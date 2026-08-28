@@ -1,0 +1,49 @@
+<Layouts.app flash={@flash}>
+  <section id="health-page" class="space-y-8">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-500">Shoestring</p>
+      <h1 class="mt-2 text-3xl font-semibold text-zinc-950">Shoestring health</h1>
+      <p class="mt-2 text-zinc-600">
+        Local control plane readiness for Phoenix, PubSub, SQLite, and state.
+      </p>
+    </div>
+
+    <div
+      id="overall-health"
+      class={[
+        "rounded-lg border px-4 py-3 text-sm font-medium",
+        @ready? && "border-emerald-200 bg-emerald-50 text-emerald-800",
+        !@ready? && "border-red-200 bg-red-50 text-red-800"
+      ]}
+    >
+      {if(@ready?, do: "Ready", else: "Not ready")}
+    </div>
+
+    <dl id="health-status" class="space-y-3">
+      <%= for {name, status} <- @health do %>
+        <div class="flex items-center justify-between rounded-lg border border-zinc-200 p-3">
+          <dt class="capitalize">{name}</dt>
+          <dd
+            id={"health-#{name}"}
+            class={
+              if(status == :ok,
+                do: "font-medium text-emerald-700",
+                else: "font-medium text-red-700"
+              )
+            }
+          >
+            {status}
+          </dd>
+        </div>
+      <% end %>
+    </dl>
+
+    <button
+      id="health-refresh"
+      phx-click="refresh"
+      class="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700"
+    >
+      Refresh
+    </button>
+  </section>
+</Layouts.app>
