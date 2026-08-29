@@ -11,7 +11,8 @@ defmodule Mix.Tasks.Gate0a.NodeTest do
 
   @required_test_files [
     "test/gate_0a_statusline_observer.test.js",
-    "test/gate_0a_probe_runners.test.js"
+    "test/gate_0a_probe_runners.test.js",
+    "test/gate_0a_probe_evidence_classification.test.js"
   ]
 
   @impl Mix.Task

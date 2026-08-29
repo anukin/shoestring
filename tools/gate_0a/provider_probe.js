@@ -5,21 +5,23 @@ const readline = require("node:readline")
 
 const PROVIDER = process.argv[2]
 
-if (PROVIDER === "codex") {
-  runCodexProbe().catch(_error => {
-    process.exitCode = 1
-  })
-} else if (PROVIDER === "claude") {
-  runClaudePreflight().catch(_error => {
-    process.exitCode = 1
-  })
-} else {
-  console.error(JSON.stringify({
-    provider: PROVIDER || null,
-    outcome: "unsupported_probe_argument",
-    supported_arguments: ["codex", "claude"],
-  }))
-  process.exitCode = 2
+if (require.main === module) {
+  if (PROVIDER === "codex") {
+    runCodexProbe().catch(_error => {
+      process.exitCode = 1
+    })
+  } else if (PROVIDER === "claude") {
+    runClaudePreflight().catch(_error => {
+      process.exitCode = 1
+    })
+  } else {
+    console.error(JSON.stringify({
+      provider: PROVIDER || null,
+      outcome: "unsupported_probe_argument",
+      supported_arguments: ["codex", "claude"],
+    }))
+    process.exitCode = 2
+  }
 }
 
 function now() {
@@ -86,6 +88,36 @@ function rateLimitsSnapshot(result) {
   }
 }
 
+function isUsableWindow(window) {
+  return !!window && typeof window.used_percent === "number"
+}
+
+function isUsableClaudeWindow(window) {
+  return !!window && typeof window.used_percentage === "number"
+}
+
+function hasUsableClaudeSnapshot(snapshot) {
+  return !!snapshot && (
+    isUsableClaudeWindow(snapshot.five_hour) ||
+    isUsableClaudeWindow(snapshot.seven_day) ||
+    isUsableClaudeWindow(snapshot.spend_limit)
+  )
+}
+
+function classifyClaudeHeadlessEvidence(headlessProbes, executableMissing) {
+  if (executableMissing) return "error"
+
+  const anyProcessFailed = headlessProbes.some(probe =>
+    ["process_terminated", "timed_out", "process_error"].includes(probe.outcome)
+  )
+  const allSignaled = headlessProbes.length > 0 &&
+    headlessProbes.every(probe => probe.rate_limit_signal === "observed" || probe.outcome === "rate_limit_refusal")
+
+  if (allSignaled) return "live_observed"
+  if (anyProcessFailed) return "error"
+  return "live_unverified"
+}
+
 function turnCompletion(message) {
   const turn = message && message.params && message.params.turn
   return {
@@ -112,12 +144,7 @@ async function runClaudePreflight() {
   }
   const executableMissing = authStatus.error != null
   const headlessProbes = authentication.logged_in ? runClaudeHeadlessProbes() : []
-  const observedSignal = headlessProbes.some(probe => probe.rate_limit_signal === "observed")
-  const evidenceStatus = observedSignal
-    ? "live_observed"
-    : executableMissing
-      ? "error"
-      : "live_unverified"
+  const evidenceStatus = classifyClaudeHeadlessEvidence(headlessProbes, executableMissing)
 
   const output = {
     schema_version: 1,
@@ -179,6 +206,7 @@ function runClaudeHeadlessProbe(mode, formatArgs) {
   const rateLimitSnapshots = messages
     .map(message => safeClaudeRateLimits(message))
     .filter(snapshot => snapshot !== null)
+  const usableSnapshots = rateLimitSnapshots.filter(hasUsableClaudeSnapshot)
 
   return {
     mode,
@@ -188,7 +216,7 @@ function runClaudeHeadlessProbe(mode, formatArgs) {
     signal: typeof result.signal === "string" ? result.signal : null,
     elapsed_ms: Date.now() - startedAt,
     message_type_counts: countClaudeMessageTypes(messages),
-    rate_limit_signal: rateLimitSnapshots.length === 0
+    rate_limit_signal: usableSnapshots.length === 0
       ? "absent"
       : "observed",
     rate_limits: rateLimitSnapshots[0] || null,
@@ -506,17 +534,13 @@ async function runCodexProbe() {
     await new Promise(resolve => setTimeout(resolve, 750))
     output.finished_at = now()
     output.live_notification_count = rateLimitUpdates.length
-    output.evidence_status = hasObservedRateLimitWindow(output, rateLimitUpdates)
+    output.evidence_status = hasUsableRateLimitEvidence(output, rateLimitUpdates)
       ? "live_observed"
       : "live_unverified"
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
   } catch (error) {
-    output.outcome = error && error.code === "TIMEOUT" ? "timed_out" : "failed"
-    output.failure = rpcFailure(error)
-    output.finished_at = now()
-    output.live_notification_count = rateLimitUpdates.length
-    output.evidence_status = "error"
-    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+    const envelope = sanitizedCodexFailureEnvelope(startedAt, error, rateLimitUpdates.length)
+    process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`)
     process.exitCode = 1
     return
   } finally {
@@ -527,14 +551,20 @@ async function runCodexProbe() {
   }
 }
 
-function hasObservedRateLimitWindow(output, rateLimitUpdates) {
+function hasUsableRateLimitEvidence(output, rateLimitUpdates) {
   const snapshots = [
     output.initial_rate_limits && output.initial_rate_limits.rate_limits,
     ...output.post_turn_rate_limits.map(entry => entry.rate_limits),
     ...rateLimitUpdates.map(entry => entry.rate_limits),
   ]
 
-  return snapshots.some(snapshot => snapshot && (snapshot.primary || snapshot.secondary))
+  return snapshots.some(snapshot =>
+    !!snapshot && (
+      isUsableWindow(snapshot.primary) ||
+      isUsableWindow(snapshot.secondary) ||
+      (typeof snapshot.rate_limit_reached_type === "string" && snapshot.rate_limit_reached_type !== "")
+    )
+  )
 }
 
 function rpcFailure(error) {
@@ -547,4 +577,30 @@ function rpcFailure(error) {
     }
   }
   return {category: "process_or_protocol_error"}
+}
+
+function sanitizedCodexFailureEnvelope(startedAt, error, liveNotificationCount) {
+  return {
+    schema_version: 1,
+    provider: "codex",
+    evidence_status: "error",
+    outcome: error && error.code === "TIMEOUT" ? "timed_out" : "failed",
+    failure: rpcFailure(error),
+    started_at: startedAt,
+    finished_at: now(),
+    live_notification_count: liveNotificationCount,
+  }
+}
+
+module.exports = {
+  windowSnapshot,
+  rateLimitsSnapshot,
+  safeClaudeWindow,
+  safeClaudeRateLimits,
+  isUsableWindow,
+  isUsableClaudeWindow,
+  hasUsableClaudeSnapshot,
+  hasUsableRateLimitEvidence,
+  classifyClaudeHeadlessEvidence,
+  sanitizedCodexFailureEnvelope,
 }

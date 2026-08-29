@@ -3,31 +3,53 @@
 const {execFileSync, spawn} = require("node:child_process")
 const readline = require("node:readline")
 
-readAfterRestart()
-  .then(output => {
-    if (output.evidence_status === "error") process.exitCode = 1
-    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
-  })
-  .catch(_error => {
-    process.stdout.write(`${JSON.stringify({
-      schema_version: 1,
-      evidence_status: "error",
-      provider: "codex",
-      invocation_mode: "codex app-server --stdio process restart",
-      outcome: "probe_failed",
-      failure: "process_or_protocol_error",
-    }, null, 2)}\n`)
-    process.exitCode = 1
-  })
+if (require.main === module) {
+  readAfterRestart()
+    .then(output => {
+      if (output.evidence_status === "error") process.exitCode = 1
+      process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+    })
+    .catch(_error => {
+      process.stdout.write(`${JSON.stringify({
+        schema_version: 1,
+        evidence_status: "error",
+        provider: "codex",
+        invocation_mode: "codex app-server --stdio process restart",
+        outcome: "probe_failed",
+        failure: "process_or_protocol_error",
+      }, null, 2)}\n`)
+      process.exitCode = 1
+    })
+}
+
+function isUsableWindow(window) {
+  return !!window && typeof window.used_percent === "number"
+}
+
+function hasUsableEvidence(observation) {
+  if (observation.outcome !== "observed") return false
+  const rateLimits = observation.rate_limits
+  if (!rateLimits) return false
+
+  return isUsableWindow(rateLimits.primary) ||
+    isUsableWindow(rateLimits.secondary) ||
+    (typeof rateLimits.rate_limit_reached_type === "string" && rateLimits.rate_limit_reached_type !== "")
+}
+
+function classifyEvidence(observations) {
+  if (observations.length > 0 && observations.every(hasUsableEvidence)) return "live_observed"
+  if (observations.some(observation => observation.outcome !== "observed")) return "error"
+  return "live_unverified"
+}
 
 async function readAfterRestart() {
   const first = await readSnapshot("before_restart")
   const second = await readSnapshot("after_restart")
-  const anyObserved = [first, second].some(observation => observation.outcome === "observed")
+  const evidenceStatus = classifyEvidence([first, second])
 
   return {
     schema_version: 1,
-    evidence_status: anyObserved ? "live_observed" : "error",
+    evidence_status: evidenceStatus,
     provider: "codex",
     cli_version: versionOf("codex"),
     runtime: {
@@ -199,6 +221,8 @@ function readSnapshot(label) {
     })()
   })
 }
+
+module.exports = {isUsableWindow, hasUsableEvidence, classifyEvidence}
 
 function compare(first, second) {
   if (first.outcome !== "observed" || second.outcome !== "observed") return "inconclusive"

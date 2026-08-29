@@ -10,28 +10,42 @@ const VALID_MODES = new Set(["single", "restart", "concurrent", "refresh", "tool
 const REPO_ROOT = process.cwd()
 const OBSERVER = path.join(REPO_ROOT, "tools/gate_0a/claude_statusline_observer.js")
 
-if (!VALID_MODES.has(MODE)) {
-  process.stdout.write(`${JSON.stringify({
-    schema_version: 1,
-    evidence_status: "unsupported_probe_argument",
-    provider: "claude",
-    supported_modes: [...VALID_MODES],
-  }, null, 2)}\n`)
-  process.exitCode = 2
-} else {
-  runProbe().then(output => {
-    if (output.evidence_status === "error") process.exitCode = 1
-    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
-  }).catch(_error => {
+if (require.main === module) {
+  if (!VALID_MODES.has(MODE)) {
     process.stdout.write(`${JSON.stringify({
       schema_version: 1,
-      evidence_status: "error",
+      evidence_status: "unsupported_probe_argument",
       provider: "claude",
-      invocation_mode: "interactive statusLine command",
-      outcome: "probe_failed",
+      supported_modes: [...VALID_MODES],
     }, null, 2)}\n`)
-    process.exitCode = 1
-  })
+    process.exitCode = 2
+  } else {
+    runProbe().then(output => {
+      if (output.evidence_status === "error") process.exitCode = 1
+      process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+    }).catch(_error => {
+      process.stdout.write(`${JSON.stringify({
+        schema_version: 1,
+        evidence_status: "error",
+        provider: "claude",
+        invocation_mode: "interactive statusLine command",
+        outcome: "probe_failed",
+      }, null, 2)}\n`)
+      process.exitCode = 1
+    })
+  }
+}
+
+function classifyStatuslineEvidence(processResults, callbacks) {
+  const observedCallback = callbacks.some(callback => callback.rate_limit_signal === "observed")
+  const allProcessesCompleted = processResults.length > 0 &&
+    processResults.every(result => result.outcome === "completed")
+  const allProcessesFailed = processResults.length > 0 &&
+    processResults.every(result => result.outcome !== "completed")
+
+  if (allProcessesCompleted && observedCallback) return "live_observed"
+  if (allProcessesFailed) return "error"
+  return "live_unverified"
 }
 
 async function runProbe() {
@@ -51,14 +65,7 @@ async function runProbe() {
       ? await Promise.all(labels.map(label => runSession(label, settings, captureFile)))
       : labels.map(label => runSessionSync(label, settings, captureFile))
     const callbacks = readCallbacks(captureFile)
-    const observedCallback = callbacks.some(callback => callback.rate_limit_signal === "observed")
-    const allProcessesFailed = processResults.length > 0 &&
-      processResults.every(result => result.outcome !== "completed")
-    const evidenceStatus = observedCallback
-      ? "live_observed"
-      : allProcessesFailed
-        ? "error"
-        : "live_unverified"
+    const evidenceStatus = classifyStatuslineEvidence(processResults, callbacks)
 
     return {
       schema_version: 1,
@@ -220,3 +227,5 @@ function versionOf(command) {
     return null
   }
 }
+
+module.exports = {classifyStatuslineEvidence}

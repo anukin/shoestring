@@ -51,10 +51,8 @@ function normalizeStatusLineInput(input, observedAt) {
     return failureSnapshot(observedAt)
   }
 
-  const rateLimits = input.rate_limits
-  const rateLimitSignal = rateLimits && typeof rateLimits === "object" && !Array.isArray(rateLimits)
-    ? "observed"
-    : "absent"
+  const rateLimits = safeRateLimits(input.rate_limits)
+  const rateLimitSignal = hasUsableRateLimits(rateLimits) ? "observed" : "absent"
 
   return {
     schema_version: 1,
@@ -65,8 +63,20 @@ function normalizeStatusLineInput(input, observedAt) {
     observed_at: observedAt,
     cli_version: typeof input.version === "string" ? input.version : null,
     rate_limit_signal: rateLimitSignal,
-    rate_limits: safeRateLimits(rateLimits),
+    rate_limits: rateLimits,
   }
+}
+
+function hasUsableRateLimits(rateLimits) {
+  return !!rateLimits && (
+    isUsableWindow(rateLimits.five_hour) ||
+    isUsableWindow(rateLimits.seven_day) ||
+    isUsableWindow(rateLimits.spend_limit)
+  )
+}
+
+function isUsableWindow(window) {
+  return !!window && typeof window.used_percentage === "number"
 }
 
 function failureSnapshot(observedAt) {
@@ -113,4 +123,4 @@ function integerOrNull(value) {
   return Number.isInteger(value) ? value : null
 }
 
-module.exports = {normalizeStatusLineInput}
+module.exports = {normalizeStatusLineInput, safeRateLimits, hasUsableRateLimits, isUsableWindow}

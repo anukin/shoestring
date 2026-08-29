@@ -3,43 +3,65 @@
 const {execFileSync, spawn} = require("node:child_process")
 const readline = require("node:readline")
 
-Promise.all([readSnapshot("session_a"), readSnapshot("session_b")])
-  .then(observations => {
-    const anyObserved = observations.some(observation => observation.outcome === "observed")
-    if (!anyObserved) process.exitCode = 1
+if (require.main === module) {
+  Promise.all([readSnapshot("session_a"), readSnapshot("session_b")])
+    .then(observations => {
+      const evidenceStatus = classifyEvidence(observations)
+      if (evidenceStatus === "error") process.exitCode = 1
 
-    process.stdout.write(`${JSON.stringify({
-      schema_version: 1,
-      evidence_status: anyObserved ? "live_observed" : "error",
-      provider: "codex",
-      cli_version: versionOf("codex"),
-      runtime: {
-        os: process.platform,
-        architecture: process.arch,
-        node_version: process.version,
-      },
-      invocation_mode: "two concurrent codex app-server --stdio connections",
-      observed_at: new Date().toISOString(),
-      observations,
-      comparison: compare(observations),
-      limitations: [
-        "The two connections read the same account without starting model turns.",
-        "This is one point-in-time concurrency sample, not a universal synchronization guarantee.",
-        "Opaque identifiers, paths, and all unrelated payload fields were discarded.",
-      ],
-    }, null, 2)}\n`)
-  })
-  .catch(_error => {
-    process.stdout.write(`${JSON.stringify({
-      schema_version: 1,
-      evidence_status: "error",
-      provider: "codex",
-      invocation_mode: "two concurrent codex app-server --stdio connections",
-      outcome: "probe_failed",
-      failure: "process_or_protocol_error",
-    }, null, 2)}\n`)
-    process.exitCode = 1
-  })
+      process.stdout.write(`${JSON.stringify({
+        schema_version: 1,
+        evidence_status: evidenceStatus,
+        provider: "codex",
+        cli_version: versionOf("codex"),
+        runtime: {
+          os: process.platform,
+          architecture: process.arch,
+          node_version: process.version,
+        },
+        invocation_mode: "two concurrent codex app-server --stdio connections",
+        observed_at: new Date().toISOString(),
+        observations,
+        comparison: compare(observations),
+        limitations: [
+          "The two connections read the same account without starting model turns.",
+          "This is one point-in-time concurrency sample, not a universal synchronization guarantee.",
+          "Opaque identifiers, paths, and all unrelated payload fields were discarded.",
+        ],
+      }, null, 2)}\n`)
+    })
+    .catch(_error => {
+      process.stdout.write(`${JSON.stringify({
+        schema_version: 1,
+        evidence_status: "error",
+        provider: "codex",
+        invocation_mode: "two concurrent codex app-server --stdio connections",
+        outcome: "probe_failed",
+        failure: "process_or_protocol_error",
+      }, null, 2)}\n`)
+      process.exitCode = 1
+    })
+}
+
+function isUsableWindow(window) {
+  return !!window && typeof window.used_percent === "number"
+}
+
+function hasUsableEvidence(observation) {
+  if (observation.outcome !== "observed") return false
+  const rateLimits = observation.rate_limits
+  if (!rateLimits) return false
+
+  return isUsableWindow(rateLimits.primary) ||
+    isUsableWindow(rateLimits.secondary) ||
+    (typeof rateLimits.rate_limit_reached_type === "string" && rateLimits.rate_limit_reached_type !== "")
+}
+
+function classifyEvidence(observations) {
+  if (observations.length > 0 && observations.every(hasUsableEvidence)) return "live_observed"
+  if (observations.some(observation => observation.outcome !== "observed")) return "error"
+  return "live_unverified"
+}
 
 function versionOf(command) {
   try {
@@ -188,3 +210,5 @@ function compare(observations) {
     ? "identical"
     : "divergent"
 }
+
+module.exports = {isUsableWindow, hasUsableEvidence, classifyEvidence}

@@ -34,7 +34,7 @@ test("normalizes only documented Claude rate-limit fields", () => {
   assert.equal(Object.hasOwn(result, "cwd"), false)
 })
 
-test("keeps absent or malformed windows explicit without inventing usage", () => {
+test("keeps absent or malformed windows explicit without inventing usage, and does not call them observed", () => {
   const result = normalizeStatusLineInput({
     version: "2.1.251 (Claude Code)",
     rate_limits: {
@@ -43,10 +43,51 @@ test("keeps absent or malformed windows explicit without inventing usage", () =>
     },
   }, "2026-08-29T07:00:01.000Z")
 
-  assert.equal(result.rate_limit_signal, "observed")
+  assert.equal(result.rate_limit_signal, "absent")
+  assert.equal(result.evidence_status, "live_unverified")
   assert.deepEqual(result.rate_limits, {
     five_hour: {used_percentage: null, resets_at: null},
     seven_day: null,
+    spend_limit: null,
+  })
+})
+
+test("an empty rate_limits container is not called observed", () => {
+  const result = normalizeStatusLineInput({
+    version: "2.1.251 (Claude Code)",
+    rate_limits: {},
+  }, "2026-08-29T07:00:01.500Z")
+
+  assert.equal(result.rate_limit_signal, "absent")
+  assert.equal(result.evidence_status, "live_unverified")
+  assert.deepEqual(result.rate_limits, {five_hour: null, seven_day: null, spend_limit: null})
+})
+
+test("an array in place of the rate_limits container is not called observed", () => {
+  const result = normalizeStatusLineInput({
+    version: "2.1.251 (Claude Code)",
+    rate_limits: [{used_percentage: 23.5, resets_at: 1_738_425_600}],
+  }, "2026-08-29T07:00:01.750Z")
+
+  assert.equal(result.rate_limit_signal, "absent")
+  assert.equal(result.evidence_status, "live_unverified")
+  assert.equal(result.rate_limits, null)
+})
+
+test("a mixed result set with one usable window is still called observed", () => {
+  const result = normalizeStatusLineInput({
+    version: "2.1.251 (Claude Code)",
+    rate_limits: {
+      five_hour: {used_percentage: 23.5, resets_at: 1_738_425_600},
+      seven_day: {used_percentage: "not-a-number", resets_at: "later"},
+    },
+  }, "2026-08-29T07:00:02.250Z")
+
+  assert.equal(result.rate_limit_signal, "observed")
+  assert.equal(result.evidence_status, "live_observed")
+  assert.deepEqual(result.rate_limits, {
+    five_hour: {used_percentage: 23.5, resets_at: 1_738_425_600},
+    seven_day: {used_percentage: null, resets_at: null},
     spend_limit: null,
   })
 })
