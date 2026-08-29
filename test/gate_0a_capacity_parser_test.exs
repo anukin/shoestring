@@ -209,6 +209,104 @@ defmodule Shoestring.Gate0ACapacityParserTest do
     assert result.freshness.age_seconds >= 3600
   end
 
+  test "live Claude status-line callback parses both capacity windows" do
+    result =
+      parse_fixture(
+        "claude/status-line-single-live.json",
+        :claude,
+        ~U[2026-08-29 07:34:20Z]
+      )
+
+    assert result.state == "observed"
+    assert result.availability == "available"
+    assert result.confidence == "high"
+    assert result.source_event == "status_line_input"
+    assert result.freshness.state == "fresh"
+    assert result.observed_at == "2026-08-29T07:34:19.504Z"
+    assert result.windows.five_hour.used_percent == 25
+    assert result.windows.five_hour.remaining_percent == 75
+    assert result.windows.seven_day.used_percent == 94
+    assert result.windows.seven_day.remaining_percent == 6
+    assert result.windows.spend_limit == nil
+  end
+
+  test "live Claude restart fixture parses the post-restart observation" do
+    fixture = load_fixture("claude/status-line-restart-live.json")
+
+    result =
+      parse_fixture("claude/status-line-restart-live.json", :claude, ~U[2026-08-29 07:35:46Z])
+
+    assert result.state == "observed"
+    assert result.availability == "available"
+    assert result.windows.five_hour.used_percent == 26
+    assert result.windows.seven_day.used_percent == 94
+
+    assert Enum.map(fixture["observations"], & &1["rate_limit_signal"]) == [
+             "absent",
+             "observed",
+             "absent",
+             "observed"
+           ]
+
+    assert Enum.map(
+             fixture["observations"],
+             &get_in(&1, ["rate_limits", "five_hour", "used_percentage"])
+           ) == [nil, 25, nil, 26]
+
+    assert fixture["comparison"] == "divergent"
+  end
+
+  test "live Claude concurrent fixture parses identical post-response snapshots" do
+    fixture = load_fixture("claude/status-line-concurrent-live.json")
+
+    result =
+      parse_fixture("claude/status-line-concurrent-live.json", :claude, ~U[2026-08-29 07:36:16Z])
+
+    assert result.state == "observed"
+    assert result.availability == "available"
+    assert result.windows.five_hour.used_percent == 26
+    assert result.windows.seven_day.used_percent == 94
+    assert fixture["comparison"] == "identical"
+
+    post_response =
+      fixture["observations"]
+      |> Enum.filter(&(&1["rate_limit_signal"] == "observed"))
+      |> Enum.map(&get_in(&1, ["rate_limits", "five_hour", "used_percentage"]))
+
+    assert post_response == [26, 26]
+  end
+
+  test "live Claude refresh fixture records repeated callback timing" do
+    fixture = load_fixture("claude/status-line-refresh-live.json")
+
+    result =
+      parse_fixture("claude/status-line-refresh-live.json", :claude, ~U[2026-08-29 07:37:40Z])
+
+    assert result.state == "observed"
+    assert result.windows.five_hour.used_percent == 26
+    assert result.windows.seven_day.used_percent == 94
+    assert fixture["refresh_interval_seconds"] == 1
+    assert fixture["comparison"] == "callbacks_received"
+    assert length(fixture["observations"]) == 5
+
+    assert fixture["observations"]
+           |> Enum.map(& &1["observed_at"])
+           |> Enum.uniq()
+           |> length() == 5
+  end
+
+  test "live Claude tool-mode fixture does not overclaim tool execution" do
+    fixture = load_fixture("claude/status-line-tools-live.json")
+
+    result =
+      parse_fixture("claude/status-line-tools-live.json", :claude, ~U[2026-08-29 07:37:51Z])
+
+    assert result.state == "observed"
+    assert result.windows.five_hour.used_percent == 27
+    assert result.windows.seven_day.used_percent == 94
+    assert fixture["tool_execution"] == "not_asserted_by_sanitized_capture"
+  end
+
   test "valid Claude windows without captured_at remain unknown" do
     fixture = %{
       "payload" => %{

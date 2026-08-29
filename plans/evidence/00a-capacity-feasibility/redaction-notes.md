@@ -26,11 +26,14 @@ of reset-credit details. `codexHome`, `userAgent`, all opaque IDs, and credit
 descriptions were discarded. The concurrent fixture retains only two labels and
 their safe window snapshots.
 
-The Claude fixtures retain the documented `rate_limits` field shape and safe
-numeric values from Anthropic's public example. The live preflight fixture
-retains only `loggedIn`, `authMethod`, mode outcomes, exit statuses, aggregate
-message types, and rate-limit presence; it does not retain a live account,
-prompt, response, or provider payload. The model display name in the
+The Claude fixtures retain only the documented `rate_limits` field shape, safe
+numeric values, callback receipt times, run labels, and aggregate comparison
+results. The five live status-line fixtures discard session identifiers,
+working directories, prompts, responses, tool output, and all raw callback
+fields outside the allowlist. The live preflight fixture retains only
+`loggedIn`, `authMethod`, mode outcomes, exit statuses, aggregate message
+types, and rate-limit presence; it does not retain a live account, prompt,
+response, or provider payload. The model display name in the
 documentation-shaped fixture is a placeholder, not an account value.
 
 ## Probe behavior
@@ -48,6 +51,13 @@ browser login, the probe ran one small JSON and one stream request. Their
 outputs were reduced to safe aggregate results; no Claude login token, account
 path, prompt, response text, or raw payload was retained. The earlier
 unauthenticated preflight remains recoverable in Git history.
+
+The status-line observer was installed through a session-only `--settings`
+override and wrote only sanitized NDJSON to a disposable temporary file. The
+runner removed only that temporary directory after each run. The committed
+fixtures contain safe percentages, reset epochs, local callback times, and
+mode comparisons; the tool-mode fixture explicitly says tool execution was
+not asserted. Compaction was not attempted and no refusal was induced.
 
 ## Review checks
 

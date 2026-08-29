@@ -1,6 +1,6 @@
 # Gate 0A: subscription-capacity feasibility
 
-**Status:** in_progress
+**Status:** complete
 **Hard dependencies:** none
 **Unlocks:** iteration 3 production capacity observatory
 
@@ -174,14 +174,58 @@ unverified rather than fabricating evidence.
 
 ## Completion record
 
-- **Final status:**
-- **Completed on:**
-- **Environments and versions tested:**
-- **Support-tier decisions:**
-- **Evidence files:**
-- **Commands and results:**
-- **Redaction review:**
-- **Deviations:**
-- **Remaining risks:**
-- **Instructions for iteration 2:**
-- **Instructions for iteration 3:**
+- **Final status:** complete; the acceptance gate is satisfied with explicit
+  evidence limits.
+- **Completed on:** 2026-08-29.
+- **Environments and versions tested:** macOS Darwin 24.6.0 arm64; Codex CLI
+  `codex-cli 0.150.1`; Claude Code `2.1.251 (Claude Code)`; Node `v26.5.0`;
+  expect `5.45`. Codex used authenticated App Server stdio. Claude used the
+  user's authenticated `claude.ai` CLI session; no credentials or account
+  identifiers were inspected.
+- **Support-tier decisions:** Codex App Server is proactive with a five-minute
+  freshness threshold, bounded leases, and a concurrency reserve. Claude's
+  official interactive status-line callback is conservative/partial. Claude
+  print JSON, stream JSON, and terminal scraping are unsupported; no reliable
+  refusal shape was observed, so none is classified reactive-only.
+- **Evidence files:** `plans/evidence/00a-capacity-feasibility/` contains the
+  support matrix, Codex and Claude observations, decision record, redaction
+  notes, parser-consumable sanitized fixtures, and live Claude status-line
+  fixtures for normal response, restart, concurrency, refresh, and a tool-mode
+  attempt. Observer and runner source are under `tools/gate_0a/`.
+- **Commands and results:** The five commands `node
+  tools/gate_0a/claude_statusline_probe.js {single,restart,concurrent,refresh,tools}`
+  completed with exit status 0 and produced the committed sanitized fixtures.
+  `mix test test/gate_0a_capacity_parser_test.exs
+  test/gate_0a_gitignore_test.exs` passed with 33 tests and 0 failures.
+  `node --test test/gate_0a_statusline_observer.test.js` passed 3 tests.
+  Node syntax checks passed for every `tools/gate_0a` and Gate 0A test script.
+  JSON validation passed for 21 fixtures. `git diff --check` passed. `mix
+  precommit` passed with 52 tests and 0 failures.
+- **Redaction review:** Only allowlisted versions, platform, mode/outcome,
+  local callback timestamps, aggregate comparisons, window percentages, reset
+  epochs, and explicit absence markers were retained. No raw callback input,
+  prompt, response, tool output, token, authentication path, session ID, or
+  account identifier was retained. The deny-by-default evidence boundary and
+  sanitized allowlist were tested.
+- **Deviations:** Compaction was not run because the live seven-day observation
+  was already 94% and another allowance-consuming interaction was not needed
+  to establish the official callback surface. No refusal was forced and no
+  natural refusal occurred. The tool-mode capture does not assert that the
+  requested read-only command executed. No remote or PR exists because this
+  repository has no configured `origin`.
+- **Remaining risks:** Compaction timing, causal tool-execution measurement,
+  provider-side refresh semantics, broader subscription/window variants,
+  cross-session enforcement beyond one sample, and a natural refusal shape
+  remain unverified. They are explicit iteration risks, not claims of support.
+- **Instructions for iteration 2:** Define the provider-neutral capacity
+  snapshot with named windows, source event, freshness, confidence, and
+  explicit unknown/degraded/refused states. Keep missing, malformed, future,
+  and timestamp-unknown fields fail closed; treat a Claude status-line startup
+  omission as distinct from headless unsupported output.
+- **Instructions for iteration 3:** Implement Codex handshake/read/update and
+  restart revalidation with bounded leases and concurrency reserve. Invoke the
+  Claude official interactive status-line observer only as conservative
+  supplemental telemetry. Keep headless modes and terminal scraping
+  unsupported until a reliable natural refusal shape is evidenced; checkpoint
+  and wait or hand off on stale, missing, malformed, future, disconnected, or
+  generic-error observations.

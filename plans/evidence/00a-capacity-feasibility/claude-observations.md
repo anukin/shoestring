@@ -7,96 +7,151 @@
 | OS | macOS Darwin 24.6.0 |
 | Architecture | arm64 |
 | Claude Code CLI | `2.1.251 (Claude Code)` |
-| Authentication status from this worktree's probe | `loggedIn=true`, `authMethod=claude.ai` |
+| Node runtime for disposable probes | `v26.5.0` |
+| expect runtime | `5.45` |
+| Authentication status | `loggedIn=true`, `authMethod=claude.ai` |
 | Subscription plan class | Not exposed by the bounded probe |
-| Live provider response from this worktree | JSON completed without a rate-limit signal; stream-json exited with a process error and no structured messages |
 
-The official Claude Code installation is present. An earlier preflight at
-`2026-08-29T05:41:04.562Z` reported no login; the user then completed the
-official browser login flow from this shell. The successful sanitized preflight
-and bounded headless results were captured at `2026-08-29T06:22:56.629Z`.
-No token, account file, account path, or raw login response was inspected or
-copied.
-
-The reproducible non-invasive probe is:
+Authentication was checked without reading or copying credentials:
 
 ```text
-node tools/gate_0a/provider_probe.js claude
+zsh -lc 'claude auth status --json | jq "{loggedIn, authMethod}"'
+{"loggedIn":true,"authMethod":"claude.ai"}
 ```
 
-Its redacted live result is represented by
-`fixtures/claude/auth-preflight-live.json`. The probe attempts bounded JSON and
-stream probes only when the preflight is authenticated. It emits only mode,
-exit/outcome, aggregate message types, and allowlisted rate-limit presence; it
-never emits provider text, identifiers, or raw payloads.
+The earlier unauthenticated preflight and the later authenticated headless
+preflight remain separate evidence. The authenticated headless run at
+`2026-08-29T06:22:56.629Z` completed JSON without a rate-limit signal; its
+stream-json invocation exited with a process error and no structured messages.
+Those results do not imply either an unsupported subscription or a refusal.
 
-The successful live preflight observation was recorded at
-`2026-08-29T06:22:56.629Z`.
-
-## Current official surfaces
+## Official surface and disposable observer
 
 The status-line contract was read at execution time from Anthropic's [Claude
 Code status-line documentation](https://code.claude.com/docs/en/statusline).
-The CLI mode flags were checked against the [official CLI reference](https://docs.anthropic.com/en/docs/claude-code/cli-usage).
+The CLI settings and output flags were checked against the [official CLI
+reference](https://docs.anthropic.com/en/docs/claude-code/cli-usage). The
+documented status-line command receives JSON on stdin and runs locally. Its
+`rate_limits` object contains the optional `five_hour` and `seven_day` windows,
+each with `used_percentage` and `resets_at`; `spend_limit` is optional.
+Anthropic documents that the rate-limit object becomes available after the
+session's first API response, windows may be independently absent, and a
+window is dropped after reset.
 
-The status-line command receives JSON on stdin. The documented `rate_limits`
-object contains:
+The disposable observer is `tools/gate_0a/claude_statusline_observer.js`. It
+uses an inline session-only `--settings` override to install the documented
+`statusLine.type=command` callback; it does not edit user settings. It reads
+only the allowlisted version, window percentages, reset epochs, callback
+receipt timestamp, and a probe label. It never retains session IDs, prompts,
+responses, paths, tool output, or the raw callback input. A malformed callback
+produces a sanitized error snapshot and never a stack trace.
 
-- `five_hour.used_percentage` and `five_hour.resets_at`;
-- `seven_day.used_percentage` and `seven_day.resets_at`; and
-- an optional `spend_limit` pair behind a Claude apps gateway with spend
-  limits.
+The runner is `tools/gate_0a/claude_statusline_probe.js`. It uses a fixed,
+non-sensitive one-line interaction in a disposable TTY with
+`--permission-mode dontAsk`, `--ax-screen-reader`, and `--tools {}`. The
+`tools` mode permits only the requested read-only `Bash(printf *)` command;
+the sanitized capture does not assert that the tool actually executed. The
+reproducible commands, run from the repository root, were:
 
-The documentation says `rate_limits` is present only for Claude.ai Pro and Max
-subscribers (or an applicable apps gateway) and only after the session's first
-API response. Each window may be independently absent, and a window is dropped
-after its reset time. These absence rules make an omitted field different from
-zero usage.
+```text
+node tools/gate_0a/claude_statusline_probe.js single
+node tools/gate_0a/claude_statusline_probe.js restart
+node tools/gate_0a/claude_statusline_probe.js concurrent
+node tools/gate_0a/claude_statusline_probe.js refresh
+node tools/gate_0a/claude_statusline_probe.js tools
+```
 
-## Modes and evidence
+Every process completed with exit status 0. The callback timestamp is local
+process receipt time, not provider-side generation time.
 
-| Mode | Live result | Tier | Finding |
+## Live status-line results
+
+The first callback of each ordinary session had no `rate_limits` object. A
+callback after the first response did. This directly distinguishes the
+documented before-first-response absence from an authenticated session that
+can emit the fields.
+
+| Mode | Sanitized result | Timing/evidence |
+| --- | --- | --- |
+| Normal response | 5-hour 25%, 7-day 94%; resets `1787994000` and `1788033600` | startup callback absent at `07:34:17.851Z`; post-response callback observed at `07:34:19.504Z` |
+| Process restart | Before restart 25%/94%; after restart 26%/94% | startup callbacks absent; observed callbacks at `07:35:36.745Z` and `07:35:45.437Z`; comparison `divergent` because the normal interaction changed the five-hour value |
+| Two concurrent sessions | Both post-response snapshots 26%/94% | observed at `07:36:15.268Z` and `07:36:15.332Z`; comparison `identical` |
+| Refresh callback | Repeated 26%/94% callbacks | with `refreshInterval=1`, observed at `07:37:31.480Z`, `07:37:32.487Z`, `07:37:33.484Z`, and `07:37:37.860Z` |
+| Tool-mode attempt | Post-response callbacks 27%/94% | observed at `07:37:45.283Z` and `07:37:50.851Z`; tool execution is `not_asserted_by_sanitized_capture` |
+
+The restart sample shows that a newly started process can obtain a current
+status-line snapshot, but the one-sample difference does not establish a
+provider persistence or synchronization guarantee. The concurrent sample is
+one account-level consistency sample, not proof of cross-session enforcement.
+The refresh run demonstrates repeated local callback delivery, not a provider
+refresh API or a universal interval guarantee. The 7-day value was already
+94%, so no further allowance-consuming interaction was used to manufacture
+more cases.
+
+No compaction operation was run: invoking it would have consumed additional
+live allowance without being necessary to establish the documented callback
+surface, and the account's sanitized seven-day observation was already 94%.
+Consequently, compaction-specific timing remains unverified. No natural
+Claude refusal or limit error occurred, and no refusal was induced. The
+sanitized refusal fixture is parser-only evidence and is not an observed
+Claude response.
+
+## Modes and support tiers
+
+| Mode | Live result | Tier | Finding and fallback |
 | --- | --- | --- | --- |
-| Interactive session with official `statusLine` command | Authentication live-verified; status-line callback not observed | Conservative/partial, conditional | The documented JSON shape is parseable after a first response, but this probe did not create an interactive status-line callback or establish a provider refresh request; either window may be absent. |
-| `claude -p --output-format json` | Live authenticated probe completed at `2026-08-29T06:22:56.629Z`; rate-limit signal absent | Unsupported pending live refusal evidence | The result envelope completed but exposed no structured `rate_limits` object or reliable quota-refusal shape. Do not use this mode for capacity admission or claim reactive recovery. |
-| `claude -p --output-format stream-json` | Live authenticated probe exited with `process_error` (status 1); no structured messages | Unsupported pending live refusal evidence | No rate-limit signal or refusal shape was captured. The process error is not evidence of a quota refusal; do not infer capacity from assistant text or terminal output. |
-| Colored interactive terminal output / scraping | Not attempted | Unsupported | Explicitly outside the Gate 0A contract and not a proactive source. |
+| Interactive session with official status-line command | Live authenticated callbacks after ordinary responses | **conservative/partial** | Use only as an explicitly invoked observer with a five-minute freshness limit and larger concurrency reserve. Missing, stale, future, malformed, or independently absent windows become unknown/degraded and stop admission. |
+| `claude -p --output-format json` | Authenticated run completed; no rate-limit signal | **unsupported** | The headless envelope does not expose the status-line object. Do not infer capacity or reactive refusal recovery from it. |
+| `claude -p --output-format stream-json` | Process error, status 1; no structured messages | **unsupported** | This is a generic process/provider failure, not a quota refusal. Preserve a checkpoint and treat the observation as unknown. |
+| Colored interactive terminal output / scraping | Explicitly excluded | **unsupported** | Terminal scraping is not a structured provider contract. |
 
-`fixtures/claude/normal-official-shape.json` contains the public documented
-five-hour and seven-day example shape, not a response from this account. The
-partial fixture models the documented independent absence rule. The missing
-fixture models the documented before-first-response condition. All are marked
-so they cannot be mistaken for live evidence.
+The status-line callback is not classified as reactive-only: a reliable refusal
+shape was not evidenced, but a structured capacity snapshot was observed. The
+headless rows are unsupported, not reactive-only, because neither mode produced
+a reliable refusal signal. An absent callback before the first response is
+distinct from headless unsupported behavior and from an unsupported
+subscription/window state; the bounded probe cannot distinguish subscription
+classes when the provider omits the object.
 
-## Unverified behaviors
+## Normalized behavior and evidence limits
 
-Authentication succeeded for the bounded headless probes, but this gate could
-not honestly measure:
+The parser normalizes a valid, fresh callback to `observed/available/high`; a
+fresh callback with one absent window is `degraded/available/medium`; stale is
+`degraded/available/low`; malformed, future, missing-timestamp, and absent
+capacity are `unknown/unknown/none`. A refusal remains `refused/refused`, but
+an unknown timestamp forces confidence `none`. Future timestamps fail closed;
+they are never clamped to age zero. A generic provider error is `unknown` with
+reason `provider_error`, while absent `rate_limits` is recorded as
+`rate_limits_absent_before_first_response_or_unsupported_subscription`.
 
-- whether status-line input is emitted in a normal interactive session on this
-  installation;
-- whether either headless mode exposes the documented `rate_limits` object (the
-  JSON result did not, and stream-json produced no structured messages);
-- update timing after assistant messages, tool sequences, compaction, or a
-  refresh callback;
-- whether values are account-wide or session-local across two sessions;
-- process restart behavior; or
-- the structured shape of a real subscription refusal.
+The following are still unverified: account-wide enforcement beyond the one
+concurrent sample, provider-side refresh semantics, compaction timing, a
+natural refusal shape, and whether the requested tool command actually ran.
+No claim is made about subscription/window states not represented by the live
+callbacks. `fixtures/claude/stale-replay.json`, malformed, missing, and refusal
+fixtures are explicit replay/parser cases rather than live claims.
 
-The parser exercises a clearly labeled synthetic refusal fixture with an
-`is_error=true`, `subtype=rate_limit` result solely to prove refusal parsing.
-The live headless run did not produce a refusal, so it does not claim that this
-subtype is an official Claude contract or that headless refusal recovery is
-currently supported.
-If the live probe later receives an error with another shape, the safe default
-is `unknown` until that shape is explicitly classified.
+## Evidence files
 
-## Safe fallback
+- `fixtures/claude/status-line-single-live.json`: normal authenticated
+  status-line startup and post-response callbacks.
+- `fixtures/claude/status-line-restart-live.json`: sanitized process-restart
+  comparison.
+- `fixtures/claude/status-line-concurrent-live.json`: sanitized concurrent
+  session comparison.
+- `fixtures/claude/status-line-refresh-live.json`: repeated callback timing
+  with a one-second refresh interval.
+- `fixtures/claude/status-line-tools-live.json`: safe tool-mode attempt with
+  tool execution deliberately left unasserted.
+- `fixtures/claude/auth-preflight-live.json`: authenticated headless preflight.
+- `fixtures/claude/normal-official-shape.json` and
+  `partial-official-shape.json`: clearly labeled documentation-shaped parser
+  fixtures, not account captures.
+- `fixtures/claude/stale-replay.json`, `malformed-replay.json`,
+  `missing-before-response.json`, and `refusal-unverified.json`: explicit
+  fallback and parser safety cases.
 
-If the status-line object is absent, stale, malformed, or changes shape,
-Shoestring must not admit proactively. It should label capacity unknown or
-degraded, preserve the trajectory checkpoint, and wait for reset/manual
-confirmation or hand off to a provider with a structured fresh read. Headless
-print/stream modes are unsupported for this gate until a live, reliable quota
-refusal shape is evidenced. A generic provider error must not be confused with
-a quota refusal. Terminal scraping is unsupported.
+The observer's executable normalization is covered by
+`test/gate_0a_statusline_observer.test.js`; fixture normalization and
+fail-closed freshness are covered by
+`test/gate_0a_capacity_parser_test.exs`.

@@ -1,0 +1,88 @@
+{
+  "fixture_kind": "status_line_refresh",
+  "evidence_status": "live_observed",
+  "captured_at": "2026-08-29T07:37:31.480Z",
+  "refresh_interval_seconds": 1,
+  "payload": {
+    "version": "2.1.251",
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 26,
+        "resets_at": 1787994000
+      },
+      "seven_day": {
+        "used_percentage": 94,
+        "resets_at": 1788033600
+      },
+      "spend_limit": null
+    }
+  },
+  "observations": [
+    {
+      "observed_at": "2026-08-29T07:37:30.248Z",
+      "rate_limit_signal": "absent",
+      "rate_limits": null
+    },
+    {
+      "observed_at": "2026-08-29T07:37:31.480Z",
+      "rate_limit_signal": "observed",
+      "rate_limits": {
+        "five_hour": {
+          "used_percentage": 26,
+          "resets_at": 1787994000
+        },
+        "seven_day": {
+          "used_percentage": 94,
+          "resets_at": 1788033600
+        },
+        "spend_limit": null
+      }
+    },
+    {
+      "observed_at": "2026-08-29T07:37:32.487Z",
+      "rate_limit_signal": "observed",
+      "rate_limits": {
+        "five_hour": {
+          "used_percentage": 26,
+          "resets_at": 1787994000
+        },
+        "seven_day": {
+          "used_percentage": 94,
+          "resets_at": 1788033600
+        },
+        "spend_limit": null
+      }
+    },
+    {
+      "observed_at": "2026-08-29T07:37:33.484Z",
+      "rate_limit_signal": "observed",
+      "rate_limits": {
+        "five_hour": {
+          "used_percentage": 26,
+          "resets_at": 1787994000
+        },
+        "seven_day": {
+          "used_percentage": 94,
+          "resets_at": 1788033600
+        },
+        "spend_limit": null
+      }
+    },
+    {
+      "observed_at": "2026-08-29T07:37:37.860Z",
+      "rate_limit_signal": "observed",
+      "rate_limits": {
+        "five_hour": {
+          "used_percentage": 26,
+          "resets_at": 1787994000
+        },
+        "seven_day": {
+          "used_percentage": 94,
+          "resets_at": 1788033600
+        },
+        "spend_limit": null
+      }
+    }
+  ],
+  "comparison": "callbacks_received"
+}
