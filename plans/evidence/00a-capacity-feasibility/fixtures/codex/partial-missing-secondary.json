@@ -1,0 +1,19 @@
+{
+  "fixture_kind": "partial",
+  "evidence_status": "sanitized_documentation_shape",
+  "captured_at": "2026-08-29T04:30:38.350Z",
+  "payload": {
+    "id": 3,
+    "result": {
+      "rateLimits": {
+        "primary": {
+          "usedPercent": 12,
+          "windowDurationMins": 300,
+          "resetsAt": 1787994541
+        },
+        "secondary": null,
+        "rateLimitReachedType": null
+      }
+    }
+  }
+}

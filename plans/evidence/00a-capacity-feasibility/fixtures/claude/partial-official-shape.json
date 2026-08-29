@@ -1,0 +1,17 @@
+{
+  "fixture_kind": "partial",
+  "evidence_status": "official_documentation_semantics_not_live",
+  "source": "https://code.claude.com/docs/en/statusline",
+  "captured_at": "2026-08-29T04:30:00.000Z",
+  "payload": {
+    "model": {
+      "display_name": "documented-model"
+    },
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 23.5,
+        "resets_at": 1738425600
+      }
+    }
+  }
+}

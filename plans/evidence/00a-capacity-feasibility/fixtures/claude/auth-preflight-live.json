@@ -1,0 +1,10 @@
+{
+  "fixture_kind": "authentication_preflight",
+  "evidence_status": "live_observed",
+  "captured_at": "2026-08-29T04:44:02.941Z",
+  "payload": {
+    "loggedIn": false,
+    "authMethod": "none"
+  },
+  "live_capacity_probe": "blocked_not_authenticated"
+}

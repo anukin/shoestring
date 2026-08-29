@@ -1,0 +1,44 @@
+{
+  "fixture_kind": "concurrent_read",
+  "evidence_status": "live_observed",
+  "captured_at": "2026-08-29T04:31:30.873Z",
+  "observations": [
+    {
+      "session": "session_a",
+      "rate_limits": {
+        "primary": {
+          "used_percent": 12,
+          "window_duration_minutes": 300,
+          "resets_at": 1787994541
+        },
+        "secondary": {
+          "used_percent": 16,
+          "window_duration_minutes": 10080,
+          "resets_at": 1788494929
+        },
+        "rate_limit_reached_type": null,
+        "spend_control_reached": false,
+        "plan_type": "plus"
+      }
+    },
+    {
+      "session": "session_b",
+      "rate_limits": {
+        "primary": {
+          "used_percent": 12,
+          "window_duration_minutes": 300,
+          "resets_at": 1787994541
+        },
+        "secondary": {
+          "used_percent": 16,
+          "window_duration_minutes": 10080,
+          "resets_at": 1788494929
+        },
+        "rate_limit_reached_type": null,
+        "spend_control_reached": false,
+        "plan_type": "plus"
+      }
+    }
+  ],
+  "comparison": "identical"
+}

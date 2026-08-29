@@ -1,0 +1,18 @@
+{
+  "fixture_kind": "stale_replay",
+  "evidence_status": "derived_from_official_documentation_shape",
+  "source": "https://code.claude.com/docs/en/statusline",
+  "captured_at": "2026-08-29T03:30:00.000Z",
+  "payload": {
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 23.5,
+        "resets_at": 1738425600
+      },
+      "seven_day": {
+        "used_percentage": 41.2,
+        "resets_at": 1738857600
+      }
+    }
+  }
+}

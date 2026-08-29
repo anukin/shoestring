@@ -1,0 +1,9 @@
+{
+  "fixture_kind": "disconnect",
+  "evidence_status": "synthetic_fallback_simulation_not_live",
+  "captured_at": "2026-08-29T04:30:00.000Z",
+  "payload": {
+    "transport": "stdio",
+    "outcome": "disconnected_before_rate_limit_response"
+  }
+}

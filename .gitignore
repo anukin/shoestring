@@ -43,6 +43,12 @@ shoestring-*.tar
 
 # Planning documents are intentionally local to this workspace.
 /plans/*
+!/plans/milestones/
+plans/milestones/*
+!/plans/milestones/00a-capacity-feasibility.md
+!/plans/evidence/
+!/plans/evidence/00a-capacity-feasibility/
+!/plans/evidence/00a-capacity-feasibility/**
 
 # Editor, language-server, and OS metadata
 /.elixir_ls/
@@ -53,3 +59,6 @@ shoestring-*.tar
 .env.*
 !.env.example
 /config/*.secret.exs
+
+# Codex runtime scratch (may contain local authentication state).
+/.codex-tmp/
