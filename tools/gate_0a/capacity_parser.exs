@@ -42,46 +42,67 @@ defmodule Shoestring.Gate0A.CapacityParser do
         do: "update_notification",
         else: "explicit_read"
 
-    with rate_limits when is_map(rate_limits) <- rate_limits,
-         {:ok, primary} <- parse_codex_window(Map.get(rate_limits, "primary")),
-         {:ok, secondary} <- parse_codex_window(Map.get(rate_limits, "secondary")) do
-      finish(
-        provider,
-        source_event,
-        observed_at,
-        now,
-        freshness_seconds,
-        %{
-          primary: primary,
-          secondary: secondary,
-          rate_limit_reached_type: string_or_nil(Map.get(rate_limits, "rateLimitReachedType")),
-          spend_control_reached: boolean_or_nil(Map.get(rate_limits, "spendControlReached")),
-          plan_type: string_or_nil(Map.get(rate_limits, "planType")),
-          reset_credit_count: reset_credit_count(reset_credits),
-          reset_credit_detail_state: reset_credit_detail_state(payload)
-        }
-      )
-    else
-      nil ->
+    cond do
+      is_nil(rate_limits) ->
         unknown(provider, "missing_rate_limits", %{
           now: now,
           observed_at: observed_at,
           freshness_seconds: freshness_seconds
         })
 
-      {:error, reason} ->
-        unknown(provider, normalize_reason(reason), %{
-          now: now,
-          observed_at: observed_at,
-          freshness_seconds: freshness_seconds
-        })
-
-      _ ->
+      not is_map(rate_limits) ->
         unknown(provider, "malformed_rate_limits", %{
           now: now,
           observed_at: observed_at,
           freshness_seconds: freshness_seconds
         })
+
+      codex_rate_limit_refusal?(rate_limits) ->
+        finish(
+          provider,
+          source_event,
+          observed_at,
+          now,
+          freshness_seconds,
+          %{
+            primary: nil,
+            secondary: nil,
+            rate_limit_reached_type: string_or_nil(Map.get(rate_limits, "rateLimitReachedType")),
+            spend_control_reached: boolean_or_nil(Map.get(rate_limits, "spendControlReached")),
+            plan_type: string_or_nil(Map.get(rate_limits, "planType")),
+            reset_credit_count: reset_credit_count(reset_credits),
+            reset_credit_detail_state: reset_credit_detail_state(payload)
+          }
+        )
+
+      true ->
+        with {:ok, primary} <- parse_codex_window(Map.get(rate_limits, "primary")),
+             {:ok, secondary} <- parse_codex_window(Map.get(rate_limits, "secondary")) do
+          finish(
+            provider,
+            source_event,
+            observed_at,
+            now,
+            freshness_seconds,
+            %{
+              primary: primary,
+              secondary: secondary,
+              rate_limit_reached_type:
+                string_or_nil(Map.get(rate_limits, "rateLimitReachedType")),
+              spend_control_reached: boolean_or_nil(Map.get(rate_limits, "spendControlReached")),
+              plan_type: string_or_nil(Map.get(rate_limits, "planType")),
+              reset_credit_count: reset_credit_count(reset_credits),
+              reset_credit_detail_state: reset_credit_detail_state(payload)
+            }
+          )
+        else
+          {:error, reason} ->
+            unknown(provider, normalize_reason(reason), %{
+              now: now,
+              observed_at: observed_at,
+              freshness_seconds: freshness_seconds
+            })
+        end
     end
   end
 
@@ -103,6 +124,17 @@ defmodule Shoestring.Gate0A.CapacityParser do
           details: %{subtype: Map.get(payload, "subtype")},
           reason: "cli_reported_rate_limit_refusal_without_capacity_snapshot"
         }
+
+      claude_provider_error?(payload) ->
+        unknown(provider, "provider_error", %{
+          now: now,
+          observed_at: observed_at,
+          freshness_seconds: freshness_seconds
+        })
+        |> Map.merge(%{
+          source_event: "headless_result_error",
+          details: %{subtype: string_or_nil(Map.get(payload, "subtype"))}
+        })
 
       is_nil(rate_limits) ->
         unknown(
@@ -191,14 +223,16 @@ defmodule Shoestring.Gate0A.CapacityParser do
     required_windows = Map.take(windows, required_keys)
     valid_windows = required_windows |> Map.values() |> Enum.count(&is_map/1)
     missing_windows = required_windows |> Map.values() |> Enum.count(&is_nil/1)
-    malformed? = Enum.any?(windows, &match?({:error, _}, &1))
-
     details = Map.drop(details, [:primary, :secondary, :five_hour, :seven_day, :spend_limit])
     reached? = details[:rate_limit_reached_type] not in [nil, ""]
-    state = state_for(valid_windows, missing_windows, malformed?, reached?, freshness)
+    state = state_for(valid_windows, missing_windows, reached?, freshness)
 
     availability =
-      if reached?, do: "refused", else: if(valid_windows > 0, do: "available", else: "unknown")
+      cond do
+        reached? -> "refused"
+        state in ["observed", "degraded"] and valid_windows > 0 -> "available"
+        true -> "unknown"
+      end
 
     %{
       provider: provider,
@@ -210,16 +244,16 @@ defmodule Shoestring.Gate0A.CapacityParser do
       freshness: freshness,
       windows: windows,
       details: details,
-      reason: reason_for(state, valid_windows, missing_windows, malformed?, reached?)
+      reason: reason_for(state, valid_windows, missing_windows, reached?, freshness)
     }
   end
 
-  defp state_for(_valid, _missing, _malformed, true, _freshness), do: "refused"
-  defp state_for(_valid, _missing, true, false, _freshness), do: "unknown"
-  defp state_for(0, _missing, false, false, _freshness), do: "unknown"
-  defp state_for(_valid, _missing, false, false, %{state: "stale"}), do: "degraded"
-  defp state_for(_valid, missing, false, false, _freshness) when missing > 0, do: "degraded"
-  defp state_for(_valid, _missing, false, false, _freshness), do: "observed"
+  defp state_for(_valid, _missing, true, _freshness), do: "refused"
+  defp state_for(0, _missing, false, _freshness), do: "unknown"
+  defp state_for(_valid, _missing, false, %{state: "stale"}), do: "degraded"
+  defp state_for(_valid, _missing, false, %{state: "unknown"}), do: "unknown"
+  defp state_for(_valid, missing, false, _freshness) when missing > 0, do: "degraded"
+  defp state_for(_valid, _missing, false, _freshness), do: "observed"
 
   defp confidence_for("observed", _valid, %{state: "fresh"}), do: "high"
   defp confidence_for("refused", _valid, %{state: "fresh"}), do: "high"
@@ -227,18 +261,20 @@ defmodule Shoestring.Gate0A.CapacityParser do
   defp confidence_for("degraded", _valid, _freshness), do: "low"
   defp confidence_for(_state, _valid, _freshness), do: "none"
 
-  defp reason_for("observed", _valid, _missing, _malformed, _reached), do: nil
+  defp reason_for("observed", _valid, _missing, _reached, _freshness), do: nil
 
-  defp reason_for("refused", _valid, _missing, _malformed, _reached),
+  defp reason_for("refused", _valid, _missing, _reached, _freshness),
     do: "provider_reported_rate_limit_reached"
 
-  defp reason_for("unknown", _valid, _missing, true, _reached), do: "malformed_window_value"
-  defp reason_for("unknown", 0, _missing, _malformed, _reached), do: "no_valid_windows"
+  defp reason_for("unknown", _valid, _missing, false, %{state: "unknown"}),
+    do: "missing_or_invalid_observation_timestamp"
 
-  defp reason_for("degraded", _valid, _missing, _malformed, _reached),
+  defp reason_for("unknown", 0, _missing, _reached, _freshness), do: "no_valid_windows"
+
+  defp reason_for("degraded", _valid, _missing, _reached, _freshness),
     do: "partial_or_stale_observation"
 
-  defp reason_for(_state, _valid, _missing, _malformed, _reached), do: "unavailable_observation"
+  defp reason_for(_state, _valid, _missing, _reached, _freshness), do: "unavailable_observation"
 
   defp freshness(nil, _now, max_age),
     do: %{state: "unknown", age_seconds: nil, max_age_seconds: max_age}
@@ -293,9 +329,20 @@ defmodule Shoestring.Gate0A.CapacityParser do
   defp boolean_or_nil(value) when is_boolean(value), do: value
   defp boolean_or_nil(_value), do: nil
 
+  defp codex_rate_limit_refusal?(rate_limits) do
+    case Map.get(rate_limits, "rateLimitReachedType") do
+      value when is_binary(value) -> String.trim(value) != ""
+      _ -> false
+    end
+  end
+
   defp claude_rate_limit_refusal?(payload) do
     Map.get(payload, "is_error") == true and
       Map.get(payload, "subtype") in ["rate_limit", "rate_limit_reached"]
+  end
+
+  defp claude_provider_error?(payload) do
+    Map.get(payload, "is_error") == true
   end
 
   defp reset_credit_count(%{"availableCount" => count}) when is_integer(count), do: count

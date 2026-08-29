@@ -36,7 +36,7 @@ after status discovery. It never emits provider text, identifiers, or raw
 payloads.
 
 The direct live preflight observation was recorded at
-`2026-08-29T04:56:40.090Z`.
+`2026-08-29T05:27:22.868Z`.
 
 ## Current official surfaces
 
@@ -63,8 +63,8 @@ zero usage.
 | Mode | Live result | Tier | Finding |
 | --- | --- | --- | --- |
 | Interactive session with official `statusLine` command | Not live-verified; direct probe authentication unavailable | Conservative/partial, conditional | The documented JSON shape is parseable after a first response, but the observer has no provider refresh request and either window may be absent. |
-| `claude -p --output-format json` | Not live-verified; direct probe authentication unavailable | Reactive-only | The bounded live mode was not run because preflight was unauthenticated. Anthropic documents a structured result envelope but does not document the status-line `rate_limits` object as part of this headless output. Use only explicit CLI error/refusal handling. |
-| `claude -p --output-format stream-json` | Not live-verified; direct probe authentication unavailable | Reactive-only | The bounded live mode was not run because preflight was unauthenticated. The CLI reference documents streaming JSON, but no live rate-limit fields or update cadence were available. Do not infer capacity from assistant text or terminal output. |
+| `claude -p --output-format json` | Not live-verified; direct probe authentication unavailable | Unsupported pending live refusal evidence | The bounded live mode was not run because preflight was unauthenticated. A structured result envelope is documented, but no reliable quota-refusal shape was evidenced; do not use this mode for capacity admission or claim reactive recovery yet. |
+| `claude -p --output-format stream-json` | Not live-verified; direct probe authentication unavailable | Unsupported pending live refusal evidence | The bounded live mode was not run because preflight was unauthenticated. Streaming JSON is documented, but no reliable quota-refusal shape was evidenced; do not infer capacity from assistant text or terminal output. |
 | Colored interactive terminal output / scraping | Not attempted | Unsupported | Explicitly outside the Gate 0A contract and not a proactive source. |
 
 `fixtures/claude/normal-official-shape.json` contains the public documented
@@ -88,8 +88,9 @@ measure:
 - the structured shape of a real subscription refusal.
 
 The parser exercises a clearly labeled synthetic refusal fixture with an
-`is_error=true`, `subtype=rate_limit` result solely to prove the reactive
-fallback. It does not claim that this subtype is an official Claude contract.
+`is_error=true`, `subtype=rate_limit` result solely to prove refusal parsing.
+It does not claim that this subtype is an official Claude contract or that
+headless refusal recovery is currently supported.
 If the live probe later receives an error with another shape, the safe default
 is `unknown` until that shape is explicitly classified.
 
@@ -99,6 +100,6 @@ If the status-line object is absent, stale, malformed, or changes shape,
 Shoestring must not admit proactively. It should label capacity unknown or
 degraded, preserve the trajectory checkpoint, and wait for reset/manual
 confirmation or hand off to a provider with a structured fresh read. Headless
-print/stream modes may report a bounded provider refusal reactively, but a
-generic error must not be confused with a quota refusal. Terminal scraping is
-unsupported.
+print/stream modes are unsupported for this gate until a live, reliable quota
+refusal shape is evidenced. A generic provider error must not be confused with
+a quota refusal. Terminal scraping is unsupported.

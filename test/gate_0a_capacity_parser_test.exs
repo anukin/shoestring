@@ -73,6 +73,72 @@ defmodule Shoestring.Gate0ACapacityParserTest do
     assert result.reason == "provider_reported_rate_limit_reached"
   end
 
+  test "Codex refusal survives malformed windows" do
+    fixture = %{
+      "captured_at" => "2026-08-29T04:30:00.000Z",
+      "payload" => %{
+        "result" => %{
+          "rateLimits" => %{
+            "primary" => %{"usedPercent" => "100"},
+            "secondary" => %{"usedPercent" => :drifted},
+            "rateLimitReachedType" => "rate_limit_reached"
+          }
+        }
+      }
+    }
+
+    result = CapacityParser.parse(:codex, fixture, now: @evaluation_time)
+
+    assert result.state == "refused"
+    assert result.availability == "refused"
+    assert result.windows == %{primary: nil, secondary: nil}
+    assert result.details.rate_limit_reached_type == "rate_limit_reached"
+    assert result.reason == "provider_reported_rate_limit_reached"
+  end
+
+  test "valid Codex windows without captured_at remain unknown" do
+    fixture = %{
+      "payload" => %{
+        "result" => %{
+          "rateLimits" => %{
+            "primary" => %{"usedPercent" => 12},
+            "secondary" => %{"usedPercent" => 16}
+          }
+        }
+      }
+    }
+
+    result = CapacityParser.parse(:codex, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.confidence == "none"
+    assert result.freshness.state == "unknown"
+    assert result.reason == "missing_or_invalid_observation_timestamp"
+  end
+
+  test "valid Codex windows with an invalid captured_at remain unknown" do
+    fixture = %{
+      "captured_at" => "not-a-timestamp",
+      "payload" => %{
+        "result" => %{
+          "rateLimits" => %{
+            "primary" => %{"usedPercent" => 12},
+            "secondary" => %{"usedPercent" => 16}
+          }
+        }
+      }
+    }
+
+    result = CapacityParser.parse(:codex, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.confidence == "none"
+    assert result.freshness.state == "unknown"
+    assert result.reason == "missing_or_invalid_observation_timestamp"
+  end
+
   test "Claude status-line documentation shape parses both windows" do
     result = parse_fixture("claude/normal-official-shape.json", :claude)
 
@@ -96,6 +162,35 @@ defmodule Shoestring.Gate0ACapacityParserTest do
     refute result.windows.five_hour.used_percent == 0
   end
 
+  test "Claude stale replay parses as degraded with low confidence" do
+    result = parse_fixture("claude/stale-replay.json", :claude)
+
+    assert result.state == "degraded"
+    assert result.availability == "available"
+    assert result.confidence == "low"
+    assert result.freshness.state == "stale"
+    assert result.freshness.age_seconds >= 3600
+  end
+
+  test "valid Claude windows without captured_at remain unknown" do
+    fixture = %{
+      "payload" => %{
+        "rate_limits" => %{
+          "five_hour" => %{"used_percentage" => 23.5, "resets_at" => 1_738_425_600},
+          "seven_day" => %{"used_percentage" => 41.2, "resets_at" => 1_738_857_600}
+        }
+      }
+    }
+
+    result = CapacityParser.parse(:claude, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.confidence == "none"
+    assert result.freshness.state == "unknown"
+    assert result.reason == "missing_or_invalid_observation_timestamp"
+  end
+
   test "Claude missing status-line limits is unknown" do
     result = parse_fixture("claude/missing-before-response.json", :claude)
 
@@ -113,7 +208,7 @@ defmodule Shoestring.Gate0ACapacityParserTest do
     assert result.reason == "malformed_claude_window"
   end
 
-  test "a known Claude refusal shape drives reactive fallback without inventing windows" do
+  test "a known Claude refusal shape is explicit without inventing windows" do
     result = parse_fixture("claude/refusal-unverified.json", :claude)
 
     assert result.state == "refused"
@@ -121,6 +216,25 @@ defmodule Shoestring.Gate0ACapacityParserTest do
     assert result.confidence == "medium"
     assert result.windows == %{}
     assert result.reason == "cli_reported_rate_limit_refusal_without_capacity_snapshot"
+  end
+
+  test "generic Claude provider errors are not classified as absent limits" do
+    fixture = %{
+      "captured_at" => "2026-08-29T04:30:00.000Z",
+      "payload" => %{
+        "type" => "result",
+        "subtype" => "provider_error",
+        "is_error" => true
+      }
+    }
+
+    result = CapacityParser.parse(:claude, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.source_event == "headless_result_error"
+    assert result.details.subtype == "provider_error"
+    assert result.reason == "provider_error"
   end
 
   test "disconnect and invalid JSON remain unknown" do
@@ -137,9 +251,52 @@ defmodule Shoestring.Gate0ACapacityParserTest do
   test "concurrent Codex observations are identical in the captured sample" do
     fixture = load_fixture("codex/concurrent-read-live.json")
     observations = fixture["observations"]
+    result = CapacityParser.parse(:codex, fixture, now: ~U[2026-08-29 05:22:17Z])
 
     assert observations |> Enum.map(& &1["rate_limits"]) |> Enum.uniq() |> length() == 1
-    assert fixture["comparison"] == "identical"
+    assert result.state == "observed"
+    assert result.availability == "available"
+    assert result.windows.primary.used_percent == 12
+    assert result.windows.secondary.used_percent == 16
+  end
+
+  test "Codex process-restart fixture parses the re-read snapshot" do
+    fixture = load_fixture("codex/restart-read-live.json")
+    result = parse_fixture("codex/restart-read-live.json", :codex, ~U[2026-08-29 05:22:18Z])
+
+    assert result.state == "observed"
+    assert result.availability == "available"
+    assert result.confidence == "high"
+    assert result.windows.primary.used_percent == 22
+    assert result.windows.secondary.used_percent == 18
+
+    assert Enum.map(
+             fixture["observations"],
+             &get_in(&1, ["rate_limits", "primary", "used_percent"])
+           ) == [22, 22]
+
+    assert Enum.map(
+             fixture["observations"],
+             &get_in(&1, ["rate_limits", "secondary", "used_percent"])
+           ) == [18, 18]
+  end
+
+  test "every Gate 0A fixture yields an explicit normalized state" do
+    fixture_paths =
+      ["codex", "claude"]
+      |> Enum.flat_map(&Path.wildcard(Path.join(@fixture_root, &1 <> "/*.json")))
+
+    for path <- fixture_paths do
+      provider = if String.contains?(path, "/claude/"), do: :claude, else: :codex
+      fixture = path |> File.read!() |> Jason.decode!()
+      result = CapacityParser.parse(provider, fixture, now: @latest_codex_evaluation_time)
+
+      assert result.state in ["observed", "degraded", "refused", "unknown"]
+      assert result.availability in ["available", "refused", "unknown"]
+      assert result.confidence in ["high", "medium", "low", "none"]
+      assert is_map(result.windows)
+      assert Map.has_key?(result, :freshness)
+    end
   end
 
   test "provider executable rejects unsupported modes without raw payload" do

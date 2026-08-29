@@ -47,6 +47,7 @@ shoestring-*.tar
 plans/milestones/*
 !/plans/milestones/00a-capacity-feasibility.md
 !/plans/evidence/
+plans/evidence/*
 !/plans/evidence/00a-capacity-feasibility/
 !/plans/evidence/00a-capacity-feasibility/**
 

@@ -3,40 +3,47 @@
 const {execFileSync, spawn} = require("node:child_process")
 const readline = require("node:readline")
 
-Promise.all([readSnapshot("session_a"), readSnapshot("session_b")])
-  .then(observations => {
-    process.stdout.write(`${JSON.stringify({
-      schema_version: 1,
-      evidence_status: "live_observed",
-      provider: "codex",
-      cli_version: versionOf("codex"),
-      runtime: {
-        os: process.platform,
-        architecture: process.arch,
-        node_version: process.version,
-      },
-      invocation_mode: "two concurrent codex app-server --stdio connections",
-      observed_at: new Date().toISOString(),
-      observations,
-      comparison: compare(observations),
-      limitations: [
-        "The two connections read the same account without starting model turns.",
-        "This is one point-in-time concurrency sample, not a universal synchronization guarantee.",
-        "Opaque identifiers, paths, and all unrelated payload fields were discarded.",
-      ],
-    }, null, 2)}\n`)
+readAfterRestart()
+  .then(output => {
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
   })
   .catch(_error => {
     process.stdout.write(`${JSON.stringify({
       schema_version: 1,
       evidence_status: "live_observed",
       provider: "codex",
-      invocation_mode: "two concurrent codex app-server --stdio connections",
+      invocation_mode: "codex app-server --stdio process restart",
       outcome: "probe_failed",
       failure: "process_or_protocol_error",
     }, null, 2)}\n`)
     process.exitCode = 1
   })
+
+async function readAfterRestart() {
+  const first = await readSnapshot("before_restart")
+  const second = await readSnapshot("after_restart")
+
+  return {
+    schema_version: 1,
+    evidence_status: "live_observed",
+    provider: "codex",
+    cli_version: versionOf("codex"),
+    runtime: {
+      os: process.platform,
+      architecture: process.arch,
+      node_version: process.version,
+    },
+    invocation_mode: "codex app-server --stdio process restart",
+    observed_at: new Date().toISOString(),
+    observations: [first, second],
+    comparison: compare(first, second),
+    limitations: [
+      "Each observation is a fresh account/rate-limit read after a new App Server process was started.",
+      "This is a restart consistency sample, not a guarantee about future process or provider behavior.",
+      "Opaque identifiers, paths, and unrelated payload fields were discarded.",
+    ],
+  }
+}
 
 function versionOf(command) {
   try {
@@ -102,17 +109,15 @@ function readSnapshot(label) {
       resolve(observation)
     }
 
-    const failure = category => {
+    const processFailure = code => {
       for (const entry of pending.values()) {
         clearTimeout(entry.timer)
-        entry.reject({code: category})
       }
-
-      finish({session: label, outcome: category})
+      finish({session: label, outcome: code})
     }
 
-    child.once("error", _error => failure("executable_unavailable"))
-    child.stdin.once("error", _error => failure("process_io_error"))
+    child.once("error", _error => processFailure("executable_unavailable"))
+    child.stdin.once("error", _error => processFailure("process_io_error"))
 
     lines.on("line", line => {
       let message
@@ -128,9 +133,16 @@ function readSnapshot(label) {
       pending.delete(message.id)
 
       if (message.error) {
-        entry.reject({code: "provider_rpc_error"})
+        finish({session: label, outcome: "provider_rpc_error"})
       } else if (!message.result || typeof message.result !== "object") {
-        entry.reject({code: "malformed_provider_response"})
+        finish({session: label, outcome: "malformed_provider_response"})
+      } else if (entry.method === "account/rateLimits/read") {
+        finish({
+          session: label,
+          outcome: "observed",
+          observed_at: new Date().toISOString(),
+          rate_limits: safeSnapshot(message.result),
+        })
       } else {
         entry.resolve(message.result)
       }
@@ -140,16 +152,16 @@ function readSnapshot(label) {
       const id = nextId++
       const timer = setTimeout(() => {
         pending.delete(id)
-        rejectRequest({code: "timed_out"})
+        rejectRequest({code: "TIMEOUT"})
       }, 30000)
-      pending.set(id, {resolve: resolveRequest, reject: rejectRequest, timer})
+      pending.set(id, {method, resolve: resolveRequest, reject: rejectRequest, timer})
 
       try {
         child.stdin.write(`${JSON.stringify({method, id, params})}\n`)
       } catch (_error) {
         clearTimeout(timer)
         pending.delete(id)
-        rejectRequest({code: "process_io_error"})
+        rejectRequest({code: "PROCESS_IO_ERROR"})
       }
     })
 
@@ -157,31 +169,38 @@ function readSnapshot(label) {
       try {
         await request("initialize", {
           clientInfo: {
-            name: "shoestring_gate_0a_concurrent",
-            title: "Shoestring Gate 0A concurrent read",
+            name: "shoestring_gate_0a_restart",
+            title: "Shoestring Gate 0A restart read",
             version: "0.1.0",
           },
         })
         child.stdin.write('{"method":"initialized","params":{}}\n')
         const result = await request("account/rateLimits/read", {})
-        finish({
-          session: label,
-          outcome: "observed",
-          observed_at: new Date().toISOString(),
-          rate_limits: safeSnapshot(result),
-        })
+        if (!settled) {
+          finish({
+            session: label,
+            outcome: "observed",
+            observed_at: new Date().toISOString(),
+            rate_limits: safeSnapshot(result),
+          })
+        }
       } catch (error) {
-        finish({session: label, outcome: error && error.code || "process_or_protocol_error"})
+        if (!settled) {
+          const outcome = error && error.code === "TIMEOUT"
+            ? "timed_out"
+            : error && error.code === "PROCESS_IO_ERROR"
+              ? "process_io_error"
+              : "provider_rpc_error"
+          finish({session: label, outcome})
+        }
       }
     })()
   })
 }
 
-function compare(observations) {
-  if (observations.length !== 2) return "inconclusive"
-  if (observations.some(observation => observation.outcome !== "observed")) return "inconclusive"
-
-  return JSON.stringify(observations[0].rate_limits) === JSON.stringify(observations[1].rate_limits)
+function compare(first, second) {
+  if (first.outcome !== "observed" || second.outcome !== "observed") return "inconclusive"
+  return JSON.stringify(first.rate_limits) === JSON.stringify(second.rate_limits)
     ? "identical"
     : "divergent"
 }

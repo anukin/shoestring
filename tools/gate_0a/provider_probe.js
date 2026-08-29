@@ -86,13 +86,6 @@ function rateLimitsSnapshot(result) {
   }
 }
 
-function rpcFailure(error) {
-  return {
-    code: error && Number.isInteger(error.code) ? error.code : null,
-    category: "provider_rpc_error",
-  }
-}
-
 function turnCompletion(message) {
   const turn = message && message.params && message.params.turn
   return {
@@ -233,8 +226,10 @@ function classifyClaudeOutcome(result, messages) {
 }
 
 function countClaudeMessageTypes(messages) {
+  const knownTypes = new Set(["assistant", "rate_limit_event", "result", "stream_event", "system", "user"])
+
   return messages.reduce((counts, message) => {
-    const type = typeof message.type === "string" ? message.type : "unknown"
+    const type = knownTypes.has(message.type) ? message.type : "other"
     counts[type] = (counts[type] || 0) + 1
     return counts
   }, {})
@@ -306,6 +301,29 @@ async function runCodexProbe() {
   }
 
   const lines = readline.createInterface({input: child.stdout})
+
+  const rejectPending = error => {
+    for (const [id, entry] of pending) {
+      clearTimeout(entry.timer)
+      pending.delete(id)
+      entry.reject(error)
+    }
+
+    for (const waiter of notificationWaiters.splice(0)) {
+      clearTimeout(waiter.timer)
+      waiter.reject(error)
+    }
+  }
+
+  const onProcessError = _error => {
+    const error = new Error("provider process unavailable")
+    error.code = "SPAWN_ERROR"
+    rejectPending(error)
+  }
+
+  child.on("error", onProcessError)
+  child.stdin.on("error", onProcessError)
+  child.stdout.on("error", onProcessError)
   lines.on("line", line => {
     let message
     try {
@@ -315,9 +333,18 @@ async function runCodexProbe() {
     }
 
     if (message && message.id !== undefined && pending.has(message.id)) {
-      const resolve = pending.get(message.id)
+      const entry = pending.get(message.id)
       pending.delete(message.id)
-      resolve(message)
+      clearTimeout(entry.timer)
+
+      if (message.error) {
+        const error = new Error("provider request failed")
+        error.code = "RPC_ERROR"
+        error.rpc_code = Number.isInteger(message.error.code) ? message.error.code : null
+        entry.reject(error)
+      } else {
+        entry.resolve(message)
+      }
       return
     }
 
@@ -341,6 +368,7 @@ async function runCodexProbe() {
       const waiter = notificationWaiters[index]
       if (waiter.predicate(message)) {
         notificationWaiters.splice(index, 1)
+        clearTimeout(waiter.timer)
         waiter.resolve(message)
       }
     }
@@ -348,7 +376,6 @@ async function runCodexProbe() {
 
   const request = (method, params) => {
     const id = nextId++
-    child.stdin.write(`${JSON.stringify({method, id, params})}\n`)
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -358,10 +385,17 @@ async function runCodexProbe() {
         reject(error)
       }, 30000)
 
-      pending.set(id, message => {
+      pending.set(id, {resolve, reject, timer})
+
+      try {
+        child.stdin.write(`${JSON.stringify({method, id, params})}\n`)
+      } catch (_error) {
         clearTimeout(timer)
-        resolve(message)
-      })
+        pending.delete(id)
+        const processError = new Error("provider process unavailable")
+        processError.code = "SPAWN_ERROR"
+        reject(processError)
+      }
     })
   }
 
@@ -370,18 +404,15 @@ async function runCodexProbe() {
   }
 
   const waitForNotification = predicate => new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    const waiter = {predicate, timer: null, reject, resolve}
+    waiter.timer = setTimeout(() => {
+      const index = notificationWaiters.indexOf(waiter)
+      if (index >= 0) notificationWaiters.splice(index, 1)
       const error = new Error("notification timed out")
       error.code = "TIMEOUT"
       reject(error)
     }, 30000)
-    notificationWaiters.push({
-      predicate,
-      resolve: message => {
-        clearTimeout(timer)
-        resolve(message)
-      },
-    })
+    notificationWaiters.push(waiter)
   })
 
   const checkedRequest = async (method, params) => {
@@ -468,16 +499,23 @@ async function runCodexProbe() {
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
   } catch (error) {
     output.outcome = error && error.code === "TIMEOUT" ? "timed_out" : "failed"
-    output.failure = error && Number.isInteger(error.code) ? rpcFailure(error) : {
-      category: "process_or_protocol_error",
-    }
+    output.failure = failureSnapshot(error)
     output.finished_at = now()
     output.live_notification_count = rateLimitUpdates.length
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
     process.exitCode = 1
     return
   } finally {
+    for (const entry of pending.values()) clearTimeout(entry.timer)
+    for (const waiter of notificationWaiters) clearTimeout(waiter.timer)
     lines.close()
     child.kill("SIGTERM")
   }
+}
+
+function failureSnapshot(error) {
+  if (error && error.code === "TIMEOUT") return {category: "timed_out"}
+  if (error && error.code === "SPAWN_ERROR") return {category: "executable_unavailable"}
+  if (error && error.code === "RPC_ERROR") return {category: "provider_rpc_error"}
+  return {category: "process_or_protocol_error"}
 }

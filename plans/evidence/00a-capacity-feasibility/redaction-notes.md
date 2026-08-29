@@ -34,8 +34,9 @@ the documentation-shaped fixture is a placeholder, not an account value.
 
 ## Probe behavior
 
-`tools/gate_0a/provider_probe.js` and
-`tools/gate_0a/concurrent_codex_read.js` keep provider messages in memory only
+`tools/gate_0a/provider_probe.js`,
+`tools/gate_0a/concurrent_codex_read.js`, and
+`tools/gate_0a/codex_restart_read.js` keep provider messages in memory only
 and project them through an allowlist before writing stdout. They ignore raw
 stderr and never write a raw capture. The Codex turn prompt is fixed and
 non-sensitive; its text and the response text are not included in output.

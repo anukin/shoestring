@@ -25,6 +25,7 @@ From the repository root:
 ```text
 node tools/gate_0a/provider_probe.js codex
 node tools/gate_0a/concurrent_codex_read.js
+node tools/gate_0a/codex_restart_read.js
 mix test test/gate_0a_capacity_parser_test.exs
 ```
 
@@ -72,8 +73,10 @@ Two `account/rateLimits/updated` notifications were received during the two
 turns, at `04:38:19.099Z` and `04:38:20.540Z`. Their primary and secondary
 windows matched the subsequent explicit reads. Both notifications were sparse:
 they omitted `spendControlReached`, reset-credit details, and the multi-bucket
-map. The parser preserves the last known value for omitted nullable fields and
-does not convert omission to false, zero, or an empty bucket.
+map. The probe emits omitted nullable fields as absent. A future production
+merge layer must preserve the last known value when applying such sparse
+updates; the Gate 0A parser normalizes one captured payload and does not
+perform that merge. Omission must never become false, zero, or an empty bucket.
 
 In this client-receipt sample each notification arrived approximately 1 ms
 before the corresponding `turn/completed` event; no notification arriving after
@@ -93,8 +96,15 @@ request with an evidence timestamp, not as synchronized metering.
 
 - Startup-before-response was verified: the initial `account/rateLimits/read`
   happened before either turn.
+- Process restart was verified live at `2026-08-29T05:22:15.906Z`: one App
+  Server process was stopped after a read, a new process completed the same
+  handshake and read, and both sanitized snapshots reported 22% primary, 18%
+  secondary, the same durations/resets, `plan_type=plus`, and no refusal. The
+  re-read was approximately 1,134 ms after the first observation. This is one
+  consistency sample, not proof that all provider state survives every future
+  restart.
 - A second probe launched two fresh App Server processes concurrently at
-  `04:31:30.873Z`; both returned identical 12% primary and 16% secondary
+  `05:22:15.986Z`; both returned identical 22% primary and 18% secondary
   snapshots, including durations, resets, plan class, and no refusal. This is
   evidence that the two connections observed the same account-level value at
   that instant. It is one sample and does not prove cross-session enforcement or
@@ -116,6 +126,9 @@ is treated as zero usage or unlimited capacity.
 - `fixtures/codex/normal-read.json` is a redacted live explicit-read result.
 - `fixtures/codex/sparse-update-live.json` is a redacted live sparse update.
 - `fixtures/codex/concurrent-read-live.json` is the redacted two-process sample.
+- `fixtures/codex/restart-read-live.json` is the redacted process-restart and
+  re-read sample; its `payload` is the parser-consumable first read and its
+  `observations` retain only the two normalized comparisons.
 - `fixtures/codex/partial-missing-secondary.json` is a labeled documentation
   shape for an absent optional bucket.
 - `fixtures/codex/stale-replay.json`, `malformed-replay.json`,
