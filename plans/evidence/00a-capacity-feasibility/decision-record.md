@@ -37,12 +37,13 @@ and Node probes live under `tools/gate_0a/` and are intentionally disposable.
   sanitized 22%/18% primary/secondary windows before and after restarting the
   App Server process. This supports restart revalidation, not a provider-wide
   persistence guarantee.
-- Claude Code `2.1.251`, same macOS/arm64 environment, failed this worktree's
-  non-invasive authentication check with `loggedIn=false`, `authMethod=none`.
-  A separate verification report supplied to this work item reported
-  `loggedIn=true`, `authMethod=claude.ai`, but no sanitized model/status-line
-  capture was supplied. Claude claims in this commit therefore remain limited
-  to current official documentation and labeled replay fixtures.
+- Claude Code `2.1.251`, same macOS/arm64 environment, was authenticated by the
+  user through the official browser flow. The bounded live run at
+  `2026-08-29T06:22:56.629Z` completed JSON mode without a rate-limit signal;
+  stream-json exited with a process error and no structured messages. No
+  status-line callback or structured refusal was captured, so headless modes
+  remain unsupported pending refusal evidence and the interactive surface
+  remains conditional conservative/partial.
 - The official current sources are linked from
   `codex-observations.md` and `claude-observations.md`.
 
@@ -63,13 +64,14 @@ a reliable live refusal shape is captured.
 
 ## Acceptance status
 
-The acceptance gate is **not yet satisfied** because this worktree could not
-run the authenticated Claude probes. The safe evidence work is complete, but
-no completion record is filled and the milestone remains `in_progress`. The
-minimal follow-up is to make the already-authenticated Claude CLI session
-available to this worktree and rerun `node tools/gate_0a/provider_probe.js
-claude`; no credentials need to be shared.
+The acceptance gate is **not yet satisfied**: the authenticated headless run
+produced no capacity signal, the interactive status-line and structured
+refusal behaviors remain unverified, and no remote/PR is available for review.
+No completion record is filled and the milestone remains `in_progress`. The
+minimal evidence follow-up is an authenticated interactive status-line or
+structured refusal capture if the product needs either capability; no
+credentials need to be shared.
 
-The missing live Claude evidence is not a reason to promote the documented
-shape to a proactive product claim. Once authentication is available, rerun the
-minimal Claude observer and update the matrix only with observed results.
+The live headless result is not a reason to promote the documented shape to a
+proactive or reactive product claim. Keep the current fallback until a
+structured Claude capacity or refusal signal is actually observed.

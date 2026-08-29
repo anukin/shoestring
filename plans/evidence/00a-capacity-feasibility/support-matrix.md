@@ -10,9 +10,9 @@ Decision date: 2026-08-28 local. Live probe timestamps are UTC on
 | Codex App Server over stdio: `account/rateLimits/updated` during two normal no-tool turns plus post-turn reads | Live, authenticated | **proactive** with bounded freshness | Refresh at response/tool boundaries and renew only after a fresh-enough read | Updates are sparse and may omit nullable fields. Merge them into the latest snapshot; never clear known fields from an omission. |
 | Codex: two concurrent App Server processes reading the same account | Live, authenticated, one point-in-time sample at `2026-08-29T05:35:03.082Z`; both 26% primary/18% secondary | **proactive** with concurrency reserve | The sample supports account-level use for this session, with a configured reserve | Identical readings do not prove synchronized enforcement across all sessions or future versions. Keep leases bounded and reserve capacity for another session. |
 | Codex: stop one App Server process, start a new one, and re-read the account | Live, authenticated, one point-in-time sample | **proactive** with restart revalidation | Re-run handshake and rate-limit read after process restart before renewing a lease | Identical snapshots in one restart sample do not prove all provider state survives every restart. A failed or malformed re-read disables admission. |
-| Claude interactive status line receiving documented JSON | Documentation-shaped replay only; direct probe authentication unavailable (independent verification reported an authenticated result, but supplied no capture) | **conservative/partial** (conditional) | Optional observer after an authenticated interactive session supplies the official `rate_limits` object | Values appear only after the first API response; each window may be absent; no request-refresh API or live concurrency result was verified. Absent/drifted input becomes unknown and disables proactive admission. |
-| Claude `-p --output-format json` | CLI surface documented; direct probe authentication unavailable | **unsupported pending live refusal evidence** | None for capacity admission; preserve a checkpoint and require manual/provider confirmation | The bounded live mode was not run because preflight was unauthenticated. The output format is not documented as carrying the status-line `rate_limits` object, and no reliable quota-refusal shape was evidenced. |
-| Claude `-p --output-format stream-json` | CLI surface documented; direct probe authentication unavailable | **unsupported pending live refusal evidence** | None for capacity admission; preserve a checkpoint and require manual/provider confirmation | The bounded live mode was not run because preflight was unauthenticated. No reliable quota-refusal shape, live rate-limit fields, update cadence, restart behavior, or concurrent-session visibility was verified. Do not scrape terminal text. |
+| Claude interactive status line receiving documented JSON | Authentication live-verified; callback not observed | **conservative/partial** (conditional) | Optional observer after an authenticated interactive session supplies the official `rate_limits` object | Values appear only after the first API response; each window may be absent; no request-refresh API or live concurrency result was verified. Absent/drifted input becomes unknown and disables proactive admission. |
+| Claude `-p --output-format json` | Live authenticated probe completed at `2026-08-29T06:22:56.629Z`; rate-limit signal absent | **unsupported pending live refusal evidence** | None for capacity admission; preserve a checkpoint and require manual/provider confirmation | The structured result completed without the status-line `rate_limits` object or a reliable quota-refusal shape. Do not claim reactive recovery from this result. |
+| Claude `-p --output-format stream-json` | Live authenticated probe exited with `process_error` (status 1); no structured messages | **unsupported pending live refusal evidence** | None for capacity admission; preserve a checkpoint and require manual/provider confirmation | No rate-limit signal or refusal shape was captured. A process error is not a quota refusal. Do not scrape terminal text. |
 | Claude colored terminal output or terminal scraping | Explicitly excluded | **unsupported** | None for MVP capacity admission | Scraping is not a structured provider contract. Preserve a checkpoint on a refusal and require a fresh official observer or manual confirmation. |
 
 ## MVP decision
@@ -23,10 +23,12 @@ required windows, and is renewed at a safe harness boundary. This five-minute
 threshold is a Shoestring freshness policy, not a Codex guarantee.
 
 Claude headless print and stream modes remain unsupported pending live refusal
-evidence. The documented interactive status-line surface is a conditional conservative/partial
-extension, not a claim that this worktree currently supports it. The product
-claim remains useful because Codex is proactively observable: Claude work can
-be checkpointed when a future verified refusal occurs or handed to Codex.
+evidence. The authenticated JSON probe completed without a capacity signal, and
+the stream probe produced only a process error. The documented interactive
+status-line surface is a conditional conservative/partial extension, not a
+claim that this worktree currently observes it. The product claim remains
+useful because Codex is proactively observable: Claude work can be checkpointed
+when a future verified refusal occurs or handed to Codex.
 Unknown, stale, missing, or malformed capacity never means unlimited
 availability.
 
