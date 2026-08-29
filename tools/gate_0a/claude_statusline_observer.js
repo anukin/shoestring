@@ -52,18 +52,19 @@ function normalizeStatusLineInput(input, observedAt) {
   }
 
   const rateLimits = input.rate_limits
+  const rateLimitSignal = rateLimits && typeof rateLimits === "object" && !Array.isArray(rateLimits)
+    ? "observed"
+    : "absent"
 
   return {
     schema_version: 1,
-    evidence_status: "live_observed",
+    evidence_status: rateLimitSignal === "observed" ? "live_observed" : "live_unverified",
     provider: "claude",
     source_event: "status_line_callback",
     probe_run: RUN_LABEL,
     observed_at: observedAt,
     cli_version: typeof input.version === "string" ? input.version : null,
-    rate_limit_signal: rateLimits && typeof rateLimits === "object" && !Array.isArray(rateLimits)
-      ? "observed"
-      : "absent",
+    rate_limit_signal: rateLimitSignal,
     rate_limits: safeRateLimits(rateLimits),
   }
 }

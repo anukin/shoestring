@@ -19,10 +19,22 @@ defmodule Shoestring.Gate0A.CapacityParser do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     freshness_seconds = Keyword.get(opts, :freshness_seconds, @default_freshness_seconds)
 
-    case provider do
-      "codex" -> parse_codex(payload, provider, observed_at, now, freshness_seconds)
-      "claude" -> parse_claude(payload, provider, observed_at, now, freshness_seconds)
-      _ -> unknown(provider, "unsupported_provider", opts)
+    cond do
+      not is_map(payload) ->
+        unknown(provider, "malformed_payload", %{
+          now: now,
+          observed_at: observed_at,
+          freshness_seconds: freshness_seconds
+        })
+
+      provider == "codex" ->
+        parse_codex(payload, provider, observed_at, now, freshness_seconds)
+
+      provider == "claude" ->
+        parse_claude(payload, provider, observed_at, now, freshness_seconds)
+
+      true ->
+        unknown(provider, "unsupported_provider", opts)
     end
   end
 
@@ -30,80 +42,119 @@ defmodule Shoestring.Gate0A.CapacityParser do
     do: unknown(provider_name(provider), "malformed_fixture", opts)
 
   defp parse_codex(payload, provider, observed_at, now, freshness_seconds) do
-    rate_limits =
-      get_in(payload, ["result", "rateLimits"]) ||
-        get_in(payload, ["params", "rateLimits"]) ||
-        Map.get(payload, "rateLimits")
-
-    reset_credits = get_in(payload, ["result", "rateLimitResetCredits"])
-
     source_event =
       if Map.get(payload, "method") == "account/rateLimits/updated",
         do: "update_notification",
         else: "explicit_read"
 
-    cond do
-      is_nil(rate_limits) ->
-        unknown(provider, "missing_rate_limits", %{
-          now: now,
-          observed_at: observed_at,
-          freshness_seconds: freshness_seconds
-        })
-
-      not is_map(rate_limits) ->
+    case find_codex_rate_limits(payload) do
+      :error ->
         unknown(provider, "malformed_rate_limits", %{
           now: now,
           observed_at: observed_at,
           freshness_seconds: freshness_seconds
         })
 
-      codex_rate_limit_refusal?(rate_limits) ->
-        finish(
-          provider,
-          source_event,
-          observed_at,
-          now,
-          freshness_seconds,
-          %{
-            primary: nil,
-            secondary: nil,
-            rate_limit_reached_type: string_or_nil(Map.get(rate_limits, "rateLimitReachedType")),
-            spend_control_reached: boolean_or_nil(Map.get(rate_limits, "spendControlReached")),
-            plan_type: string_or_nil(Map.get(rate_limits, "planType")),
-            reset_credit_count: reset_credit_count(reset_credits),
-            reset_credit_detail_state: reset_credit_detail_state(payload)
-          }
-        )
+      {:ok, rate_limits} ->
+        reset_credits =
+          case dig(payload, ["result", "rateLimitResetCredits"]) do
+            {:ok, value} -> value
+            :error -> nil
+          end
 
-      true ->
-        with {:ok, primary} <- parse_codex_window(Map.get(rate_limits, "primary")),
-             {:ok, secondary} <- parse_codex_window(Map.get(rate_limits, "secondary")) do
-          finish(
-            provider,
-            source_event,
-            observed_at,
-            now,
-            freshness_seconds,
-            %{
-              primary: primary,
-              secondary: secondary,
-              rate_limit_reached_type:
-                string_or_nil(Map.get(rate_limits, "rateLimitReachedType")),
-              spend_control_reached: boolean_or_nil(Map.get(rate_limits, "spendControlReached")),
-              plan_type: string_or_nil(Map.get(rate_limits, "planType")),
-              reset_credit_count: reset_credit_count(reset_credits),
-              reset_credit_detail_state: reset_credit_detail_state(payload)
-            }
-          )
-        else
-          {:error, reason} ->
-            unknown(provider, normalize_reason(reason), %{
+        cond do
+          is_nil(rate_limits) ->
+            unknown(provider, "missing_rate_limits", %{
               now: now,
               observed_at: observed_at,
               freshness_seconds: freshness_seconds
             })
+
+          not is_map(rate_limits) ->
+            unknown(provider, "malformed_rate_limits", %{
+              now: now,
+              observed_at: observed_at,
+              freshness_seconds: freshness_seconds
+            })
+
+          codex_rate_limit_refusal?(rate_limits) ->
+            finish(
+              provider,
+              source_event,
+              observed_at,
+              now,
+              freshness_seconds,
+              %{
+                primary: nil,
+                secondary: nil,
+                rate_limit_reached_type:
+                  string_or_nil(Map.get(rate_limits, "rateLimitReachedType")),
+                spend_control_reached:
+                  boolean_or_nil(Map.get(rate_limits, "spendControlReached")),
+                plan_type: string_or_nil(Map.get(rate_limits, "planType")),
+                reset_credit_count: reset_credit_count(reset_credits),
+                reset_credit_detail_state: reset_credit_detail_state(payload)
+              }
+            )
+
+          true ->
+            with {:ok, primary} <- parse_codex_window(Map.get(rate_limits, "primary")),
+                 {:ok, secondary} <- parse_codex_window(Map.get(rate_limits, "secondary")) do
+              finish(
+                provider,
+                source_event,
+                observed_at,
+                now,
+                freshness_seconds,
+                %{
+                  primary: primary,
+                  secondary: secondary,
+                  rate_limit_reached_type:
+                    string_or_nil(Map.get(rate_limits, "rateLimitReachedType")),
+                  spend_control_reached:
+                    boolean_or_nil(Map.get(rate_limits, "spendControlReached")),
+                  plan_type: string_or_nil(Map.get(rate_limits, "planType")),
+                  reset_credit_count: reset_credit_count(reset_credits),
+                  reset_credit_detail_state: reset_credit_detail_state(payload)
+                }
+              )
+            else
+              {:error, reason} ->
+                unknown(provider, normalize_reason(reason), %{
+                  now: now,
+                  observed_at: observed_at,
+                  freshness_seconds: freshness_seconds
+                })
+            end
         end
     end
+  end
+
+  defp find_codex_rate_limits(payload) do
+    case dig(payload, ["result", "rateLimits"]) do
+      :error ->
+        :error
+
+      {:ok, nil} ->
+        case dig(payload, ["params", "rateLimits"]) do
+          :error -> :error
+          {:ok, nil} -> {:ok, Map.get(payload, "rateLimits")}
+          {:ok, value} -> {:ok, value}
+        end
+
+      {:ok, value} ->
+        {:ok, value}
+    end
+  end
+
+  defp dig(container, keys) do
+    Enum.reduce_while(keys, {:ok, container}, fn key, {:ok, acc} ->
+      cond do
+        is_map(acc) -> {:cont, {:ok, Map.get(acc, key)}}
+        is_nil(acc) -> {:cont, {:ok, nil}}
+        true -> {:halt, :error}
+      end
+    end)
   end
 
   defp parse_claude(payload, provider, observed_at, now, freshness_seconds) do

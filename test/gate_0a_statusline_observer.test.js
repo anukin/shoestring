@@ -51,6 +51,16 @@ test("keeps absent or malformed windows explicit without inventing usage", () =>
   })
 })
 
+test("marks a startup callback with no rate-limit object as unverified, not live_observed", () => {
+  const result = normalizeStatusLineInput({
+    version: "2.1.251 (Claude Code)",
+  }, "2026-08-29T07:00:00.000Z")
+
+  assert.equal(result.evidence_status, "live_unverified")
+  assert.equal(result.rate_limit_signal, "absent")
+  assert.equal(result.rate_limits, null)
+})
+
 test("does not expose malformed callback input", () => {
   const result = normalizeStatusLineInput(null, "2026-08-29T07:00:02.000Z")
 

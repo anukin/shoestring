@@ -20,11 +20,12 @@ if (!VALID_MODES.has(MODE)) {
   process.exitCode = 2
 } else {
   runProbe().then(output => {
+    if (output.evidence_status === "error") process.exitCode = 1
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
   }).catch(_error => {
     process.stdout.write(`${JSON.stringify({
       schema_version: 1,
-      evidence_status: "sanitized_probe_error",
+      evidence_status: "error",
       provider: "claude",
       invocation_mode: "interactive statusLine command",
       outcome: "probe_failed",
@@ -50,10 +51,18 @@ async function runProbe() {
       ? await Promise.all(labels.map(label => runSession(label, settings, captureFile)))
       : labels.map(label => runSessionSync(label, settings, captureFile))
     const callbacks = readCallbacks(captureFile)
+    const observedCallback = callbacks.some(callback => callback.rate_limit_signal === "observed")
+    const allProcessesFailed = processResults.length > 0 &&
+      processResults.every(result => result.outcome !== "completed")
+    const evidenceStatus = observedCallback
+      ? "live_observed"
+      : allProcessesFailed
+        ? "error"
+        : "live_unverified"
 
     return {
       schema_version: 1,
-      evidence_status: "live_observed",
+      evidence_status: evidenceStatus,
       provider: "claude",
       cli_version: versionOf("claude"),
       runtime: {

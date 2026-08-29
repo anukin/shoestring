@@ -5,12 +5,13 @@ const readline = require("node:readline")
 
 readAfterRestart()
   .then(output => {
+    if (output.evidence_status === "error") process.exitCode = 1
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
   })
   .catch(_error => {
     process.stdout.write(`${JSON.stringify({
       schema_version: 1,
-      evidence_status: "live_observed",
+      evidence_status: "error",
       provider: "codex",
       invocation_mode: "codex app-server --stdio process restart",
       outcome: "probe_failed",
@@ -22,10 +23,11 @@ readAfterRestart()
 async function readAfterRestart() {
   const first = await readSnapshot("before_restart")
   const second = await readSnapshot("after_restart")
+  const anyObserved = [first, second].some(observation => observation.outcome === "observed")
 
   return {
     schema_version: 1,
-    evidence_status: "live_observed",
+    evidence_status: anyObserved ? "live_observed" : "error",
     provider: "codex",
     cli_version: versionOf("codex"),
     runtime: {

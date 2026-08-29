@@ -5,9 +5,12 @@ const readline = require("node:readline")
 
 Promise.all([readSnapshot("session_a"), readSnapshot("session_b")])
   .then(observations => {
+    const anyObserved = observations.some(observation => observation.outcome === "observed")
+    if (!anyObserved) process.exitCode = 1
+
     process.stdout.write(`${JSON.stringify({
       schema_version: 1,
-      evidence_status: "live_observed",
+      evidence_status: anyObserved ? "live_observed" : "error",
       provider: "codex",
       cli_version: versionOf("codex"),
       runtime: {
@@ -29,7 +32,7 @@ Promise.all([readSnapshot("session_a"), readSnapshot("session_b")])
   .catch(_error => {
     process.stdout.write(`${JSON.stringify({
       schema_version: 1,
-      evidence_status: "live_observed",
+      evidence_status: "error",
       provider: "codex",
       invocation_mode: "two concurrent codex app-server --stdio connections",
       outcome: "probe_failed",

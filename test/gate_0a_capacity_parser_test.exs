@@ -420,6 +420,115 @@ defmodule Shoestring.Gate0ACapacityParserTest do
     assert malformed_json.windows == %{}
   end
 
+  test "scalar Codex payload fails closed instead of crashing" do
+    fixture = %{"captured_at" => "2026-08-29T04:30:00.000Z", "payload" => "not-an-object"}
+
+    result = CapacityParser.parse(:codex, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.confidence == "none"
+    assert result.reason == "malformed_payload"
+    assert result.windows == %{}
+  end
+
+  test "nested Codex result malformed as a scalar fails closed instead of crashing" do
+    fixture = %{
+      "captured_at" => "2026-08-29T04:30:00.000Z",
+      "payload" => %{"result" => "not-an-object"}
+    }
+
+    result = CapacityParser.parse(:codex, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.confidence == "none"
+    assert result.reason == "malformed_rate_limits"
+    assert result.windows == %{}
+  end
+
+  test "nested Codex result malformed as a list fails closed instead of crashing" do
+    fixture = %{
+      "captured_at" => "2026-08-29T04:30:00.000Z",
+      "payload" => %{"result" => [1, 2, 3]}
+    }
+
+    result = CapacityParser.parse(:codex, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.confidence == "none"
+    assert result.reason == "malformed_rate_limits"
+    assert result.windows == %{}
+  end
+
+  test "Codex params drift alongside a nil result fails closed instead of crashing" do
+    fixture = %{
+      "captured_at" => "2026-08-29T04:30:00.000Z",
+      "payload" => %{"result" => nil, "params" => "not-an-object"}
+    }
+
+    result = CapacityParser.parse(:codex, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.confidence == "none"
+    assert result.reason == "malformed_rate_limits"
+  end
+
+  test "list Claude payload fails closed instead of crashing" do
+    fixture = %{"captured_at" => "2026-08-29T04:30:00.000Z", "payload" => [1, 2, 3]}
+
+    result = CapacityParser.parse(:claude, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.confidence == "none"
+    assert result.reason == "malformed_payload"
+    assert result.windows == %{}
+  end
+
+  test "scalar Claude payload fails closed instead of crashing" do
+    fixture = %{"captured_at" => "2026-08-29T04:30:00.000Z", "payload" => "not-an-object"}
+
+    result = CapacityParser.parse(:claude, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.confidence == "none"
+    assert result.reason == "malformed_payload"
+  end
+
+  test "a top-level list envelope fails closed for both providers instead of crashing" do
+    fixture = [1, 2, 3]
+
+    codex_result = CapacityParser.parse(:codex, fixture, now: @evaluation_time)
+    claude_result = CapacityParser.parse(:claude, fixture, now: @evaluation_time)
+
+    for result <- [codex_result, claude_result] do
+      assert result.state == "unknown"
+      assert result.availability == "unknown"
+      assert result.confidence == "none"
+      assert result.reason == "malformed_fixture"
+      assert result.windows == %{}
+    end
+  end
+
+  test "a top-level scalar envelope fails closed for both providers instead of crashing" do
+    fixture = "not-an-object"
+
+    codex_result = CapacityParser.parse(:codex, fixture, now: @evaluation_time)
+    claude_result = CapacityParser.parse(:claude, fixture, now: @evaluation_time)
+
+    for result <- [codex_result, claude_result] do
+      assert result.state == "unknown"
+      assert result.availability == "unknown"
+      assert result.confidence == "none"
+      assert result.reason == "malformed_fixture"
+      assert result.windows == %{}
+    end
+  end
+
   test "concurrent Codex observations are identical in the captured sample" do
     fixture = load_fixture("codex/concurrent-read-live.json")
     observations = fixture["observations"]

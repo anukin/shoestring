@@ -110,9 +110,18 @@ async function runClaudePreflight() {
     logged_in: typeof status.loggedIn === "boolean" ? status.loggedIn : null,
     auth_method: typeof status.authMethod === "string" ? status.authMethod : null,
   }
+  const executableMissing = authStatus.error != null
+  const headlessProbes = authentication.logged_in ? runClaudeHeadlessProbes() : []
+  const observedSignal = headlessProbes.some(probe => probe.rate_limit_signal === "observed")
+  const evidenceStatus = observedSignal
+    ? "live_observed"
+    : executableMissing
+      ? "error"
+      : "live_unverified"
+
   const output = {
     schema_version: 1,
-    evidence_status: "live_observed",
+    evidence_status: evidenceStatus,
     provider: "claude",
     cli_version: versionOf("claude"),
     runtime: {
@@ -123,12 +132,12 @@ async function runClaudePreflight() {
     observed_at: now(),
     invocation_mode: "claude auth status --json",
     authentication,
-    live_capacity_probe: authentication.logged_in
-      ? "authenticated_headless_probe"
-      : "blocked_not_authenticated",
-    headless_probes: authentication.logged_in
-      ? runClaudeHeadlessProbes()
-      : [],
+    live_capacity_probe: executableMissing
+      ? "blocked_executable_unavailable"
+      : authentication.logged_in
+        ? "authenticated_headless_probe"
+        : "blocked_not_authenticated",
+    headless_probes: headlessProbes,
     limitations: authentication.logged_in
       ? [
         "Claude status-line callback delivery was not asserted by the headless probes.",
@@ -140,6 +149,7 @@ async function runClaudePreflight() {
       ],
   }
 
+  if (evidenceStatus === "error") process.exitCode = 1
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
 }
 
@@ -269,7 +279,7 @@ async function runCodexProbe() {
 
   const output = {
     schema_version: 1,
-    evidence_status: "live_observed",
+    evidence_status: "live_unverified",
     provider: "codex",
     cli_version: versionOf("codex"),
     runtime: {
@@ -496,12 +506,16 @@ async function runCodexProbe() {
     await new Promise(resolve => setTimeout(resolve, 750))
     output.finished_at = now()
     output.live_notification_count = rateLimitUpdates.length
+    output.evidence_status = hasObservedRateLimitWindow(output, rateLimitUpdates)
+      ? "live_observed"
+      : "live_unverified"
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
   } catch (error) {
     output.outcome = error && error.code === "TIMEOUT" ? "timed_out" : "failed"
     output.failure = rpcFailure(error)
     output.finished_at = now()
     output.live_notification_count = rateLimitUpdates.length
+    output.evidence_status = "error"
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
     process.exitCode = 1
     return
@@ -511,6 +525,16 @@ async function runCodexProbe() {
     lines.close()
     child.kill("SIGTERM")
   }
+}
+
+function hasObservedRateLimitWindow(output, rateLimitUpdates) {
+  const snapshots = [
+    output.initial_rate_limits && output.initial_rate_limits.rate_limits,
+    ...output.post_turn_rate_limits.map(entry => entry.rate_limits),
+    ...rateLimitUpdates.map(entry => entry.rate_limits),
+  ]
+
+  return snapshots.some(snapshot => snapshot && (snapshot.primary || snapshot.secondary))
 }
 
 function rpcFailure(error) {

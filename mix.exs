@@ -71,7 +71,12 @@ defmodule Shoestring.MixProject do
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["shoestring.state.prepare", "ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "assets.deploy": ["phx.digest"],
-      precommit: ["format --check-formatted", "compile --warnings-as-errors", "test"]
+      precommit: [
+        "format --check-formatted",
+        "compile --warnings-as-errors",
+        "test",
+        "gate_0a.node_test"
+      ]
     ]
   end
 end
