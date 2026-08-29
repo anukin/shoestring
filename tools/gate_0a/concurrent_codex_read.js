@@ -7,7 +7,12 @@ if (require.main === module) {
   Promise.all([readSnapshot("session_a"), readSnapshot("session_b")])
     .then(observations => {
       const evidenceStatus = classifyEvidence(observations)
-      if (evidenceStatus === "error") process.exitCode = 1
+
+      if (evidenceStatus === "error") {
+        process.exitCode = 1
+        process.stdout.write(`${JSON.stringify(sanitizedFailureEnvelope(observations), null, 2)}\n`)
+        return
+      }
 
       process.stdout.write(`${JSON.stringify({
         schema_version: 1,
@@ -31,14 +36,7 @@ if (require.main === module) {
       }, null, 2)}\n`)
     })
     .catch(_error => {
-      process.stdout.write(`${JSON.stringify({
-        schema_version: 1,
-        evidence_status: "error",
-        provider: "codex",
-        invocation_mode: "two concurrent codex app-server --stdio connections",
-        outcome: "probe_failed",
-        failure: "process_or_protocol_error",
-      }, null, 2)}\n`)
+      process.stdout.write(`${JSON.stringify(sanitizedFailureEnvelope([]), null, 2)}\n`)
       process.exitCode = 1
     })
 }
@@ -61,6 +59,22 @@ function classifyEvidence(observations) {
   if (observations.length > 0 && observations.every(hasUsableEvidence)) return "live_observed"
   if (observations.some(observation => observation.outcome !== "observed")) return "error"
   return "live_unverified"
+}
+
+// A fresh, minimal, allowlisted envelope for the error case -- never the
+// accumulated `observations` array, which may contain a genuinely captured
+// (though already-sanitized) rate-limit snapshot from a session that
+// succeeded while a sibling session failed.
+function sanitizedFailureEnvelope(observations) {
+  return {
+    schema_version: 1,
+    provider: "codex",
+    evidence_status: "error",
+    outcome: "probe_failed",
+    invocation_mode: "two concurrent codex app-server --stdio connections",
+    probe_outcomes: observations.map(observation => observation.outcome),
+    observed_at: new Date().toISOString(),
+  }
 }
 
 function versionOf(command) {
@@ -211,4 +225,4 @@ function compare(observations) {
     : "divergent"
 }
 
-module.exports = {isUsableWindow, hasUsableEvidence, classifyEvidence}
+module.exports = {isUsableWindow, hasUsableEvidence, classifyEvidence, sanitizedFailureEnvelope}

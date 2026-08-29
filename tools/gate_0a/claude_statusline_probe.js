@@ -24,28 +24,46 @@ if (require.main === module) {
       if (output.evidence_status === "error") process.exitCode = 1
       process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
     }).catch(_error => {
-      process.stdout.write(`${JSON.stringify({
-        schema_version: 1,
-        evidence_status: "error",
-        provider: "claude",
-        invocation_mode: "interactive statusLine command",
-        outcome: "probe_failed",
-      }, null, 2)}\n`)
+      process.stdout.write(`${JSON.stringify(sanitizedStatuslineFailureEnvelope([]), null, 2)}\n`)
       process.exitCode = 1
     })
   }
 }
 
 function classifyStatuslineEvidence(processResults, callbacks) {
-  const observedCallback = callbacks.some(callback => callback.rate_limit_signal === "observed")
   const allProcessesCompleted = processResults.length > 0 &&
     processResults.every(result => result.outcome === "completed")
   const allProcessesFailed = processResults.length > 0 &&
     processResults.every(result => result.outcome !== "completed")
 
-  if (allProcessesCompleted && observedCallback) return "live_observed"
+  // Every required process (matched by its own label/probe_run, not just
+  // "some callback somewhere") must have produced at least one usable
+  // callback before the aggregate run counts as live_observed. Two completed
+  // processes where only one produced usable evidence must not be
+  // live_observed.
+  const everyProcessHasUsableCallback = processResults.length > 0 &&
+    processResults.every(result =>
+      callbacks.some(callback =>
+        callback.probe_run === result.label && callback.rate_limit_signal === "observed"
+      )
+    )
+
+  if (allProcessesCompleted && everyProcessHasUsableCallback) return "live_observed"
   if (allProcessesFailed) return "error"
   return "live_unverified"
+}
+
+function sanitizedStatuslineFailureEnvelope(processResults) {
+  return {
+    schema_version: 1,
+    provider: "claude",
+    evidence_status: "error",
+    outcome: "probe_failed",
+    invocation_mode: "interactive Claude Code with official statusLine command via session --settings",
+    tested_mode: MODE,
+    probe_outcomes: processResults.map(result => result.outcome),
+    observed_at: new Date().toISOString(),
+  }
 }
 
 async function runProbe() {
@@ -66,6 +84,10 @@ async function runProbe() {
       : labels.map(label => runSessionSync(label, settings, captureFile))
     const callbacks = readCallbacks(captureFile)
     const evidenceStatus = classifyStatuslineEvidence(processResults, callbacks)
+
+    if (evidenceStatus === "error") {
+      return sanitizedStatuslineFailureEnvelope(processResults)
+    }
 
     return {
       schema_version: 1,
@@ -228,4 +250,4 @@ function versionOf(command) {
   }
 }
 
-module.exports = {classifyStatuslineEvidence}
+module.exports = {classifyStatuslineEvidence, sanitizedStatuslineFailureEnvelope}

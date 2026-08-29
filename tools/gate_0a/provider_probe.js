@@ -7,13 +7,9 @@ const PROVIDER = process.argv[2]
 
 if (require.main === module) {
   if (PROVIDER === "codex") {
-    runCodexProbe().catch(_error => {
-      process.exitCode = 1
-    })
+    runProviderEntrypoint("codex", runCodexProbe)
   } else if (PROVIDER === "claude") {
-    runClaudePreflight().catch(_error => {
-      process.exitCode = 1
-    })
+    runProviderEntrypoint("claude", runClaudePreflight)
   } else {
     console.error(JSON.stringify({
       provider: PROVIDER || null,
@@ -26,6 +22,28 @@ if (require.main === module) {
 
 function now() {
   return new Date().toISOString()
+}
+
+// Last-resort safety net: if a provider runner's own promise rejects
+// unexpectedly (bypassing its internal try/catch and sanitized-envelope
+// paths entirely), still emit a fresh, minimal, allowlisted JSON error
+// envelope and exit non-zero, without ever touching the rejection's
+// message or stack.
+function runProviderEntrypoint(provider, run) {
+  return run().catch(_error => {
+    process.exitCode = 1
+    process.stdout.write(`${JSON.stringify(sanitizedTopLevelFailureEnvelope(provider), null, 2)}\n`)
+  })
+}
+
+function sanitizedTopLevelFailureEnvelope(provider) {
+  return {
+    schema_version: 1,
+    provider,
+    evidence_status: "error",
+    outcome: "probe_failed",
+    observed_at: now(),
+  }
 }
 
 function versionOf(command) {
@@ -107,14 +125,25 @@ function hasUsableClaudeSnapshot(snapshot) {
 function classifyClaudeHeadlessEvidence(headlessProbes, executableMissing) {
   if (executableMissing) return "error"
 
+  // Failure takes precedence: a probe that actually failed as a process
+  // means the run cannot claim live evidence, even if a sibling probe's
+  // rate_limit_signal was (perhaps inconsistently) marked "observed".
   const anyProcessFailed = headlessProbes.some(probe =>
     ["process_terminated", "timed_out", "process_error"].includes(probe.outcome)
   )
+  if (anyProcessFailed) return "error"
+
+  // Normal observed evidence requires the probe to have actually completed
+  // AND carried a validated observed signal. An explicit rate-limit refusal
+  // is the only outcome allowed to bypass the completion requirement, since
+  // it is itself a definitive provider signal rather than incomplete data.
   const allSignaled = headlessProbes.length > 0 &&
-    headlessProbes.every(probe => probe.rate_limit_signal === "observed" || probe.outcome === "rate_limit_refusal")
+    headlessProbes.every(probe =>
+      (probe.outcome === "completed" && probe.rate_limit_signal === "observed") ||
+      probe.outcome === "rate_limit_refusal"
+    )
 
   if (allSignaled) return "live_observed"
-  if (anyProcessFailed) return "error"
   return "live_unverified"
 }
 
@@ -146,6 +175,13 @@ async function runClaudePreflight() {
   const headlessProbes = authentication.logged_in ? runClaudeHeadlessProbes() : []
   const evidenceStatus = classifyClaudeHeadlessEvidence(headlessProbes, executableMissing)
 
+  if (evidenceStatus === "error") {
+    process.exitCode = 1
+    const envelope = sanitizedClaudePreflightFailureEnvelope(executableMissing, headlessProbes)
+    process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`)
+    return
+  }
+
   const output = {
     schema_version: 1,
     evidence_status: evidenceStatus,
@@ -176,8 +212,22 @@ async function runClaudePreflight() {
       ],
   }
 
-  if (evidenceStatus === "error") process.exitCode = 1
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+}
+
+function sanitizedClaudePreflightFailureEnvelope(executableMissing, headlessProbes) {
+  return {
+    schema_version: 1,
+    provider: "claude",
+    evidence_status: "error",
+    outcome: "probe_failed",
+    invocation_mode: "claude auth status --json",
+    live_capacity_probe: executableMissing
+      ? "blocked_executable_unavailable"
+      : "authenticated_headless_probe",
+    probe_outcomes: headlessProbes.map(probe => probe.outcome),
+    observed_at: now(),
+  }
 }
 
 function runClaudeHeadlessProbes() {
@@ -203,10 +253,7 @@ function runClaudeHeadlessProbe(mode, formatArgs) {
     maxBuffer: 4 * 1024 * 1024,
   })
   const messages = parseClaudeOutput(mode, result.stdout || "")
-  const rateLimitSnapshots = messages
-    .map(message => safeClaudeRateLimits(message))
-    .filter(snapshot => snapshot !== null)
-  const usableSnapshots = rateLimitSnapshots.filter(hasUsableClaudeSnapshot)
+  const reported = selectReportedClaudeRateLimits(messages)
 
   return {
     mode,
@@ -216,10 +263,24 @@ function runClaudeHeadlessProbe(mode, formatArgs) {
     signal: typeof result.signal === "string" ? result.signal : null,
     elapsed_ms: Date.now() - startedAt,
     message_type_counts: countClaudeMessageTypes(messages),
-    rate_limit_signal: usableSnapshots.length === 0
-      ? "absent"
-      : "observed",
-    rate_limits: rateLimitSnapshots[0] || null,
+    rate_limit_signal: reported.rate_limit_signal,
+    rate_limits: reported.rate_limits,
+  }
+}
+
+function selectReportedClaudeRateLimits(messages) {
+  const rateLimitSnapshots = messages
+    .map(message => safeClaudeRateLimits(message))
+    .filter(snapshot => snapshot !== null)
+  const usableSnapshots = rateLimitSnapshots.filter(hasUsableClaudeSnapshot)
+
+  return {
+    rate_limit_signal: usableSnapshots.length === 0 ? "absent" : "observed",
+    // Report the snapshot that actually justifies the signal: the first
+    // usable one when the signal is "observed", not simply the first
+    // parsed snapshot chronologically (which may be an earlier, empty or
+    // malformed one that never justified "observed" at all).
+    rate_limits: usableSnapshots[0] || rateLimitSnapshots[0] || null,
   }
 }
 
@@ -534,7 +595,7 @@ async function runCodexProbe() {
     await new Promise(resolve => setTimeout(resolve, 750))
     output.finished_at = now()
     output.live_notification_count = rateLimitUpdates.length
-    output.evidence_status = hasUsableRateLimitEvidence(output, rateLimitUpdates)
+    output.evidence_status = allRequiredCodexSnapshotsUsable(output)
       ? "live_observed"
       : "live_unverified"
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
@@ -551,20 +612,36 @@ async function runCodexProbe() {
   }
 }
 
-function hasUsableRateLimitEvidence(output, rateLimitUpdates) {
-  const snapshots = [
+function requiredCodexSnapshots(output) {
+  // Only the initial and post-turn account/rateLimits/read snapshots are
+  // required proof of live capacity data. Push notifications
+  // (account/rateLimits/updated) are incidental/optional and are not part
+  // of the required set.
+  return [
     output.initial_rate_limits && output.initial_rate_limits.rate_limits,
     ...output.post_turn_rate_limits.map(entry => entry.rate_limits),
-    ...rateLimitUpdates.map(entry => entry.rate_limits),
   ]
+}
 
-  return snapshots.some(snapshot =>
-    !!snapshot && (
-      isUsableWindow(snapshot.primary) ||
-      isUsableWindow(snapshot.secondary) ||
-      (typeof snapshot.rate_limit_reached_type === "string" && snapshot.rate_limit_reached_type !== "")
-    )
+function isUsableCodexSnapshot(snapshot) {
+  return !!snapshot && (
+    isUsableWindow(snapshot.primary) ||
+    isUsableWindow(snapshot.secondary) ||
+    (typeof snapshot.rate_limit_reached_type === "string" && snapshot.rate_limit_reached_type !== "")
   )
+}
+
+// Every required snapshot must individually be usable (or an explicit
+// refusal) before the aggregate run counts as live_observed -- a single
+// usable snapshot among several required reads is not enough
+// (snapshots.some would wrongly promote that to a live claim). A mixed set
+// (some usable, some not) is treated as live_unverified, consistent with
+// the other Gate 0A aggregate classifiers in this codebase: "error" is
+// reserved for actual process/RPC failures (handled via the catch path),
+// not merely incomplete evidence.
+function allRequiredCodexSnapshotsUsable(output) {
+  const required = requiredCodexSnapshots(output)
+  return required.length > 0 && required.every(isUsableCodexSnapshot)
 }
 
 function rpcFailure(error) {
@@ -600,7 +677,13 @@ module.exports = {
   isUsableWindow,
   isUsableClaudeWindow,
   hasUsableClaudeSnapshot,
-  hasUsableRateLimitEvidence,
+  requiredCodexSnapshots,
+  isUsableCodexSnapshot,
+  allRequiredCodexSnapshotsUsable,
+  selectReportedClaudeRateLimits,
   classifyClaudeHeadlessEvidence,
   sanitizedCodexFailureEnvelope,
+  sanitizedClaudePreflightFailureEnvelope,
+  runProviderEntrypoint,
+  sanitizedTopLevelFailureEnvelope,
 }

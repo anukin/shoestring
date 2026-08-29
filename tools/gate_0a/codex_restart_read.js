@@ -10,14 +10,7 @@ if (require.main === module) {
       process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
     })
     .catch(_error => {
-      process.stdout.write(`${JSON.stringify({
-        schema_version: 1,
-        evidence_status: "error",
-        provider: "codex",
-        invocation_mode: "codex app-server --stdio process restart",
-        outcome: "probe_failed",
-        failure: "process_or_protocol_error",
-      }, null, 2)}\n`)
+      process.stdout.write(`${JSON.stringify(sanitizedFailureEnvelope([]), null, 2)}\n`)
       process.exitCode = 1
     })
 }
@@ -42,10 +35,30 @@ function classifyEvidence(observations) {
   return "live_unverified"
 }
 
+// A fresh, minimal, allowlisted envelope for the error case -- never the
+// accumulated observations, which may contain a genuinely captured (though
+// already-sanitized) rate-limit snapshot from a session that succeeded
+// while the other failed.
+function sanitizedFailureEnvelope(observations) {
+  return {
+    schema_version: 1,
+    provider: "codex",
+    evidence_status: "error",
+    outcome: "probe_failed",
+    invocation_mode: "codex app-server --stdio process restart",
+    probe_outcomes: observations.map(observation => observation.outcome),
+    observed_at: new Date().toISOString(),
+  }
+}
+
 async function readAfterRestart() {
   const first = await readSnapshot("before_restart")
   const second = await readSnapshot("after_restart")
   const evidenceStatus = classifyEvidence([first, second])
+
+  if (evidenceStatus === "error") {
+    return sanitizedFailureEnvelope([first, second])
+  }
 
   return {
     schema_version: 1,
@@ -222,7 +235,7 @@ function readSnapshot(label) {
   })
 }
 
-module.exports = {isUsableWindow, hasUsableEvidence, classifyEvidence}
+module.exports = {isUsableWindow, hasUsableEvidence, classifyEvidence, sanitizedFailureEnvelope}
 
 function compare(first, second) {
   if (first.outcome !== "observed" || second.outcome !== "observed") return "inconclusive"
