@@ -7,18 +7,21 @@
 | OS | macOS Darwin 24.6.0 |
 | Architecture | arm64 |
 | Claude Code CLI | `2.1.251 (Claude Code)` |
-| Authentication status | `loggedIn=false`, `authMethod=none` |
+| Authentication status from this worktree's probe | `loggedIn=false`, `authMethod=none` |
 | Subscription plan class | Not recorded; unavailable without authentication |
-| Live provider response | Not attempted after failed authentication preflight |
+| Live provider response from this worktree | Not attempted after failed authentication preflight |
 
-The official Claude Code installation is present, but the existing CLI session
-is not authenticated. No token, account file, account path, or login flow was
-inspected or copied. The exact blocker is therefore: **Claude Code cannot make
-an authenticated subscription request on this machine until the user signs in
-through the official CLI.** The minimal human action is to run the normal
-official `claude auth login` flow and tell the next probe run when
-`claude auth status --json` reports an authenticated session. No token should be
-sent to Shoestring or to this agent.
+The official Claude Code installation is present. The direct sanitized rerun in
+this worktree still reports an unauthenticated session, so it did not make a
+model request. A separate verification report supplied to this work item says
+that another invocation returned `loggedIn=true`, `authMethod=claude.ai`; that
+report is not a payload captured by this probe and cannot substitute for a live
+model or status-line observation here. No token, account file, account path, or
+login flow was inspected or copied. The exact blocker for this worktree is:
+**the Claude process available to the probe has no authenticated session.**
+The minimal human action is to make the authenticated CLI session available to
+this worktree and rerun the probe. No token should be sent to Shoestring or to
+this agent.
 
 The reproducible non-invasive probe is:
 
@@ -27,11 +30,13 @@ node tools/gate_0a/provider_probe.js claude
 ```
 
 Its redacted live result is represented by
-`fixtures/claude/auth-preflight-live.json`. The probe exits after authentication
-status discovery and does not attempt a model request when the session is not
-authenticated.
+`fixtures/claude/auth-preflight-live.json`. The probe attempts bounded JSON and
+stream probes only when the preflight is authenticated; otherwise it exits
+after status discovery. It never emits provider text, identifiers, or raw
+payloads.
 
-The live preflight observation was recorded at `2026-08-29T04:44:02.941Z`.
+The direct live preflight observation was recorded at
+`2026-08-29T04:56:40.090Z`.
 
 ## Current official surfaces
 
@@ -57,9 +62,9 @@ zero usage.
 
 | Mode | Live result | Tier | Finding |
 | --- | --- | --- | --- |
-| Interactive session with official `statusLine` command | Not live-verified; no authentication | Conservative/partial, conditional | The documented JSON shape is parseable after a first response, but the observer has no provider refresh request and either window may be absent. |
-| `claude -p --output-format json` | Not live-verified; no authentication | Reactive-only | Anthropic documents a structured result envelope and JSON output, but does not document the status-line `rate_limits` object as part of this headless output. Use only explicit CLI error/refusal handling. |
-| `claude -p --output-format stream-json` | Not live-verified; no authentication | Reactive-only | The CLI reference documents streaming JSON, but no live capacity fields or update cadence were available. Do not infer capacity from assistant text or terminal output. |
+| Interactive session with official `statusLine` command | Not live-verified; direct probe authentication unavailable | Conservative/partial, conditional | The documented JSON shape is parseable after a first response, but the observer has no provider refresh request and either window may be absent. |
+| `claude -p --output-format json` | Not live-verified; direct probe authentication unavailable | Reactive-only | The bounded live mode was not run because preflight was unauthenticated. Anthropic documents a structured result envelope but does not document the status-line `rate_limits` object as part of this headless output. Use only explicit CLI error/refusal handling. |
+| `claude -p --output-format stream-json` | Not live-verified; direct probe authentication unavailable | Reactive-only | The bounded live mode was not run because preflight was unauthenticated. The CLI reference documents streaming JSON, but no live rate-limit fields or update cadence were available. Do not infer capacity from assistant text or terminal output. |
 | Colored interactive terminal output / scraping | Not attempted | Unsupported | Explicitly outside the Gate 0A contract and not a proactive source. |
 
 `fixtures/claude/normal-official-shape.json` contains the public documented
@@ -70,7 +75,7 @@ so they cannot be mistaken for live evidence.
 
 ## Unverified behaviors
 
-Because the authentication prerequisite failed, this gate could not honestly
+Because the direct probe's authentication prerequisite still failed, this gate could not honestly
 measure:
 
 - whether status-line input is emitted in a normal interactive session on this

@@ -142,15 +142,14 @@ defmodule Shoestring.Gate0ACapacityParserTest do
     assert fixture["comparison"] == "identical"
   end
 
-  test "Claude executable reports the authentication blocker without raw payload" do
+  test "provider executable rejects unsupported modes without raw payload" do
     probe = Path.expand("../tools/gate_0a/provider_probe.js", __DIR__)
-    {output, exit_status} = System.cmd("node", [probe, "claude"], stderr_to_stdout: true)
+    {output, exit_status} = System.cmd("node", [probe, "unsupported"], stderr_to_stdout: true)
     result = Jason.decode!(output)
 
-    assert exit_status == 0
-    assert result["provider"] == "claude"
-    assert result["authentication"] == %{"logged_in" => false, "auth_method" => "none"}
-    assert result["live_capacity_probe"] == "blocked_not_authenticated"
+    assert exit_status == 2
+    assert result["outcome"] == "unsupported_probe_argument"
+    assert result["supported_arguments"] == ["codex", "claude"]
     refute Map.has_key?(result, "token")
   end
 

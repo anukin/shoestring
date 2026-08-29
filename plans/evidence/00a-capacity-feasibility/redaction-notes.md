@@ -28,9 +28,9 @@ their safe window snapshots.
 
 The Claude fixtures retain the documented `rate_limits` field shape and safe
 numeric values from Anthropic's public example. They do not retain any live
-Claude account payload because the local authentication preflight reported
-`loggedIn: false` and `authMethod: none`. The model display name in the
-documentation-shaped fixture is a placeholder, not an account value.
+Claude account payload because this worktree's authentication preflight
+reported `loggedIn: false` and `authMethod: none`. The model display name in
+the documentation-shaped fixture is a placeholder, not an account value.
 
 ## Probe behavior
 
@@ -41,8 +41,10 @@ stderr and never write a raw capture. The Codex turn prompt is fixed and
 non-sensitive; its text and the response text are not included in output.
 
 Claude authentication was checked with the CLI's JSON status command, then
-reduced to the two non-sensitive fields above. No Claude login, token, account
-path, or model request was attempted after that failed preflight.
+reduced to the two non-sensitive fields above. The probe is coded to run one
+small JSON and one stream request only after an authenticated preflight; no
+such request was attempted after this failed preflight. No Claude login,
+token, account path, prompt, response text, or raw payload was retained.
 
 ## Review checks
 

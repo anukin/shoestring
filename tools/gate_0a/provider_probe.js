@@ -17,7 +17,7 @@ if (PROVIDER === "codex") {
   console.error(JSON.stringify({
     provider: PROVIDER || null,
     outcome: "unsupported_probe_argument",
-    supported_arguments: ["codex"],
+    supported_arguments: ["codex", "claude"],
   }))
   process.exitCode = 2
 }
@@ -113,7 +113,11 @@ async function runClaudePreflight() {
     status = {}
   }
 
-  process.stdout.write(`${JSON.stringify({
+  const authentication = {
+    logged_in: typeof status.loggedIn === "boolean" ? status.loggedIn : null,
+    auth_method: typeof status.authMethod === "string" ? status.authMethod : null,
+  }
+  const output = {
     schema_version: 1,
     evidence_status: "live_observed",
     provider: "claude",
@@ -125,16 +129,135 @@ async function runClaudePreflight() {
     },
     observed_at: now(),
     invocation_mode: "claude auth status --json",
-    authentication: {
-      logged_in: typeof status.loggedIn === "boolean" ? status.loggedIn : null,
-      auth_method: typeof status.authMethod === "string" ? status.authMethod : null,
-    },
-    live_capacity_probe: "blocked_not_authenticated",
-    limitations: [
-      "No Claude model request or status-line callback was attempted after the failed authentication preflight.",
-      "No credential, account identifier, authentication path, prompt, or response payload was retained.",
-    ],
-  }, null, 2)}\n`)
+    authentication,
+    live_capacity_probe: authentication.logged_in
+      ? "authenticated_headless_probe"
+      : "blocked_not_authenticated",
+    headless_probes: authentication.logged_in
+      ? runClaudeHeadlessProbes()
+      : [],
+    limitations: authentication.logged_in
+      ? [
+        "Claude status-line callback delivery was not asserted by the headless probes.",
+        "No credential, account identifier, authentication path, prompt, or response payload was retained.",
+      ]
+      : [
+        "No Claude model request or status-line callback was attempted after the failed authentication preflight.",
+        "No credential, account identifier, authentication path, prompt, or response payload was retained.",
+      ],
+  }
+
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+}
+
+function runClaudeHeadlessProbes() {
+  return [
+    runClaudeHeadlessProbe("json", ["--output-format", "json"]),
+    runClaudeHeadlessProbe("stream-json", ["--output-format", "stream-json"]),
+  ]
+}
+
+function runClaudeHeadlessProbe(mode, formatArgs) {
+  const startedAt = Date.now()
+  const result = spawnSync("claude", [
+    "--print",
+    "--no-session-persistence",
+    "--permission-mode",
+    "dontAsk",
+    ...formatArgs,
+    "Reply with exactly OK.",
+  ], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 120000,
+    maxBuffer: 4 * 1024 * 1024,
+  })
+  const messages = parseClaudeOutput(mode, result.stdout || "")
+  const rateLimitSnapshots = messages
+    .map(message => safeClaudeRateLimits(message))
+    .filter(snapshot => snapshot !== null)
+
+  return {
+    mode,
+    invocation_mode: `claude --print --no-session-persistence --output-format ${mode}`,
+    outcome: classifyClaudeOutcome(result, messages),
+    exit_status: Number.isInteger(result.status) ? result.status : null,
+    signal: typeof result.signal === "string" ? result.signal : null,
+    elapsed_ms: Date.now() - startedAt,
+    message_type_counts: countClaudeMessageTypes(messages),
+    rate_limit_signal: rateLimitSnapshots.length === 0
+      ? "absent"
+      : "observed",
+    rate_limits: rateLimitSnapshots[0] || null,
+  }
+}
+
+function parseClaudeOutput(mode, stdout) {
+  if (mode === "json") {
+    try {
+      const value = JSON.parse(stdout)
+      return value && typeof value === "object" ? [value] : []
+    } catch (_error) {
+      return []
+    }
+  }
+
+  return stdout
+    .split(/\r?\n/)
+    .map(line => {
+      try {
+        return JSON.parse(line)
+      } catch (_error) {
+        return null
+      }
+    })
+    .filter(value => value && typeof value === "object")
+}
+
+function classifyClaudeOutcome(result, messages) {
+  if (result.signal) return "process_terminated"
+  if (result.error && result.error.code === "ETIMEDOUT") return "timed_out"
+
+  const errorResult = messages.find(message => message.is_error === true)
+  if (errorResult) {
+    return ["rate_limit", "rate_limit_reached"].includes(errorResult.subtype)
+      ? "rate_limit_refusal"
+      : "provider_error"
+  }
+
+  if (messages.some(message => message.type === "result" && message.subtype === "success")) {
+    return "completed"
+  }
+
+  return result.status === 0 ? "no_structured_result" : "process_error"
+}
+
+function countClaudeMessageTypes(messages) {
+  return messages.reduce((counts, message) => {
+    const type = typeof message.type === "string" ? message.type : "unknown"
+    counts[type] = (counts[type] || 0) + 1
+    return counts
+  }, {})
+}
+
+function safeClaudeRateLimits(message) {
+  const value = message && message.rate_limits
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+
+  return {
+    five_hour: safeClaudeWindow(value.five_hour),
+    seven_day: safeClaudeWindow(value.seven_day),
+    spend_limit: safeClaudeWindow(value.spend_limit),
+  }
+}
+
+function safeClaudeWindow(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+
+  return {
+    used_percentage: numberOrNull(value.used_percentage),
+    resets_at: integerOrNull(value.resets_at),
+  }
 }
 
 async function runCodexProbe() {
