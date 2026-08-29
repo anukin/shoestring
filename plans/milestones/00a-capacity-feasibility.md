@@ -229,3 +229,62 @@ unverified rather than fabricating evidence.
   unsupported until a reliable natural refusal shape is evidenced; checkpoint
   and wait or hand off on stale, missing, malformed, future, disconnected, or
   generic-error observations.
+
+## Next-session decision handoff
+
+Treat Gate 0A as a completed feasibility POC, not as the production capacity
+implementation. Do not extend the disposable probes merely to make them look
+like production adapters. Reopen this gate only if cross-review finds an
+evidence-integrity or safety defect, or if a provider contract changes enough
+to invalidate the support classification.
+
+The decisions carried forward are:
+
+1. **Codex is the proactive MVP capacity source.** Use the official App Server
+   stdio handshake, explicit reads, and sparse update notifications. Production
+   admission must apply the five-minute freshness threshold, bounded leases,
+   safe-boundary revalidation, and a concurrency reserve. An observation is a
+   point-in-time signal, not a reservation or provider guarantee.
+2. **Claude is conservative supplemental telemetry.** Use only the official
+   interactive `statusLine` callback. It becomes useful after a response and
+   cannot serve as an autonomous pre-turn admission meter. Claude print JSON,
+   stream JSON, and terminal scraping remain unsupported for capacity
+   admission.
+3. **Unknown data fails closed.** The production contract must preserve named
+   windows, source event, observation time, freshness, confidence, and explicit
+   `observed`, `degraded`, `refused`, and `unknown` states. Missing, malformed,
+   stale, future-dated, disconnected, or generic-error observations must never
+   become zero usage or assumed availability.
+4. **The next implementation step is iteration 2, followed by iteration 3.**
+   Iteration 2 should turn the fixture shapes into provider-neutral contracts
+   and a deterministic fake. Iteration 3 should replace the disposable probes
+   with supervised production monitors and the documented fallback behavior.
+   Iterations 4 and 5 may then consume those contracts for lease renewal,
+   reserve margins, admission, and handoff decisions.
+5. **Residual evidence gaps are deferred risks, not MVP support claims.** A
+   natural hard-limit refusal, Claude compaction timing, causal tool
+   consumption, provider-side refresh semantics, broader plan/window variants,
+   sustained concurrent-load behavior, and vendor protocol drift remain to be
+   handled conservatively or re-probed when naturally available. Do not burn
+   allowance merely to close those gaps.
+
+The final independent different-vendor review passed commit `fe0ef84` with no
+blocking correctness, security, redaction, evidence-integrity, or
+reproducibility findings. The review confirmed that the Claude observer uses a
+constructive allowlist, retains no raw callback input, uses session-only
+settings, bounds execution, and cleans up temporary storage outside the
+repository.
+
+Carry the following non-blocking hardening into iteration 3 rather than
+reopening the POC: make the live-output-to-fixture transform explicit and
+tested; test the runner comparison logic; timestamp normalized output from an
+observed callback rather than an initial absent callback; distinguish capture
+I/O failure from malformed provider input; bound version-string retention;
+make concurrent capture corruption observable; avoid relying on an empty
+`--tools` argument; and emit `rate_limit_signal=observed` only when at least one
+valid window is present. These items matter before production reuse of the
+probe code, but they do not change the support-tier decision.
+
+When a Git `origin` is configured, push the branch and open the PR; do not merge
+it automatically. The absence of a remote does not change the feasibility
+decision or the iteration 2/3 handoff.
