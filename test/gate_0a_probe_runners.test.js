@@ -54,6 +54,34 @@ const SANITIZED_FAILURE_KEYS = [
   "schema_version",
 ]
 
+test("provider_probe.js: an unsupported provider argument is never echoed back, even a sentinel sensitive-looking one", () => {
+  const probe = path.join(REPO_ROOT, "tools/gate_0a/provider_probe.js")
+  const sentinel = "/home/attacker/.ssh/id_rsa_SENTINEL_DO_NOT_LEAK_9f3a1c-secret-prompt-message"
+  const result = runScript(probe, [sentinel], {})
+
+  assert.equal(result.status, 2)
+  assert.equal(result.stdout.includes("SENTINEL"), false)
+  assert.equal(result.stdout.includes("attacker"), false)
+  assert.equal(result.stdout.includes("id_rsa"), false)
+  assert.equal(result.stderr.includes("SENTINEL"), false)
+  assert.equal(result.stderr.includes("attacker"), false)
+  assert.equal(result.stderr.includes("id_rsa"), false)
+
+  const output = JSON.parse(result.stdout)
+  assert.deepEqual(Object.keys(output).sort(), [
+    "evidence_status",
+    "observed_at",
+    "outcome",
+    "provider",
+    "schema_version",
+    "supported_arguments",
+  ])
+  assert.equal(output.provider, null)
+  assert.equal(output.evidence_status, "error")
+  assert.equal(output.outcome, "unsupported_probe_argument")
+  assert.deepEqual(output.supported_arguments, ["codex", "claude"])
+})
+
 test("provider_probe.js codex: missing binary (hermetic empty PATH) reports error, not live_observed", () => {
   const probe = path.join(REPO_ROOT, "tools/gate_0a/provider_probe.js")
   const emptyPathDir = hermeticEmptyPath()

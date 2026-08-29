@@ -11,12 +11,8 @@ if (require.main === module) {
   } else if (PROVIDER === "claude") {
     runProviderEntrypoint("claude", runClaudePreflight)
   } else {
-    console.error(JSON.stringify({
-      provider: PROVIDER || null,
-      outcome: "unsupported_probe_argument",
-      supported_arguments: ["codex", "claude"],
-    }))
     process.exitCode = 2
+    process.stdout.write(`${JSON.stringify(sanitizedUnsupportedArgumentEnvelope(), null, 2)}\n`)
   }
 }
 
@@ -42,6 +38,20 @@ function sanitizedTopLevelFailureEnvelope(provider) {
     provider,
     evidence_status: "error",
     outcome: "probe_failed",
+    observed_at: now(),
+  }
+}
+
+// The user-supplied CLI argument is never retained or echoed here (no
+// path, prompt, or raw message) -- only the fixed, known-safe list of
+// supported arguments is reported.
+function sanitizedUnsupportedArgumentEnvelope() {
+  return {
+    schema_version: 1,
+    provider: null,
+    evidence_status: "error",
+    outcome: "unsupported_probe_argument",
+    supported_arguments: ["codex", "claude"],
     observed_at: now(),
   }
 }
@@ -686,4 +696,5 @@ module.exports = {
   sanitizedClaudePreflightFailureEnvelope,
   runProviderEntrypoint,
   sanitizedTopLevelFailureEnvelope,
+  sanitizedUnsupportedArgumentEnvelope,
 }

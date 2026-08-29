@@ -358,6 +358,24 @@ test("provider_probe: sanitizedTopLevelFailureEnvelope only contains the allowli
   assert.equal(envelope.provider, "codex")
 })
 
+test("provider_probe: sanitizedUnsupportedArgumentEnvelope only contains the allowlisted fields and never echoes any input", () => {
+  const envelope = providerProbe.sanitizedUnsupportedArgumentEnvelope()
+
+  assert.deepEqual(Object.keys(envelope).sort(), [
+    "evidence_status",
+    "observed_at",
+    "outcome",
+    "provider",
+    "schema_version",
+    "supported_arguments",
+  ])
+  assert.equal(envelope.provider, null)
+  assert.equal(envelope.evidence_status, "error")
+  assert.equal(envelope.outcome, "unsupported_probe_argument")
+  assert.deepEqual(envelope.supported_arguments, ["codex", "claude"])
+  assertNoForbiddenSubstrings(envelope)
+})
+
 for (const provider of ["codex", "claude"]) {
   test(`provider_probe: runProviderEntrypoint(${provider}) emits a fresh sanitized envelope and exits non-zero on an unexpected rejection, without leaking the error message or stack`, async () => {
     const originalWrite = process.stdout.write
