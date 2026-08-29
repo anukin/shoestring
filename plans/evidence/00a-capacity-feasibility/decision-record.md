@@ -26,6 +26,13 @@ and Node probes live under `tools/gate_0a/` and are intentionally disposable.
 - Codex live snapshots exposed primary 5-hour and secondary 7-day windows,
   percentages, durations, reset timestamps, reached state, and a `codex`
   multi-bucket key.
+- The latest live concurrent-read rerun was captured at
+  `2026-08-29T05:35:03.082Z`; both sanitized observations were 26% primary and
+  18% secondary and compared identical. An intermediate draft had paired a
+  `05:22:15.986Z` timestamp with 12%/16%; it was corrected from the actual
+  rerun rather than edited to preserve that mismatch. The original
+  `04:31:30.873Z` 12%/16% capture and the correction are recoverable from Git
+  history.
 - The live stop/start sample at `2026-08-29T05:22:15.906Z` returned identical
   sanitized 22%/18% primary/secondary windows before and after restarting the
   App Server process. This supports restart revalidation, not a provider-wide

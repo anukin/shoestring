@@ -139,6 +139,43 @@ defmodule Shoestring.Gate0ACapacityParserTest do
     assert result.reason == "missing_or_invalid_observation_timestamp"
   end
 
+  test "future Codex observations fail closed as freshness unknown" do
+    fixture = %{
+      "captured_at" => "2026-08-29T04:31:00.001Z",
+      "payload" => %{
+        "result" => %{
+          "rateLimits" => %{
+            "primary" => %{"usedPercent" => 12},
+            "secondary" => %{"usedPercent" => 16}
+          }
+        }
+      }
+    }
+
+    result = CapacityParser.parse(:codex, fixture, now: ~U[2026-08-29 04:30:45Z])
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.confidence == "none"
+    assert result.freshness == %{state: "unknown", age_seconds: nil, max_age_seconds: 300}
+    assert result.reason == "missing_or_invalid_observation_timestamp"
+  end
+
+  test "no valid windows takes precedence over a missing timestamp reason" do
+    fixture = %{
+      "payload" => %{
+        "result" => %{
+          "rateLimits" => %{"primary" => nil, "secondary" => nil}
+        }
+      }
+    }
+
+    result = CapacityParser.parse(:codex, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.reason == "no_valid_windows"
+  end
+
   test "Claude status-line documentation shape parses both windows" do
     result = parse_fixture("claude/normal-official-shape.json", :claude)
 
@@ -191,6 +228,43 @@ defmodule Shoestring.Gate0ACapacityParserTest do
     assert result.reason == "missing_or_invalid_observation_timestamp"
   end
 
+  test "Claude refusal with an unknown timestamp has no confidence" do
+    fixture = %{
+      "payload" => %{
+        "type" => "result",
+        "subtype" => "rate_limit",
+        "is_error" => true
+      }
+    }
+
+    result = CapacityParser.parse(:claude, fixture, now: @evaluation_time)
+
+    assert result.state == "refused"
+    assert result.availability == "refused"
+    assert result.confidence == "none"
+    assert result.freshness.state == "unknown"
+  end
+
+  test "future Claude observations fail closed as freshness unknown" do
+    fixture = %{
+      "captured_at" => "2026-08-29T04:31:00.001Z",
+      "payload" => %{
+        "rate_limits" => %{
+          "five_hour" => %{"used_percentage" => 23.5, "resets_at" => 1_738_425_600},
+          "seven_day" => %{"used_percentage" => 41.2, "resets_at" => 1_738_857_600}
+        }
+      }
+    }
+
+    result = CapacityParser.parse(:claude, fixture, now: @evaluation_time)
+
+    assert result.state == "unknown"
+    assert result.availability == "unknown"
+    assert result.confidence == "none"
+    assert result.freshness == %{state: "unknown", age_seconds: nil, max_age_seconds: 300}
+    assert result.reason == "missing_or_invalid_observation_timestamp"
+  end
+
   test "Claude missing status-line limits is unknown" do
     result = parse_fixture("claude/missing-before-response.json", :claude)
 
@@ -213,7 +287,7 @@ defmodule Shoestring.Gate0ACapacityParserTest do
 
     assert result.state == "refused"
     assert result.availability == "refused"
-    assert result.confidence == "medium"
+    assert result.confidence == "none"
     assert result.windows == %{}
     assert result.reason == "cli_reported_rate_limit_refusal_without_capacity_snapshot"
   end
@@ -251,13 +325,19 @@ defmodule Shoestring.Gate0ACapacityParserTest do
   test "concurrent Codex observations are identical in the captured sample" do
     fixture = load_fixture("codex/concurrent-read-live.json")
     observations = fixture["observations"]
-    result = CapacityParser.parse(:codex, fixture, now: ~U[2026-08-29 05:22:17Z])
+    result = CapacityParser.parse(:codex, fixture, now: ~U[2026-08-29 05:35:05Z])
 
     assert observations |> Enum.map(& &1["rate_limits"]) |> Enum.uniq() |> length() == 1
     assert result.state == "observed"
     assert result.availability == "available"
-    assert result.windows.primary.used_percent == 12
-    assert result.windows.secondary.used_percent == 16
+    assert fixture["captured_at"] == "2026-08-29T05:35:03.082Z"
+    assert result.windows.primary.used_percent == 26
+    assert result.windows.secondary.used_percent == 18
+
+    assert Enum.map(observations, & &1["observed_at"]) == [
+             "2026-08-29T05:35:03.069Z",
+             "2026-08-29T05:35:03.029Z"
+           ]
   end
 
   test "Codex process-restart fixture parses the re-read snapshot" do
@@ -296,6 +376,27 @@ defmodule Shoestring.Gate0ACapacityParserTest do
       assert result.confidence in ["high", "medium", "low", "none"]
       assert is_map(result.windows)
       assert Map.has_key?(result, :freshness)
+
+      if result.freshness.state == "unknown" do
+        refute result.state == "observed"
+        refute result.availability == "available"
+        refute result.confidence == "high"
+      end
+
+      if is_binary(fixture["captured_at"]) do
+        case DateTime.from_iso8601(fixture["captured_at"]) do
+          {:ok, captured_at, _offset} ->
+            if DateTime.compare(captured_at, @latest_codex_evaluation_time) == :gt do
+              assert result.freshness.state == "unknown"
+              assert result.state == "unknown"
+              assert result.availability == "unknown"
+              assert result.confidence == "none"
+            end
+
+          {:error, _reason} ->
+            :ok
+        end
+      end
     end
   end
 
@@ -307,6 +408,25 @@ defmodule Shoestring.Gate0ACapacityParserTest do
     assert exit_status == 2
     assert result["outcome"] == "unsupported_probe_argument"
     assert result["supported_arguments"] == ["codex", "claude"]
+    refute Map.has_key?(result, "token")
+  end
+
+  test "provider executable reports a missing Codex binary through rpcFailure safely" do
+    node = System.find_executable("node")
+    probe = Path.expand("../tools/gate_0a/provider_probe.js", __DIR__)
+
+    {output, exit_status} =
+      System.cmd(node, [probe, "codex"],
+        env: [{"PATH", "/usr/bin"}],
+        stderr_to_stdout: true
+      )
+
+    result = Jason.decode!(output)
+
+    assert exit_status == 1
+    assert result["outcome"] == "failed"
+    assert result["failure"] == %{"category" => "executable_unavailable"}
+    refute String.contains?(output, "Error:")
     refute Map.has_key?(result, "token")
   end
 

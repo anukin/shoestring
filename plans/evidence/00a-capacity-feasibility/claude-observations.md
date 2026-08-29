@@ -36,7 +36,7 @@ after status discovery. It never emits provider text, identifiers, or raw
 payloads.
 
 The direct live preflight observation was recorded at
-`2026-08-29T05:27:22.868Z`.
+`2026-08-29T05:41:04.562Z`.
 
 ## Current official surfaces
 

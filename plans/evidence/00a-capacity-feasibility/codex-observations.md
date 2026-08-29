@@ -103,12 +103,18 @@ request with an evidence timestamp, not as synchronized metering.
   re-read was approximately 1,134 ms after the first observation. This is one
   consistency sample, not proof that all provider state survives every future
   restart.
-- A second probe launched two fresh App Server processes concurrently at
-  `05:22:15.986Z`; both returned identical 22% primary and 18% secondary
-  snapshots, including durations, resets, plan class, and no refusal. This is
-  evidence that the two connections observed the same account-level value at
-  that instant. It is one sample and does not prove cross-session enforcement or
-  update synchronization.
+- A second probe launched two fresh App Server processes concurrently. The
+  latest documented rerun was captured at `2026-08-29T05:35:03.082Z`; session A
+  was observed at `05:35:03.069Z` and session B at `05:35:03.029Z`. Both
+  returned identical 26% primary and 18% secondary snapshots, including
+  durations, resets, plan class, and no refusal. This is evidence that the two
+  connections observed the same account-level value at that instant. It is one
+  sample and does not prove cross-session enforcement or update synchronization.
+  A prior working-tree draft incorrectly paired `05:22:15.986Z` with 12%/16%;
+  that pairing was not retained as current live evidence. The original
+  `04:31:30.873Z` 12%/16% capture and the intermediate draft remain auditable in
+  Git history; the committed fixture now contains only the latest rerun's
+  sanitized values and timestamps.
 - A missing secondary bucket, stale observation, malformed value, and stdio
   disconnect are represented by replay fixtures. They are parser safety cases,
   not claims that those exact failures occurred in the live run.
@@ -125,7 +131,9 @@ is treated as zero usage or unlimited capacity.
 
 - `fixtures/codex/normal-read.json` is a redacted live explicit-read result.
 - `fixtures/codex/sparse-update-live.json` is a redacted live sparse update.
-- `fixtures/codex/concurrent-read-live.json` is the redacted two-process sample.
+- `fixtures/codex/concurrent-read-live.json` is the redacted two-process sample
+  from the `05:35:03.082Z` rerun: both observations are 26% primary and 18%
+  secondary, with their individual receipt timestamps retained.
 - `fixtures/codex/restart-read-live.json` is the redacted process-restart and
   re-read sample; its `payload` is the parser-consumable first read and its
   `observations` retain only the two normalized comparisons.

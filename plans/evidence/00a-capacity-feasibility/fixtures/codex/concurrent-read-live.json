@@ -1,17 +1,17 @@
 {
   "fixture_kind": "concurrent_read",
   "evidence_status": "live_observed",
-  "captured_at": "2026-08-29T05:22:15.986Z",
+  "captured_at": "2026-08-29T05:35:03.082Z",
   "payload": {
     "result": {
       "rateLimits": {
         "primary": {
-          "usedPercent": 12,
+          "usedPercent": 26,
           "windowDurationMins": 300,
           "resetsAt": 1787994541
         },
         "secondary": {
-          "usedPercent": 16,
+          "usedPercent": 18,
           "windowDurationMins": 10080,
           "resetsAt": 1788494929
         },
@@ -24,14 +24,15 @@
   "observations": [
     {
       "session": "session_a",
+      "observed_at": "2026-08-29T05:35:03.069Z",
       "rate_limits": {
         "primary": {
-          "used_percent": 12,
+          "used_percent": 26,
           "window_duration_minutes": 300,
           "resets_at": 1787994541
         },
         "secondary": {
-          "used_percent": 16,
+          "used_percent": 18,
           "window_duration_minutes": 10080,
           "resets_at": 1788494929
         },
@@ -42,14 +43,15 @@
     },
     {
       "session": "session_b",
+      "observed_at": "2026-08-29T05:35:03.029Z",
       "rate_limits": {
         "primary": {
-          "used_percent": 12,
+          "used_percent": 26,
           "window_duration_minutes": 300,
           "resets_at": 1787994541
         },
         "secondary": {
-          "used_percent": 16,
+          "used_percent": 18,
           "window_duration_minutes": 10080,
           "resets_at": 1788494929
         },

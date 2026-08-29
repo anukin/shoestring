@@ -112,14 +112,16 @@ defmodule Shoestring.Gate0A.CapacityParser do
 
     cond do
       claude_rate_limit_refusal?(payload) ->
+        freshness = freshness(observed_at, now, freshness_seconds)
+
         %{
           provider: provider,
           state: "refused",
           availability: "refused",
-          confidence: "medium",
+          confidence: confidence_for("refused", 0, freshness),
           source_event: "headless_result_error",
           observed_at: observed_at,
-          freshness: freshness(observed_at, now, freshness_seconds),
+          freshness: freshness,
           windows: %{},
           details: %{subtype: Map.get(payload, "subtype")},
           reason: "cli_reported_rate_limit_refusal_without_capacity_snapshot"
@@ -266,10 +268,10 @@ defmodule Shoestring.Gate0A.CapacityParser do
   defp reason_for("refused", _valid, _missing, _reached, _freshness),
     do: "provider_reported_rate_limit_reached"
 
+  defp reason_for("unknown", 0, _missing, _reached, _freshness), do: "no_valid_windows"
+
   defp reason_for("unknown", _valid, _missing, false, %{state: "unknown"}),
     do: "missing_or_invalid_observation_timestamp"
-
-  defp reason_for("unknown", 0, _missing, _reached, _freshness), do: "no_valid_windows"
 
   defp reason_for("degraded", _valid, _missing, _reached, _freshness),
     do: "partial_or_stale_observation"
@@ -282,13 +284,17 @@ defmodule Shoestring.Gate0A.CapacityParser do
   defp freshness(observed_at, now, max_age) when is_binary(observed_at) do
     case DateTime.from_iso8601(observed_at) do
       {:ok, observed, _offset} ->
-        age = max(DateTime.diff(now, observed, :second), 0)
+        if DateTime.compare(now, observed) == :lt do
+          %{state: "unknown", age_seconds: nil, max_age_seconds: max_age}
+        else
+          age = DateTime.diff(now, observed, :second)
 
-        %{
-          state: if(age <= max_age, do: "fresh", else: "stale"),
-          age_seconds: age,
-          max_age_seconds: max_age
-        }
+          %{
+            state: if(age <= max_age, do: "fresh", else: "stale"),
+            age_seconds: age,
+            max_age_seconds: max_age
+          }
+        end
 
       _ ->
         %{state: "unknown", age_seconds: nil, max_age_seconds: max_age}

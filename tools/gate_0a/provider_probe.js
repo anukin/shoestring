@@ -499,7 +499,7 @@ async function runCodexProbe() {
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
   } catch (error) {
     output.outcome = error && error.code === "TIMEOUT" ? "timed_out" : "failed"
-    output.failure = failureSnapshot(error)
+    output.failure = rpcFailure(error)
     output.finished_at = now()
     output.live_notification_count = rateLimitUpdates.length
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
@@ -513,9 +513,14 @@ async function runCodexProbe() {
   }
 }
 
-function failureSnapshot(error) {
+function rpcFailure(error) {
   if (error && error.code === "TIMEOUT") return {category: "timed_out"}
   if (error && error.code === "SPAWN_ERROR") return {category: "executable_unavailable"}
-  if (error && error.code === "RPC_ERROR") return {category: "provider_rpc_error"}
+  if (error && error.code === "RPC_ERROR") {
+    return {
+      category: "provider_rpc_error",
+      code: Number.isInteger(error.rpc_code) ? error.rpc_code : null,
+    }
+  }
   return {category: "process_or_protocol_error"}
 }

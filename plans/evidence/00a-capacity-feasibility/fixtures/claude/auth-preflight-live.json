@@ -1,7 +1,7 @@
 {
   "fixture_kind": "authentication_preflight",
   "evidence_status": "live_observed",
-  "captured_at": "2026-08-29T05:27:22.868Z",
+  "captured_at": "2026-08-29T05:41:04.562Z",
   "payload": {
     "loggedIn": false,
     "authMethod": "none"

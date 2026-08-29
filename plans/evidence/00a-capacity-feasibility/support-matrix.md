@@ -8,7 +8,7 @@ Decision date: 2026-08-28 local. Live probe timestamps are UTC on
 | --- | --- | --- | --- | --- |
 | Codex App Server over stdio: initialize, `account/read`, and `account/rateLimits/read` before a response | Live, authenticated | **proactive** | Preflight and safe-boundary lease renewal from a fresh structured snapshot | A read is an observation, not a reservation. If the read fails, times out, or the schema drifts, mark capacity unknown, do not admit, checkpoint, and use the reactive provider-error path. |
 | Codex App Server over stdio: `account/rateLimits/updated` during two normal no-tool turns plus post-turn reads | Live, authenticated | **proactive** with bounded freshness | Refresh at response/tool boundaries and renew only after a fresh-enough read | Updates are sparse and may omit nullable fields. Merge them into the latest snapshot; never clear known fields from an omission. |
-| Codex: two concurrent App Server processes reading the same account | Live, authenticated, one point-in-time sample | **proactive** with concurrency reserve | The sample supports account-level use for this session, with a configured reserve | Identical readings do not prove synchronized enforcement across all sessions or future versions. Keep leases bounded and reserve capacity for another session. |
+| Codex: two concurrent App Server processes reading the same account | Live, authenticated, one point-in-time sample at `2026-08-29T05:35:03.082Z`; both 26% primary/18% secondary | **proactive** with concurrency reserve | The sample supports account-level use for this session, with a configured reserve | Identical readings do not prove synchronized enforcement across all sessions or future versions. Keep leases bounded and reserve capacity for another session. |
 | Codex: stop one App Server process, start a new one, and re-read the account | Live, authenticated, one point-in-time sample | **proactive** with restart revalidation | Re-run handshake and rate-limit read after process restart before renewing a lease | Identical snapshots in one restart sample do not prove all provider state survives every restart. A failed or malformed re-read disables admission. |
 | Claude interactive status line receiving documented JSON | Documentation-shaped replay only; direct probe authentication unavailable (independent verification reported an authenticated result, but supplied no capture) | **conservative/partial** (conditional) | Optional observer after an authenticated interactive session supplies the official `rate_limits` object | Values appear only after the first API response; each window may be absent; no request-refresh API or live concurrency result was verified. Absent/drifted input becomes unknown and disables proactive admission. |
 | Claude `-p --output-format json` | CLI surface documented; direct probe authentication unavailable | **unsupported pending live refusal evidence** | None for capacity admission; preserve a checkpoint and require manual/provider confirmation | The bounded live mode was not run because preflight was unauthenticated. The output format is not documented as carrying the status-line `rate_limits` object, and no reliable quota-refusal shape was evidenced. |
@@ -45,14 +45,20 @@ freshness.max_age_seconds: 300
 windows: provider-specific named windows, with absent windows represented by nil
 ```
 
-`fresh` means the observation is at most 300 seconds old. Complete, fresh
+`fresh` means the observation is at most 300 seconds old and is not in the
+future relative to the evaluation clock. A future or materially future
+timestamp is freshness `unknown` (this policy accepts no clock-skew grace) and
+fails closed to `state=unknown`, `availability=unknown`, and
+`confidence=none`. Complete, fresh
 structured windows are `high` confidence; partial fresh windows are `medium`;
 stale observations are `low`; malformed, disconnected, absent, or
 timestamp-unknown observations are `none`. Valid windows without a valid
 `captured_at` normalize to `state=unknown`, `availability=unknown`, and
 `confidence=none`; they never become fresh just because the values are
-well-formed. A structured refusal can be `refused`, but the live refusal case
-was not induced in this gate.
+well-formed. A refusal with an unknown timestamp remains `refused` for the
+explicit provider signal but has `confidence=none`; it does not authorize a
+fresh-capacity claim. A structured refusal can be `refused`, but the live
+refusal case was not induced in this gate.
 
 ## Iteration 3 production probes and fallbacks
 
