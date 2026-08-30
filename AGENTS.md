@@ -2,6 +2,15 @@ This is a web application written using the Phoenix web framework.
 
 ## Project guidelines
 
+- Never add `Co-authored-by` trailers for Omnigent, Codex, Claude, any LLM,
+  agent, subagent, orchestrator, or automation.
+- Do not add automated authorship, contributor, or attribution trailers in
+  commits or pull-request descriptions.
+- Add a human `Co-authored-by` trailer only when the user explicitly names the
+  human and requests it.
+- Inspect commit messages before committing and remove any automated trailer;
+  the configured Git author remains the sole author.
+
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
 
