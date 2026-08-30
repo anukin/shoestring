@@ -95,6 +95,23 @@ defmodule ShoestringWeb.TrajectoryTimelineLiveTest do
     refute has_element?(view, "#goal-identity")
   end
 
+  test "local mode renders a redacted timeline payload", %{conn: conn} do
+    goal = insert_goal()
+
+    event =
+      append(
+        goal.id,
+        "decision.recorded",
+        %{"decision" => "Bearer abc/def+=-?public=1"},
+        "redacted"
+      )
+
+    {:ok, view, _html} = live(conn, "/goals/#{goal.id}/timeline")
+
+    assert has_element?(view, "#event-payload-#{event.id}", "[REDACTED]")
+    refute has_element?(view, "#event-payload-#{event.id}", "Bearer abc/def+=-")
+  end
+
   defp append_fixture_events(goal_id) do
     task_id = Ecto.UUID.generate()
 

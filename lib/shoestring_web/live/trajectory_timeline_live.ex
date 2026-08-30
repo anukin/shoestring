@@ -3,7 +3,7 @@ defmodule ShoestringWeb.TrajectoryTimelineLive do
 
   alias Shoestring.Repo
   alias Shoestring.Trajectory
-  alias Shoestring.Trajectory.{Goal, ProjectorPosition, TrajectoryEvent}
+  alias Shoestring.Trajectory.{Goal, ProjectorPosition, Redaction, TrajectoryEvent}
 
   @projector "goal_task"
   @payload_fields %{
@@ -66,7 +66,7 @@ defmodule ShoestringWeb.TrajectoryTimelineLive do
         if authorized_goal?(goal, socket.assigns.current_scope) do
           load_replay(socket, goal, position)
         else
-          error_state(socket, goal, position, {:unauthorized, goal_id})
+          error_state(socket, nil, position, {:unauthorized, goal_id})
         end
     end
   end
@@ -133,16 +133,26 @@ defmodule ShoestringWeb.TrajectoryTimelineLive do
     end
   end
 
-  defp authorized_goal?(_goal, nil), do: true
+  @doc "Authorizes local mode or an explicit scope owner for a goal."
+  @spec authorized_goal?(Goal.t(), nil | map() | term()) :: boolean()
+  def authorized_goal?(%Goal{}, nil), do: true
 
-  defp authorized_goal?(goal, scope) when is_map(scope) do
+  def authorized_goal?(%Goal{owner_id: goal_owner_id}, scope) when is_map(scope) do
     case scope_owner_id(scope) do
-      nil -> true
-      owner_id -> Ecto.UUID.cast(owner_id) == {:ok, goal.owner_id}
+      owner_id when is_binary(owner_id) ->
+        with {:ok, scope_owner_id} <- Ecto.UUID.cast(owner_id),
+             {:ok, goal_owner_id} <- Ecto.UUID.cast(goal_owner_id) do
+          scope_owner_id == goal_owner_id
+        else
+          _error -> false
+        end
+
+      _missing_owner ->
+        false
     end
   end
 
-  defp authorized_goal?(_goal, _scope), do: false
+  def authorized_goal?(_goal, _scope), do: false
 
   defp scope_owner_id(scope) do
     scope_user = Map.get(scope, :user) || Map.get(scope, "user")
@@ -165,7 +175,7 @@ defmodule ShoestringWeb.TrajectoryTimelineLive do
 
     payload
     |> Map.take(fields)
-    |> redact_payload()
+    |> Redaction.redact()
     |> Jason.encode!()
     |> String.slice(0, 240)
   rescue
@@ -173,37 +183,6 @@ defmodule ShoestringWeb.TrajectoryTimelineLive do
   end
 
   defp payload_summary(_event), do: "{}"
-
-  defp redact_payload(value) when is_map(value) do
-    Enum.into(value, %{}, fn {key, nested_value} ->
-      key = to_string(key)
-
-      if secret_key?(key) do
-        {key, "[REDACTED]"}
-      else
-        {key, redact_payload(nested_value)}
-      end
-    end)
-  end
-
-  defp redact_payload(value) when is_list(value), do: Enum.map(value, &redact_payload/1)
-
-  defp redact_payload(value) when is_binary(value) do
-    Regex.replace(
-      ~r/(?i)(sk-[a-z0-9][a-z0-9_-]*|ghp_[a-z0-9_]+|bearer\s+[a-z0-9._~+\/-=]+|(?:api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+)/,
-      value,
-      "[REDACTED]"
-    )
-  end
-
-  defp redact_payload(value), do: value
-
-  defp secret_key?(key),
-    do:
-      Regex.match?(
-        ~r/(?i)(token|secret|password|credential|authorization|api[_-]?key|private[_-]?key)/,
-        key
-      )
 
   defp error_text(:invalid_goal_id), do: "Goal unavailable."
   defp error_text({:goal_not_found, _goal_id}), do: "Goal unavailable."
@@ -224,7 +203,7 @@ defmodule ShoestringWeb.TrajectoryTimelineLive do
 
   defp safe_error_detail(detail) when is_binary(detail) do
     detail
-    |> redact_payload()
+    |> Redaction.redact()
     |> String.slice(0, 240)
   end
 
