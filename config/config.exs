@@ -16,7 +16,11 @@ config :shoestring,
 config :shoestring, Shoestring.Repo,
   journal_mode: :wal,
   busy_timeout: 2_000,
+  custom_pragmas: [busy_timeout: 2_000],
   foreign_keys: :on
+
+config :shoestring,
+  trajectory_writer_idle_timeout: 60_000
 
 # Configure the endpoint
 config :shoestring, ShoestringWeb.Endpoint,

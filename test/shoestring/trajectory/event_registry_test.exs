@@ -55,6 +55,11 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     assert "can't be blank" in errors_on(changeset).actor
   end
 
+  test "a non-map envelope returns the stable base must-be-a-map error" do
+    assert {:error, changeset} = EventEnvelope.validate(:not_an_envelope)
+    assert "must be a map" in errors_on(changeset).base
+  end
+
   test "malformed payloads return a stable payload changeset error" do
     assert {:error, {:invalid_payload, "task.created", 1, changeset}} =
              EventRegistry.validate_payload("task.created", 1, %{"task_id" => "not-a-uuid"})

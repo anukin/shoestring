@@ -1,0 +1,104 @@
+defmodule Shoestring.Trajectory do
+  @moduledoc "Public append, replay, and ordered stream boundary for trajectories."
+
+  import Ecto.Query
+
+  alias Shoestring.Repo
+  alias Shoestring.Trajectory.{AppendInput, EventRegistry, TrajectoryEvent, WriterSupervisor}
+
+  @default_call_timeout 15_000
+
+  @doc "Validates and appends one untrusted event input to the selected goal."
+  @spec append(Ecto.UUID.t(), map(), Keyword.t()) ::
+          {:ok, TrajectoryEvent.t()}
+          | {:error, term()}
+  def append(goal_id, attrs, opts \\ []) do
+    with {:ok, normalized_goal_id} <- cast_goal_id(goal_id),
+         {:ok, input} <- AppendInput.cast(attrs),
+         :ok <- validate_registered_input(input),
+         {:ok, pid} <- WriterSupervisor.ensure_started(normalized_goal_id, writer_opts(opts)) do
+      GenServer.call(
+        pid,
+        {:append, input},
+        Keyword.get(opts, :call_timeout, @default_call_timeout)
+      )
+    end
+  end
+
+  @doc "Replays all compatible events for a goal in canonical sequence order."
+  @spec replay(Ecto.UUID.t(), Keyword.t()) ::
+          {:ok, [TrajectoryEvent.t()]}
+          | {:error, term()}
+  def replay(goal_id, _opts \\ []) do
+    with {:ok, normalized_goal_id} <- cast_goal_id(goal_id),
+         events <- fetch_events(normalized_goal_id),
+         :ok <- validate_history(events) do
+      {:ok, events}
+    end
+  end
+
+  @doc "Returns an ordered, already-compatible event stream for a goal."
+  @spec stream(Ecto.UUID.t(), Keyword.t()) ::
+          {:ok, Enumerable.t()}
+          | {:error, term()}
+  def stream(goal_id, opts \\ []) do
+    case replay(goal_id, opts) do
+      {:ok, events} -> {:ok, Stream.map(events, & &1)}
+      error -> error
+    end
+  end
+
+  @doc "The PubSub topic carrying committed events for one goal."
+  @spec topic(Ecto.UUID.t()) :: String.t()
+  def topic(goal_id), do: "trajectory:goal:#{goal_id}"
+
+  defp cast_goal_id(goal_id) do
+    case Ecto.UUID.cast(goal_id) do
+      {:ok, normalized_goal_id} -> {:ok, normalized_goal_id}
+      :error -> {:error, {:invalid_goal_id, goal_id}}
+    end
+  end
+
+  defp validate_registered_input(%AppendInput{} = input) do
+    case EventRegistry.validate_payload(input.type, input.schema_version, input.payload) do
+      {:ok, _payload} -> :ok
+      error -> error
+    end
+  end
+
+  defp writer_opts(opts), do: Keyword.get(opts, :writer_opts, [])
+
+  defp fetch_events(goal_id) do
+    Repo.all(
+      from event in TrajectoryEvent,
+        where: event.goal_id == ^goal_id,
+        order_by: [asc: event.sequence]
+    )
+  end
+
+  defp validate_history(events) do
+    Enum.reduce_while(events, :ok, fn event, :ok ->
+      case EventRegistry.validate(event_attributes(event)) do
+        {:ok, _validated} -> {:cont, :ok}
+        {:error, error} -> {:halt, {:error, error}}
+      end
+    end)
+  end
+
+  defp event_attributes(event) do
+    %{
+      id: event.id,
+      goal_id: event.goal_id,
+      task_id: event.task_id,
+      run_id: event.run_id,
+      sequence: event.sequence,
+      parent_event_id: event.parent_event_id,
+      type: event.type,
+      actor: event.actor,
+      occurred_at: event.occurred_at,
+      schema_version: event.schema_version,
+      payload: event.payload,
+      idempotency_key: event.idempotency_key
+    }
+  end
+end

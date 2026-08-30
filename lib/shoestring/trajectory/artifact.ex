@@ -30,12 +30,16 @@ defmodule Shoestring.Trajectory.Artifact do
     |> validate_format(:sha256, ~r/\A[0-9a-f]{64}\z/)
     |> validate_number(:byte_size, greater_than_or_equal_to: 0)
     |> validate_change(:location, &validate_location/2)
+    |> check_constraint(:byte_size,
+      name: "artifacts_byte_size_nonnegative",
+      message: "must be greater than or equal to 0"
+    )
   end
 
   defp validate_location(:location, location) do
     path_parts = Path.split(location)
 
-    if Path.type(location) == :absolute or Enum.member?(path_parts, "..") or location == "" do
+    if Path.type(location) == :absolute or Enum.member?(path_parts, "..") do
       [location: "must be a safe relative path"]
     else
       []

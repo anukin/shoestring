@@ -16,6 +16,7 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
     assert Application.fetch_env!(:shoestring, Shoestring.Repo)[:journal_mode] == :wal
     assert Application.fetch_env!(:shoestring, Shoestring.Repo)[:busy_timeout] == 2_000
     assert {:ok, %{rows: [["wal"]]}} = Repo.query("PRAGMA journal_mode")
+    assert {:ok, %{rows: [[2_000]]}} = Repo.query("PRAGMA busy_timeout")
   end
 
   test "foundation tables use foreign keys and the canonical event indexes" do

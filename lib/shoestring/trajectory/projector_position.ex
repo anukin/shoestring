@@ -27,6 +27,14 @@ defmodule Shoestring.Trajectory.ProjectorPosition do
     |> validate_length(:projector, min: 1, max: 200)
     |> validate_number(:version, greater_than: 0)
     |> validate_number(:last_sequence, greater_than_or_equal_to: 0)
+    |> check_constraint(:version,
+      name: "projector_positions_version_positive",
+      message: "must be greater than 0"
+    )
+    |> check_constraint(:last_sequence,
+      name: "projector_positions_sequence_nonnegative",
+      message: "must be greater than or equal to 0"
+    )
     |> unique_constraint([:goal_id, :projector])
   end
 

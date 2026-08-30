@@ -1,9 +1,17 @@
 defmodule Shoestring.Trajectory.EventEnvelope do
-  @moduledoc "Validation for the common, version-independent event envelope."
+  @moduledoc """
+  Validation for the common, version-independent event envelope.
+
+  This full envelope is the trusted persisted/replay representation. Raw
+  append callers use `Shoestring.Trajectory.AppendInput`, which deliberately
+  omits identity, ownership, relationship, and sequence fields.
+  """
 
   use Ecto.Schema
 
   import Ecto.Changeset
+
+  alias Shoestring.Trajectory.EventValidation
 
   @primary_key false
 
@@ -55,8 +63,8 @@ defmodule Shoestring.Trajectory.EventEnvelope do
     |> validate_length(:actor, min: 1, max: 200)
     |> validate_number(:sequence, greater_than: 0)
     |> validate_number(:schema_version, greater_than: 0)
-    |> validate_change(:payload, &validate_payload/2)
-    |> validate_change(:idempotency_key, &validate_idempotency_key/2)
+    |> validate_change(:payload, &EventValidation.validate_json_payload/2)
+    |> validate_change(:idempotency_key, &EventValidation.validate_idempotency_key/2)
   end
 
   def changeset(envelope, _attrs) do
@@ -77,42 +85,8 @@ defmodule Shoestring.Trajectory.EventEnvelope do
   end
 
   def validate(_attrs) do
-    {:error, changeset(%__MODULE__{}, %{"payload" => %{}})}
+    {:error, change(%__MODULE__{}) |> add_error(:base, "must be a map")}
   end
-
-  defp validate_payload(:payload, payload) do
-    if json_object?(payload) do
-      []
-    else
-      [payload: "must be a JSON-compatible object"]
-    end
-  end
-
-  defp validate_idempotency_key(:idempotency_key, key) do
-    if String.trim(key) == "" do
-      [idempotency_key: "can't be blank when present"]
-    else
-      []
-    end
-  end
-
-  defp json_object?(value) when is_map(value) do
-    Enum.all?(value, fn {key, nested_value} -> is_binary(key) and json_value?(nested_value) end)
-  end
-
-  defp json_object?(_value), do: false
-
-  defp json_value?(nil), do: true
-  defp json_value?(value) when is_boolean(value), do: true
-  defp json_value?(value) when is_number(value), do: true
-  defp json_value?(value) when is_binary(value), do: true
-  defp json_value?(value) when is_list(value), do: json_list?(value)
-  defp json_value?(value) when is_map(value), do: json_object?(value)
-  defp json_value?(_value), do: false
-
-  defp json_list?([]), do: true
-  defp json_list?([head | tail]), do: json_value?(head) and json_list?(tail)
-  defp json_list?(_value), do: false
 
   @type t :: %__MODULE__{}
 end

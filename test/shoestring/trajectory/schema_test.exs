@@ -82,6 +82,29 @@ defmodule Shoestring.Trajectory.SchemaTest do
     refute Map.has_key?(changeset.changes, :task_id)
   end
 
+  test "database check constraints are mapped by every foundation changeset" do
+    assert has_constraint?(Task.changeset(%Task{}, %{}), "tasks_position_nonnegative")
+
+    assert has_constraint?(
+             Artifact.changeset(%Artifact{}, %{}),
+             "artifacts_byte_size_nonnegative"
+           )
+
+    assert has_constraint?(
+             ProjectorPosition.changeset(%ProjectorPosition{}, %{}),
+             "projector_positions_version_positive"
+           )
+
+    assert has_constraint?(
+             ProjectorPosition.changeset(%ProjectorPosition{}, %{}),
+             "projector_positions_sequence_nonnegative"
+           )
+  end
+
+  defp has_constraint?(changeset, name) do
+    Enum.any?(changeset.constraints, &(&1.constraint == name))
+  end
+
   defp uuid_version(uuid) do
     uuid |> String.at(14) |> String.to_integer(16)
   end

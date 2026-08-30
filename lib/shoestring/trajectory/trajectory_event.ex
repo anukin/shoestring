@@ -11,6 +11,8 @@ defmodule Shoestring.Trajectory.TrajectoryEvent do
 
   import Ecto.Changeset
 
+  alias Shoestring.Trajectory.EventValidation
+
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -50,8 +52,8 @@ defmodule Shoestring.Trajectory.TrajectoryEvent do
     |> validate_length(:actor, min: 1, max: 200)
     |> validate_number(:sequence, greater_than: 0)
     |> validate_number(:schema_version, greater_than: 0)
-    |> validate_change(:payload, &validate_payload/2)
-    |> validate_change(:idempotency_key, &validate_idempotency_key/2)
+    |> validate_change(:payload, &EventValidation.validate_json_payload/2)
+    |> validate_change(:idempotency_key, &EventValidation.validate_idempotency_key/2)
     |> check_constraint(:sequence,
       name: "trajectory_events_sequence_positive",
       message: "must be greater than 0"
@@ -74,40 +76,6 @@ defmodule Shoestring.Trajectory.TrajectoryEvent do
       name: "trajectory_events_goal_id_idempotency_key_index"
     )
   end
-
-  defp validate_payload(:payload, payload) do
-    if json_object?(payload) do
-      []
-    else
-      [payload: "must be a JSON-compatible object"]
-    end
-  end
-
-  defp validate_idempotency_key(:idempotency_key, key) do
-    if String.trim(key) == "" do
-      [idempotency_key: "can't be blank when present"]
-    else
-      []
-    end
-  end
-
-  defp json_object?(value) when is_map(value) do
-    Enum.all?(value, fn {key, nested_value} -> is_binary(key) and json_value?(nested_value) end)
-  end
-
-  defp json_object?(_value), do: false
-
-  defp json_value?(nil), do: true
-  defp json_value?(value) when is_boolean(value), do: true
-  defp json_value?(value) when is_number(value), do: true
-  defp json_value?(value) when is_binary(value), do: true
-  defp json_value?(value) when is_list(value), do: json_list?(value)
-  defp json_value?(value) when is_map(value), do: json_object?(value)
-  defp json_value?(_value), do: false
-
-  defp json_list?([]), do: true
-  defp json_list?([head | tail]), do: json_value?(head) and json_list?(tail)
-  defp json_list?(_value), do: false
 
   @type t :: %__MODULE__{}
 end

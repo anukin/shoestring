@@ -30,6 +30,10 @@ defmodule Shoestring.Trajectory.Task do
     |> validate_length(:title, min: 1, max: 500)
     |> validate_inclusion(:status, ["pending", "in_progress", "completed", "blocked"])
     |> validate_number(:position, greater_than_or_equal_to: 0)
+    |> check_constraint(:position,
+      name: "tasks_position_nonnegative",
+      message: "must be greater than or equal to 0"
+    )
   end
 
   @type t :: %__MODULE__{}
