@@ -66,7 +66,7 @@ defmodule ShoestringWeb.TrajectoryTimelineLive do
         if authorized_goal?(goal, socket.assigns.current_scope) do
           load_replay(socket, goal, position)
         else
-          error_state(socket, nil, position, {:unauthorized, goal_id})
+          error_state(socket, nil, nil, {:unauthorized, goal_id})
         end
     end
   end

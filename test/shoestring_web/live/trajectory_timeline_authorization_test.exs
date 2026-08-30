@@ -3,7 +3,7 @@ defmodule ShoestringWeb.TrajectoryTimelineAuthorizationTest do
 
   alias Shoestring.Repo
   alias Shoestring.Trajectory
-  alias Shoestring.Trajectory.Goal
+  alias Shoestring.Trajectory.{Goal, Projector, ProjectorPosition}
   alias ShoestringWeb.TrajectoryTimelineLive
 
   test "nil scope is allowed for the documented local-user mode" do
@@ -29,6 +29,7 @@ defmodule ShoestringWeb.TrajectoryTimelineAuthorizationTest do
   test "denied present scopes do not retain the goal or its events" do
     goal = insert_goal()
     event = append_event(goal.id)
+    insert_projector_failure!(goal.id)
 
     for scope <- [%{}, %{user: %{}}, %{user_id: "not-a-uuid"}, %{user_id: Ecto.UUID.generate()}] do
       assert {:ok, socket} =
@@ -40,6 +41,7 @@ defmodule ShoestringWeb.TrajectoryTimelineAuthorizationTest do
 
       assert socket.assigns.goal == nil
       assert socket.assigns.timeline_error == "Goal unavailable."
+      assert socket.assigns.projection == %{status: "not_projected", error_detail: nil}
       assert socket.assigns.streams.events.inserts == []
 
       refute Enum.any?(socket.assigns.streams.events.inserts, fn {_id, _at, item, _, _} ->
@@ -87,5 +89,18 @@ defmodule ShoestringWeb.TrajectoryTimelineAuthorizationTest do
              })
 
     event
+  end
+
+  defp insert_projector_failure!(goal_id) do
+    %ProjectorPosition{
+      id: Ecto.UUID.generate(),
+      goal_id: goal_id,
+      projector: "goal_task",
+      version: Projector.version(),
+      last_sequence: 1,
+      status: "failed",
+      error_detail: "private projection failure"
+    }
+    |> Repo.insert!()
   end
 end
