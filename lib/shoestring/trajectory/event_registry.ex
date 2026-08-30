@@ -12,16 +12,32 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
   @payload_schemas %{
     "goal.created" => %{
-      1 => %{required: [:title], optional: [:description], uuid_fields: []}
+      1 => %{
+        required: [:title],
+        optional: [:description, :artifact_id],
+        uuid_fields: [:artifact_id]
+      }
     },
     "task.created" => %{
-      1 => %{required: [:task_id, :title], optional: [:description], uuid_fields: [:task_id]}
+      1 => %{
+        required: [:task_id, :title],
+        optional: [:description, :artifact_id],
+        uuid_fields: [:task_id, :artifact_id]
+      }
     },
     "decision.recorded" => %{
-      1 => %{required: [:decision], optional: [:rationale], uuid_fields: []}
+      1 => %{
+        required: [:decision],
+        optional: [:rationale, :artifact_id],
+        uuid_fields: [:artifact_id]
+      }
     },
     "task.completed" => %{
-      1 => %{required: [:task_id], optional: [:result], uuid_fields: [:task_id]}
+      1 => %{
+        required: [:task_id],
+        optional: [:result, :artifact_id],
+        uuid_fields: [:task_id, :artifact_id]
+      }
     }
   }
 
@@ -34,6 +50,45 @@ defmodule Shoestring.Trajectory.EventRegistry do
     end)
     |> Enum.sort()
   end
+
+  @doc "Returns the current registered version for an event type."
+  @spec current_version(term()) :: pos_integer() | {:error, {:unknown_event_type, term()}}
+  def current_version(type) do
+    case Map.fetch(@payload_schemas, type) do
+      {:ok, versions} -> versions |> Map.keys() |> Enum.max()
+      :error -> {:error, {:unknown_event_type, type}}
+    end
+  end
+
+  @doc "Explicitly upcasts a registered payload without mutating stored history."
+  @spec upcast(term(), term(), map()) ::
+          {:ok, map()}
+          | {:error, {:unknown_event_type, term()}}
+          | {:error, {:unknown_event_version, term(), term()}}
+  def upcast(type, version, payload) do
+    case current_version(type) do
+      {:error, error} -> {:error, error}
+      ^version -> {:ok, payload}
+      _current_version -> {:error, {:unknown_event_version, type, version}}
+    end
+  end
+
+  @doc "Returns a schema-valid, portable payload for export, dropping legacy unknown keys."
+  @spec export_payload(term(), term(), map()) ::
+          {:ok, map()}
+          | {:error, {:invalid_payload, term(), term(), Ecto.Changeset.t()}}
+          | {:error, {:unknown_event_type, term()}}
+          | {:error, {:unknown_event_version, term(), term()}}
+  def export_payload(type, version, payload) when is_map(payload) do
+    with {:ok, schema} <- schema_for(type, version),
+         sanitized = Map.take(payload, allowed_keys(schema)),
+         {:ok, validated} <- validate_payload(type, version, sanitized) do
+      {:ok, validated}
+    end
+  end
+
+  def export_payload(type, version, _payload),
+    do: validate_payload(type, version, %{})
 
   @doc "Validates an envelope and then validates its registered payload schema."
   @spec validate(map()) ::
@@ -62,20 +117,26 @@ defmodule Shoestring.Trajectory.EventRegistry do
           | {:error, {:unknown_event_type, term()}}
           | {:error, {:unknown_event_version, term(), term()}}
   def validate_payload(type, version, payload) do
+    case schema_for(type, version) do
+      {:ok, schema} -> validate_payload_schema(type, version, schema, payload)
+      error -> error
+    end
+  end
+
+  defp schema_for(type, version) do
     case Map.fetch(@payload_schemas, type) do
       :error ->
         {:error, {:unknown_event_type, type}}
 
       {:ok, versions} ->
         case Map.fetch(versions, version) do
-          :error ->
-            {:error, {:unknown_event_version, type, version}}
-
-          {:ok, schema} ->
-            validate_payload_schema(type, version, schema, payload)
+          :error -> {:error, {:unknown_event_version, type, version}}
+          {:ok, schema} -> {:ok, schema}
         end
     end
   end
+
+  defp allowed_keys(schema), do: Enum.map(schema.required ++ schema.optional, &Atom.to_string/1)
 
   defp validate_payload_schema(type, version, schema, payload) when is_map(payload) do
     fields = schema.required ++ schema.optional

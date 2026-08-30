@@ -20,7 +20,9 @@ config :shoestring, Shoestring.Repo,
   foreign_keys: :on
 
 config :shoestring,
-  trajectory_writer_idle_timeout: 60_000
+  trajectory_writer_idle_timeout: 60_000,
+  artifact_root: nil,
+  artifact_max_size: 10 * 1024 * 1024
 
 # Configure the endpoint
 config :shoestring, ShoestringWeb.Endpoint,

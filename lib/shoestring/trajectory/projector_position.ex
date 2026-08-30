@@ -12,6 +12,8 @@ defmodule Shoestring.Trajectory.ProjectorPosition do
     field :projector, :string
     field :version, :integer
     field :last_sequence, :integer, default: 0
+    field :status, :string, default: "ok"
+    field :error_detail, :string
 
     belongs_to :goal, Shoestring.Trajectory.Goal
 

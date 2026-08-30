@@ -16,6 +16,8 @@ defmodule Shoestring.Trajectory.SchemaTest do
     end
 
     assert TrajectoryEvent.__schema__(:type, :occurred_at) == :utc_datetime_usec
+    assert ProjectorPosition.__schema__(:type, :status) == :string
+    assert ProjectorPosition.__schema__(:type, :error_detail) == :string
   end
 
   test "goal and task creation changesets keep ownership and foreign keys programmatic" do

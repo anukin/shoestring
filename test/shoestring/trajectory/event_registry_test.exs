@@ -83,6 +83,29 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
              EventRegistry.validate(Map.put(@valid_envelope, "schema_version", 99))
   end
 
+  test "current versions and identity upcasts are explicit" do
+    payload = %{"decision" => "continue", "artifact_id" => Ecto.UUID.generate()}
+
+    assert EventRegistry.current_version("decision.recorded") == 1
+    assert {:ok, ^payload} = EventRegistry.upcast("decision.recorded", 1, payload)
+
+    assert {:error, {:unknown_event_type, "future.event"}} =
+             EventRegistry.current_version("future.event")
+
+    assert {:error, {:unknown_event_version, "decision.recorded", 2}} =
+             EventRegistry.upcast("decision.recorded", 2, payload)
+  end
+
+  test "v1 events can explicitly reference artifact metadata" do
+    artifact_id = Ecto.UUID.generate()
+
+    assert {:ok, %{"decision" => "continue", "artifact_id" => ^artifact_id}} =
+             EventRegistry.validate_payload("decision.recorded", 1, %{
+               "decision" => "continue",
+               "artifact_id" => artifact_id
+             })
+  end
+
   defp errors_on(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
       Regex.replace(~r"%{(\\w+)}", message, fn _, key ->

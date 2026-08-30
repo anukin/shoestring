@@ -30,6 +30,8 @@ defmodule Shoestring.Trajectory.Artifact do
     |> validate_format(:sha256, ~r/\A[0-9a-f]{64}\z/)
     |> validate_number(:byte_size, greater_than_or_equal_to: 0)
     |> validate_change(:location, &validate_location/2)
+    |> foreign_key_constraint(:goal_id)
+    |> foreign_key_constraint(:task_id)
     |> check_constraint(:byte_size,
       name: "artifacts_byte_size_nonnegative",
       message: "must be greater than or equal to 0"
@@ -45,6 +47,15 @@ defmodule Shoestring.Trajectory.Artifact do
       []
     end
   end
+
+  @doc "Returns whether a stored artifact location is a safe relative path."
+  @spec safe_location?(term()) :: boolean()
+  def safe_location?(location) when is_binary(location) do
+    path_parts = Path.split(location)
+    Path.type(location) != :absolute and ".." not in path_parts
+  end
+
+  def safe_location?(_location), do: false
 
   @type t :: %__MODULE__{}
 end

@@ -30,6 +30,11 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
            ]
   end
 
+  test "projector positions persist status and visible failure detail" do
+    assert {:ok, %{rows: rows}} = Repo.query("PRAGMA table_info(projector_positions)")
+    assert Enum.map(rows, &Enum.at(&1, 1)) |> Enum.take(-2) == ["status", "error_detail"]
+  end
+
   defp foundation_tables do
     {:ok, %{rows: rows}} =
       Repo.query(
