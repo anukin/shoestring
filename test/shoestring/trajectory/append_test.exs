@@ -4,6 +4,7 @@ defmodule Shoestring.Trajectory.AppendTest do
   alias Shoestring.Repo
   alias Shoestring.Trajectory
   alias Shoestring.Trajectory.{Goal, TrajectoryEvent}
+  alias Shoestring.Trajectory.Task, as: TrajectoryTask
 
   test "the public append boundary assigns trusted identity and ordering fields" do
     goal = insert_goal()
@@ -78,6 +79,52 @@ defmodule Shoestring.Trajectory.AppendTest do
     assert is_pid(pid)
   end
 
+  test "an idle shutdown queued before dispatch is recovered without killing the caller" do
+    goal = insert_goal()
+    dispatches = :counters.new(1, [])
+
+    dispatch_fun = fn pid, request, timeout ->
+      dispatch_number = :counters.get(dispatches, 1)
+      :counters.add(dispatches, 1, 1)
+
+      if dispatch_number == 0 do
+        %{idle_token: token} = :sys.get_state(pid)
+        send(pid, {:idle_timeout, token})
+      end
+
+      GenServer.call(pid, request, timeout)
+    end
+
+    assert {:ok, event} =
+             Trajectory.append(goal.id, valid_input("idle-race"),
+               writer_opts: [idle_timeout: 60_000],
+               dispatch_fun: dispatch_fun
+             )
+
+    assert event.sequence == 1
+    assert :counters.get(dispatches, 1) == 2
+  end
+
+  test "a second expected writer disappearance returns a stable error" do
+    goal = insert_goal()
+    dispatches = :counters.new(1, [])
+
+    dispatch_fun = fn pid, request, timeout ->
+      :counters.add(dispatches, 1, 1)
+      exit({:noproc, {GenServer, :call, [pid, request, timeout]}})
+    end
+
+    assert {:error, {:writer_unavailable, :disappeared}} =
+             Trajectory.append(goal.id, valid_input("double-writer-disappearance"),
+               writer_opts: [idle_timeout: :infinity],
+               dispatch_fun: dispatch_fun
+             )
+
+    assert :counters.get(dispatches, 1) == 2
+    assert Repo.aggregate(TrajectoryEvent, :count, :id) == 0
+    stop_writer(goal.id)
+  end
+
   test "a busy writer for one goal does not block another goal" do
     first_goal = insert_goal()
     second_goal = insert_goal()
@@ -106,6 +153,72 @@ defmodule Shoestring.Trajectory.AppendTest do
     assert second.id == first.id
     refute_receive {:trajectory_event_committed, _event}, 50
     assert Repo.aggregate(TrajectoryEvent, :count, :id) == 1
+  end
+
+  test "concurrent duplicate idempotency keys store and publish exactly once" do
+    goal = insert_goal()
+    topic = Trajectory.topic(goal.id)
+    :ok = Phoenix.PubSub.subscribe(Shoestring.PubSub, topic)
+    count = 20
+
+    results =
+      Task.async_stream(
+        1..count,
+        fn _number -> Trajectory.append(goal.id, valid_input("concurrent-duplicate")) end,
+        max_concurrency: count,
+        timeout: :infinity
+      )
+      |> Enum.to_list()
+
+    events = for {:ok, {:ok, event}} <- results, do: event
+    assert length(events) == count
+    assert events |> Enum.map(& &1.id) |> Enum.uniq() |> length() == 1
+    assert_receive {:trajectory_event_committed, published}
+    assert published.id == hd(events).id
+    refute_receive {:trajectory_event_committed, _event}, 50
+    assert Repo.aggregate(TrajectoryEvent, :count, :id) == 1
+  end
+
+  test "trusted domain references are persisted while raw attrs remain forbidden" do
+    goal = insert_goal()
+    task = insert_task(goal)
+    assert {:ok, parent} = Trajectory.append(goal.id, valid_input("trusted-parent"))
+    run_id = Ecto.UUID.generate()
+
+    assert {:ok, event} =
+             Trajectory.append(goal.id, valid_input("trusted-references"),
+               trusted: [task_id: task.id, run_id: run_id, parent_event_id: parent.id]
+             )
+
+    assert event.task_id == task.id
+    assert event.run_id == run_id
+    assert event.parent_event_id == parent.id
+
+    assert {:error, {:forbidden_append_fields, _fields}} =
+             Trajectory.append(
+               goal.id,
+               Map.put(valid_input("forged-references"), "task_id", task.id)
+             )
+  end
+
+  test "trusted task references must belong to the appended goal" do
+    goal = insert_goal()
+    other_goal = insert_goal()
+    other_task = insert_task(other_goal)
+
+    assert {:error, {:trusted_reference_not_owned, :task_id}} =
+             Trajectory.append(goal.id, valid_input("wrong-task-owner"),
+               trusted: [task_id: other_task.id]
+             )
+
+    assert {:ok, foreign_parent} = Trajectory.append(other_goal.id, valid_input("foreign-parent"))
+
+    assert {:error, {:trusted_reference_not_owned, :parent_event_id}} =
+             Trajectory.append(goal.id, valid_input("wrong-parent-owner"),
+               trusted: [parent_event_id: foreign_parent.id]
+             )
+
+    assert {:ok, []} = Trajectory.replay(goal.id)
   end
 
   test "invalid and unknown events store and publish nothing" do
@@ -153,6 +266,21 @@ defmodule Shoestring.Trajectory.AppendTest do
     |> Goal.changeset(%{"title" => "A goal"})
     |> Ecto.Changeset.put_change(:owner_id, Ecto.UUID.generate())
     |> Repo.insert!()
+  end
+
+  defp insert_task(goal) do
+    %TrajectoryTask{}
+    |> TrajectoryTask.changeset(%{"title" => "A task"})
+    |> Ecto.Changeset.put_change(:goal_id, goal.id)
+    |> Repo.insert!()
+  end
+
+  defp stop_writer(goal_id) do
+    assert [{pid, _value}] = Registry.lookup(Shoestring.Trajectory.WriterRegistry, goal_id)
+    ref = Process.monitor(pid)
+    assert :ok = DynamicSupervisor.terminate_child(Shoestring.Trajectory.WriterSupervisor, pid)
+    assert_receive {:DOWN, ^ref, :process, ^pid, reason}
+    assert reason in [:normal, :shutdown]
   end
 
   defp valid_input(idempotency_key \\ nil) do

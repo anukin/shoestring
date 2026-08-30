@@ -4,7 +4,14 @@ defmodule Shoestring.Trajectory do
   import Ecto.Query
 
   alias Shoestring.Repo
-  alias Shoestring.Trajectory.{AppendInput, EventRegistry, TrajectoryEvent, WriterSupervisor}
+
+  alias Shoestring.Trajectory.{
+    AppendInput,
+    EventRegistry,
+    TrajectoryEvent,
+    TrustedEventReferences,
+    WriterSupervisor
+  }
 
   @default_call_timeout 15_000
 
@@ -15,13 +22,10 @@ defmodule Shoestring.Trajectory do
   def append(goal_id, attrs, opts \\ []) do
     with {:ok, normalized_goal_id} <- cast_goal_id(goal_id),
          {:ok, input} <- AppendInput.cast(attrs),
+         {:ok, references} <- TrustedEventReferences.cast(Keyword.get(opts, :trusted)),
          :ok <- validate_registered_input(input),
          {:ok, pid} <- WriterSupervisor.ensure_started(normalized_goal_id, writer_opts(opts)) do
-      GenServer.call(
-        pid,
-        {:append, input},
-        Keyword.get(opts, :call_timeout, @default_call_timeout)
-      )
+      dispatch_append(normalized_goal_id, input, references, pid, opts, 0)
     end
   end
 
@@ -67,6 +71,48 @@ defmodule Shoestring.Trajectory do
   end
 
   defp writer_opts(opts), do: Keyword.get(opts, :writer_opts, [])
+
+  defp dispatch_append(goal_id, input, references, pid, opts, attempt) do
+    try do
+      dispatch_fun(opts).(pid, {:append, input, references}, call_timeout(opts))
+    catch
+      :exit, reason ->
+        recover_writer_exit(goal_id, input, references, pid, opts, attempt, reason)
+    end
+  end
+
+  defp recover_writer_exit(goal_id, input, references, pid, opts, 0, reason) do
+    if writer_disappeared?(reason, pid) do
+      case WriterSupervisor.ensure_started(goal_id, writer_opts(opts)) do
+        {:ok, replacement_pid} ->
+          dispatch_append(goal_id, input, references, replacement_pid, opts, 1)
+
+        {:error, _start_reason} ->
+          {:error, {:writer_unavailable, :disappeared}}
+      end
+    else
+      exit(reason)
+    end
+  end
+
+  defp recover_writer_exit(_goal_id, _input, _references, pid, _opts, 1, reason) do
+    if writer_disappeared?(reason, pid) do
+      {:error, {:writer_unavailable, :disappeared}}
+    else
+      exit(reason)
+    end
+  end
+
+  defp writer_disappeared?({kind, {GenServer, :call, [called_pid, _request, _timeout]}}, pid)
+       when kind in [:noproc, :normal, :shutdown] do
+    called_pid == pid
+  end
+
+  defp writer_disappeared?(_reason, _pid), do: false
+
+  defp dispatch_fun(opts), do: Keyword.get(opts, :dispatch_fun, &GenServer.call/3)
+
+  defp call_timeout(opts), do: Keyword.get(opts, :call_timeout, @default_call_timeout)
 
   defp fetch_events(goal_id) do
     Repo.all(

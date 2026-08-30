@@ -1,7 +1,7 @@
 defmodule Shoestring.Trajectory.WriterTest do
   use Shoestring.DataCase, async: false
 
-  alias Shoestring.Trajectory.{AppendInput, Writer}
+  alias Shoestring.Trajectory.{AppendInput, Writer, WriterSupervisor}
 
   test "a writer's retry policy is bounded and does not sleep" do
     attempts = :counters.new(1, [])
@@ -57,15 +57,31 @@ defmodule Shoestring.Trajectory.WriterTest do
     assert :counters.get(attempts, 1) == 2
   end
 
-  test "a stopped idle writer is removed cleanly from its registry" do
+  test "a real idle timeout stops and unregisters the writer" do
     goal_id = Ecto.UUID.generate()
-    pid = start_supervised!({Writer, goal_id: goal_id, idle_timeout: :infinity})
-    assert [{^pid, _value}] = Registry.lookup(Shoestring.Trajectory.WriterRegistry, goal_id)
+    pid = start_supervised!({Writer, goal_id: goal_id, idle_timeout: 0})
 
     ref = Process.monitor(pid)
-    _ = :sys.get_state(pid)
-    send(pid, :idle_timeout)
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
     assert GenServer.whereis(Writer.via(goal_id)) == nil
+  end
+
+  test "concurrent startup resolves to one registered writer" do
+    goal_id = Ecto.UUID.generate()
+
+    results =
+      Task.async_stream(
+        1..20,
+        fn _number -> WriterSupervisor.ensure_started(goal_id, idle_timeout: :infinity) end,
+        max_concurrency: 20,
+        timeout: :infinity
+      )
+      |> Enum.to_list()
+
+    pids = for {:ok, {:ok, pid}} <- results, do: pid
+    assert length(pids) == 20
+    assert Enum.uniq(pids) |> length() == 1
+    assert [{pid, _value}] = Registry.lookup(Shoestring.Trajectory.WriterRegistry, goal_id)
+    assert hd(pids) == pid
   end
 end

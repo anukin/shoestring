@@ -12,7 +12,15 @@ defmodule Shoestring.Trajectory.Writer do
 
   alias Shoestring.Repo
   alias Shoestring.Trajectory
-  alias Shoestring.Trajectory.{AppendInput, EventRegistry, TrajectoryEvent}
+
+  alias Shoestring.Trajectory.{
+    AppendInput,
+    EventRegistry,
+    TrajectoryEvent,
+    TrustedEventReferences
+  }
+
+  alias Shoestring.Trajectory.Task, as: TrajectoryTask
 
   defstruct [
     :goal_id,
@@ -55,7 +63,7 @@ defmodule Shoestring.Trajectory.Writer do
       repo: Keyword.get(opts, :repo, Repo),
       pubsub: Keyword.get(opts, :pubsub, Shoestring.PubSub),
       max_retries: nonnegative_integer(Keyword.get(opts, :max_retries, @default_max_retries)),
-      attempt_fun: Keyword.get(opts, :attempt_fun, &default_attempt/2),
+      attempt_fun: Keyword.get(opts, :attempt_fun, &default_attempt/3),
       publish_fun: Keyword.get(opts, :publish_fun, &default_publish/3),
       idle_timeout: idle_timeout(Keyword.get(opts, :idle_timeout)),
       idle_timer: nil,
@@ -67,10 +75,23 @@ defmodule Shoestring.Trajectory.Writer do
 
   @impl true
   def handle_call({:append, %AppendInput{} = input}, _from, state) do
+    handle_append(input, %TrustedEventReferences{}, state)
+  end
+
+  @impl true
+  def handle_call(
+        {:append, %AppendInput{} = input, %TrustedEventReferences{} = references},
+        _from,
+        state
+      ) do
+    handle_append(input, references, state)
+  end
+
+  defp handle_append(input, references, state) do
     reply =
       case validate_input(input) do
         :ok ->
-          case append_with_retries(input, state, 0) do
+          case append_with_retries(input, references, state, 0) do
             {:ok, :inserted, event} -> publish(event, state)
             {:ok, :duplicate, event} -> {:ok, event}
             {:error, reason} -> {:error, reason}
@@ -82,9 +103,6 @@ defmodule Shoestring.Trajectory.Writer do
 
     {:reply, reply, arm_idle_timer(state)}
   end
-
-  @impl true
-  def handle_info(:idle_timeout, state), do: {:stop, :normal, state}
 
   @impl true
   def handle_info({:idle_timeout, token}, %{idle_token: token} = state),
@@ -101,8 +119,8 @@ defmodule Shoestring.Trajectory.Writer do
     :ok
   end
 
-  defp append_with_retries(input, state, retries) do
-    case invoke_attempt(input, state) do
+  defp append_with_retries(input, references, state, retries) do
+    case invoke_attempt(input, references, state) do
       {:ok, :inserted, event} ->
         {:ok, :inserted, event}
 
@@ -112,7 +130,7 @@ defmodule Shoestring.Trajectory.Writer do
       {:error, reason} ->
         if retryable?(reason) do
           if retries < state.max_retries do
-            append_with_retries(input, state, retries + 1)
+            append_with_retries(input, references, state, retries + 1)
           else
             {:error, {:retry_exhausted, retry_reason(reason)}}
           end
@@ -125,15 +143,19 @@ defmodule Shoestring.Trajectory.Writer do
     end
   end
 
-  defp invoke_attempt(input, state) do
-    state.attempt_fun.(input, state)
+  defp invoke_attempt(input, references, state) do
+    case :erlang.fun_info(state.attempt_fun, :arity) do
+      {:arity, 3} -> state.attempt_fun.(input, references, state)
+      {:arity, 2} -> state.attempt_fun.(input, state)
+      _arity -> state.attempt_fun.(input, references, state)
+    end
   rescue
     error in [DBConnection.ConnectionError, Exqlite.Error] ->
       {:error, database_error(error)}
   end
 
-  defp default_attempt(input, state) do
-    case state.repo.transaction(fn -> transaction_attempt(input, state) end) do
+  defp default_attempt(input, references, state) do
+    case state.repo.transaction(fn -> transaction_attempt(input, references, state) end) do
       {:ok, result} ->
         result
 
@@ -151,11 +173,11 @@ defmodule Shoestring.Trajectory.Writer do
       {:error, database_error(error)}
   end
 
-  defp transaction_attempt(input, state) do
+  defp transaction_attempt(input, references, state) do
     existing_event(state, input.idempotency_key)
     |> case do
       %TrajectoryEvent{} = event -> {:ok, :duplicate, event}
-      nil -> insert_new_event(input, state)
+      nil -> insert_new_event(input, references, state)
     end
   end
 
@@ -168,33 +190,72 @@ defmodule Shoestring.Trajectory.Writer do
     )
   end
 
-  defp insert_new_event(input, state) do
-    sequence = next_sequence(state)
+  defp insert_new_event(input, references, state) do
+    case validate_trusted_references(references, state) do
+      :ok ->
+        sequence = next_sequence(state)
 
-    event = %TrajectoryEvent{
-      id: Ecto.UUID.generate(),
-      goal_id: state.goal_id,
-      task_id: nil,
-      run_id: nil,
-      sequence: sequence,
-      parent_event_id: nil,
-      type: input.type,
-      actor: input.actor,
-      occurred_at: input.occurred_at || DateTime.truncate(DateTime.utc_now(), :microsecond),
-      schema_version: input.schema_version,
-      payload: input.payload,
-      idempotency_key: input.idempotency_key
-    }
+        event = %TrajectoryEvent{
+          id: Ecto.UUID.generate(),
+          goal_id: state.goal_id,
+          task_id: references.task_id,
+          run_id: references.run_id,
+          sequence: sequence,
+          parent_event_id: references.parent_event_id,
+          type: input.type,
+          actor: input.actor,
+          occurred_at: input.occurred_at || DateTime.truncate(DateTime.utc_now(), :microsecond),
+          schema_version: input.schema_version,
+          payload: input.payload,
+          idempotency_key: input.idempotency_key
+        }
 
-    changeset = TrajectoryEvent.changeset(event, %{})
+        changeset = TrajectoryEvent.changeset(event, %{})
 
-    case state.repo.insert(changeset) do
-      {:ok, event} ->
-        {:ok, :inserted, event}
+        case state.repo.insert(changeset) do
+          {:ok, event} ->
+            {:ok, :inserted, event}
 
-      {:error, changeset} ->
-        state.repo.rollback(classify_insert_error(changeset))
+          {:error, changeset} ->
+            state.repo.rollback(classify_insert_error(changeset))
+        end
+
+      {:error, reason} ->
+        state.repo.rollback(reason)
     end
+  end
+
+  defp validate_trusted_references(%TrustedEventReferences{} = references, state) do
+    with :ok <- validate_task_reference(references.task_id, state),
+         :ok <- validate_parent_reference(references.parent_event_id, state) do
+      :ok
+    end
+  end
+
+  defp validate_task_reference(nil, _state), do: :ok
+
+  defp validate_task_reference(task_id, state) do
+    exists? =
+      state.repo.one(
+        from task in TrajectoryTask,
+          where: task.id == ^task_id and task.goal_id == ^state.goal_id,
+          select: 1
+      ) == 1
+
+    if exists?, do: :ok, else: {:error, {:trusted_reference_not_owned, :task_id}}
+  end
+
+  defp validate_parent_reference(nil, _state), do: :ok
+
+  defp validate_parent_reference(parent_event_id, state) do
+    exists? =
+      state.repo.one(
+        from event in TrajectoryEvent,
+          where: event.id == ^parent_event_id and event.goal_id == ^state.goal_id,
+          select: 1
+      ) == 1
+
+    if exists?, do: :ok, else: {:error, {:trusted_reference_not_owned, :parent_event_id}}
   end
 
   defp next_sequence(state) do

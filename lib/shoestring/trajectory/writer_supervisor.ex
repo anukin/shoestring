@@ -18,7 +18,7 @@ defmodule Shoestring.Trajectory.WriterSupervisor do
   @doc "Looks up or atomically starts the writer registered for a goal."
   @spec ensure_started(Ecto.UUID.t(), keyword()) :: {:ok, pid()} | {:error, term()}
   def ensure_started(goal_id, opts \\ []) do
-    lookup_or_start(goal_id, opts, 0)
+    lookup_or_start(goal_id, opts)
   end
 
   @doc false
@@ -28,33 +28,27 @@ defmodule Shoestring.Trajectory.WriterSupervisor do
     DynamicSupervisor.start_child(__MODULE__, {Writer, child_opts})
   end
 
-  defp lookup_or_start(goal_id, opts, attempt) do
+  defp lookup_or_start(goal_id, opts) do
     case Registry.lookup(@registry, goal_id) do
       [{pid, _value}] ->
         if GenServer.whereis(Writer.via(goal_id)) == pid do
           {:ok, pid}
         else
-          start_or_retry(goal_id, opts, attempt)
+          start_or_retry(goal_id, opts)
         end
 
       [] ->
-        start_or_retry(goal_id, opts, attempt)
+        start_or_retry(goal_id, opts)
     end
   end
 
-  defp start_or_retry(goal_id, opts, attempt) do
+  defp start_or_retry(goal_id, opts) do
     case start_writer(goal_id, opts) do
       {:ok, pid} ->
         {:ok, pid}
 
       {:error, {:already_started, pid}} ->
         {:ok, pid}
-
-      {:error, {:already_registered, pid}} ->
-        {:ok, pid}
-
-      {:error, {:already_present, _child_id}} when attempt == 0 ->
-        lookup_or_start(goal_id, opts, 1)
 
       {:error, reason} ->
         {:error, {:writer_start_failed, reason}}
