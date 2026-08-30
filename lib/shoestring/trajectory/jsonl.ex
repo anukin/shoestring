@@ -12,6 +12,7 @@ defmodule Shoestring.Trajectory.JSONL do
     EventRegistry,
     Goal,
     Projector,
+    Redaction,
     TrajectoryEvent
   }
 
@@ -288,7 +289,7 @@ defmodule Shoestring.Trajectory.JSONL do
            EventRegistry.upcast(envelope.type, envelope.schema_version, payload) do
       exported =
         event_attributes(%{event | payload: upcasted_payload})
-        |> redact()
+        |> Redaction.redact()
 
       {:ok,
        Jason.encode!(%{
@@ -326,7 +327,7 @@ defmodule Shoestring.Trajectory.JSONL do
     with true <- Artifact.safe_location?(artifact.location),
          {:ok, %{bytes: bytes}} <-
            ArtifactStore.read(artifact.id, root: ArtifactStore.root(opts)),
-         metadata <- artifact_metadata(artifact) |> redact(),
+         metadata <- artifact_metadata(artifact) |> Redaction.redact(),
          metadata <- attach_artifact_bytes(metadata, artifact, bytes, opts) do
       {:ok,
        Jason.encode!(%{
@@ -488,37 +489,4 @@ defmodule Shoestring.Trajectory.JSONL do
   defp trim_final_line(lines) do
     if List.last(lines) == "", do: Enum.drop(lines, -1), else: lines
   end
-
-  defp redact(%DateTime{} = value), do: DateTime.to_iso8601(value)
-
-  defp redact(value) when is_map(value) do
-    Enum.reduce(value, %{}, fn {key, nested_value}, result ->
-      key = to_string(key)
-
-      if secret_key?(key) do
-        result
-      else
-        Map.put(result, key, redact(nested_value))
-      end
-    end)
-  end
-
-  defp redact(value) when is_list(value), do: Enum.map(value, &redact/1)
-
-  defp redact(value) when is_binary(value) do
-    Regex.replace(
-      ~r/(?i)(sk-[a-z0-9][a-z0-9_-]*|ghp_[a-z0-9_]+|bearer\s+[a-z0-9._~+\/-=]+|(?:api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+)/,
-      value,
-      "[REDACTED]"
-    )
-  end
-
-  defp redact(value), do: value
-
-  defp secret_key?(key),
-    do:
-      Regex.match?(
-        ~r/(?i)(token|secret|password|credential|authorization|api[_-]?key|private[_-]?key)/,
-        key
-      )
 end

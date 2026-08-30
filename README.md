@@ -38,8 +38,11 @@ The current application contains the first durable trajectory slice:
 
 The timeline is currently a development/demo surface. The repository does not
 yet contain an authentication plug, authenticated `live_session`, or
-`on_mount` current-scope convention. Do not expose the timeline to untrusted or
-shared users until that boundary is established.
+`on_mount` current-scope convention. A nil `current_scope` is therefore the
+explicit single-local-user mode, not an authentication boundary; present scope
+maps must identify the goal owner. Authentication must replace local mode before
+`SHOESTRING_BIND` is used for non-loopback or multi-user exposure. Do not expose
+the timeline to untrusted or shared users until that boundary is established.
 
 ## Architecture
 
