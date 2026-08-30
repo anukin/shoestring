@@ -9,9 +9,14 @@ import Config
 
 config :shoestring,
   ecto_repos: [Shoestring.Repo],
-  generators: [timestamp_type: :utc_datetime],
+  generators: [timestamp_type: :utc_datetime_usec],
   state_dir: nil,
   environment: config_env()
+
+config :shoestring, Shoestring.Repo,
+  journal_mode: :wal,
+  busy_timeout: 2_000,
+  foreign_keys: :on
 
 # Configure the endpoint
 config :shoestring, ShoestringWeb.Endpoint,
