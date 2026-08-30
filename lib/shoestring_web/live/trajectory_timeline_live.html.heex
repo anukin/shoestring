@@ -1,0 +1,68 @@
+<Layouts.app flash={@flash} current_scope={@current_scope}>
+  <section id="goal-timeline" class="space-y-8">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-500">Trajectory</p>
+      <%= if @goal do %>
+        <h1
+          id="goal-identity"
+          data-goal-id={@goal.id}
+          class="mt-2 text-3xl font-semibold text-zinc-950"
+        >
+          {@goal.title}
+        </h1>
+      <% end %>
+    </div>
+
+    <div
+      id="projection-status"
+      data-status={@projection.status}
+      class="rounded-lg border border-zinc-200 px-4 py-3"
+    >
+      <span id="projection-state" class="font-medium">Projection: {@projection.status}</span>
+      <%= if @projection.error_detail do %>
+        <p id="projection-error" class="mt-2 text-sm text-red-700">{@projection.error_detail}</p>
+      <% end %>
+    </div>
+
+    <%= if @timeline_error do %>
+      <div
+        id="timeline-error"
+        role="alert"
+        class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+      >
+        {@timeline_error}
+      </div>
+    <% end %>
+
+    <div id="timeline-events" phx-update="stream" class="space-y-3">
+      <div
+        id="timeline-empty"
+        class="hidden only:block rounded-lg border border-dashed border-zinc-300 p-4 text-sm text-zinc-500"
+      >
+        No compatible events are available.
+      </div>
+
+      <div
+        :for={{dom_id, event} <- @streams.events}
+        id={dom_id}
+        data-sequence={event.sequence}
+        class="rounded-lg border border-zinc-200 p-4"
+      >
+        <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+          <span id={"event-sequence-#{event.id}"} class="font-semibold text-zinc-950">
+            {event.sequence}
+          </span>
+          <span id={"event-type-#{event.id}"} class="text-zinc-700">{event.type}</span>
+          <span id={"event-actor-#{event.id}"} class="text-zinc-500">{event.actor}</span>
+          <time id={"event-time-#{event.id}"} datetime={event_time(event)} class="text-zinc-500">
+            {event_time(event)}
+          </time>
+        </div>
+        <pre
+          id={"event-payload-#{event.id}"}
+          class="mt-3 overflow-auto whitespace-pre-wrap text-xs text-zinc-600"
+        >{payload_summary(event)}</pre>
+      </div>
+    </div>
+  </section>
+</Layouts.app>

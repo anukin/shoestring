@@ -7,7 +7,7 @@ defmodule Shoestring.Trajectory.WriterTest do
     attempts = :counters.new(1, [])
     goal_id = Ecto.UUID.generate()
 
-    attempt_fun = fn _input, _state ->
+    attempt_fun = fn _input, _references, _state ->
       :counters.add(attempts, 1, 1)
       {:error, :busy}
     end
@@ -33,7 +33,7 @@ defmodule Shoestring.Trajectory.WriterTest do
     attempts = :counters.new(1, [])
     goal_id = Ecto.UUID.generate()
 
-    attempt_fun = fn _input, _state ->
+    attempt_fun = fn _input, _references, _state ->
       :counters.add(attempts, 1, 1)
       {:error, :sequence_conflict}
     end

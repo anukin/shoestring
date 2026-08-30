@@ -82,33 +82,51 @@ defmodule Shoestring.Trajectory do
   end
 
   defp recover_writer_exit(goal_id, input, references, pid, opts, 0, reason) do
-    if writer_disappeared?(reason, pid) do
-      case WriterSupervisor.ensure_started(goal_id, writer_opts(opts)) do
-        {:ok, replacement_pid} ->
-          dispatch_append(goal_id, input, references, replacement_pid, opts, 1)
+    cond do
+      writer_disappeared?(reason, pid) ->
+        case WriterSupervisor.ensure_started(goal_id, writer_opts(opts)) do
+          {:ok, replacement_pid} ->
+            dispatch_append(goal_id, input, references, replacement_pid, opts, 1)
 
-        {:error, _start_reason} ->
-          {:error, {:writer_unavailable, :disappeared}}
-      end
-    else
-      exit(reason)
+          {:error, _start_reason} ->
+            {:error, {:writer_unavailable, :disappeared}}
+        end
+
+      ambiguous_writer_exit?(reason, pid) ->
+        {:error, {:writer_unavailable, :ambiguous}}
+
+      true ->
+        exit(reason)
     end
   end
 
   defp recover_writer_exit(_goal_id, _input, _references, pid, _opts, 1, reason) do
-    if writer_disappeared?(reason, pid) do
-      {:error, {:writer_unavailable, :disappeared}}
-    else
-      exit(reason)
+    cond do
+      writer_disappeared?(reason, pid) ->
+        {:error, {:writer_unavailable, :disappeared}}
+
+      ambiguous_writer_exit?(reason, pid) ->
+        {:error, {:writer_unavailable, :ambiguous}}
+
+      true ->
+        exit(reason)
     end
   end
 
-  defp writer_disappeared?({kind, {GenServer, :call, [called_pid, _request, _timeout]}}, pid)
-       when kind in [:noproc, :normal, :shutdown] do
+  # :noproc and the writer's token-protected :normal idle exit happen before a call can reply.
+  # A :shutdown exit is ambiguous because an application stop may follow delivery.
+  defp writer_disappeared?({kind, {GenServer, :call, [called_pid | _rest]}}, pid)
+       when kind in [:noproc, :normal] do
     called_pid == pid
   end
 
   defp writer_disappeared?(_reason, _pid), do: false
+
+  defp ambiguous_writer_exit?({:shutdown, {GenServer, :call, [called_pid | _rest]}}, pid) do
+    called_pid == pid
+  end
+
+  defp ambiguous_writer_exit?(_reason, _pid), do: false
 
   defp dispatch_fun(opts), do: Keyword.get(opts, :dispatch_fun, &GenServer.call/3)
 

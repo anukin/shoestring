@@ -125,11 +125,31 @@ defmodule Shoestring.Trajectory.AppendTest do
     stop_writer(goal.id)
   end
 
+  test "an ambiguous shutdown is not retried for a non-idempotent append" do
+    goal = insert_goal()
+    dispatches = :counters.new(1, [])
+
+    dispatch_fun = fn pid, request, timeout ->
+      :counters.add(dispatches, 1, 1)
+      exit({:shutdown, {GenServer, :call, [pid, request, timeout]}})
+    end
+
+    assert {:error, {:writer_unavailable, :ambiguous}} =
+             Trajectory.append(goal.id, valid_input("ambiguous-shutdown"),
+               writer_opts: [idle_timeout: :infinity],
+               dispatch_fun: dispatch_fun
+             )
+
+    assert :counters.get(dispatches, 1) == 1
+    assert Repo.aggregate(TrajectoryEvent, :count, :id) == 0
+    stop_writer(goal.id)
+  end
+
   test "a busy writer for one goal does not block another goal" do
     first_goal = insert_goal()
     second_goal = insert_goal()
 
-    always_busy = fn _input, _state -> {:error, :busy} end
+    always_busy = fn _input, _references, _state -> {:error, :busy} end
 
     assert {:error, {:retry_exhausted, :busy}} =
              Trajectory.append(first_goal.id, valid_input(),

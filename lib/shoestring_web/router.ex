@@ -18,6 +18,7 @@ defmodule ShoestringWeb.Router do
     pipe_through :browser
 
     live "/", HealthLive, :index
+    live "/goals/:goal_id/timeline", TrajectoryTimelineLive, :show
   end
 
   scope "/", ShoestringWeb do

@@ -125,6 +125,51 @@ defmodule Shoestring.Trajectory.ProjectorTest do
              Projector.project(goal.id)
   end
 
+  test "task projections reject references to a task owned by another goal" do
+    goal = insert_goal()
+    other_goal = insert_goal()
+    other_task = insert_task(other_goal)
+
+    insert_event!(goal.id, 1, "task.created", %{
+      "task_id" => other_task.id,
+      "title" => "foreign task"
+    })
+
+    other_task_id = other_task.id
+
+    assert {:error,
+            {:projection_failed, 1, {:invalid_transition, :task_not_owned, ^other_task_id}}} =
+             Projector.project(goal.id)
+
+    completed_goal = insert_goal()
+    insert_event!(completed_goal.id, 1, "task.completed", %{"task_id" => other_task.id})
+    other_goal_id = other_goal.id
+
+    assert {:error,
+            {:projection_failed, 1, {:invalid_transition, :task_not_owned, ^other_goal_id}}} =
+             Projector.project(completed_goal.id)
+  end
+
+  test "a persisted projector version mismatch requires a rebuild before processing" do
+    goal = insert_goal()
+
+    %ProjectorPosition{
+      id: Ecto.UUID.generate(),
+      goal_id: goal.id,
+      projector: Projector.name(),
+      version: 99,
+      last_sequence: 0,
+      status: "ok"
+    }
+    |> Repo.insert!()
+
+    assert {:error, {:projection_failed, 1, {:projector_version_mismatch, "goal_task", 99, 1}}} =
+             Projector.project(goal.id)
+
+    assert Repo.get_by!(ProjectorPosition, goal_id: goal.id, projector: Projector.name()).status ==
+             "failed"
+  end
+
   test "a failed goal projection does not block another goal" do
     failed_goal = insert_goal()
     healthy_goal = insert_goal()
@@ -227,5 +272,27 @@ defmodule Shoestring.Trajectory.ProjectorTest do
       schema_version: 1,
       payload: payload
     }
+  end
+
+  defp insert_task(goal) do
+    %Task{}
+    |> Task.changeset(%{"title" => "Foreign task"})
+    |> Ecto.Changeset.put_change(:goal_id, goal.id)
+    |> Repo.insert!()
+  end
+
+  defp insert_event!(goal_id, sequence, type, payload) do
+    %TrajectoryEvent{
+      id: Ecto.UUID.generate(),
+      goal_id: goal_id,
+      sequence: sequence,
+      type: type,
+      actor: "fixture",
+      occurred_at: ~U[2026-08-29 12:00:00.000000Z],
+      schema_version: 1,
+      payload: payload
+    }
+    |> TrajectoryEvent.changeset(%{})
+    |> Repo.insert!()
   end
 end

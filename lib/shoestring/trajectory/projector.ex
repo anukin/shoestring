@@ -114,28 +114,37 @@ defmodule Shoestring.Trajectory.Projector do
   defp apply_next_in_transaction(goal_id) do
     position = load_or_create_position(goal_id)
 
-    if position.status == "failed" do
-      {:failed, failure_from_position(position), position}
-    else
-      expected_sequence = position.last_sequence + 1
+    cond do
+      position.status == "failed" ->
+        {:failed, failure_from_position(position), position}
 
-      case Repo.one(
-             from event in TrajectoryEvent,
-               where: event.goal_id == ^goal_id and event.sequence == ^expected_sequence
-           ) do
-        nil ->
-          if Repo.exists?(
+      position.version != @version ->
+        fail_projection(
+          position,
+          position.last_sequence + 1,
+          {:projector_version_mismatch, @projector, position.version, @version}
+        )
+
+      true ->
+        expected_sequence = position.last_sequence + 1
+
+        case Repo.one(
                from event in TrajectoryEvent,
-                 where: event.goal_id == ^goal_id and event.sequence > ^expected_sequence
+                 where: event.goal_id == ^goal_id and event.sequence == ^expected_sequence
              ) do
-            fail_projection(position, expected_sequence, {:sequence_gap, expected_sequence})
-          else
-            {:done, position}
-          end
+          nil ->
+            if Repo.exists?(
+                 from event in TrajectoryEvent,
+                   where: event.goal_id == ^goal_id and event.sequence > ^expected_sequence
+               ) do
+              fail_projection(position, expected_sequence, {:sequence_gap, expected_sequence})
+            else
+              {:done, position}
+            end
 
-        event ->
-          apply_event_in_transaction(position, event)
-      end
+          event ->
+            apply_event_in_transaction(position, event)
+        end
     end
   end
 

@@ -144,11 +144,7 @@ defmodule Shoestring.Trajectory.Writer do
   end
 
   defp invoke_attempt(input, references, state) do
-    case :erlang.fun_info(state.attempt_fun, :arity) do
-      {:arity, 3} -> state.attempt_fun.(input, references, state)
-      {:arity, 2} -> state.attempt_fun.(input, state)
-      _arity -> state.attempt_fun.(input, references, state)
-    end
+    state.attempt_fun.(input, references, state)
   rescue
     error in [DBConnection.ConnectionError, Exqlite.Error] ->
       {:error, database_error(error)}
@@ -199,6 +195,7 @@ defmodule Shoestring.Trajectory.Writer do
           id: Ecto.UUID.generate(),
           goal_id: state.goal_id,
           task_id: references.task_id,
+          # Run ownership awaits the Iteration 2 runs table; preserve only the trusted UUID now.
           run_id: references.run_id,
           sequence: sequence,
           parent_event_id: references.parent_event_id,

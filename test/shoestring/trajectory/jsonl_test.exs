@@ -119,6 +119,21 @@ defmodule Shoestring.Trajectory.JSONLTest do
     assert Repo.get!(TrajectoryEvent, event.id).payload == legacy_payload
   end
 
+  test "artifact bytes are attached after metadata redaction without mutation" do
+    goal = insert_goal()
+    root = temporary_root()
+    bytes = "secret: bytes that must remain exact"
+
+    assert {:ok, artifact} =
+             ArtifactStore.put(goal.id, bytes, %{"media_type" => "text/plain"}, root: root)
+
+    assert {:ok, jsonl} = JSONL.export(goal.id, root: root, include_artifacts: true)
+    assert {:ok, fixture} = JSONL.decode(jsonl)
+    [exported_artifact] = fixture.artifacts
+    assert Base.decode64!(exported_artifact["bytes_base64"]) == bytes
+    assert exported_artifact["sha256"] == artifact.sha256
+  end
+
   test "decode rejects unknown event types and event schema versions" do
     goal = insert_goal()
     append_fixture_events(goal.id)

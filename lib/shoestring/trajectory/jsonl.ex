@@ -326,12 +326,13 @@ defmodule Shoestring.Trajectory.JSONL do
     with true <- Artifact.safe_location?(artifact.location),
          {:ok, %{bytes: bytes}} <-
            ArtifactStore.read(artifact.id, root: ArtifactStore.root(opts)),
-         metadata <- artifact_metadata(artifact, bytes, opts) do
+         metadata <- artifact_metadata(artifact) |> redact(),
+         metadata <- attach_artifact_bytes(metadata, artifact, bytes, opts) do
       {:ok,
        Jason.encode!(%{
          "kind" => @artifact_kind,
          "schema_version" => @line_schema_version,
-         "artifact" => redact(metadata)
+         "artifact" => metadata
        })}
     else
       false -> {:error, {:artifact_unsafe_location, artifact.location}}
@@ -339,8 +340,8 @@ defmodule Shoestring.Trajectory.JSONL do
     end
   end
 
-  defp artifact_metadata(artifact, bytes, opts) do
-    metadata = %{
+  defp artifact_metadata(artifact) do
+    %{
       "id" => artifact.id,
       "goal_id" => artifact.goal_id,
       "task_id" => artifact.task_id,
@@ -350,7 +351,9 @@ defmodule Shoestring.Trajectory.JSONL do
       "location" => artifact.location,
       "redacted" => artifact.redacted
     }
+  end
 
+  defp attach_artifact_bytes(metadata, artifact, bytes, opts) do
     if Keyword.get(opts, :include_artifacts, false) and not artifact.redacted do
       Map.put(metadata, "bytes_base64", Base.encode64(bytes))
     else
