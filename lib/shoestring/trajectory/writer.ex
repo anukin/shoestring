@@ -11,6 +11,7 @@ defmodule Shoestring.Trajectory.Writer do
   import Ecto.Query
 
   alias Shoestring.Repo
+  alias Shoestring.Harness.RunRecord
   alias Shoestring.Trajectory
 
   alias Shoestring.Trajectory.{
@@ -224,6 +225,7 @@ defmodule Shoestring.Trajectory.Writer do
 
   defp validate_trusted_references(%TrustedEventReferences{} = references, state) do
     with :ok <- validate_task_reference(references.task_id, state),
+         :ok <- validate_run_reference(references.run_id, state),
          :ok <- validate_parent_reference(references.parent_event_id, state) do
       :ok
     end
@@ -240,6 +242,19 @@ defmodule Shoestring.Trajectory.Writer do
       ) == 1
 
     if exists?, do: :ok, else: {:error, {:trusted_reference_not_owned, :task_id}}
+  end
+
+  defp validate_run_reference(nil, _state), do: :ok
+
+  defp validate_run_reference(run_id, state) do
+    exists? =
+      state.repo.one(
+        from run in RunRecord,
+          where: run.id == ^run_id and run.goal_id == ^state.goal_id,
+          select: 1
+      ) == 1
+
+    if exists?, do: :ok, else: {:error, {:trusted_reference_not_owned, :run_id}}
   end
 
   defp validate_parent_reference(nil, _state), do: :ok
