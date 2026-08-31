@@ -2,6 +2,7 @@ defmodule Shoestring.Trajectory.AppendTest do
   use Shoestring.DataCase, async: false
 
   alias Shoestring.Repo
+  alias Shoestring.Harness.RunRecord
   alias Shoestring.Trajectory
   alias Shoestring.Trajectory.{Goal, TrajectoryEvent}
   alias Shoestring.Trajectory.Task, as: TrajectoryTask
@@ -203,15 +204,15 @@ defmodule Shoestring.Trajectory.AppendTest do
     goal = insert_goal()
     task = insert_task(goal)
     assert {:ok, parent} = Trajectory.append(goal.id, valid_input("trusted-parent"))
-    run_id = Ecto.UUID.generate()
+    run = insert_run(goal, task)
 
     assert {:ok, event} =
              Trajectory.append(goal.id, valid_input("trusted-references"),
-               trusted: [task_id: task.id, run_id: run_id, parent_event_id: parent.id]
+               trusted: [task_id: task.id, run_id: run.id, parent_event_id: parent.id]
              )
 
     assert event.task_id == task.id
-    assert event.run_id == run_id
+    assert event.run_id == run.id
     assert event.parent_event_id == parent.id
 
     assert {:error, {:forbidden_append_fields, _fields}} =
@@ -292,6 +293,24 @@ defmodule Shoestring.Trajectory.AppendTest do
     %TrajectoryTask{}
     |> TrajectoryTask.changeset(%{"title" => "A task"})
     |> Ecto.Changeset.put_change(:goal_id, goal.id)
+    |> Repo.insert!()
+  end
+
+  defp insert_run(goal, task) do
+    %RunRecord{
+      id: Ecto.UUID.generate(),
+      goal_id: goal.id,
+      task_id: task.id,
+      dispatch_id: Ecto.UUID.generate(),
+      provider_id: "test",
+      workspace_ref: "workspace",
+      request_version: 1,
+      prompt: "test",
+      policy: %{},
+      requested_capabilities: %{},
+      status: "requested",
+      projection_sequence: 0
+    }
     |> Repo.insert!()
   end
 

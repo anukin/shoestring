@@ -13,13 +13,53 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     "payload" => %{"decision" => "continue"}
   }
 
-  test "the registry exposes exactly the initial v1 event types" do
-    assert EventRegistry.registered_types() == [
+  test "the registry exposes initial and harness v1 event types" do
+    registered = EventRegistry.registered_types()
+
+    assert [
              {"decision.recorded", 1},
              {"goal.created", 1},
              {"task.completed", 1},
              {"task.created", 1}
-           ]
+           ] -- registered == []
+
+    assert [
+             {"run.requested", 1},
+             {"run.starting", 1},
+             {"run.running", 1},
+             {"run.pausing", 1},
+             {"run.suspended", 1},
+             {"run.completed", 1},
+             {"run.failed", 1},
+             {"run.cancelling", 1},
+             {"run.cancelled", 1},
+             {"lease.proposed", 1},
+             {"lease.granted", 1},
+             {"lease.active", 1},
+             {"lease.renewal_due", 1},
+             {"lease.renewed", 1},
+             {"lease.expired", 1},
+             {"lease.revoked", 1},
+             {"lease.checkpoint_required", 1},
+             {"checkpoint.created", 1},
+             {"capacity.snapshot_observed", 1},
+             {"harness.event_recorded", 1}
+           ] -- registered == []
+  end
+
+  test "registered harness payloads retain exact version compatibility" do
+    run_id = "11111111-1111-4111-8111-111111111111"
+
+    assert {:ok, %{"run_id" => ^run_id}} =
+             EventRegistry.validate_payload("run.starting", 1, %{"run_id" => run_id})
+
+    assert {:error, {:unknown_event_version, "run.starting", 2}} =
+             EventRegistry.validate_payload("run.starting", 2, %{"run_id" => run_id})
+
+    assert {:error, {:invalid_payload, "run.failed", 1, changeset}} =
+             EventRegistry.validate_payload("run.failed", 1, %{"run_id" => run_id})
+
+    assert "can't be blank" in errors_on(changeset).error_category
   end
 
   test "all four v1 event types validate their payloads independently" do

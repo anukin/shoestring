@@ -3,6 +3,29 @@ defmodule Shoestring.Trajectory.ProjectorTransition do
 
   alias Shoestring.Trajectory.{Goal, Task, TrajectoryEvent}
 
+  @harness_event_types [
+    "run.requested",
+    "run.starting",
+    "run.running",
+    "run.pausing",
+    "run.suspended",
+    "run.completed",
+    "run.failed",
+    "run.cancelling",
+    "run.cancelled",
+    "lease.proposed",
+    "lease.granted",
+    "lease.active",
+    "lease.renewal_due",
+    "lease.renewed",
+    "lease.expired",
+    "lease.revoked",
+    "lease.checkpoint_required",
+    "checkpoint.created",
+    "capacity.snapshot_observed",
+    "harness.event_recorded"
+  ]
+
   @type result ::
           {:ok, %{goal: Goal.t(), task: Task.t() | nil, task_action: :none | :upsert | :update}}
           | {:error, {:invalid_transition, atom(), term()}}
@@ -12,11 +35,23 @@ defmodule Shoestring.Trajectory.ProjectorTransition do
   def apply(%Goal{} = goal, task, %TrajectoryEvent{goal_id: goal_id} = event)
       when goal.id == goal_id do
     case event.type do
-      "goal.created" -> goal_created(goal, task, event)
-      "task.created" -> task_created(goal, task, event)
-      "decision.recorded" -> {:ok, %{goal: goal, task: task, task_action: :none}}
-      "task.completed" -> task_completed(goal, task, event)
-      type -> {:error, {:invalid_transition, :unsupported_event, type}}
+      "goal.created" ->
+        goal_created(goal, task, event)
+
+      "task.created" ->
+        task_created(goal, task, event)
+
+      "decision.recorded" ->
+        {:ok, %{goal: goal, task: task, task_action: :none}}
+
+      "task.completed" ->
+        task_completed(goal, task, event)
+
+      type when type in @harness_event_types ->
+        {:ok, %{goal: goal, task: task, task_action: :none}}
+
+      type ->
+        {:error, {:invalid_transition, :unsupported_event, type}}
     end
   end
 

@@ -8,6 +8,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
   import Ecto.Changeset
 
+  alias Shoestring.Harness.Contract
   alias Shoestring.Trajectory.EventEnvelope
 
   @payload_schemas %{
@@ -37,6 +38,168 @@ defmodule Shoestring.Trajectory.EventRegistry do
         required: [:task_id],
         optional: [:result, :artifact_id],
         uuid_fields: [:task_id, :artifact_id]
+      }
+    },
+    "run.requested" => %{
+      1 => %{
+        required: [
+          :run_id,
+          :dispatch_id,
+          :provider_id,
+          :workspace_ref,
+          :request_version,
+          :prompt,
+          :continuation,
+          :policy,
+          :requested_capabilities
+        ],
+        optional: [:extensions],
+        uuid_fields: [:run_id, :dispatch_id],
+        types: %{
+          request_version: :integer,
+          continuation: :map,
+          policy: :map,
+          requested_capabilities: :map,
+          extensions: :map
+        }
+      }
+    },
+    "run.starting" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
+    "run.running" => %{
+      1 => %{
+        required: [:run_id],
+        optional: [:provider_session_id, :process_id],
+        uuid_fields: []
+      }
+    },
+    "run.pausing" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
+    "run.suspended" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
+    "run.completed" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
+    "run.failed" => %{
+      1 => %{
+        required: [:run_id, :error_category, :error_code],
+        optional: [],
+        uuid_fields: [:run_id]
+      }
+    },
+    "run.cancelling" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
+    "run.cancelled" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
+    "lease.proposed" => %{
+      1 => %{
+        required: [
+          :grant_id,
+          :run_id,
+          :admitted_snapshot_id,
+          :contract_version,
+          :reserves,
+          :response_budget,
+          :tool_budget,
+          :deadline,
+          :checkpoint_cadence,
+          :renewal_state,
+          :extensions
+        ],
+        optional: [],
+        uuid_fields: [:grant_id, :run_id, :admitted_snapshot_id],
+        types: %{
+          contract_version: :integer,
+          reserves: :map,
+          response_budget: :integer,
+          tool_budget: :integer,
+          deadline: :utc_datetime,
+          checkpoint_cadence: :integer,
+          extensions: :map
+        }
+      }
+    },
+    "lease.granted" => %{1 => %{required: [:grant_id], optional: [], uuid_fields: [:grant_id]}},
+    "lease.active" => %{1 => %{required: [:grant_id], optional: [], uuid_fields: [:grant_id]}},
+    "lease.renewal_due" => %{
+      1 => %{required: [:grant_id], optional: [], uuid_fields: [:grant_id]}
+    },
+    "lease.renewed" => %{1 => %{required: [:grant_id], optional: [], uuid_fields: [:grant_id]}},
+    "lease.expired" => %{1 => %{required: [:grant_id], optional: [], uuid_fields: [:grant_id]}},
+    "lease.revoked" => %{1 => %{required: [:grant_id], optional: [], uuid_fields: [:grant_id]}},
+    "lease.checkpoint_required" => %{
+      1 => %{required: [:grant_id], optional: [], uuid_fields: [:grant_id]}
+    },
+    "checkpoint.created" => %{
+      1 => %{
+        required: [
+          :checkpoint_id,
+          :run_id,
+          :contract_version,
+          :acceptance_contract,
+          :repository_state,
+          :evidence,
+          :decisions,
+          :unresolved_issues,
+          :next_action,
+          :stop_reason,
+          :artifact_ids,
+          :extensions
+        ],
+        optional: [:provider_session_id],
+        uuid_fields: [:checkpoint_id, :run_id],
+        types: %{
+          contract_version: :integer,
+          acceptance_contract: :map,
+          repository_state: :map,
+          evidence: :map,
+          decisions: :map,
+          unresolved_issues: :map,
+          artifact_ids: :map,
+          extensions: :map
+        }
+      }
+    },
+    "capacity.snapshot_observed" => %{
+      1 => %{
+        required: [
+          :snapshot_id,
+          :contract_version,
+          :capacity_state,
+          :windows,
+          :observed_at,
+          :source,
+          :scope,
+          :confidence,
+          :support_tier,
+          :compatibility_state,
+          :extensions
+        ],
+        optional: [:run_id, :expires_at],
+        uuid_fields: [:snapshot_id, :run_id],
+        types: %{
+          contract_version: :integer,
+          windows: :map,
+          observed_at: :utc_datetime,
+          expires_at: :utc_datetime,
+          source: :map,
+          extensions: :map
+        }
+      }
+    },
+    "harness.event_recorded" => %{
+      1 => %{
+        required: [:run_id, :source_event_id, :ordinal, :occurred_at, :kind],
+        optional: [
+          :process_id,
+          :provider_session_id,
+          :artifact_id,
+          :capacity_snapshot_id,
+          :error,
+          :result,
+          :extensions
+        ],
+        uuid_fields: [:run_id, :artifact_id, :capacity_snapshot_id],
+        types: %{
+          ordinal: :integer,
+          occurred_at: :utc_datetime,
+          error: :map,
+          result: :map,
+          extensions: :map
+        }
       }
     }
   }
@@ -144,10 +307,11 @@ defmodule Shoestring.Trajectory.EventRegistry do
     unknown_keys = Map.keys(payload) -- allowed_keys
 
     changeset =
-      {%{}, Enum.into(fields, %{}, &{&1, :string})}
+      {%{}, Enum.into(fields, %{}, &{&1, field_type(schema, &1)})}
       |> cast(payload, fields)
       |> validate_required(schema.required)
       |> validate_uuid_fields(schema.uuid_fields)
+      |> validate_payload_safety(type, schema, payload)
 
     changeset =
       if unknown_keys == [] do
@@ -177,5 +341,49 @@ defmodule Shoestring.Trajectory.EventRegistry do
         end
       end)
     end)
+  end
+
+  defp field_type(schema, field), do: schema |> Map.get(:types, %{}) |> Map.get(field, :string)
+
+  defp validate_payload_safety(changeset, type, schema, payload) do
+    if normalized_harness_event?(type) do
+      validate_normalized_payload_safety(changeset, schema, payload)
+    else
+      changeset
+    end
+  end
+
+  defp validate_normalized_payload_safety(changeset, schema, payload) do
+    changeset =
+      if Contract.safe_term?(payload) do
+        changeset
+      else
+        add_error(changeset, :base, "must not contain secrets or raw transcripts")
+      end
+
+    if :extensions in (schema.required ++ schema.optional) do
+      case Map.get(payload, "extensions") do
+        nil ->
+          changeset
+
+        extensions when is_map(extensions) ->
+          case Contract.extensions(extensions) do
+            {:ok, _extensions} ->
+              changeset
+
+            {:error, _error} ->
+              add_error(changeset, :extensions, "must be bounded, namespaced, and secret-free")
+          end
+
+        _other ->
+          add_error(changeset, :extensions, "must be an object")
+      end
+    else
+      changeset
+    end
+  end
+
+  defp normalized_harness_event?(type) do
+    String.starts_with?(type, ["run.", "lease.", "checkpoint.", "capacity.", "harness."])
   end
 end
