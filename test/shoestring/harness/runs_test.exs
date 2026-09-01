@@ -1,6 +1,7 @@
 defmodule Shoestring.Harness.RunsTest do
   use Shoestring.DataCase, async: false
 
+  alias Elixir.Task, as: AsyncTask
   alias Shoestring.Harness.{Identity, RunRecord, RunRequest, Runs}
   alias Shoestring.Repo
   alias Shoestring.Trajectory.{Goal, Task, TrajectoryEvent}
@@ -46,6 +47,76 @@ defmodule Shoestring.Harness.RunsTest do
     assert Runs.owned?(goal.id, run.id, Repo)
     refute Runs.owned?("00000000-0000-4000-8000-000000000605", run.id, Repo)
     refute Runs.owned?(goal.id, "00000000-0000-4000-8000-000000000606", Repo)
+  end
+
+  test "a duplicate dispatch_id is returned as a changeset error" do
+    goal = insert_goal()
+    task = insert_task(goal)
+    request = run_request(goal, task)
+
+    assert {:ok, _run} =
+             Runs.request(request, identity(),
+               clock: Shoestring.Test.FixedClock,
+               identifier: Shoestring.Test.FixedIdentifier
+             )
+
+    assert {:error, changeset} =
+             %RunRecord{id: @run_id}
+             |> RunRecord.intent_changeset(
+               request,
+               "test.adapter",
+               Shoestring.Test.FixedClock.now()
+             )
+             |> Repo.insert()
+
+    assert {:dispatch_id, {_message, opts}} = List.keyfind(changeset.errors, :dispatch_id, 0)
+    assert opts[:constraint] == :unique
+    assert opts[:constraint_name] == "harness_runs_dispatch_id_index"
+  end
+
+  test "concurrent duplicate requests recover the single inserted run" do
+    goal = insert_goal()
+    task = insert_task(goal)
+    request = run_request(goal, task)
+    parent = self()
+
+    task_supervisor =
+      start_supervised!({AsyncTask.Supervisor, name: :runs_duplicate_task_supervisor})
+
+    tasks =
+      for identifier <- [
+            Shoestring.Test.FixedIdentifier,
+            Shoestring.Test.AlternateFixedIdentifier
+          ] do
+        AsyncTask.Supervisor.async_nolink(task_supervisor, fn ->
+          send(parent, {:runs_request_ready, self()})
+
+          receive do
+            :start_request ->
+              Runs.request(request, identity(),
+                clock: Shoestring.Test.FixedClock,
+                identifier: identifier
+              )
+          end
+        end)
+      end
+
+    ready_pids =
+      for _ <- 1..2 do
+        assert_receive {:runs_request_ready, pid}
+        pid
+      end
+
+    Enum.each(ready_pids, &send(&1, :start_request))
+
+    assert [{:ok, first}, {:ok, second}] = Enum.map(tasks, &AsyncTask.await(&1, :infinity))
+    assert first.id == second.id
+
+    assert 1 ==
+             Repo.aggregate(
+               from(run in RunRecord, where: run.dispatch_id == ^@dispatch_id),
+               :count
+             )
   end
 
   defp run_request(goal, task) do

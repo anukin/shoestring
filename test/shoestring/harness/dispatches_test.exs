@@ -3,7 +3,7 @@ defmodule Shoestring.Harness.DispatchesTest do
   use Oban.Testing, repo: Shoestring.Repo, engine: Oban.Engines.Lite
 
   alias Oban.Job
-  alias Shoestring.Harness.{DispatchRecord, DispatchWorker, Identity, RunRecord, RunRequest}
+  alias Shoestring.Harness.{DispatchRecord, DispatchWorker, Identity, RunRecord, RunRequest, Runs}
   alias Shoestring.Harness.Dispatch.Reconciler
   alias Shoestring.Harness.Dispatches
   alias Shoestring.Repo
@@ -191,6 +191,30 @@ defmodule Shoestring.Harness.DispatchesTest do
 
     assert %DispatchRecord{job_id: ^repaired_job_id} =
              Repo.get!(DispatchRecord, dispatch.dispatch_id)
+  end
+
+  test "restart reconciliation repairs a run intent stranded before dispatch and job insertion",
+       %{
+         goal: goal,
+         task: task
+       } do
+    assert {:ok, run} = Runs.request(run_request(goal, task), identity(), opts())
+    assert nil == Repo.get(DispatchRecord, run.dispatch_id)
+    assert [] = all_enqueued(worker: DispatchWorker)
+
+    reconciler =
+      start_supervised!(
+        {Reconciler,
+         name: :run_intent_orphan_reconciler_test, repo: Repo, clock: Shoestring.Test.FixedClock}
+      )
+
+    assert %Reconciler{last_result: {:ok, 1}} = :sys.get_state(reconciler)
+    assert [%Job{id: job_id}] = all_enqueued(worker: DispatchWorker)
+
+    run_id = run.id
+
+    assert %DispatchRecord{dispatch_id: @dispatch_id, run_id: ^run_id, job_id: ^job_id} =
+             Repo.get!(DispatchRecord, @dispatch_id)
   end
 
   defp opts do

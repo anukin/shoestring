@@ -78,20 +78,35 @@ defmodule Shoestring.Harness.Runs do
     now = Clock.now(clock)
 
     with :ok <- validate_goal_and_task(repo, request) do
-      case repo.get_by(RunRecord, dispatch_id: request.dispatch_id) do
-        %RunRecord{} = run ->
+      run_id = Identifier.generate(identifier)
+      run = %RunRecord{id: run_id}
+
+      case repo.insert(RunRecord.intent_changeset(run, request, identity.adapter_id, now)) do
+        {:ok, run} ->
           {:ok, run}
 
-        nil ->
-          run_id = Identifier.generate(identifier)
-          run = %RunRecord{id: run_id}
-
-          case repo.insert(RunRecord.intent_changeset(run, request, identity.adapter_id, now)) do
-            {:ok, run} -> {:ok, run}
-            {:error, changeset} -> {:error, changeset}
-          end
+        {:error, changeset} ->
+          recover_existing_dispatch(repo, request.dispatch_id, changeset)
       end
     end
+  end
+
+  defp recover_existing_dispatch(repo, dispatch_id, changeset) do
+    if dispatch_id_conflict?(changeset) do
+      case repo.get_by(RunRecord, dispatch_id: dispatch_id) do
+        %RunRecord{} = run -> {:ok, run}
+        nil -> {:error, changeset}
+      end
+    else
+      {:error, changeset}
+    end
+  end
+
+  defp dispatch_id_conflict?(changeset) do
+    Enum.any?(changeset.errors, fn
+      {:dispatch_id, {_message, opts}} -> opts[:constraint] == :unique
+      _error -> false
+    end)
   end
 
   defp requested_event?(run, repo) do

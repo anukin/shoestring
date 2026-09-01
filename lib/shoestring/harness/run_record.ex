@@ -74,7 +74,7 @@ defmodule Shoestring.Harness.RunRecord do
       "cancelling",
       "cancelled"
     ])
-    |> unique_constraint(:dispatch_id)
+    |> unique_constraint(:dispatch_id, name: "harness_runs_dispatch_id_index")
     |> foreign_key_constraint(:goal_id)
     |> foreign_key_constraint(:task_id)
     |> check_constraint(:request_version, name: "harness_runs_request_version_positive")

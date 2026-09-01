@@ -31,20 +31,21 @@ defmodule Shoestring.Harness.Dispatches do
   def enqueue(%RunRequest{} = request, %Identity{} = identity, opts \\ []) do
     with {:ok, run} <- Runs.request(request, identity, opts),
          :ok <- ensure_requested_event(run, opts),
-         {:ok, dispatch, job} <- ensure_delivery(run, opts) do
+         {:ok, dispatch, job, _repaired?} <- ensure_delivery(run, opts) do
       {:ok, dispatch, job}
     end
   end
 
-  @doc "Repairs every canonical dispatch intent whose linked Oban job is absent."
+  @doc "Repairs every durable run intent whose dispatch record or linked Oban job is absent."
   @spec reconcile(keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
   def reconcile(opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
-    repo.all(from dispatch in DispatchRecord, order_by: [asc: dispatch.inserted_at])
-    |> Enum.reduce_while({:ok, 0}, fn dispatch, {:ok, count} ->
-      with :ok <- ensure_requested_event(dispatch, opts),
-           {:ok, _dispatch, _job, repaired?} <- ensure_job(dispatch, opts) do
+    repo.all(from run in RunRecord, order_by: [asc: run.inserted_at])
+    |> Enum.reduce_while({:ok, 0}, fn run, {:ok, count} ->
+      with {:ok, _run_events_repaired} <- Runs.reconcile(run.goal_id, clock_opts(opts)),
+           :ok <- ensure_requested_event(run, opts),
+           {:ok, _dispatch, _job, repaired?} <- ensure_delivery(run, opts) do
         {:cont, {:ok, count + if(repaired?, do: 1, else: 0)}}
       else
         {:error, reason} -> {:halt, {:error, reason}}
@@ -112,8 +113,14 @@ defmodule Shoestring.Harness.Dispatches do
     repo = Keyword.get(opts, :repo, Repo)
 
     case repo.get(DispatchRecord, run.dispatch_id) do
-      nil -> create_intent_and_job(run, opts)
-      %DispatchRecord{} = dispatch -> ensure_job_result(dispatch, opts)
+      nil ->
+        case create_intent_and_job(run, opts) do
+          {:ok, dispatch, job} -> {:ok, dispatch, job, true}
+          error -> error
+        end
+
+      %DispatchRecord{} = dispatch ->
+        ensure_job(dispatch, opts)
     end
   end
 
@@ -134,7 +141,10 @@ defmodule Shoestring.Harness.Dispatches do
         {:ok, dispatch, job}
 
       {:error, :dispatch, _changeset, _changes} ->
-        recover_existing_delivery(run.dispatch_id, opts)
+        case recover_existing_delivery(run.dispatch_id, opts) do
+          {:ok, dispatch, job, _repaired?} -> {:ok, dispatch, job}
+          error -> error
+        end
 
       {:error, _operation, reason, _changes} ->
         {:error, reason}
@@ -145,15 +155,8 @@ defmodule Shoestring.Harness.Dispatches do
     repo = Keyword.get(opts, :repo, Repo)
 
     case fetch(dispatch_id, repo) do
-      {:ok, dispatch} -> ensure_job_result(dispatch, opts)
+      {:ok, dispatch} -> ensure_job(dispatch, opts)
       error -> error
-    end
-  end
-
-  defp ensure_job_result(dispatch, opts) do
-    case ensure_job(dispatch, opts) do
-      {:ok, dispatch, job, _repaired?} -> {:ok, dispatch, job}
-      {:error, reason} -> {:error, reason}
     end
   end
 
