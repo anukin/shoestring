@@ -47,7 +47,10 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
     assert column_names("harness_execution_leases") |> Enum.member?("deadline")
     assert column_names("harness_checkpoints") |> Enum.member?("stop_reason")
     assert column_names("harness_capacity_snapshots") |> Enum.member?("capacity_state")
+    assert column_names("harness_capacity_snapshots") |> Enum.member?("capacity_state_v2")
+    assert column_names("harness_capacity_snapshots") |> Enum.member?("observed_at_v2")
     assert column_names("harness_capacity_windows") |> Enum.member?("used_percent")
+    assert column_names("harness_capacity_windows") |> Enum.member?("state_v2")
 
     assert index_names("harness_runs") == [
              "harness_runs_dispatch_id_index",
@@ -133,6 +136,23 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
                "INSERT INTO harness_capacity_windows (id, snapshot_id, kind, state, used_percent, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                [window_id, snapshot_id, "five_hour", "known", 101, now, now]
              )
+
+    assert {:error, _} =
+             Repo.query(
+               "UPDATE harness_capacity_snapshots SET capacity_state_v2 = 'available' WHERE id = ?",
+               [snapshot_id]
+             )
+
+    assert {:ok, _} =
+             Repo.query(
+               "INSERT INTO harness_capacity_windows (id, snapshot_id, kind, state, state_v2, used_percent, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+               [window_id, snapshot_id, "five_hour", "known", "observed", 25, now, now]
+             )
+
+    assert {:error, _} =
+             Repo.query("UPDATE harness_capacity_windows SET state_v2 = 'known' WHERE id = ?", [
+               window_id
+             ])
   end
 
   defp foundation_tables do

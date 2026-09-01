@@ -19,8 +19,9 @@ defmodule Shoestring.Harness.ContractsTest do
   @snapshot_id "00000000-0000-4000-8000-000000000005"
   @grant_id "00000000-0000-4000-8000-000000000006"
   @checkpoint_id "00000000-0000-4000-8000-000000000007"
+  @now ~U[2026-08-30 12:00:00Z]
 
-  test "all public v1 contracts construct typed normalized values" do
+  test "public contracts construct typed normalized values" do
     assert {:ok, %RunRequest{version: 1, requested_capabilities: [:resume]}} =
              RunRequest.new(run_request_attrs())
 
@@ -30,18 +31,275 @@ defmodule Shoestring.Harness.ContractsTest do
                run_id: @run_id,
                source_event_id: "event-1",
                ordinal: 1,
-               occurred_at: ~U[2026-08-30 12:00:00Z],
+               occurred_at: @now,
                kind: :result,
                result: %{status: "completed"}
              })
 
-    assert {:ok, %CapacitySnapshot{capacity_state: :known}} =
-             CapacitySnapshot.new(known_snapshot_attrs())
+    assert {:ok,
+            %CapacitySnapshot{
+              version: 2,
+              capacity_state: :observed,
+              source: %{event: :explicit_read, provider_id: "codex"}
+            }} =
+             CapacitySnapshot.new(observed_snapshot_attrs(), now: @now)
 
     assert {:ok, %ExecutionLease{grant_id: @grant_id, reserves: %{response: 1, tool: 2}}} =
              ExecutionLease.new(lease_attrs())
 
-    assert {:ok, %Checkpoint{checkpoint_id: @checkpoint_id}} = Checkpoint.new(checkpoint_attrs())
+    assert {:ok, %Checkpoint{checkpoint_id: @checkpoint_id}} =
+             Checkpoint.new(checkpoint_attrs())
+  end
+
+  test "provider and mode support metadata distinguishes proactive Codex from Claude telemetry" do
+    assert {:ok, codex} = CapacitySnapshot.new(observed_snapshot_attrs(), now: @now)
+    assert codex.support_tier == :proactive
+    assert codex.source.invocation_mode == "app_server"
+    assert CapacitySnapshot.eligible?(codex, @now)
+
+    assert {:ok, claude_interactive} =
+             CapacitySnapshot.new(
+               observed_snapshot_attrs(%{
+                 source: %{
+                   adapter_id: "fixture.capacity",
+                   provider_id: "claude",
+                   invocation_mode: "interactive_status_line",
+                   event: :status_line_input
+                 },
+                 support_tier: :conservative_partial
+               }),
+               now: @now
+             )
+
+    refute CapacitySnapshot.eligible?(claude_interactive, @now)
+
+    assert {:ok, startup_omission} =
+             CapacitySnapshot.new(
+               unknown_snapshot_attrs(%{
+                 source: %{
+                   adapter_id: "fixture.capacity",
+                   provider_id: "claude",
+                   invocation_mode: "interactive_status_line",
+                   event: :status_line_input
+                 },
+                 support_tier: :conservative_partial,
+                 reason: "rate_limits_absent_before_first_response_or_unsupported_subscription"
+               }),
+               now: @now
+             )
+
+    assert {:ok, headless_unsupported} =
+             CapacitySnapshot.new(
+               unknown_snapshot_attrs(%{
+                 source: %{
+                   adapter_id: "fixture.capacity",
+                   provider_id: "claude",
+                   invocation_mode: "print_json",
+                   event: :headless_result_error
+                 },
+                 support_tier: :unsupported,
+                 reason: "headless_capacity_signal_unsupported"
+               }),
+               now: @now
+             )
+
+    assert startup_omission.reason != headless_unsupported.reason
+    refute CapacitySnapshot.eligible?(startup_omission, @now)
+    refute CapacitySnapshot.eligible?(headless_unsupported, @now)
+  end
+
+  test "freshness is deterministic, bounded, and never treats future data as fresh" do
+    assert {:ok, codex} = CapacitySnapshot.new(observed_snapshot_attrs(), now: @now)
+    assert codex.freshness.max_age_seconds == 300
+    assert codex.expires_at == ~U[2026-08-30 12:05:00Z]
+    assert CapacitySnapshot.freshness(codex, ~U[2026-08-30 12:05:00Z]) == :fresh
+    assert CapacitySnapshot.freshness(codex, ~U[2026-08-30 12:05:01Z]) == :stale
+    refute CapacitySnapshot.eligible?(codex, ~U[2026-08-30 12:05:01Z])
+
+    assert {:ok, non_codex_policy} =
+             CapacitySnapshot.new(
+               observed_snapshot_attrs(%{freshness: %{max_age_seconds: 600}}),
+               now: @now
+             )
+
+    assert non_codex_policy.expires_at == ~U[2026-08-30 12:10:00Z]
+
+    assert {:error, changeset} =
+             CapacitySnapshot.new(
+               observed_snapshot_attrs(%{freshness: %{max_age_seconds: 86_401}}),
+               now: @now
+             )
+
+    assert "must not exceed 86400" in errors_on(changeset).max_age_seconds
+
+    assert {:ok, future} =
+             CapacitySnapshot.new(
+               unknown_snapshot_attrs(%{
+                 observed_at: ~U[2026-08-30 12:00:01Z],
+                 reason: "future_observation_timestamp"
+               }),
+               now: @now
+             )
+
+    assert CapacitySnapshot.freshness(future, @now) == :unknown
+    refute CapacitySnapshot.eligible?(future, @now)
+
+    assert {:error, changeset} =
+             CapacitySnapshot.new(
+               observed_snapshot_attrs(%{observed_at: ~U[2026-08-30 12:00:01Z]}),
+               now: @now
+             )
+
+    assert "future capacity must be unknown" in errors_on(changeset).capacity_state
+  end
+
+  test "missing, malformed, timestamp-unknown, stale, disconnected, refused, and all-unknown observations fail closed" do
+    assert {:ok, timestamp_unknown} =
+             CapacitySnapshot.new(
+               unknown_snapshot_attrs(%{
+                 observed_at: nil,
+                 reason: "missing_or_invalid_observation_timestamp"
+               }),
+               now: @now
+             )
+
+    assert CapacitySnapshot.freshness(timestamp_unknown, @now) == :unknown
+    refute CapacitySnapshot.eligible?(timestamp_unknown, @now)
+
+    assert {:ok, stale} =
+             CapacitySnapshot.new(
+               degraded_snapshot_attrs(%{
+                 observed_at: ~U[2026-08-30 11:54:59Z],
+                 reason: "stale_observation"
+               }),
+               now: @now
+             )
+
+    assert CapacitySnapshot.freshness(stale, @now) == :stale
+    refute CapacitySnapshot.eligible?(stale, @now)
+
+    assert {:ok, disconnected} =
+             CapacitySnapshot.new(
+               unknown_snapshot_attrs(%{reason: "transport_disconnected"}),
+               now: @now
+             )
+
+    assert {:ok, generic_error} =
+             CapacitySnapshot.new(
+               unknown_snapshot_attrs(%{
+                 source: %{
+                   adapter_id: "fixture.capacity",
+                   provider_id: "codex",
+                   invocation_mode: "app_server",
+                   event: :headless_result_error
+                 },
+                 reason: "provider_error"
+               }),
+               now: @now
+             )
+
+    assert CapacitySnapshot.freshness(generic_error, @now) == :unknown
+
+    assert {:ok, refused} =
+             CapacitySnapshot.new(
+               %{
+                 version: 2,
+                 snapshot_id: @snapshot_id,
+                 capacity_state: :refused,
+                 windows: [],
+                 observed_at: nil,
+                 freshness: %{max_age_seconds: 300},
+                 source: %{
+                   adapter_id: "fixture.capacity",
+                   provider_id: "codex",
+                   invocation_mode: "app_server",
+                   event: :explicit_read
+                 },
+                 scope: "account",
+                 confidence: :none,
+                 support_tier: :proactive,
+                 compatibility_state: :compatible,
+                 reason: "provider_reported_rate_limit_reached",
+                 extensions: %{}
+               },
+               now: @now
+             )
+
+    assert {:ok, all_unknown_windows} =
+             CapacitySnapshot.new(
+               unknown_snapshot_attrs(%{
+                 windows: [
+                   %{kind: "primary", state: :unknown, reason: "missing_bucket"},
+                   %{kind: "secondary", state: :unknown, reason: "malformed_bucket"}
+                 ],
+                 reason: "no_valid_windows"
+               }),
+               now: @now
+             )
+
+    for snapshot <- [disconnected, generic_error, refused, all_unknown_windows] do
+      refute CapacitySnapshot.eligible?(snapshot, @now)
+    end
+
+    assert {:error, changeset} =
+             CapacitySnapshot.new(
+               observed_snapshot_attrs(%{
+                 windows: [%{kind: "primary", state: :observed, used_percent: "0"}]
+               }),
+               now: @now
+             )
+
+    assert "must be between 0 and 100" in errors_on(changeset).used_percent
+
+    assert {:error, changeset} =
+             CapacitySnapshot.new(
+               observed_snapshot_attrs(%{
+                 windows: [%{kind: "primary", state: :observed}]
+               }),
+               now: @now
+             )
+
+    assert "must be between 0 and 100" in errors_on(changeset).used_percent
+
+    assert {:error, changeset} =
+             CapacitySnapshot.new(Map.delete(observed_snapshot_attrs(), :observed_at), now: @now)
+
+    assert "can't be blank" in errors_on(changeset).observed_at
+  end
+
+  test "capacity serialization is exact and rejects state or shape drift" do
+    assert {:ok, snapshot} = CapacitySnapshot.new(observed_snapshot_attrs(), now: @now)
+    payload = EventPayload.capacity_snapshot(snapshot, @run_id)
+
+    assert {:ok, ^payload} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 2, payload, now: @now)
+
+    assert {:ok, decoded} = CapacitySnapshot.from_payload(payload, now: @now)
+    assert decoded == snapshot
+
+    for malformed <- [
+          put_in(payload, ["capacity_state"], "available"),
+          put_in(payload, ["windows", "items", Access.at(0), "state"], "known"),
+          put_in(payload, ["source", "event"], "terminal_scrape"),
+          put_in(payload, ["freshness", "max_age_seconds"], 0),
+          put_in(payload, ["expires_at"], "2026-08-30T12:05:01Z"),
+          put_in(payload, ["source", "format"], "drift"),
+          put_in(payload, ["windows", "items", Access.at(0)], %{
+            "kind" => "primary",
+            "state" => "observed"
+          }),
+          put_in(payload, ["windows", "items", Access.at(0)], %{
+            "kind" => "primary",
+            "used_percent" => 25.0
+          }),
+          Map.delete(payload, "observed_at"),
+          Map.delete(payload, "expires_at")
+        ] do
+      assert {:error, {:invalid_payload, "capacity.snapshot_observed", 2, _changeset}} =
+               EventRegistry.validate_payload("capacity.snapshot_observed", 2, malformed,
+                 now: @now
+               )
+    end
   end
 
   test "contract versions and extensions are explicit and bounded" do
@@ -77,38 +335,13 @@ defmodule Shoestring.Harness.ContractsTest do
                run_id: @run_id,
                source_event_id: "quota-1",
                ordinal: 1,
-               occurred_at: ~U[2026-08-30 12:00:00Z],
+               occurred_at: @now,
                kind: :error,
                error: %{category: "quota_refused", code: "limit", message: "Capacity refused"}
              })
   end
 
-  test "capacity unknown and freshness are first-class deterministic states" do
-    assert {:ok, unknown} =
-             CapacitySnapshot.new(%{
-               version: 1,
-               snapshot_id: @snapshot_id,
-               capacity_state: :unknown,
-               windows: [],
-               observed_at: ~U[2026-08-30 12:00:00Z],
-               source: %{adapter_id: "test.adapter", method: "probe"},
-               scope: "account",
-               confidence: :none,
-               support_tier: :unsupported,
-               compatibility_state: :degraded
-             })
-
-    assert CapacitySnapshot.unknown?(unknown)
-    assert CapacitySnapshot.freshness(unknown, ~U[2030-01-01 00:00:00Z]) == :unknown
-    refute CapacitySnapshot.eligible?(unknown, ~U[2026-08-30 12:00:00Z])
-
-    assert {:ok, known} = CapacitySnapshot.new(known_snapshot_attrs())
-    assert CapacitySnapshot.freshness(known, ~U[2026-08-30 12:04:59Z]) == :fresh
-    assert CapacitySnapshot.freshness(known, ~U[2026-08-30 12:05:01Z]) == :stale
-    refute CapacitySnapshot.eligible?(known, ~U[2026-08-30 12:05:01Z])
-  end
-
-  test "a minimum checkpoint does not require model authored text or a summary" do
+  test "a minimum checkpoint does not require model-authored text or a summary" do
     attrs = checkpoint_attrs()
     refute Map.has_key?(attrs, :summary)
     refute Map.has_key?(attrs, :model_response)
@@ -130,9 +363,9 @@ defmodule Shoestring.Harness.ContractsTest do
     assert "must not contain secrets or raw transcripts" in errors_on(changeset).extensions
   end
 
-  test "contract event payloads are JSON-safe and registered at their exact v1 schemas" do
+  test "event payloads are JSON-safe and registered at their exact schemas" do
     assert {:ok, request} = RunRequest.new(run_request_attrs())
-    assert {:ok, snapshot} = CapacitySnapshot.new(known_snapshot_attrs())
+    assert {:ok, snapshot} = CapacitySnapshot.new(observed_snapshot_attrs(), now: @now)
     assert {:ok, lease} = ExecutionLease.new(lease_attrs())
     assert {:ok, checkpoint} = Checkpoint.new(checkpoint_attrs())
 
@@ -142,7 +375,7 @@ defmodule Shoestring.Harness.ContractsTest do
                run_id: @run_id,
                source_event_id: "result-1",
                ordinal: 1,
-               occurred_at: ~U[2026-08-30 12:00:00Z],
+               occurred_at: @now,
                kind: :result,
                result: %{status: "completed"}
              })
@@ -157,8 +390,9 @@ defmodule Shoestring.Harness.ContractsTest do
     assert {:ok, _payload} =
              EventRegistry.validate_payload(
                "capacity.snapshot_observed",
-               1,
-               EventPayload.capacity_snapshot(snapshot, @run_id)
+               2,
+               EventPayload.capacity_snapshot(snapshot, @run_id),
+               now: @now
              )
 
     assert {:ok, _payload} =
@@ -183,6 +417,87 @@ defmodule Shoestring.Harness.ContractsTest do
              )
   end
 
+  defp observed_snapshot_attrs(overrides \\ %{}) do
+    Map.merge(
+      %{
+        version: 2,
+        snapshot_id: @snapshot_id,
+        capacity_state: :observed,
+        windows: [
+          %{
+            kind: "primary",
+            state: :observed,
+            used_percent: 25.0,
+            reset_at: ~U[2026-08-30 13:00:00Z]
+          },
+          %{
+            kind: "secondary",
+            state: :observed,
+            used_percent: 40.0,
+            reset_at: ~U[2026-09-06 12:00:00Z]
+          }
+        ],
+        observed_at: @now,
+        freshness: %{max_age_seconds: 300},
+        source: %{
+          adapter_id: "fixture.capacity",
+          provider_id: "codex",
+          invocation_mode: "app_server",
+          event: :explicit_read
+        },
+        scope: "account",
+        confidence: :high,
+        support_tier: :proactive,
+        compatibility_state: :compatible,
+        reason: nil,
+        extensions: %{}
+      },
+      overrides
+    )
+  end
+
+  defp degraded_snapshot_attrs(overrides) do
+    Map.merge(
+      observed_snapshot_attrs(%{
+        capacity_state: :degraded,
+        windows: [
+          %{kind: "primary", state: :observed, used_percent: 25.0},
+          %{kind: "secondary", state: :unknown, reason: "missing_bucket"}
+        ],
+        confidence: :medium,
+        compatibility_state: :degraded,
+        reason: "partial_window"
+      }),
+      overrides
+    )
+  end
+
+  defp unknown_snapshot_attrs(overrides) do
+    Map.merge(
+      %{
+        version: 2,
+        snapshot_id: @snapshot_id,
+        capacity_state: :unknown,
+        windows: [],
+        observed_at: @now,
+        freshness: %{max_age_seconds: 300},
+        source: %{
+          adapter_id: "fixture.capacity",
+          provider_id: "codex",
+          invocation_mode: "app_server",
+          event: :none
+        },
+        scope: "account",
+        confidence: :none,
+        support_tier: :unsupported,
+        compatibility_state: :degraded,
+        reason: "provider_error",
+        extensions: %{}
+      },
+      overrides
+    )
+  end
+
   defp run_request_attrs do
     %{
       version: 1,
@@ -194,30 +509,6 @@ defmodule Shoestring.Harness.ContractsTest do
       requested_capabilities: [:resume],
       dispatch_id: @dispatch_id,
       extensions: %{"test.adapter:mode" => "scripted"}
-    }
-  end
-
-  defp known_snapshot_attrs do
-    %{
-      version: 1,
-      snapshot_id: @snapshot_id,
-      capacity_state: :known,
-      windows: [
-        %{
-          kind: "five_hour",
-          state: :known,
-          used_percent: 25.0,
-          reset_at: ~U[2026-08-30 13:00:00Z]
-        }
-      ],
-      observed_at: ~U[2026-08-30 12:00:00Z],
-      expires_at: ~U[2026-08-30 12:05:00Z],
-      source: %{adapter_id: "test.adapter", method: "probe"},
-      scope: "account",
-      confidence: :high,
-      support_tier: :supported,
-      compatibility_state: :compatible,
-      extensions: %{}
     }
   end
 
