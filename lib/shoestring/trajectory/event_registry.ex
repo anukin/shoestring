@@ -64,6 +64,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
         }
       }
     },
+    "dispatch.requested" => %{
+      1 => %{
+        required: [:dispatch_id, :run_id, :request_version],
+        optional: [],
+        uuid_fields: [:dispatch_id, :run_id],
+        types: %{request_version: :integer}
+      }
+    },
     "run.starting" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
     "run.running" => %{
       1 => %{

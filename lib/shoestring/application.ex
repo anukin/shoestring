@@ -10,15 +10,20 @@ defmodule Shoestring.Application do
     Shoestring.State.ensure_writable_root!()
     Shoestring.State.configure_repo!()
 
-    children = [
-      ShoestringWeb.Telemetry,
-      Shoestring.Repo,
-      {Registry, keys: :unique, name: Shoestring.Trajectory.WriterRegistry},
-      Shoestring.Trajectory.WriterSupervisor,
-      {DNSCluster, query: Application.get_env(:shoestring, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: Shoestring.PubSub},
-      ShoestringWeb.Endpoint
-    ]
+    children =
+      [
+        ShoestringWeb.Telemetry,
+        Shoestring.Repo,
+        {Oban, Application.fetch_env!(:shoestring, Oban)},
+        {Registry, keys: :unique, name: Shoestring.Trajectory.WriterRegistry},
+        Shoestring.Trajectory.WriterSupervisor
+      ] ++
+        dispatch_reconciler_children() ++
+        [
+          {DNSCluster, query: Application.get_env(:shoestring, :dns_cluster_query) || :ignore},
+          {Phoenix.PubSub, name: Shoestring.PubSub},
+          ShoestringWeb.Endpoint
+        ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
@@ -32,5 +37,13 @@ defmodule Shoestring.Application do
   def config_change(changed, _new, removed) do
     ShoestringWeb.Endpoint.config_change(changed, removed)
     :ok
+  end
+
+  defp dispatch_reconciler_children do
+    if Application.get_env(:shoestring, :dispatch_reconciler, true) do
+      [Shoestring.Harness.Dispatch.Reconciler]
+    else
+      []
+    end
   end
 end

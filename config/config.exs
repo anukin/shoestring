@@ -22,7 +22,14 @@ config :shoestring, Shoestring.Repo,
 config :shoestring,
   trajectory_writer_idle_timeout: 60_000,
   artifact_root: nil,
-  artifact_max_size: 10 * 1024 * 1024
+  artifact_max_size: 10 * 1024 * 1024,
+  dispatch_clock: Shoestring.Harness.SystemClock,
+  dispatch_reconciler: true
+
+config :shoestring, Oban,
+  engine: Oban.Engines.Lite,
+  repo: Shoestring.Repo,
+  queues: [dispatch: 5]
 
 # Configure the endpoint
 config :shoestring, ShoestringWeb.Endpoint,

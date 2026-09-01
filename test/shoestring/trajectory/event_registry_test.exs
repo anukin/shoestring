@@ -13,38 +13,34 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     "payload" => %{"decision" => "continue"}
   }
 
-  test "the registry exposes initial and harness v1 event types" do
-    registered = EventRegistry.registered_types()
-
-    assert [
+  test "the registry exposes the exact initial and harness v1 event types" do
+    assert EventRegistry.registered_types() == [
+             {"capacity.snapshot_observed", 1},
+             {"checkpoint.created", 1},
              {"decision.recorded", 1},
+             {"dispatch.requested", 1},
              {"goal.created", 1},
-             {"task.completed", 1},
-             {"task.created", 1}
-           ] -- registered == []
-
-    assert [
-             {"run.requested", 1},
-             {"run.starting", 1},
-             {"run.running", 1},
-             {"run.pausing", 1},
-             {"run.suspended", 1},
-             {"run.completed", 1},
-             {"run.failed", 1},
-             {"run.cancelling", 1},
-             {"run.cancelled", 1},
-             {"lease.proposed", 1},
-             {"lease.granted", 1},
+             {"harness.event_recorded", 1},
              {"lease.active", 1},
+             {"lease.checkpoint_required", 1},
+             {"lease.expired", 1},
+             {"lease.granted", 1},
+             {"lease.proposed", 1},
              {"lease.renewal_due", 1},
              {"lease.renewed", 1},
-             {"lease.expired", 1},
              {"lease.revoked", 1},
-             {"lease.checkpoint_required", 1},
-             {"checkpoint.created", 1},
-             {"capacity.snapshot_observed", 1},
-             {"harness.event_recorded", 1}
-           ] -- registered == []
+             {"run.cancelled", 1},
+             {"run.cancelling", 1},
+             {"run.completed", 1},
+             {"run.failed", 1},
+             {"run.pausing", 1},
+             {"run.requested", 1},
+             {"run.running", 1},
+             {"run.starting", 1},
+             {"run.suspended", 1},
+             {"task.completed", 1},
+             {"task.created", 1}
+           ]
   end
 
   test "registered harness payloads retain exact version compatibility" do
