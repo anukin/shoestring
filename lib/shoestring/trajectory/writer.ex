@@ -290,7 +290,9 @@ defmodule Shoestring.Trajectory.Writer do
   end
 
   defp validate_input(%AppendInput{} = input) do
-    case EventRegistry.validate_payload(input.type, input.schema_version, input.payload) do
+    now = input.occurred_at || DateTime.utc_now()
+
+    case EventRegistry.validate_payload(input.type, input.schema_version, input.payload, now: now) do
       {:ok, _payload} -> :ok
       error -> error
     end

@@ -8,7 +8,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
   import Ecto.Changeset
 
-  alias Shoestring.Harness.Contract
+  alias Shoestring.Harness.{CapacitySnapshot, Contract}
   alias Shoestring.Trajectory.EventEnvelope
 
   @payload_schemas %{
@@ -178,6 +178,32 @@ defmodule Shoestring.Trajectory.EventRegistry do
           source: :map,
           extensions: :map
         }
+      },
+      2 => %{
+        required: [
+          :snapshot_id,
+          :contract_version,
+          :capacity_state,
+          :windows,
+          :freshness,
+          :source,
+          :scope,
+          :confidence,
+          :support_tier,
+          :compatibility_state,
+          :extensions
+        ],
+        optional: [:run_id, :observed_at, :expires_at, :reason],
+        uuid_fields: [:snapshot_id, :run_id],
+        types: %{
+          contract_version: :integer,
+          windows: :map,
+          observed_at: :utc_datetime,
+          expires_at: :utc_datetime,
+          freshness: :map,
+          source: :map,
+          extensions: :map
+        }
       }
     },
     "harness.event_recorded" => %{
@@ -228,6 +254,13 @@ defmodule Shoestring.Trajectory.EventRegistry do
           {:ok, map()}
           | {:error, {:unknown_event_type, term()}}
           | {:error, {:unknown_event_version, term(), term()}}
+  def upcast("capacity.snapshot_observed", 1, payload) do
+    with {:ok, payload} <- validate_payload("capacity.snapshot_observed", 1, payload),
+         {:ok, payload} <- upcast_legacy_capacity_snapshot(payload) do
+      {:ok, payload}
+    end
+  end
+
   def upcast(type, version, payload) do
     case current_version(type) do
       {:error, error} -> {:error, error}
@@ -263,7 +296,9 @@ defmodule Shoestring.Trajectory.EventRegistry do
   def validate(attrs) do
     case EventEnvelope.validate(attrs) do
       {:ok, envelope} ->
-        case validate_payload(envelope.type, envelope.schema_version, envelope.payload) do
+        case validate_payload(envelope.type, envelope.schema_version, envelope.payload,
+               now: envelope.occurred_at
+             ) do
           {:ok, payload} -> {:ok, %{envelope: envelope, payload: payload}}
           error -> error
         end
@@ -274,14 +309,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
   end
 
   @doc "Validates one payload against the exact registered type and version."
-  @spec validate_payload(String.t(), pos_integer(), map()) ::
+  @spec validate_payload(String.t(), pos_integer(), map(), keyword()) ::
           {:ok, map()}
           | {:error, {:invalid_payload, String.t(), pos_integer(), Ecto.Changeset.t()}}
           | {:error, {:unknown_event_type, term()}}
           | {:error, {:unknown_event_version, term(), term()}}
-  def validate_payload(type, version, payload) do
+  def validate_payload(type, version, payload, opts \\ []) do
     case schema_for(type, version) do
-      {:ok, schema} -> validate_payload_schema(type, version, schema, payload)
+      {:ok, schema} -> validate_payload_schema(type, version, schema, payload, opts)
       error -> error
     end
   end
@@ -301,7 +336,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
   defp allowed_keys(schema), do: Enum.map(schema.required ++ schema.optional, &Atom.to_string/1)
 
-  defp validate_payload_schema(type, version, schema, payload) when is_map(payload) do
+  defp validate_payload_schema(type, version, schema, payload, opts) when is_map(payload) do
     fields = schema.required ++ schema.optional
     allowed_keys = Enum.map(fields, &Atom.to_string/1)
     unknown_keys = Map.keys(payload) -- allowed_keys
@@ -321,13 +356,18 @@ defmodule Shoestring.Trajectory.EventRegistry do
       end
 
     if changeset.valid? do
-      {:ok, Map.take(payload, allowed_keys)}
+      validated = Map.take(payload, allowed_keys)
+
+      case validate_capacity_snapshot(type, version, validated, opts) do
+        :ok -> {:ok, validated}
+        {:error, changeset} -> {:error, {:invalid_payload, type, version, changeset}}
+      end
     else
       {:error, {:invalid_payload, type, version, changeset}}
     end
   end
 
-  defp validate_payload_schema(type, version, _schema, _payload) do
+  defp validate_payload_schema(type, version, _schema, _payload, _opts) do
     changeset = change(%{}) |> add_error(:base, "must be a JSON-compatible object")
     {:error, {:invalid_payload, type, version, changeset}}
   end
@@ -352,6 +392,196 @@ defmodule Shoestring.Trajectory.EventRegistry do
       changeset
     end
   end
+
+  defp validate_capacity_snapshot("capacity.snapshot_observed", 2, payload, opts) do
+    case CapacitySnapshot.from_payload(payload, opts) do
+      {:ok, _snapshot} -> :ok
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
+
+  defp validate_capacity_snapshot("capacity.snapshot_observed", 1, payload, _opts) do
+    cond do
+      Map.get(payload, "capacity_state") not in ["known", "unknown"] ->
+        Contract.invalid(:capacity_state, "must be a recognized legacy state")
+
+      not valid_legacy_capacity_windows?(Map.get(payload, "windows")) ->
+        Contract.invalid(:windows, "must use the exact legacy windows format")
+
+      not valid_legacy_source?(Map.get(payload, "source")) ->
+        Contract.invalid(:source, "must use the exact legacy source format")
+
+      Map.get(payload, "confidence") not in ["none", "low", "medium", "high"] ->
+        Contract.invalid(:confidence, "must be a recognized legacy confidence")
+
+      Map.get(payload, "support_tier") not in ["supported", "partial", "unsupported"] ->
+        Contract.invalid(:support_tier, "must be a recognized legacy support tier")
+
+      Map.get(payload, "compatibility_state") not in ["compatible", "degraded", "incompatible"] ->
+        Contract.invalid(:compatibility_state, "must be a recognized legacy compatibility state")
+
+      not valid_legacy_capacity_state?(payload) ->
+        Contract.invalid(:capacity_state, "does not match its legacy windows and freshness")
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_capacity_snapshot(_type, _version, _payload, _opts), do: :ok
+
+  defp valid_legacy_capacity_state?(%{"capacity_state" => "known"} = payload) do
+    with %{"items" => windows} when is_list(windows) <- Map.get(payload, "windows"),
+         true <- windows != [],
+         true <- is_binary(Map.get(payload, "expires_at")) do
+      true
+    else
+      _other -> false
+    end
+  end
+
+  defp valid_legacy_capacity_state?(%{"capacity_state" => "unknown"} = payload) do
+    Map.get(payload, "windows") == %{"items" => []} and Map.get(payload, "confidence") == "none"
+  end
+
+  defp valid_legacy_capacity_state?(_payload), do: false
+
+  defp valid_legacy_capacity_windows?(%{"items" => windows} = value)
+       when is_list(windows) and map_size(value) == 1 do
+    Enum.all?(windows, &valid_legacy_capacity_window?/1) and
+      Enum.uniq_by(windows, &Map.get(&1, "kind")) == windows
+  end
+
+  defp valid_legacy_capacity_windows?(_value), do: false
+
+  defp valid_legacy_capacity_window?(%{"kind" => kind, "state" => "known"} = window)
+       when is_binary(kind) and byte_size(kind) > 0 do
+    Map.keys(window) -- ["kind", "state", "used_percent", "reset_at"] == [] and
+      is_number(Map.get(window, "used_percent")) and
+      Map.get(window, "used_percent") >= 0 and Map.get(window, "used_percent") <= 100 and
+      valid_optional_datetime?(Map.get(window, "reset_at"))
+  end
+
+  defp valid_legacy_capacity_window?(
+         %{"kind" => kind, "state" => "unknown", "reason" => reason} = window
+       )
+       when is_binary(kind) and byte_size(kind) > 0 and is_binary(reason) and
+              byte_size(reason) > 0 do
+    Map.keys(window) -- ["kind", "state", "reason"] == []
+  end
+
+  defp valid_legacy_capacity_window?(_window), do: false
+
+  defp valid_legacy_source?(%{"adapter_id" => adapter_id, "method" => method} = source)
+       when is_binary(adapter_id) and byte_size(adapter_id) > 0 do
+    Map.keys(source) -- ["adapter_id", "method"] == [] and
+      method in ["probe", "status", "vendor_api"]
+  end
+
+  defp valid_legacy_source?(_source), do: false
+
+  defp valid_optional_datetime?(nil), do: true
+
+  defp valid_optional_datetime?(value) do
+    match?({:ok, _datetime}, Contract.datetime(value, :reset_at))
+  end
+
+  defp upcast_legacy_capacity_snapshot(payload) do
+    with {:ok, observed_at} <- Contract.datetime(Map.fetch!(payload, "observed_at"), :observed_at),
+         max_age_seconds <- legacy_max_age_seconds(payload, observed_at),
+         {:ok, windows} <- upcast_legacy_windows(Map.fetch!(payload, "windows")) do
+      capacity_state =
+        case Map.fetch!(payload, "capacity_state") do
+          "known" -> "degraded"
+          "unknown" -> "unknown"
+        end
+
+      support_tier =
+        case Map.fetch!(payload, "support_tier") do
+          "unsupported" -> "unsupported"
+          _tier -> "conservative_partial"
+        end
+
+      expires_at = DateTime.add(observed_at, max_age_seconds, :second)
+
+      {:ok,
+       %{
+         "snapshot_id" => Map.fetch!(payload, "snapshot_id"),
+         "run_id" => Map.get(payload, "run_id"),
+         "contract_version" => CapacitySnapshot.version(),
+         "capacity_state" => capacity_state,
+         "windows" => %{"items" => windows},
+         "observed_at" => DateTime.to_iso8601(observed_at),
+         "expires_at" => DateTime.to_iso8601(expires_at),
+         "freshness" => %{"max_age_seconds" => max_age_seconds},
+         "source" => %{
+           "adapter_id" => Map.fetch!(payload, "source") |> Map.fetch!("adapter_id"),
+           "provider_id" => "legacy",
+           "invocation_mode" => "unknown",
+           "event" => "none"
+         },
+         "scope" => Map.fetch!(payload, "scope"),
+         "confidence" =>
+           if(capacity_state == "unknown", do: "none", else: Map.fetch!(payload, "confidence")),
+         "support_tier" => support_tier,
+         "compatibility_state" => "degraded",
+         "reason" => "legacy_capacity_contract_missing_provenance",
+         "extensions" => Map.fetch!(payload, "extensions")
+       }}
+    end
+  end
+
+  defp legacy_max_age_seconds(payload, observed_at) do
+    with expires_at when is_binary(expires_at) <- Map.get(payload, "expires_at"),
+         {:ok, expires_at} <- Contract.datetime(expires_at, :expires_at),
+         seconds <- DateTime.diff(expires_at, observed_at, :second),
+         true <- seconds > 0 and seconds <= CapacitySnapshot.maximum_freshness_seconds() do
+      seconds
+    else
+      _other -> 300
+    end
+  end
+
+  defp upcast_legacy_windows(%{"items" => windows}) when is_list(windows) do
+    windows
+    |> Enum.reduce_while({:ok, []}, fn window, {:ok, acc} ->
+      case upcast_legacy_window(window) do
+        {:ok, window} -> {:cont, {:ok, [window | acc]}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, windows} -> {:ok, Enum.reverse(windows)}
+      error -> error
+    end
+  end
+
+  defp upcast_legacy_windows(_windows),
+    do: Contract.invalid(:windows, "must be a legacy windows list")
+
+  defp upcast_legacy_window(%{"state" => "known"} = window) do
+    {:ok,
+     %{
+       "kind" => Map.fetch!(window, "kind"),
+       "state" => "observed",
+       "used_percent" => Map.fetch!(window, "used_percent"),
+       "reset_at" => Map.get(window, "reset_at")
+     }
+     |> reject_nil_values()}
+  end
+
+  defp upcast_legacy_window(%{"state" => "unknown"} = window) do
+    {:ok,
+     %{
+       "kind" => Map.fetch!(window, "kind"),
+       "state" => "unknown",
+       "reason" => Map.fetch!(window, "reason")
+     }}
+  end
+
+  defp upcast_legacy_window(_window), do: Contract.invalid(:windows, "must be a legacy window")
+
+  defp reject_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
 
   defp validate_normalized_payload_safety(changeset, schema, payload) do
     changeset =

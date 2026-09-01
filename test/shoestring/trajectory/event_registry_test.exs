@@ -43,6 +43,7 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
              {"lease.checkpoint_required", 1},
              {"checkpoint.created", 1},
              {"capacity.snapshot_observed", 1},
+             {"capacity.snapshot_observed", 2},
              {"harness.event_recorded", 1}
            ] -- registered == []
   end
@@ -134,6 +135,31 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
 
     assert {:error, {:unknown_event_version, "decision.recorded", 2}} =
              EventRegistry.upcast("decision.recorded", 2, payload)
+
+    assert EventRegistry.current_version("capacity.snapshot_observed") == 2
+  end
+
+  test "legacy capacity event states are strict and upcast into fail-closed v2 metadata" do
+    payload = legacy_capacity_payload()
+
+    assert {:ok, ^payload} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 1, payload)
+
+    assert {:ok, upcast} = EventRegistry.upcast("capacity.snapshot_observed", 1, payload)
+    assert upcast["contract_version"] == 2
+    assert upcast["capacity_state"] == "degraded"
+    assert upcast["source"]["provider_id"] == "legacy"
+    assert upcast["source"]["event"] == "none"
+    assert upcast["reason"] == "legacy_capacity_contract_missing_provenance"
+
+    for malformed <- [
+          put_in(payload, ["capacity_state"], "available"),
+          put_in(payload, ["windows", "items", Access.at(0), "state"], "observed"),
+          put_in(payload, ["support_tier"], "proactive")
+        ] do
+      assert {:error, {:invalid_payload, "capacity.snapshot_observed", 1, _changeset}} =
+               EventRegistry.validate_payload("capacity.snapshot_observed", 1, malformed)
+    end
   end
 
   test "v1 events can explicitly reference artifact metadata" do
@@ -152,5 +178,24 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
         opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
       end)
     end)
+  end
+
+  defp legacy_capacity_payload do
+    %{
+      "snapshot_id" => "22222222-2222-4222-8222-222222222222",
+      "contract_version" => 1,
+      "capacity_state" => "known",
+      "windows" => %{
+        "items" => [%{"kind" => "five_hour", "state" => "known", "used_percent" => 25.0}]
+      },
+      "observed_at" => "2026-08-30T12:00:00Z",
+      "expires_at" => "2026-08-30T12:05:00Z",
+      "source" => %{"adapter_id" => "legacy.adapter", "method" => "probe"},
+      "scope" => "account",
+      "confidence" => "high",
+      "support_tier" => "supported",
+      "compatibility_state" => "compatible",
+      "extensions" => %{}
+    }
   end
 end

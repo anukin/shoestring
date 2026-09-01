@@ -37,17 +37,20 @@ defmodule Shoestring.Harness.EventPayload do
       "windows" => %{"items" => Enum.map(snapshot.windows, &window/1)},
       "observed_at" => iso8601(snapshot.observed_at),
       "expires_at" => iso8601(snapshot.expires_at),
+      "freshness" => %{"max_age_seconds" => snapshot.freshness.max_age_seconds},
       "source" => %{
         "adapter_id" => snapshot.source.adapter_id,
-        "method" => snapshot.source.method
+        "provider_id" => snapshot.source.provider_id,
+        "invocation_mode" => snapshot.source.invocation_mode,
+        "event" => Atom.to_string(snapshot.source.event)
       },
       "scope" => snapshot.scope,
       "confidence" => Atom.to_string(snapshot.confidence),
       "support_tier" => Atom.to_string(snapshot.support_tier),
       "compatibility_state" => Atom.to_string(snapshot.compatibility_state),
+      "reason" => snapshot.reason,
       "extensions" => snapshot.extensions
     }
-    |> drop_nil_values()
   end
 
   @spec execution_lease(ExecutionLease.t()) :: map()
@@ -127,10 +130,10 @@ defmodule Shoestring.Harness.EventPayload do
     }
   end
 
-  defp window(%{state: :known} = window) do
+  defp window(%{state: :observed} = window) do
     %{
       "kind" => window.kind,
-      "state" => "known",
+      "state" => "observed",
       "used_percent" => window.used_percent,
       "reset_at" => iso8601(window.reset_at)
     }
