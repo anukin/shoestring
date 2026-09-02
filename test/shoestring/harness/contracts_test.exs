@@ -54,7 +54,9 @@ defmodule Shoestring.Harness.ContractsTest do
   test "provider and mode support metadata distinguishes proactive Codex from Claude telemetry" do
     assert {:ok, codex} = CapacitySnapshot.new(observed_snapshot_attrs(), now: @now)
     assert codex.support_tier == :proactive
+    assert codex.source.provider_id == "codex"
     assert codex.source.invocation_mode == "app_server"
+    assert codex.compatibility_state == :compatible
     assert CapacitySnapshot.eligible?(codex, @now)
 
     assert {:ok, claude_interactive} =
@@ -243,6 +245,33 @@ defmodule Shoestring.Harness.ContractsTest do
 
     assert {:error, changeset} =
              CapacitySnapshot.new(
+               %{
+                 version: 2,
+                 snapshot_id: @snapshot_id,
+                 capacity_state: :refused,
+                 windows: [],
+                 observed_at: nil,
+                 freshness: %{max_age_seconds: 300},
+                 source: %{
+                   adapter_id: "fixture.capacity",
+                   provider_id: "claude",
+                   invocation_mode: "print_json",
+                   event: :headless_result_error
+                 },
+                 scope: "account",
+                 confidence: :none,
+                 support_tier: :unsupported,
+                 compatibility_state: :degraded,
+                 reason: "headless_capacity_signal_unsupported",
+                 extensions: %{}
+               },
+               now: @now
+             )
+
+    assert "unsupported sources cannot report a refusal" in errors_on(changeset).support_tier
+
+    assert {:error, changeset} =
+             CapacitySnapshot.new(
                observed_snapshot_attrs(%{
                  windows: [%{kind: "primary", state: :observed, used_percent: "0"}]
                }),
@@ -276,6 +305,16 @@ defmodule Shoestring.Harness.ContractsTest do
 
     assert {:ok, decoded} = CapacitySnapshot.from_payload(payload, now: @now)
     assert decoded == snapshot
+
+    equivalent_expiry = Map.put(payload, "expires_at", "2026-08-30T05:05:00-07:00")
+
+    assert {:ok, _decoded} =
+             EventRegistry.validate_payload(
+               "capacity.snapshot_observed",
+               2,
+               equivalent_expiry,
+               now: @now
+             )
 
     for malformed <- [
           put_in(payload, ["capacity_state"], "available"),

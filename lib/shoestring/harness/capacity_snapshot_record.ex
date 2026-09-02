@@ -102,6 +102,7 @@ defmodule Shoestring.Harness.CapacitySnapshotRecord do
       "none"
     ])
     |> validate_capacity_state()
+    |> validate_support_tier()
     |> foreign_key_constraint(:goal_id)
     |> foreign_key_constraint(:run_id)
     |> check_constraint(:contract_version, name: "harness_capacity_snapshots_version_positive")
@@ -126,6 +127,19 @@ defmodule Shoestring.Harness.CapacitySnapshotRecord do
 
       {state, _reason} when state in ["degraded", "refused", "unknown"] ->
         add_error(changeset, :reason, "is required for this capacity state")
+
+      _other ->
+        changeset
+    end
+  end
+
+  defp validate_support_tier(changeset) do
+    case {get_field(changeset, :capacity_state), get_field(changeset, :support_tier)} do
+      {"unknown", _support_tier} ->
+        changeset
+
+      {"refused", "unsupported"} ->
+        add_error(changeset, :support_tier, "unsupported sources cannot report a refusal")
 
       _other ->
         changeset

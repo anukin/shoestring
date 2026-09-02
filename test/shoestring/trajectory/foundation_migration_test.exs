@@ -1,6 +1,8 @@
 defmodule Shoestring.Trajectory.FoundationMigrationTest do
   use Shoestring.DataCase, async: false
 
+  alias Shoestring.Harness.{CapacitySnapshotRecord, CapacityWindowRecord}
+
   test "the empty database migration creates the complete foundation" do
     assert foundation_tables() ==
              [
@@ -64,7 +66,7 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
            ]
   end
 
-  test "sqlite enforces harness status and capacity window constraints directly" do
+  test "sqlite enforces canonical harness constraints on invalid updates" do
     goal_id = "00000000-0000-4000-8000-000000000401"
     task_id = "00000000-0000-4000-8000-000000000402"
     run_id = "00000000-0000-4000-8000-000000000403"
@@ -143,6 +145,35 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
                [snapshot_id]
              )
 
+    assert {:error, _} =
+             Repo.query(
+               "UPDATE harness_capacity_snapshots SET capacity_state = 'available' WHERE id = ?",
+               [snapshot_id]
+             )
+
+    assert {:error, _} =
+             Repo.query(
+               "UPDATE harness_capacity_snapshots SET freshness_max_age_seconds = 0 WHERE id = ?",
+               [snapshot_id]
+             )
+
+    assert {:error, _} =
+             Repo.query(
+               "UPDATE harness_capacity_snapshots SET source_event = 'unknown' WHERE id = ?",
+               [snapshot_id]
+             )
+
+    snapshot = Repo.get!(CapacitySnapshotRecord, snapshot_id)
+
+    assert {:error, changeset} =
+             Repo.update(
+               CapacitySnapshotRecord.changeset(snapshot, %{
+                 "legacy_capacity_state" => "available"
+               })
+             )
+
+    assert Map.has_key?(errors_on(changeset), :legacy_capacity_state)
+
     assert {:ok, _} =
              Repo.query(
                "INSERT INTO harness_capacity_windows (id, snapshot_id, kind, state, state_v2, used_percent, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -153,6 +184,18 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
              Repo.query("UPDATE harness_capacity_windows SET state_v2 = 'known' WHERE id = ?", [
                window_id
              ])
+
+    assert {:error, _} =
+             Repo.query("UPDATE harness_capacity_windows SET state = 'observed' WHERE id = ?", [
+               window_id
+             ])
+
+    window = Repo.get!(CapacityWindowRecord, window_id)
+
+    assert {:error, changeset} =
+             Repo.update(CapacityWindowRecord.changeset(window, %{"legacy_state" => "observed"}))
+
+    assert Map.has_key?(errors_on(changeset), :legacy_state)
   end
 
   defp foundation_tables do

@@ -182,6 +182,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
          {:ok, extensions} <-
            attrs |> Contract.optional(:extensions) |> then(&Contract.extensions/1),
          expires_at = expires_at(observed_at, freshness),
+         :ok <- validate_support_tier(capacity_state, support_tier),
          :ok <-
            validate_state(
              capacity_state,
@@ -455,6 +456,14 @@ defmodule Shoestring.Harness.CapacitySnapshot do
       {:ok, _value} -> Contract.invalid(field, "is not allowed for this state")
     end
   end
+
+  # A support tier describes what the source can establish, not whether the
+  # provider happened to be at its limit. A proactive source may therefore
+  # report a refusal, but an unsupported source cannot claim a reliable one.
+  defp validate_support_tier(:refused, :unsupported),
+    do: Contract.invalid(:support_tier, "unsupported sources cannot report a refusal")
+
+  defp validate_support_tier(_capacity_state, _support_tier), do: :ok
 
   defp validate_state(
          :observed,

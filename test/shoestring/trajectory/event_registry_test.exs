@@ -149,7 +149,10 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     assert upcast["contract_version"] == 2
     assert upcast["capacity_state"] == "degraded"
     assert upcast["source"]["provider_id"] == "legacy"
+    assert upcast["source"]["invocation_mode"] == "unknown"
     assert upcast["source"]["event"] == "none"
+    assert upcast["support_tier"] == "conservative_partial"
+    assert upcast["compatibility_state"] == "degraded"
     assert upcast["reason"] == "legacy_capacity_contract_missing_provenance"
 
     for malformed <- [
@@ -221,6 +224,26 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
 
     assert {:ok, _snapshot} =
              EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast)
+  end
+
+  test "capacity required fields and unregistered versions remain visible failures" do
+    assert {:ok, payload} =
+             EventRegistry.upcast("capacity.snapshot_observed", 1, legacy_capacity_payload())
+
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 2, changeset}} =
+             EventRegistry.validate_payload(
+               "capacity.snapshot_observed",
+               2,
+               Map.delete(payload, "freshness")
+             )
+
+    assert "can't be blank" in errors_on(changeset).freshness
+
+    assert {:error, {:unknown_event_version, "capacity.snapshot_observed", 3}} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 3, payload)
+
+    assert {:error, {:unknown_event_version, "capacity.snapshot_observed", 3}} =
+             EventRegistry.upcast("capacity.snapshot_observed", 3, payload)
   end
 
   test "v1 events can explicitly reference artifact metadata" do
