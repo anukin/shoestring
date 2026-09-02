@@ -110,6 +110,44 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     assert "must be a UUID" in errors_on(changeset).task_id
   end
 
+  test "unknown fields are rejected for strict schemas and explicitly additive v2 is sanitized" do
+    assert {:error, {:invalid_payload, "decision.recorded", 1, changeset}} =
+             EventRegistry.validate_payload("decision.recorded", 1, %{
+               "decision" => "continue",
+               "linkage_typo" => "ignored"
+             })
+
+    assert "contains unsupported fields" in errors_on(changeset).base
+
+    {:ok, legacy} =
+      EventRegistry.upcast("capacity.snapshot_observed", 1, legacy_capacity_payload())
+
+    additive =
+      legacy
+      |> Map.put("future_field", "ignored")
+      |> put_in(["source", "future_field"], "ignored")
+      |> put_in(["windows", "items", Access.at(0), "future_field"], "ignored")
+
+    assert {:ok, sanitized} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 2, additive, now: @now)
+
+    refute Map.has_key?(sanitized, "future_field")
+    refute Map.has_key?(sanitized["source"], "future_field")
+    refute Map.has_key?(hd(sanitized["windows"]["items"]), "future_field")
+  end
+
+  test "additive v2 fields remain secret-scanned without echoing their values" do
+    {:ok, legacy} =
+      EventRegistry.upcast("capacity.snapshot_observed", 1, legacy_capacity_payload())
+
+    payload = Map.put(legacy, "future_field", "api_key: sentinel-value")
+
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 2, changeset}} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 2, payload, now: @now)
+
+    refute inspect(errors_on(changeset)) =~ "sentinel-value"
+  end
+
   test "unknown event types and versions are rejected without atomizing input" do
     unknown_type = "future.#{System.unique_integer([:positive])}"
 
@@ -171,7 +209,7 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     end
   end
 
-  test "additive legacy fields are accepted while required legacy fields remain validated" do
+  test "new legacy payloads are strict while stored legacy replay stays compatible" do
     payload =
       legacy_capacity_payload()
       |> Map.put("future_field", "ignored")
@@ -179,11 +217,39 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
       |> put_in(["windows", "items", Access.at(0), "future_field"], "ignored")
       |> put_in(["source", "future_field"], "ignored")
 
-    assert {:ok, validated} =
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 1, changeset}} =
              EventRegistry.validate_payload("capacity.snapshot_observed", 1, payload, now: @now)
 
-    refute Map.has_key?(validated, "future_field")
-    assert validated["windows"]["future_window_metadata"] == %{"version" => 3}
+    assert "contains unsupported fields" in errors_on(changeset).base
+
+    nested_payload = Map.delete(payload, "future_field")
+
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 1, nested_changeset}} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 1, nested_payload,
+               now: @now
+             )
+
+    assert "must use a valid legacy windows format" in errors_on(nested_changeset).windows
+
+    assert {:ok, validated} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 1, nested_payload,
+               now: @now,
+               allow_legacy_unknown: true
+             )
+
+    refute Map.has_key?(validated["windows"], "future_window_metadata")
+
+    replay_payload = Map.put(nested_payload, "historical_typo", "ignored")
+
+    replay_envelope =
+      Map.merge(@valid_envelope, %{
+        "type" => "capacity.snapshot_observed",
+        "payload" => replay_payload
+      })
+
+    assert {:ok, %{payload: replay_validated}} = EventRegistry.validate(replay_envelope)
+    refute Map.has_key?(replay_validated, "historical_typo")
+    refute Map.has_key?(replay_validated["windows"], "future_window_metadata")
 
     assert {:error, {:invalid_payload, "capacity.snapshot_observed", 1, _changeset}} =
              EventRegistry.validate_payload(

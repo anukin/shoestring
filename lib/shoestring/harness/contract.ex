@@ -198,8 +198,10 @@ defmodule Shoestring.Harness.Contract do
   defp safe_term?(value, depth) when is_map(value) do
     map_size(value) <= 32 and
       Enum.all?(value, fn {key, nested_value} ->
-        key_string = to_string(key)
-        key_string not in @forbidden_content_keys and safe_term?(nested_value, depth + 1)
+        key_string = safe_key_string(key)
+
+        is_binary(key_string) and key_string not in @forbidden_content_keys and
+          safe_term?(nested_value, depth + 1)
       end)
   end
 
@@ -215,6 +217,10 @@ defmodule Shoestring.Harness.Contract do
   end
 
   defp extension_content_key(_key), do: nil
+
+  defp safe_key_string(key) when is_binary(key), do: key
+  defp safe_key_string(key) when is_atom(key), do: Atom.to_string(key)
+  defp safe_key_string(_key), do: nil
 
   defp secret?(value), do: Enum.any?(@secret_patterns, &Regex.match?(&1, value))
 end

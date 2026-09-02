@@ -448,8 +448,14 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   end
 
   # A support tier describes what the source can establish, not whether the
-  # provider happened to be at its limit. A proactive source may therefore
-  # report a refusal, but an unsupported source cannot claim a reliable one.
+  # provider happened to be at its limit. Only a proactive source may make a
+  # canonical observed claim. A proactive source may also report a refusal,
+  # but an unsupported source cannot claim a reliable one.
+  defp validate_support_tier(:observed, :proactive), do: :ok
+
+  defp validate_support_tier(:observed, _support_tier),
+    do: Contract.invalid(:support_tier, "observed capacity requires proactive support")
+
   defp validate_support_tier(:refused, :unsupported),
     do: Contract.invalid(:support_tier, "unsupported sources cannot report a refusal")
 
@@ -527,25 +533,22 @@ defmodule Shoestring.Harness.CapacitySnapshot do
           :capacity_state,
           "degraded capacity requires a timestamped observed window and reason"
         )
-
-      :future ->
-        Contract.invalid(:capacity_state, "future capacity must be unknown")
     end
   end
 
   defp validate_state(
          :refused,
-         _windows,
+         windows,
          _observed_at,
          _freshness,
          _source,
-         _confidence,
+         confidence,
          _compatibility,
          reason,
          _now
        )
        when is_binary(reason),
-       do: :ok
+       do: validate_refusal(confidence, windows)
 
   defp validate_state(
          :refused,
@@ -595,6 +598,19 @@ defmodule Shoestring.Harness.CapacitySnapshot do
            :capacity_state,
            "unknown capacity requires none confidence and a reason"
          )
+
+  defp validate_refusal(confidence, windows) do
+    cond do
+      confidence == :high ->
+        Contract.invalid(:confidence, "refused capacity cannot have high confidence")
+
+      Enum.any?(windows, &(&1.state == :observed)) ->
+        Contract.invalid(:windows, "refused capacity cannot contain observed windows")
+
+      true ->
+        :ok
+    end
+  end
 
   defp freshness_for(nil, _freshness, _now), do: :unknown
 
@@ -768,12 +784,16 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   defp ensure_only_keys(map, allowed, field) do
     allowed = Enum.map(allowed, &to_string/1)
 
-    if Enum.all?(Map.keys(map), &(to_string(&1) in allowed)) do
+    if Enum.all?(Map.keys(map), &supported_key?(&1, allowed)) do
       :ok
     else
       Contract.invalid(field, "contains unsupported fields")
     end
   end
+
+  defp supported_key?(key, allowed) when is_binary(key), do: key in allowed
+  defp supported_key?(key, allowed) when is_atom(key), do: Atom.to_string(key) in allowed
+  defp supported_key?(_key, _allowed), do: false
 
   defp payload_field("contract_version"), do: :contract_version
   defp payload_field("capacity_state"), do: :capacity_state

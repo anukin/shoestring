@@ -59,7 +59,7 @@ defmodule Shoestring.Harness.ContractsTest do
     assert codex.compatibility_state == :compatible
     assert CapacitySnapshot.eligible?(codex, @now)
 
-    assert {:ok, claude_interactive} =
+    assert {:error, claude_interactive_error} =
              CapacitySnapshot.new(
                observed_snapshot_attrs(%{
                  source: %{
@@ -73,7 +73,33 @@ defmodule Shoestring.Harness.ContractsTest do
                now: @now
              )
 
-    refute CapacitySnapshot.eligible?(claude_interactive, @now)
+    assert "observed capacity requires proactive support" in errors_on(claude_interactive_error).support_tier
+
+    for non_proactive_tier <- [:reactive_only, :unsupported] do
+      assert {:error, changeset} =
+               CapacitySnapshot.new(
+                 observed_snapshot_attrs(%{support_tier: non_proactive_tier}),
+                 now: @now
+               )
+
+      assert "observed capacity requires proactive support" in errors_on(changeset).support_tier
+    end
+
+    assert {:ok, claude_degraded} =
+             CapacitySnapshot.new(
+               degraded_snapshot_attrs(%{
+                 source: %{
+                   adapter_id: "fixture.capacity",
+                   provider_id: "claude",
+                   invocation_mode: "interactive_status_line",
+                   event: :status_line_input
+                 },
+                 support_tier: :conservative_partial
+               }),
+               now: @now
+             )
+
+    refute CapacitySnapshot.eligible?(claude_degraded, @now)
 
     assert {:ok, startup_omission} =
              CapacitySnapshot.new(
@@ -272,6 +298,31 @@ defmodule Shoestring.Harness.ContractsTest do
 
     assert {:error, changeset} =
              CapacitySnapshot.new(
+               unknown_snapshot_attrs(%{
+                 capacity_state: :refused,
+                 confidence: :high,
+                 support_tier: :proactive,
+                 reason: "reported_limit"
+               }),
+               now: @now
+             )
+
+    assert "refused capacity cannot have high confidence" in errors_on(changeset).confidence
+
+    assert {:error, changeset} =
+             CapacitySnapshot.new(
+               observed_snapshot_attrs(%{
+                 capacity_state: :refused,
+                 confidence: :none,
+                 reason: "reported_limit"
+               }),
+               now: @now
+             )
+
+    assert "refused capacity cannot contain observed windows" in errors_on(changeset).windows
+
+    assert {:error, changeset} =
+             CapacitySnapshot.new(
                observed_snapshot_attrs(%{
                  windows: [%{kind: "primary", state: :observed, used_percent: "0"}]
                }),
@@ -326,6 +377,14 @@ defmodule Shoestring.Harness.ContractsTest do
              )
 
     assert additive_payload["capacity_state"] == "observed"
+
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 2, _changeset}} =
+             EventRegistry.validate_payload(
+               "capacity.snapshot_observed",
+               2,
+               Map.put(payload, "support_tier", "reactive_only"),
+               now: @now
+             )
 
     for malformed <- [
           put_in(payload, ["capacity_state"], "available"),

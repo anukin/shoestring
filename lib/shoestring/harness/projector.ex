@@ -394,7 +394,7 @@ defmodule Shoestring.Harness.Projector do
       attrs = %{
         "kind" => window.kind,
         "state" => Atom.to_string(window.state),
-        "legacy_state" => legacy_window_state(window.state),
+        "legacy_state" => legacy_window_state(snapshot.capacity_state, window.state),
         "used_percent" => Map.get(window, :used_percent),
         "reset_at" => Map.get(window, :reset_at),
         "unknown_reason" => Map.get(window, :reason)
@@ -591,8 +591,11 @@ defmodule Shoestring.Harness.Projector do
   defp map_value(map, key), do: Map.get(map, key)
   defp legacy_capacity_state(:observed), do: "known"
   defp legacy_capacity_state(_state), do: "unknown"
-  defp legacy_window_state(:observed), do: "known"
-  defp legacy_window_state(:unknown), do: "unknown"
+  # The v1 shadow must not imply trusted capacity when the v2 parent is
+  # degraded, refused, or unknown. A v1 known window is therefore retained
+  # only for a canonical v2 observed snapshot.
+  defp legacy_window_state(:observed, :observed), do: "known"
+  defp legacy_window_state(_capacity_state, _window_state), do: "unknown"
   defp map_items(%{"items" => items}) when is_list(items), do: items
   defp map_items(%{items: items}) when is_list(items), do: items
   defp map_items(_value), do: []

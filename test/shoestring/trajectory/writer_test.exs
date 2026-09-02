@@ -57,6 +57,68 @@ defmodule Shoestring.Trajectory.WriterTest do
     assert :counters.get(attempts, 1) == 2
   end
 
+  test "the writer persists the validated, sanitized payload" do
+    test_pid = self()
+    goal_id = Ecto.UUID.generate()
+
+    attempt_fun = fn input, _references, _state ->
+      send(test_pid, {:validated_payload, input.payload})
+      {:error, :not_retryable}
+    end
+
+    pid =
+      start_supervised!({
+        Writer,
+        goal_id: goal_id, idle_timeout: :infinity, attempt_fun: attempt_fun
+      })
+
+    input = %AppendInput{
+      type: "capacity.snapshot_observed",
+      schema_version: 2,
+      actor: "system",
+      occurred_at: ~U[2026-08-30 12:00:00Z],
+      payload: %{
+        "snapshot_id" => "11111111-1111-4111-8111-111111111111",
+        "contract_version" => 2,
+        "capacity_state" => "unknown",
+        "windows" => %{
+          "items" => [
+            %{
+              "kind" => "primary",
+              "state" => "unknown",
+              "reason" => "not_reported",
+              "future_field" => "ignored"
+            }
+          ],
+          "future_window_metadata" => "ignored"
+        },
+        "observed_at" => nil,
+        "freshness" => %{"max_age_seconds" => 300},
+        "source" => %{
+          "adapter_id" => "fixture",
+          "provider_id" => "codex",
+          "invocation_mode" => "app_server",
+          "event" => "none",
+          "future_field" => "ignored"
+        },
+        "scope" => "account",
+        "confidence" => "none",
+        "support_tier" => "unsupported",
+        "compatibility_state" => "degraded",
+        "reason" => "not_reported",
+        "extensions" => %{},
+        "future_field" => "ignored"
+      }
+    }
+
+    assert {:error, :not_retryable} = GenServer.call(pid, {:append, input})
+    assert_receive {:validated_payload, validated_payload}
+    refute Map.has_key?(validated_payload, "future_field")
+    refute Map.has_key?(validated_payload["source"], "future_field")
+    refute Map.has_key?(validated_payload["windows"], "future_window_metadata")
+    refute Map.has_key?(hd(validated_payload["windows"]["items"]), "future_field")
+  end
+
   test "a real idle timeout stops and unregisters the writer" do
     goal_id = Ecto.UUID.generate()
     pid = start_supervised!({Writer, goal_id: goal_id, idle_timeout: 0})

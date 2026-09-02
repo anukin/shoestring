@@ -151,11 +151,15 @@ defmodule Shoestring.Harness.ProjectorTest do
     snapshot = Repo.get!(CapacitySnapshotRecord, legacy_snapshot_id)
     assert snapshot.contract_version == 2
     assert snapshot.capacity_state == "degraded"
+    assert snapshot.legacy_capacity_state == "unknown"
     assert snapshot.source_provider_id == "legacy"
     assert snapshot.source_event == "none"
     assert snapshot.reason == "legacy_capacity_contract_missing_provenance"
     assert snapshot.confidence == "high"
     assert snapshot.support_tier == "conservative_partial"
+
+    assert Repo.get_by!(CapacityWindowRecord, snapshot_id: legacy_snapshot_id).legacy_state ==
+             "unknown"
 
     assert {:ok, rebuilt} =
              Projector.rebuild(goal.id,
@@ -164,7 +168,12 @@ defmodule Shoestring.Harness.ProjectorTest do
              )
 
     assert rebuilt.last_sequence == position.last_sequence
-    assert Repo.get!(CapacitySnapshotRecord, legacy_snapshot_id).capacity_state == "degraded"
+    rebuilt_snapshot = Repo.get!(CapacitySnapshotRecord, legacy_snapshot_id)
+    assert rebuilt_snapshot.capacity_state == "degraded"
+    assert rebuilt_snapshot.legacy_capacity_state == "unknown"
+
+    assert Repo.get_by!(CapacityWindowRecord, snapshot_id: legacy_snapshot_id).legacy_state ==
+             "unknown"
   end
 
   test "replay upcasts legacy observations after the event to deterministic unknown capacity", %{
@@ -223,6 +232,7 @@ defmodule Shoestring.Harness.ProjectorTest do
     snapshot = Repo.get!(CapacitySnapshotRecord, snapshot_id)
     assert position.last_sequence == 4
     assert snapshot.capacity_state == "unknown"
+    assert snapshot.legacy_capacity_state == "unknown"
     assert snapshot.confidence == "none"
     assert snapshot.reason == "legacy_capacity_observation_after_event"
     assert Repo.get_by!(CapacityWindowRecord, snapshot_id: snapshot_id).state == "unknown"

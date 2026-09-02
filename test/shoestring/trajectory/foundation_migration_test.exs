@@ -62,8 +62,10 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
     assert column_names("harness_capacity_snapshots") |> Enum.member?("capacity_state")
     assert column_names("harness_capacity_snapshots") |> Enum.member?("capacity_state_v2")
     assert column_names("harness_capacity_snapshots") |> Enum.member?("observed_at_v2")
+    assert column_names("harness_capacity_snapshots") |> Enum.member?("legacy_support_tier_v1")
     assert column_names("harness_capacity_windows") |> Enum.member?("used_percent")
     assert column_names("harness_capacity_windows") |> Enum.member?("state_v2")
+    assert column_names("harness_capacity_windows") |> Enum.member?("legacy_state_v1")
 
     assert index_names("harness_runs") == [
              "harness_runs_dispatch_id_index",
@@ -83,6 +85,8 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
     run_id = "00000000-0000-4000-8000-000000000403"
     snapshot_id = "00000000-0000-4000-8000-000000000404"
     window_id = "00000000-0000-4000-8000-000000000405"
+    refused_snapshot_id = "00000000-0000-4000-8000-000000000408"
+    refused_window_id = "00000000-0000-4000-8000-000000000409"
     now = "2026-08-30T12:00:00.000000Z"
 
     assert {:ok, _} =
@@ -171,6 +175,12 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
 
     assert {:error, _} =
              Repo.query(
+               "UPDATE harness_capacity_snapshots SET capacity_state_v2 = 'observed', reason = NULL, support_tier = 'conservative_partial' WHERE id = ?",
+               [snapshot_id]
+             )
+
+    assert {:error, _} =
+             Repo.query(
                "UPDATE harness_capacity_snapshots SET reason = NULL WHERE id = ?",
                [snapshot_id]
              )
@@ -199,7 +209,78 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
                [snapshot_id]
              )
 
+    assert {:ok, _} =
+             Repo.query(
+               "INSERT INTO harness_capacity_snapshots (id, goal_id, run_id, contract_version, capacity_state, observed_at, source_adapter_id, source_method, scope, confidence, support_tier, compatibility_state, extensions, projection_sequence, inserted_at, updated_at, capacity_state_v2, observed_at_v2, freshness_max_age_seconds, source_provider_id, source_invocation_mode, source_event, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+               [
+                 refused_snapshot_id,
+                 goal_id,
+                 run_id,
+                 1,
+                 "unknown",
+                 now,
+                 "test",
+                 "none",
+                 "account",
+                 "none",
+                 "proactive",
+                 "compatible",
+                 "{}",
+                 2,
+                 now,
+                 now,
+                 "refused",
+                 nil,
+                 300,
+                 "test",
+                 "app_server",
+                 "explicit_read",
+                 "reported_limit"
+               ]
+             )
+
+    assert {:error, _} =
+             Repo.query(
+               "INSERT INTO harness_capacity_snapshots (id, goal_id, run_id, contract_version, capacity_state, observed_at, source_adapter_id, source_method, scope, confidence, support_tier, compatibility_state, extensions, projection_sequence, inserted_at, updated_at, capacity_state_v2, observed_at_v2, freshness_max_age_seconds, source_provider_id, source_invocation_mode, source_event, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+               [
+                 "00000000-0000-4000-8000-000000000410",
+                 goal_id,
+                 run_id,
+                 1,
+                 "unknown",
+                 now,
+                 "test",
+                 "none",
+                 "account",
+                 "high",
+                 "proactive",
+                 "compatible",
+                 "{}",
+                 2,
+                 now,
+                 now,
+                 "refused",
+                 nil,
+                 300,
+                 "test",
+                 "app_server",
+                 "explicit_read",
+                 "reported_limit"
+               ]
+             )
+
     snapshot = Repo.get!(CapacitySnapshotRecord, snapshot_id)
+
+    assert {:error, changeset} =
+             Repo.update(
+               CapacitySnapshotRecord.changeset(snapshot, %{
+                 "capacity_state" => "observed",
+                 "reason" => nil,
+                 "support_tier" => "reactive_only"
+               })
+             )
+
+    assert "observed capacity requires proactive support" in errors_on(changeset).support_tier
 
     assert {:error, changeset} =
              Repo.update(
@@ -214,6 +295,12 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
              Repo.query(
                "INSERT INTO harness_capacity_windows (id, snapshot_id, kind, state, state_v2, used_percent, unknown_reason, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                [window_id, snapshot_id, "five_hour", "known", "observed", 25, nil, now, now]
+             )
+
+    assert {:error, _} =
+             Repo.query(
+               "UPDATE harness_capacity_snapshots SET capacity_state_v2 = 'refused', support_tier = 'proactive' WHERE id = ?",
+               [snapshot_id]
              )
 
     assert {:error, _} =
@@ -242,6 +329,22 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
              Repo.query("UPDATE harness_capacity_windows SET state = 'observed' WHERE id = ?", [
                window_id
              ])
+
+    assert {:error, _} =
+             Repo.query(
+               "INSERT INTO harness_capacity_windows (id, snapshot_id, kind, state, state_v2, used_percent, unknown_reason, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+               [
+                 refused_window_id,
+                 refused_snapshot_id,
+                 "five_hour",
+                 "unknown",
+                 "observed",
+                 0,
+                 nil,
+                 now,
+                 now
+               ]
+             )
 
     window = Repo.get!(CapacityWindowRecord, window_id)
 
@@ -280,9 +383,12 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
     window_id = "00000000-0000-4000-8000-000000000504"
     future_snapshot_id = "00000000-0000-4000-8000-000000000507"
     future_window_id = "00000000-0000-4000-8000-000000000508"
-    observed_at = "2026-08-30T12:00:00.123456Z"
+    new_snapshot_id = "00000000-0000-4000-8000-000000000509"
+    new_window_id = "00000000-0000-4000-8000-000000000510"
+    # Cover equality when SQLite stores a zero-microsecond ISO timestamp.
+    observed_at = "2026-08-30T12:00:00Z"
     expires_at = nil
-    event_at = "2026-08-30T12:00:00.000000Z"
+    event_at = "2026-08-30T12:00:00Z"
 
     assert {:ok, _} =
              Shoestring.Test.MigrationRepo.query(
@@ -329,11 +435,11 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
                  "2026-08-30T12:00:01.123456Z",
                  "2026-08-30T12:05:01.123456Z",
                  "legacy.adapter",
-                 "probe",
+                 "vendor_api",
                  "account",
                  "high",
-                 "supported",
-                 "compatible",
+                 "partial",
+                 "degraded",
                  "{}",
                  2,
                  event_at,
@@ -369,11 +475,11 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
                  observed_at,
                  expires_at,
                  "legacy.adapter",
-                 "probe",
+                 "vendor_api",
                  "account",
                  "none",
-                 "supported",
-                 "compatible",
+                 "partial",
+                 "degraded",
                  "{}",
                  1,
                  observed_at,
@@ -403,9 +509,59 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
              )
            )
 
+    # A post-migration v2 row has no v1 archive. Down must therefore use the
+    # conservative fallback instead of turning an observed claim into a
+    # trusted v1 known/supported/compatible/probe record.
+    assert {:ok, _} =
+             Shoestring.Test.MigrationRepo.query(
+               "INSERT INTO harness_capacity_snapshots (id, goal_id, run_id, contract_version, capacity_state, observed_at, expires_at, source_adapter_id, source_method, scope, confidence, support_tier, compatibility_state, extensions, projection_sequence, inserted_at, updated_at, capacity_state_v2, observed_at_v2, freshness_max_age_seconds, source_provider_id, source_invocation_mode, source_event, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+               [
+                 new_snapshot_id,
+                 goal_id,
+                 run_id,
+                 2,
+                 "known",
+                 observed_at,
+                 "2026-08-30T12:05:00Z",
+                 "fixture.capacity",
+                 "explicit_read",
+                 "account",
+                 "high",
+                 "proactive",
+                 "compatible",
+                 "{}",
+                 3,
+                 observed_at,
+                 observed_at,
+                 "observed",
+                 observed_at,
+                 300,
+                 "codex",
+                 "app_server",
+                 "explicit_read",
+                 nil
+               ]
+             )
+
+    assert {:ok, _} =
+             Shoestring.Test.MigrationRepo.query(
+               "INSERT INTO harness_capacity_windows (id, snapshot_id, kind, state, state_v2, used_percent, unknown_reason, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+               [
+                 new_window_id,
+                 new_snapshot_id,
+                 "five_hour",
+                 "known",
+                 "observed",
+                 0.0,
+                 nil,
+                 observed_at,
+                 observed_at
+               ]
+             )
+
     {:ok, %{columns: snapshot_columns, rows: [snapshot_row]}} =
       Shoestring.Test.MigrationRepo.query(
-        "SELECT contract_version, capacity_state_v2, observed_at_v2, expires_at, freshness_max_age_seconds, source_method, source_adapter_id, source_provider_id, source_invocation_mode, source_event, scope, confidence, support_tier, compatibility_state, reason, extensions FROM harness_capacity_snapshots WHERE id = ?",
+        "SELECT contract_version, capacity_state, capacity_state_v2, observed_at_v2, expires_at, freshness_max_age_seconds, source_method, source_adapter_id, source_provider_id, source_invocation_mode, source_event, scope, confidence, support_tier, compatibility_state, reason, extensions FROM harness_capacity_snapshots WHERE id = ?",
         [snapshot_id]
       )
 
@@ -418,11 +574,18 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
 
     {:ok, %{rows: [window_row]}} =
       Shoestring.Test.MigrationRepo.query(
-        "SELECT kind, state_v2, used_percent, reset_at, unknown_reason FROM harness_capacity_windows WHERE id = ?",
+        "SELECT kind, state, state_v2, used_percent, reset_at, unknown_reason FROM harness_capacity_windows WHERE id = ?",
         [window_id]
       )
 
-    [migrated_kind, migrated_state, migrated_used, migrated_reset, migrated_reason] = window_row
+    [
+      migrated_kind,
+      migrated_legacy_state,
+      migrated_state,
+      migrated_used,
+      migrated_reset,
+      migrated_reason
+    ] = window_row
 
     legacy_payload = %{
       "snapshot_id" => snapshot_id,
@@ -433,21 +596,22 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
       },
       "observed_at" => observed_at,
       "expires_at" => expires_at,
-      "source" => %{"adapter_id" => "legacy.adapter", "method" => "probe"},
+      "source" => %{"adapter_id" => "legacy.adapter", "method" => "vendor_api"},
       "scope" => "account",
       "confidence" => "none",
-      "support_tier" => "supported",
-      "compatibility_state" => "compatible",
+      "support_tier" => "partial",
+      "compatibility_state" => "degraded",
       "extensions" => %{}
     }
 
     assert {:ok, rebuilt} =
              EventRegistry.upcast("capacity.snapshot_observed", 1, legacy_payload,
-               now: ~U[2026-08-30 12:00:00.123456Z]
+               now: ~U[2026-08-30 12:00:00Z]
              )
 
     assert migrated_snapshot == %{
              "contract_version" => 2,
+             "capacity_state" => "unknown",
              "capacity_state_v2" => rebuilt["capacity_state"],
              "observed_at_v2" => rebuilt["observed_at"],
              "expires_at" => rebuilt["expires_at"],
@@ -465,8 +629,9 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
              "extensions" => rebuilt["extensions"]
            }
 
-    assert {migrated_kind, migrated_state, migrated_used, migrated_reset, migrated_reason} ==
-             {"five_hour", "observed", 25.0, nil, nil}
+    assert {migrated_kind, migrated_legacy_state, migrated_state, migrated_used, migrated_reset,
+            migrated_reason} ==
+             {"five_hour", "unknown", "observed", 25.0, nil, nil}
 
     assert rebuilt["windows"]["items"] == [
              %{
@@ -476,13 +641,69 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
              }
            ]
 
+    future_payload = %{
+      "snapshot_id" => future_snapshot_id,
+      "contract_version" => 1,
+      "capacity_state" => "known",
+      "windows" => %{
+        "items" => [%{"kind" => "five_hour", "state" => "known", "used_percent" => 25.0}]
+      },
+      "observed_at" => "2026-08-30T12:00:01.123456Z",
+      "expires_at" => "2026-08-30T12:05:01.123456Z",
+      "source" => %{"adapter_id" => "legacy.adapter", "method" => "vendor_api"},
+      "scope" => "account",
+      "confidence" => "high",
+      "support_tier" => "partial",
+      "compatibility_state" => "degraded",
+      "extensions" => %{}
+    }
+
+    assert {:ok, future_rebuilt} =
+             EventRegistry.upcast("capacity.snapshot_observed", 1, future_payload,
+               now: ~U[2026-08-30 12:00:00Z]
+             )
+
+    {:ok, %{columns: future_snapshot_columns, rows: [future_snapshot_values]}} =
+      Shoestring.Test.MigrationRepo.query(
+        "SELECT contract_version, capacity_state, capacity_state_v2, observed_at_v2, expires_at, freshness_max_age_seconds, source_method, source_adapter_id, source_provider_id, source_invocation_mode, source_event, scope, confidence, support_tier, compatibility_state, reason, extensions FROM harness_capacity_snapshots WHERE id = ?",
+        [future_snapshot_id]
+      )
+
+    future_migrated_snapshot =
+      future_snapshot_values
+      |> Enum.zip(future_snapshot_columns)
+      |> Map.new(fn {value, column} ->
+        {column, if(column == "extensions", do: Jason.decode!(value), else: value)}
+      end)
+
+    assert future_migrated_snapshot == %{
+             "contract_version" => 2,
+             "capacity_state" => "unknown",
+             "capacity_state_v2" => future_rebuilt["capacity_state"],
+             "observed_at_v2" => future_rebuilt["observed_at"],
+             "expires_at" => future_rebuilt["expires_at"],
+             "freshness_max_age_seconds" => future_rebuilt["freshness"]["max_age_seconds"],
+             "source_method" => "none",
+             "source_adapter_id" => future_rebuilt["source"]["adapter_id"],
+             "source_provider_id" => future_rebuilt["source"]["provider_id"],
+             "source_invocation_mode" => future_rebuilt["source"]["invocation_mode"],
+             "source_event" => future_rebuilt["source"]["event"],
+             "scope" => future_rebuilt["scope"],
+             "confidence" => future_rebuilt["confidence"],
+             "support_tier" => future_rebuilt["support_tier"],
+             "compatibility_state" => future_rebuilt["compatibility_state"],
+             "reason" => future_rebuilt["reason"],
+             "extensions" => future_rebuilt["extensions"]
+           }
+
     {:ok, %{rows: [future_snapshot_row]}} =
       Shoestring.Test.MigrationRepo.query(
-        "SELECT capacity_state_v2, confidence, reason FROM harness_capacity_snapshots WHERE id = ?",
+        "SELECT capacity_state, capacity_state_v2, confidence, reason FROM harness_capacity_snapshots WHERE id = ?",
         [future_snapshot_id]
       )
 
     assert future_snapshot_row == [
+             "unknown",
              "unknown",
              "none",
              "legacy_capacity_observation_after_event"
@@ -490,11 +711,12 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
 
     {:ok, %{rows: [future_window_row]}} =
       Shoestring.Test.MigrationRepo.query(
-        "SELECT state_v2, used_percent, unknown_reason FROM harness_capacity_windows WHERE id = ?",
+        "SELECT state, state_v2, used_percent, unknown_reason FROM harness_capacity_windows WHERE id = ?",
         [future_window_id]
       )
 
     assert future_window_row == [
+             "unknown",
              "unknown",
              nil,
              "legacy_capacity_observation_after_event"
@@ -502,11 +724,8 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
 
     assert @legacy_reason == migrated_snapshot["reason"]
 
-    assert is_list(
-             Ecto.Migrator.run(Shoestring.Test.MigrationRepo, @migrations, :down,
-               to: @base_migration
-             )
-           )
+    assert [@capacity_migration] ==
+             Ecto.Migrator.run(Shoestring.Test.MigrationRepo, @migrations, :down, step: 1)
 
     {:ok, %{rows: snapshot_columns_after_down}} =
       Shoestring.Test.MigrationRepo.query("PRAGMA table_info(harness_capacity_snapshots)")
@@ -514,9 +733,128 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
     {:ok, %{rows: window_columns_after_down}} =
       Shoestring.Test.MigrationRepo.query("PRAGMA table_info(harness_capacity_windows)")
 
-    refute Enum.any?(snapshot_columns_after_down, &(Enum.at(&1, 1) == "capacity_state_v2"))
-    refute Enum.any?(snapshot_columns_after_down, &(Enum.at(&1, 1) == "reason"))
-    refute Enum.any?(window_columns_after_down, &(Enum.at(&1, 1) == "state_v2"))
+    assert Enum.map(snapshot_columns_after_down, &Enum.at(&1, 1)) == [
+             "id",
+             "goal_id",
+             "run_id",
+             "contract_version",
+             "capacity_state",
+             "observed_at",
+             "expires_at",
+             "source_adapter_id",
+             "source_method",
+             "scope",
+             "confidence",
+             "support_tier",
+             "compatibility_state",
+             "extensions",
+             "projection_sequence",
+             "inserted_at",
+             "updated_at"
+           ]
+
+    assert Enum.map(window_columns_after_down, &Enum.at(&1, 1)) == [
+             "id",
+             "snapshot_id",
+             "kind",
+             "state",
+             "used_percent",
+             "reset_at",
+             "unknown_reason",
+             "inserted_at",
+             "updated_at"
+           ]
+
+    {:ok, %{rows: restored_snapshots}} =
+      Shoestring.Test.MigrationRepo.query(
+        "SELECT id, contract_version, capacity_state, observed_at, expires_at, source_method, confidence, support_tier, compatibility_state FROM harness_capacity_snapshots ORDER BY id"
+      )
+
+    assert restored_snapshots == [
+             [
+               snapshot_id,
+               1,
+               "known",
+               observed_at,
+               nil,
+               "vendor_api",
+               "none",
+               "partial",
+               "degraded"
+             ],
+             [
+               future_snapshot_id,
+               1,
+               "known",
+               "2026-08-30T12:00:01.123456Z",
+               "2026-08-30T12:05:01.123456Z",
+               "vendor_api",
+               "high",
+               "partial",
+               "degraded"
+             ],
+             [
+               new_snapshot_id,
+               1,
+               "unknown",
+               observed_at,
+               "2026-08-30T12:05:00Z",
+               "none",
+               "none",
+               "partial",
+               "degraded"
+             ]
+           ]
+
+    {:ok, %{rows: restored_windows}} =
+      Shoestring.Test.MigrationRepo.query(
+        "SELECT id, snapshot_id, kind, state, used_percent, reset_at, unknown_reason FROM harness_capacity_windows ORDER BY id"
+      )
+
+    assert restored_windows == [
+             [window_id, snapshot_id, "five_hour", "known", 25.0, nil, nil],
+             [future_window_id, future_snapshot_id, "five_hour", "known", 25.0, nil, nil],
+             [
+               new_window_id,
+               new_snapshot_id,
+               "five_hour",
+               "unknown",
+               nil,
+               nil,
+               "v2_capacity_contract_downcast"
+             ]
+           ]
+
+    assert migration_index_names(Shoestring.Test.MigrationRepo, "harness_capacity_snapshots") == [
+             "harness_capacity_snapshots_compatibility_state_support_tier_index",
+             "harness_capacity_snapshots_goal_id_observed_at_index",
+             "harness_capacity_snapshots_run_id_observed_at_index"
+           ]
+
+    assert migration_index_names(Shoestring.Test.MigrationRepo, "harness_capacity_windows") == [
+             "harness_capacity_windows_reset_at_index",
+             "harness_capacity_windows_snapshot_id_kind_index"
+           ]
+
+    assert {:ok, %{rows: [[1]]}} =
+             Shoestring.Test.MigrationRepo.query("PRAGMA foreign_keys")
+
+    assert {:ok, %{rows: []}} =
+             Shoestring.Test.MigrationRepo.query("PRAGMA foreign_key_check")
+
+    # A no-op or base-target rollback would remove these tables; these invalid
+    # updates also prove the restored v1 CHECK constraints are live.
+    assert {:error, _} =
+             Shoestring.Test.MigrationRepo.query(
+               "UPDATE harness_capacity_snapshots SET capacity_state = 'observed' WHERE id = ?",
+               [snapshot_id]
+             )
+
+    assert {:error, _} =
+             Shoestring.Test.MigrationRepo.query(
+               "UPDATE harness_capacity_windows SET state = 'observed' WHERE id = ?",
+               [window_id]
+             )
   end
 
   defp foundation_tables do
@@ -540,5 +878,14 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
   defp column_names(table) do
     {:ok, %{rows: rows}} = Repo.query("PRAGMA table_info(#{table})")
     Enum.map(rows, &Enum.at(&1, 1))
+  end
+
+  defp migration_index_names(repo, table) do
+    {:ok, %{rows: rows}} = repo.query("PRAGMA index_list(#{table})")
+
+    rows
+    |> Enum.map(&Enum.at(&1, 1))
+    |> Enum.reject(&String.starts_with?(&1, "sqlite_autoindex_"))
+    |> Enum.sort()
   end
 end

@@ -103,6 +103,7 @@ defmodule Shoestring.Harness.CapacitySnapshotRecord do
     ])
     |> validate_capacity_state()
     |> validate_support_tier()
+    |> validate_refusal()
     |> foreign_key_constraint(:goal_id)
     |> foreign_key_constraint(:run_id)
     |> check_constraint(:contract_version, name: "harness_capacity_snapshots_version_positive")
@@ -136,6 +137,12 @@ defmodule Shoestring.Harness.CapacitySnapshotRecord do
 
   defp validate_support_tier(changeset) do
     case {get_field(changeset, :capacity_state), get_field(changeset, :support_tier)} do
+      {"observed", "proactive"} ->
+        changeset
+
+      {"observed", _support_tier} ->
+        add_error(changeset, :support_tier, "observed capacity requires proactive support")
+
       {"unknown", _support_tier} ->
         changeset
 
@@ -144,6 +151,15 @@ defmodule Shoestring.Harness.CapacitySnapshotRecord do
 
       _other ->
         changeset
+    end
+  end
+
+  defp validate_refusal(changeset) do
+    if get_field(changeset, :capacity_state) == "refused" and
+         get_field(changeset, :confidence) == "high" do
+      add_error(changeset, :confidence, "refused capacity cannot have high confidence")
+    else
+      changeset
     end
   end
 

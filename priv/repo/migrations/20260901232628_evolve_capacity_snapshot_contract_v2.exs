@@ -4,23 +4,55 @@ defmodule Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2 do
   # SQLite cannot add a table-level constraint with ALTER TABLE. The window
   # table is therefore rebuilt in both directions so the state/data invariant
   # is enforced by the schema, including for direct SQL writers.
+  #
+  # This migration is intentionally non-transactional because the down path
+  # must toggle SQLite foreign_keys while rebuilding the referenced snapshots
+  # table. SQLite ignores that PRAGMA inside a transaction. The up path keeps
+  # foreign keys enabled and is made recoverable by retaining the original v1
+  # values in rollback-only archive columns; Ecto cannot express different
+  # transaction settings for up and down. Handwritten rebuild DDL deliberately
+  # uses the same SQLite affinities as Ecto's types (BLOB UUIDs, TEXT strings,
+  # FLOAT percentages, and DATETIME timestamps).
   @disable_ddl_transaction true
 
   @legacy_reason "legacy_capacity_contract_missing_provenance"
 
   def up do
-    execute("PRAGMA foreign_keys = OFF")
-
     alter table(:harness_capacity_snapshots) do
       # There is deliberately no default here. New observed rows omit reason
       # and must persist NULL; only existing rows receive the legacy reason.
       add :reason, :string
+      add :legacy_capacity_state_v1, :string
+      add :legacy_expires_at_v1, :utc_datetime_usec
+      add :legacy_confidence_v1, :string
+      add :legacy_support_tier_v1, :string
+      add :legacy_compatibility_state_v1, :string
+      add :legacy_source_method_v1, :string
     end
 
     execute("""
     UPDATE harness_capacity_snapshots
-    SET reason = '#{@legacy_reason}'
+    SET
+      reason = '#{@legacy_reason}',
+      legacy_capacity_state_v1 = capacity_state,
+      legacy_expires_at_v1 = expires_at,
+      legacy_confidence_v1 = confidence,
+      legacy_support_tier_v1 = support_tier,
+      legacy_compatibility_state_v1 = compatibility_state,
+      legacy_source_method_v1 = source_method
     WHERE reason IS NULL
+    """)
+
+    execute("""
+    UPDATE harness_capacity_snapshots
+    SET
+      legacy_capacity_state_v1 = capacity_state,
+      legacy_expires_at_v1 = expires_at,
+      legacy_confidence_v1 = confidence,
+      legacy_support_tier_v1 = support_tier,
+      legacy_compatibility_state_v1 = compatibility_state,
+      legacy_source_method_v1 = source_method
+    WHERE legacy_capacity_state_v1 IS NULL
     """)
 
     alter table(:harness_capacity_snapshots) do
@@ -38,6 +70,8 @@ defmodule Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2 do
              AND reason IS NOT NULL AND length(trim(reason)) > 0)
           )
           AND NOT (capacity_state_v2 = 'refused' AND support_tier = 'unsupported')
+          AND NOT (capacity_state_v2 = 'observed' AND support_tier <> 'proactive')
+          AND NOT (capacity_state_v2 = 'refused' AND confidence = 'high')
           """
         }
 
@@ -67,6 +101,45 @@ defmodule Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2 do
     rebuild_windows_up()
 
     execute("""
+    CREATE TRIGGER harness_capacity_windows_refused_observed_insert
+    BEFORE INSERT ON harness_capacity_windows
+    WHEN NEW.state_v2 = 'observed'
+      AND EXISTS (
+        SELECT 1 FROM harness_capacity_snapshots
+        WHERE id = NEW.snapshot_id AND capacity_state_v2 = 'refused'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'refused capacity cannot contain observed windows');
+    END
+    """)
+
+    execute("""
+    CREATE TRIGGER harness_capacity_windows_refused_observed_update
+    BEFORE UPDATE OF snapshot_id, state_v2 ON harness_capacity_windows
+    WHEN NEW.state_v2 = 'observed'
+      AND EXISTS (
+        SELECT 1 FROM harness_capacity_snapshots
+        WHERE id = NEW.snapshot_id AND capacity_state_v2 = 'refused'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'refused capacity cannot contain observed windows');
+    END
+    """)
+
+    execute("""
+    CREATE TRIGGER harness_capacity_snapshots_refused_observed_update
+    BEFORE UPDATE OF capacity_state_v2 ON harness_capacity_snapshots
+    WHEN NEW.capacity_state_v2 = 'refused'
+      AND EXISTS (
+        SELECT 1 FROM harness_capacity_windows
+        WHERE snapshot_id = NEW.id AND state_v2 = 'observed'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'refused capacity cannot contain observed windows');
+    END
+    """)
+
+    execute("""
     UPDATE harness_capacity_snapshots
     SET
       contract_version = 2,
@@ -82,6 +155,10 @@ defmodule Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2 do
           THEN 'degraded'
         ELSE 'unknown'
       END,
+      -- Legacy shadow state is canonical fail-closed output. This migration
+      -- cannot establish a proactive observed v2 source, so it is unknown;
+      -- rollback uses legacy_capacity_state_v1 to restore the old value.
+      capacity_state = 'unknown',
       observed_at_v2 = observed_at,
       freshness_max_age_seconds = CASE
         WHEN expires_at IS NOT NULL
@@ -149,11 +226,14 @@ defmodule Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2 do
   end
 
   def down do
-    # The v2 backfill intentionally normalizes stale legacy metadata. The
-    # legacy representation has no fields that can losslessly retain those
-    # distinctions, so rollback restores the legacy shape and conservative
-    # legacy values while preserving IDs, timestamps, windows, and extensions.
+    # Restore the exact v1 values captured before the canonical v2 backfill.
+    # Rows created after the migration have NULL archive values and therefore
+    # use conservative v1 fallbacks in the rebuild helpers below.
     execute("PRAGMA foreign_keys = OFF")
+
+    execute("DROP TRIGGER IF EXISTS harness_capacity_windows_refused_observed_insert")
+    execute("DROP TRIGGER IF EXISTS harness_capacity_windows_refused_observed_update")
+    execute("DROP TRIGGER IF EXISTS harness_capacity_snapshots_refused_observed_update")
 
     rebuild_windows_down()
     rebuild_snapshots_down()
@@ -171,6 +251,10 @@ defmodule Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2 do
       state TEXT NOT NULL
         CONSTRAINT harness_capacity_windows_state_valid
         CHECK (state IN ('known', 'unknown')),
+      legacy_state_v1 TEXT,
+      legacy_used_percent_v1 FLOAT,
+      legacy_reset_at_v1 DATETIME,
+      legacy_unknown_reason_v1 TEXT,
       used_percent FLOAT
         CONSTRAINT harness_capacity_windows_used_percent_range
         CHECK (used_percent IS NULL OR (used_percent >= 0 AND used_percent <= 100)),
@@ -199,13 +283,18 @@ defmodule Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2 do
 
     execute("""
     INSERT INTO harness_capacity_windows_v2
-      (id, snapshot_id, kind, state, used_percent, reset_at, unknown_reason,
-       inserted_at, updated_at, state_v2)
+      (id, snapshot_id, kind, state, legacy_state_v1, legacy_used_percent_v1,
+       legacy_reset_at_v1, legacy_unknown_reason_v1, used_percent, reset_at,
+       unknown_reason, inserted_at, updated_at, state_v2)
     SELECT
       w.id,
       w.snapshot_id,
       w.kind,
+      'unknown',
       w.state,
+      w.used_percent,
+      w.reset_at,
+      w.unknown_reason,
       CASE
         WHEN julianday(s.observed_at) <= julianday(s.inserted_at)
           AND w.state = 'known'
@@ -279,10 +368,13 @@ defmodule Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2 do
       id,
       snapshot_id,
       kind,
-      state,
-      CASE WHEN state = 'known' THEN used_percent ELSE NULL END,
-      CASE WHEN state = 'known' THEN reset_at ELSE NULL END,
-      CASE WHEN state = 'unknown' THEN unknown_reason ELSE NULL END,
+      CASE WHEN legacy_state_v1 IN ('known', 'unknown') THEN legacy_state_v1 ELSE 'unknown' END,
+      CASE WHEN legacy_state_v1 IS NOT NULL THEN legacy_used_percent_v1 ELSE NULL END,
+      CASE WHEN legacy_state_v1 IS NOT NULL THEN legacy_reset_at_v1 ELSE NULL END,
+      CASE
+        WHEN legacy_state_v1 IS NOT NULL THEN legacy_unknown_reason_v1
+        ELSE COALESCE(NULLIF(trim(unknown_reason), ''), 'v2_capacity_contract_downcast')
+      END,
       inserted_at,
       updated_at
     FROM harness_capacity_windows
@@ -333,15 +425,34 @@ defmodule Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2 do
       goal_id,
       run_id,
       1,
-      capacity_state,
+      CASE
+        WHEN legacy_capacity_state_v1 IN ('known', 'unknown') THEN legacy_capacity_state_v1
+        ELSE 'unknown'
+      END,
       observed_at,
-      expires_at,
+      CASE
+        WHEN legacy_capacity_state_v1 IS NOT NULL THEN legacy_expires_at_v1
+        ELSE expires_at
+      END,
       source_adapter_id,
-      CASE WHEN source_method = 'none' THEN 'probe' ELSE source_method END,
+      CASE
+        WHEN legacy_source_method_v1 IS NOT NULL THEN legacy_source_method_v1
+        ELSE 'none'
+      END,
       scope,
-      confidence,
-      CASE WHEN support_tier = 'unsupported' THEN 'unsupported' ELSE 'supported' END,
-      CASE WHEN compatibility_state = 'incompatible' THEN 'incompatible' ELSE 'compatible' END,
+      COALESCE(legacy_confidence_v1, 'none'),
+      CASE
+        WHEN legacy_support_tier_v1 IN ('supported', 'partial', 'unsupported')
+          THEN legacy_support_tier_v1
+        WHEN support_tier = 'unsupported' THEN 'unsupported'
+        ELSE 'partial'
+      END,
+      CASE
+        WHEN legacy_compatibility_state_v1 IN ('compatible', 'degraded', 'incompatible')
+          THEN legacy_compatibility_state_v1
+        WHEN compatibility_state = 'incompatible' THEN 'incompatible'
+        ELSE 'degraded'
+      END,
       extensions,
       projection_sequence,
       inserted_at,
