@@ -2,6 +2,7 @@ defmodule Shoestring.Harness.DispatchesTest do
   use Shoestring.DataCase, async: false
   use Oban.Testing, repo: Shoestring.Repo, engine: Oban.Engines.Lite
 
+  alias Elixir.Task, as: AsyncTask
   alias Oban.Job
   alias Shoestring.Harness.{DispatchRecord, DispatchWorker, Identity, RunRecord, RunRequest, Runs}
   alias Shoestring.Harness.Dispatch.Reconciler
@@ -78,6 +79,78 @@ defmodule Shoestring.Harness.DispatchesTest do
                ),
                :count
              )
+  end
+
+  test "concurrent duplicate enqueue calls converge on one durable dispatch and job", %{
+    goal: goal,
+    task: task
+  } do
+    request = run_request(goal, task)
+    id = identity()
+    parent = self()
+
+    task_supervisor =
+      start_supervised!({AsyncTask.Supervisor, name: :dispatches_duplicate_task_supervisor})
+
+    tasks =
+      for identifier <- [
+            Shoestring.Test.FixedIdentifier,
+            Shoestring.Test.AlternateFixedIdentifier
+          ] do
+        AsyncTask.Supervisor.async_nolink(task_supervisor, fn ->
+          send(parent, {:enqueue_ready, self()})
+
+          receive do
+            :start_enqueue -> Dispatches.enqueue(request, id, opts(identifier: identifier))
+          end
+        end)
+      end
+
+    ready_pids =
+      for _ <- 1..2 do
+        assert_receive {:enqueue_ready, pid}
+        pid
+      end
+
+    Enum.each(ready_pids, &send(&1, :start_enqueue))
+
+    assert [{:ok, first, first_job}, {:ok, second, second_job}] =
+             Enum.map(tasks, &AsyncTask.await(&1, :infinity))
+
+    assert first.dispatch_id == second.dispatch_id
+    assert first.run_id == second.run_id
+    assert first_job.id == second_job.id
+    assert 1 == Repo.aggregate(from(dispatch in DispatchRecord), :count)
+    assert 1 == Repo.aggregate(from(run in RunRecord), :count)
+    assert [_job] = all_enqueued(worker: DispatchWorker)
+  end
+
+  test "enqueue rolls back a run when dispatch persistence fails", %{goal: goal, task: task} do
+    other_run_id = "00000000-0000-4000-8000-000000000599"
+
+    %RunRecord{id: other_run_id}
+    |> RunRecord.intent_changeset(
+      run_request(goal, task, dispatch_id: "00000000-0000-4000-8000-000000000598"),
+      "test.adapter",
+      Shoestring.Test.FixedClock.now()
+    )
+    |> Repo.insert!()
+
+    %DispatchRecord{dispatch_id: @dispatch_id}
+    |> Ecto.Changeset.change(
+      goal_id: goal.id,
+      task_id: task.id,
+      run_id: other_run_id,
+      request_version: 1,
+      status: "requested",
+      inserted_at: Shoestring.Test.FixedClock.now(),
+      updated_at: Shoestring.Test.FixedClock.now()
+    )
+    |> Repo.insert!()
+
+    assert {:error, _reason} = Dispatches.enqueue(run_request(goal, task), identity(), opts())
+    refute Repo.exists?(from(run in RunRecord, where: run.dispatch_id == ^@dispatch_id))
+    assert 1 == Repo.aggregate(from(dispatch in DispatchRecord), :count)
   end
 
   test "manual delivery invokes one effect and does not accept the run or task", %{
@@ -217,14 +290,14 @@ defmodule Shoestring.Harness.DispatchesTest do
              Repo.get!(DispatchRecord, @dispatch_id)
   end
 
-  defp opts do
+  defp opts(overrides \\ []) do
     [
       clock: Shoestring.Test.FixedClock,
-      identifier: Shoestring.Test.FixedIdentifier
+      identifier: Keyword.get(overrides, :identifier, Shoestring.Test.FixedIdentifier)
     ]
   end
 
-  defp run_request(goal, task) do
+  defp run_request(goal, task, overrides \\ []) do
     assert {:ok, request} =
              RunRequest.new(%{
                version: 1,
@@ -234,7 +307,7 @@ defmodule Shoestring.Harness.DispatchesTest do
                prompt: "Dispatch a deterministic fake run.",
                policy: %{mode: "supervised", network: false, write_access: true},
                requested_capabilities: [],
-               dispatch_id: @dispatch_id,
+               dispatch_id: Keyword.get(overrides, :dispatch_id, @dispatch_id),
                extensions: %{}
              })
 

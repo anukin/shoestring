@@ -29,10 +29,51 @@ defmodule Shoestring.Harness.Dispatches do
   @spec enqueue(RunRequest.t(), Identity.t(), keyword()) ::
           {:ok, DispatchRecord.t(), Job.t()} | {:error, term()}
   def enqueue(%RunRequest{} = request, %Identity{} = identity, opts \\ []) do
-    with {:ok, run} <- Runs.request(request, identity, opts),
-         :ok <- ensure_requested_event(run, opts),
-         {:ok, dispatch, job, _repaired?} <- ensure_delivery(run, opts) do
+    with {:ok, dispatch, job, run} <- create_run_and_delivery(request, identity, opts),
+         :ok <- Runs.ensure_requested_event(run, request, identity, opts),
+         :ok <- ensure_requested_event(dispatch, opts) do
       {:ok, dispatch, job}
+    end
+  end
+
+  defp create_run_and_delivery(request, identity, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+    now = now(opts)
+
+    with {:ok, run_changeset} <- Runs.build_intent_changeset(request, identity, opts) do
+      Multi.new()
+      |> Multi.insert(:run, run_changeset)
+      |> Multi.insert(:dispatch, fn %{run: run} ->
+        DispatchRecord.intent_changeset(%DispatchRecord{dispatch_id: run.dispatch_id}, run, now)
+      end)
+      |> Oban.insert(:job, fn %{dispatch: dispatch} -> job_changeset(dispatch, now) end)
+      |> Multi.run(:job_link, fn transaction_repo, %{dispatch: dispatch, job: job} ->
+        transaction_repo.update(DispatchRecord.job_changeset(dispatch, job.id, now))
+      end)
+      |> repo.transaction()
+      |> case do
+        {:ok, %{run: run, job_link: dispatch, job: job}} ->
+          {:ok, dispatch, job, run}
+
+        {:error, :run, changeset, _changes} ->
+          recover_run_and_delivery(repo, changeset, opts)
+
+        {:error, :dispatch, changeset, _changes} ->
+          case Runs.recover_existing_run(repo, changeset) do
+            {:ok, run} -> ensure_delivery(run, opts)
+            {:error, reason} -> {:error, reason}
+          end
+
+        {:error, _operation, reason, _changes} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp recover_run_and_delivery(repo, changeset, opts) do
+    with {:ok, run} <- Runs.recover_existing_run(repo, changeset),
+         {:ok, dispatch, job, _repaired?} <- ensure_delivery(run, opts) do
+      {:ok, dispatch, job, run}
     end
   end
 

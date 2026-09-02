@@ -42,6 +42,7 @@ defmodule Shoestring.Harness.DispatchRecord do
     |> validate_required([:dispatch_id, :goal_id, :task_id, :run_id, :request_version, :status])
     |> validate_number(:request_version, greater_than: 0)
     |> validate_inclusion(:status, @statuses)
+    |> unique_constraint(:dispatch_id, name: "harness_dispatches_dispatch_id_index")
     |> foreign_key_constraint(:goal_id)
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:run_id)

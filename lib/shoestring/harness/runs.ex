@@ -20,14 +20,64 @@ defmodule Shoestring.Harness.Runs do
   @spec request(RunRequest.t(), Identity.t(), keyword()) ::
           {:ok, RunRecord.t()} | {:error, Error.t() | term()}
   def request(%RunRequest{} = request, %Identity{} = identity, opts \\ []) do
-    with :ok <- compatible?(identity, request),
-         {:ok, run} <- persist_intent(request, identity, opts),
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with {:ok, changeset} <- build_intent_changeset(request, identity, opts),
+         {:ok, run} <- insert_or_recover(repo, changeset),
          :ok <- append_requested(run, request, identity, opts) do
       {:ok, run}
     else
       {:error, error} -> {:error, error}
     end
   end
+
+  @doc false
+  @spec build_intent_changeset(RunRequest.t(), Identity.t(), keyword()) ::
+          {:ok, Ecto.Changeset.t()} | {:error, Error.t() | term()}
+  def build_intent_changeset(%RunRequest{} = request, %Identity{} = identity, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+    identifier = Keyword.get(opts, :identifier, Shoestring.Harness.SystemIdentifier)
+    clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
+    now = Clock.now(clock)
+
+    with :ok <- compatible?(identity, request),
+         :ok <- validate_goal_and_task(repo, request) do
+      run = %RunRecord{id: Identifier.generate(identifier)}
+      {:ok, RunRecord.intent_changeset(run, request, identity.adapter_id, now)}
+    end
+  end
+
+  @doc false
+  @spec insert_or_recover(module(), Ecto.Changeset.t()) ::
+          {:ok, RunRecord.t()} | {:error, term()}
+  def insert_or_recover(repo, changeset) do
+    case repo.insert(changeset) do
+      {:ok, run} -> {:ok, run}
+      {:error, changeset} -> recover_existing_run(repo, changeset)
+    end
+  end
+
+  @doc false
+  @spec recover_existing_run(module(), Ecto.Changeset.t()) ::
+          {:ok, RunRecord.t()} | {:error, term()}
+  def recover_existing_run(repo, changeset) do
+    if dispatch_id_conflict?(changeset) do
+      dispatch_id = Ecto.Changeset.get_field(changeset, :dispatch_id)
+
+      case repo.get_by(RunRecord, dispatch_id: dispatch_id) do
+        %RunRecord{} = run -> {:ok, run}
+        nil -> {:error, changeset}
+      end
+    else
+      {:error, changeset}
+    end
+  end
+
+  @doc false
+  @spec ensure_requested_event(RunRecord.t(), RunRequest.t(), Identity.t(), keyword()) ::
+          :ok | {:error, term()}
+  def ensure_requested_event(run, request, identity, opts),
+    do: append_requested(run, request, identity, opts)
 
   @doc "Repairs a persisted intent that has no canonical run.requested event yet."
   @spec reconcile(Ecto.UUID.t(), keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
@@ -69,37 +119,6 @@ defmodule Shoestring.Harness.Runs do
          "shoestring.harness:request_version" => expected
        }
      )}
-  end
-
-  defp persist_intent(request, identity, opts) do
-    repo = Keyword.get(opts, :repo, Repo)
-    identifier = Keyword.get(opts, :identifier, Shoestring.Harness.SystemIdentifier)
-    clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
-    now = Clock.now(clock)
-
-    with :ok <- validate_goal_and_task(repo, request) do
-      run_id = Identifier.generate(identifier)
-      run = %RunRecord{id: run_id}
-
-      case repo.insert(RunRecord.intent_changeset(run, request, identity.adapter_id, now)) do
-        {:ok, run} ->
-          {:ok, run}
-
-        {:error, changeset} ->
-          recover_existing_dispatch(repo, request.dispatch_id, changeset)
-      end
-    end
-  end
-
-  defp recover_existing_dispatch(repo, dispatch_id, changeset) do
-    if dispatch_id_conflict?(changeset) do
-      case repo.get_by(RunRecord, dispatch_id: dispatch_id) do
-        %RunRecord{} = run -> {:ok, run}
-        nil -> {:error, changeset}
-      end
-    else
-      {:error, changeset}
-    end
   end
 
   defp dispatch_id_conflict?(changeset) do
