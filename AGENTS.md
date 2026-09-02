@@ -14,6 +14,19 @@ This is a web application written using the Phoenix web framework.
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
 
+### Commit attribution
+
+- **Never add `Co-authored-by` trailers for Omnigent, Codex, Claude, an LLM,
+  an agent, a sub-agent, an orchestrator, or any other automation.** This rule
+  applies to every worker and every commit in this repository.
+- Do not add any automated authorship, contributor, or attribution trailer to a
+  commit message or PR description.
+- Add a human `Co-authored-by` trailer only when the user explicitly names that
+  human co-author and explicitly requests the trailer.
+- Before committing, inspect the final commit message and remove any automated
+  co-author trailer inserted by a tool or default template. The configured Git
+  author remains the sole author unless the user explicitly directs otherwise.
+
 ### Phoenix v1.8 guidelines
 
 - **Always** begin your LiveView templates with `<Layouts.app flash={@flash} ...>` which wraps all inner content
