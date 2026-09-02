@@ -22,7 +22,20 @@ config :shoestring, Shoestring.Repo,
 config :shoestring,
   trajectory_writer_idle_timeout: 60_000,
   artifact_root: nil,
-  artifact_max_size: 10 * 1024 * 1024
+  artifact_max_size: 10 * 1024 * 1024,
+  dispatch_clock: Shoestring.Harness.SystemClock,
+  dispatch_reconciler: true
+
+config :shoestring, Oban,
+  engine: Oban.Engines.Lite,
+  repo: Shoestring.Repo,
+  queues: [dispatch: 5],
+  plugins: [
+    # An abandoned executing job must become runnable again; DispatchRecord remains the effect claim.
+    {Oban.Lifeline, rescue_after: {5, :minutes}},
+    # Delivery rows are disposable because Dispatches reconciles from durable intent after pruning.
+    {Oban.Pruner, max_age: {1, :day}}
+  ]
 
 # Configure the endpoint
 config :shoestring, ShoestringWeb.Endpoint,

@@ -532,6 +532,17 @@ defmodule Shoestring.Harness.ContractsTest do
 
     assert {:ok, _payload} =
              EventRegistry.validate_payload(
+               "dispatch.requested",
+               1,
+               EventPayload.dispatch_requested(%{
+                 dispatch_id: @dispatch_id,
+                 run_id: @run_id,
+                 request_version: 1
+               })
+             )
+
+    assert {:ok, _payload} =
+             EventRegistry.validate_payload(
                "capacity.snapshot_observed",
                2,
                EventPayload.capacity_snapshot(snapshot, @run_id),

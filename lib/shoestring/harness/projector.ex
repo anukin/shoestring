@@ -170,13 +170,17 @@ defmodule Shoestring.Harness.Projector do
     with {:ok, run_id} <- payload_uuid(payload, "run_id"),
          :ok <- matching_run_id(event, run_id),
          %RunRecord{} = run <- Repo.get_by(RunRecord, id: run_id, goal_id: event.goal_id) do
-      update_run_projection(
-        run,
-        :requested,
-        Map.get(payload, "provider_session_id"),
-        event.sequence,
-        event.occurred_at
-      )
+      if run.status == "requested" and run.projection_sequence == 0 do
+        update_run_projection(
+          run,
+          :requested,
+          Map.get(payload, "provider_session_id"),
+          event.sequence,
+          event.occurred_at
+        )
+      else
+        :ok
+      end
     else
       nil -> {:error, {:run_not_found, Map.get(payload, "run_id")}}
       error -> error
