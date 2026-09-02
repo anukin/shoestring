@@ -17,6 +17,7 @@ defmodule Shoestring.Harness.RunRecord do
     field :continuation, :map
     field :policy, :map
     field :requested_capabilities, :map
+    field :extensions, :map
     field :status, :string, default: "requested"
     field :provider_session_id, :string
     field :projection_sequence, :integer, default: 0
@@ -47,6 +48,7 @@ defmodule Shoestring.Harness.RunRecord do
     |> put_change(:continuation, request.continuation)
     |> put_change(:policy, request.policy)
     |> put_change(:requested_capabilities, %{items: request.requested_capabilities})
+    |> put_change(:extensions, request.extensions)
     |> put_change(:status, "requested")
     |> put_change(:projection_sequence, 0)
     |> put_change(:inserted_at, now)
@@ -61,7 +63,8 @@ defmodule Shoestring.Harness.RunRecord do
       :request_version,
       :prompt,
       :policy,
-      :requested_capabilities
+      :requested_capabilities,
+      :extensions
     ])
     |> validate_inclusion(:status, [
       "requested",
@@ -74,7 +77,7 @@ defmodule Shoestring.Harness.RunRecord do
       "cancelling",
       "cancelled"
     ])
-    |> unique_constraint(:dispatch_id)
+    |> unique_constraint(:dispatch_id, name: "harness_runs_dispatch_id_index")
     |> foreign_key_constraint(:goal_id)
     |> foreign_key_constraint(:task_id)
     |> check_constraint(:request_version, name: "harness_runs_request_version_positive")
