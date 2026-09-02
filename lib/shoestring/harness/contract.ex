@@ -23,6 +23,9 @@ defmodule Shoestring.Harness.Contract do
     end
   end
 
+  def fetch(attrs, key) when is_map(attrs) and is_binary(key),
+    do: Map.fetch(attrs, key)
+
   def fetch(_attrs, _key), do: :error
 
   def required(attrs, key) do
@@ -44,7 +47,7 @@ defmodule Shoestring.Harness.Contract do
   def version(attrs, expected) do
     case required(attrs, :version) do
       {:ok, ^expected} -> {:ok, expected}
-      {:ok, value} -> invalid(:version, "must equal #{expected}; received #{inspect(value)}")
+      {:ok, _value} -> invalid(:version, "must equal #{expected}")
       error -> error
     end
   end

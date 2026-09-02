@@ -42,24 +42,6 @@ defmodule Shoestring.Harness.CapacitySnapshot do
     :extensions
   ]
 
-  @payload_keys [
-    "snapshot_id",
-    "run_id",
-    "contract_version",
-    "capacity_state",
-    "windows",
-    "observed_at",
-    "expires_at",
-    "freshness",
-    "source",
-    "scope",
-    "confidence",
-    "support_tier",
-    "compatibility_state",
-    "reason",
-    "extensions"
-  ]
-
   @enforce_keys [
     :version,
     :snapshot_id,
@@ -217,12 +199,12 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   def new(_attrs, _opts), do: Contract.invalid(:base, "must be an object")
 
-  @doc "Decodes and strictly validates the v2 JSON event representation."
+  @doc "Decodes known v2 JSON fields and ignores additive fields."
   @spec from_payload(map(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
   def from_payload(payload, opts \\ [])
 
   def from_payload(payload, opts) when is_map(payload) and is_list(opts) do
-    with :ok <- ensure_only_keys(payload, @payload_keys, :capacity_payload),
+    with :ok <- payload_safety(payload),
          {:ok, version} <-
            payload |> fetch_payload("contract_version") |> then(&payload_version/1),
          {:ok, capacity_state} <-
@@ -272,6 +254,14 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   end
 
   def from_payload(_payload, _opts), do: Contract.invalid(:base, "must be an object")
+
+  defp payload_safety(payload) do
+    if Contract.safe_term?(payload) do
+      :ok
+    else
+      Contract.invalid(:base, "must not contain secrets or raw transcripts")
+    end
+  end
 
   @doc "Computes freshness at an injected time; it never treats the future as fresh."
   @spec freshness(t(), DateTime.t()) :: :fresh | :stale | :unknown
@@ -493,9 +483,6 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
       :future ->
         Contract.invalid(:capacity_state, "future capacity must be unknown")
-
-      :unknown ->
-        Contract.invalid(:capacity_state, "timestamp-unknown capacity must be unknown")
     end
   end
 
@@ -543,9 +530,6 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
       :future ->
         Contract.invalid(:capacity_state, "future capacity must be unknown")
-
-      :unknown ->
-        Contract.invalid(:capacity_state, "timestamp-unknown capacity must be unknown")
     end
   end
 
@@ -643,8 +627,8 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   defp payload_version({:ok, @version}), do: {:ok, @version}
 
-  defp payload_version({:ok, value}),
-    do: Contract.invalid(:contract_version, "must equal #{@version}; received #{inspect(value)}")
+  defp payload_version({:ok, _value}),
+    do: Contract.invalid(:contract_version, "must equal #{@version}")
 
   defp payload_version(error), do: error
 
@@ -664,6 +648,8 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   defp payload_windows({:ok, %{"items" => items} = value}) when map_size(value) == 1,
     do: payload_windows(items)
+
+  defp payload_windows({:ok, %{"items" => items}}), do: payload_windows(items)
 
   defp payload_windows({:ok, _value}),
     do: Contract.invalid(:windows, "must contain only an items list")
@@ -687,13 +673,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   defp payload_windows(_items), do: Contract.invalid(:windows, "items must be a list")
 
   defp payload_window(value) when is_map(value) do
-    with :ok <-
-           ensure_only_keys(
-             value,
-             ["kind", "state", "used_percent", "reset_at", "reason"],
-             :window
-           ),
-         {:ok, state} <- payload_enum(Map.fetch(value, "state"), :window_state, @window_states),
+    with {:ok, state} <- payload_enum(Map.fetch(value, "state"), :window_state, @window_states),
          {:ok, kind} <-
            value |> fetch_payload("kind") |> Contract.text(:window_kind, max: 100) do
       case state do
@@ -718,9 +698,8 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   defp payload_window(_value), do: Contract.invalid(:windows, "entries must be objects")
 
-  defp payload_freshness({:ok, %{"max_age_seconds" => max_age_seconds} = value})
-       when map_size(value) == 1,
-       do: freshness(%{max_age_seconds: max_age_seconds})
+  defp payload_freshness({:ok, %{"max_age_seconds" => max_age_seconds}}),
+    do: freshness(%{max_age_seconds: max_age_seconds})
 
   defp payload_freshness({:ok, _value}),
     do: Contract.invalid(:freshness, "must contain max_age_seconds")
@@ -728,13 +707,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   defp payload_freshness(error), do: error
 
   defp payload_source({:ok, value}) when is_map(value) do
-    with :ok <-
-           ensure_only_keys(
-             value,
-             ["adapter_id", "provider_id", "invocation_mode", "event"],
-             :source
-           ),
-         {:ok, event} <- payload_enum(Map.fetch(value, "event"), :source_event, @source_events),
+    with {:ok, event} <- payload_enum(Map.fetch(value, "event"), :source_event, @source_events),
          {:ok, adapter_id} <-
            fetch_payload(value, "adapter_id") |> Contract.text(:source_adapter_id, max: 200),
          {:ok, provider_id} <-
@@ -759,7 +732,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
     case Map.fetch(payload, key) do
       {:ok, nil} -> {:ok, nil}
       {:ok, value} -> Contract.datetime(value, payload_field(key))
-      :error -> Contract.invalid(payload_field(key), "can't be blank")
+      :error -> {:ok, nil}
     end
   end
 
@@ -775,7 +748,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
     case Map.fetch(payload, key) do
       {:ok, nil} -> {:ok, nil}
       {:ok, value} -> Contract.text(value, payload_field(key), opts)
-      :error -> Contract.invalid(payload_field(key), "can't be blank")
+      :error -> {:ok, nil}
     end
   end
 

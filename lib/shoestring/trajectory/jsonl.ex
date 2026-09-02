@@ -286,7 +286,9 @@ defmodule Shoestring.Trajectory.JSONL do
          {:ok, payload} <-
            EventRegistry.export_payload(envelope.type, envelope.schema_version, envelope.payload),
          {:ok, upcasted_payload} <-
-           EventRegistry.upcast(envelope.type, envelope.schema_version, payload) do
+           EventRegistry.upcast(envelope.type, envelope.schema_version, payload,
+             now: envelope.occurred_at
+           ) do
       exported =
         event_attributes(%{event | payload: upcasted_payload})
         |> Redaction.redact()

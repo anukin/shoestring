@@ -13,6 +13,8 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     "payload" => %{"decision" => "continue"}
   }
 
+  @now ~U[2026-08-30 12:00:00Z]
+
   test "the registry exposes initial and harness v1 event types" do
     registered = EventRegistry.registered_types()
 
@@ -139,13 +141,15 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     assert EventRegistry.current_version("capacity.snapshot_observed") == 2
   end
 
-  test "legacy capacity event states are strict and upcast into fail-closed v2 metadata" do
+  test "legacy capacity event states remain compatible and upcast into fail-closed v2 metadata" do
     payload = legacy_capacity_payload()
 
     assert {:ok, ^payload} =
              EventRegistry.validate_payload("capacity.snapshot_observed", 1, payload)
 
-    assert {:ok, upcast} = EventRegistry.upcast("capacity.snapshot_observed", 1, payload)
+    assert {:ok, upcast} =
+             EventRegistry.upcast("capacity.snapshot_observed", 1, payload, now: @now)
+
     assert upcast["contract_version"] == 2
     assert upcast["capacity_state"] == "degraded"
     assert upcast["source"]["provider_id"] == "legacy"
@@ -161,8 +165,57 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
           put_in(payload, ["support_tier"], "proactive")
         ] do
       assert {:error, {:invalid_payload, "capacity.snapshot_observed", 1, _changeset}} =
-               EventRegistry.validate_payload("capacity.snapshot_observed", 1, malformed)
+               EventRegistry.validate_payload("capacity.snapshot_observed", 1, malformed,
+                 now: @now
+               )
     end
+  end
+
+  test "additive legacy fields are accepted while required legacy fields remain validated" do
+    payload =
+      legacy_capacity_payload()
+      |> Map.put("future_field", "ignored")
+      |> put_in(["windows", "future_window_metadata"], %{"version" => 3})
+      |> put_in(["windows", "items", Access.at(0), "future_field"], "ignored")
+      |> put_in(["source", "future_field"], "ignored")
+
+    assert {:ok, validated} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 1, payload, now: @now)
+
+    refute Map.has_key?(validated, "future_field")
+    assert validated["windows"]["future_window_metadata"] == %{"version" => 3}
+
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 1, _changeset}} =
+             EventRegistry.validate_payload(
+               "capacity.snapshot_observed",
+               1,
+               Map.delete(payload, "observed_at"),
+               now: @now
+             )
+  end
+
+  test "legacy observations after the event are upcast to deterministic unknown capacity" do
+    payload =
+      legacy_capacity_payload()
+      |> Map.put("observed_at", "2026-08-30T12:00:01Z")
+
+    assert {:ok, upcast} =
+             EventRegistry.upcast("capacity.snapshot_observed", 1, payload, now: @now)
+
+    assert upcast["capacity_state"] == "unknown"
+    assert upcast["confidence"] == "none"
+    assert upcast["reason"] == "legacy_capacity_observation_after_event"
+
+    assert upcast["windows"]["items"] == [
+             %{
+               "kind" => "five_hour",
+               "state" => "unknown",
+               "reason" => "legacy_capacity_observation_after_event"
+             }
+           ]
+
+    assert {:ok, _snapshot} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast, now: @now)
   end
 
   test "legacy capacity upcast produces a v2-valid payload across the full legacy matrix" do
@@ -189,13 +242,14 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
         |> Map.put("windows", windows)
 
       assert {:ok, ^payload} =
-               EventRegistry.validate_payload("capacity.snapshot_observed", 1, payload),
+               EventRegistry.validate_payload("capacity.snapshot_observed", 1, payload, now: @now),
              "legacy known/#{confidence}/#{shape_name} should be a valid v1 payload"
 
-      assert {:ok, upcast} = EventRegistry.upcast("capacity.snapshot_observed", 1, payload)
+      assert {:ok, upcast} =
+               EventRegistry.upcast("capacity.snapshot_observed", 1, payload, now: @now)
 
       assert {:ok, _snapshot} =
-               EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast),
+               EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast, now: @now),
              "legacy known/#{confidence}/#{shape_name} upcast to #{inspect(upcast)} is not v2-valid"
 
       case shape_name do
@@ -216,25 +270,32 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
       |> Map.put("confidence", "none")
 
     assert {:ok, ^unknown_payload} =
-             EventRegistry.validate_payload("capacity.snapshot_observed", 1, unknown_payload)
+             EventRegistry.validate_payload("capacity.snapshot_observed", 1, unknown_payload,
+               now: @now
+             )
 
-    assert {:ok, upcast} = EventRegistry.upcast("capacity.snapshot_observed", 1, unknown_payload)
+    assert {:ok, upcast} =
+             EventRegistry.upcast("capacity.snapshot_observed", 1, unknown_payload, now: @now)
+
     assert upcast["capacity_state"] == "unknown"
     assert upcast["confidence"] == "none"
 
     assert {:ok, _snapshot} =
-             EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast)
+             EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast, now: @now)
   end
 
   test "capacity required fields and unregistered versions remain visible failures" do
     assert {:ok, payload} =
-             EventRegistry.upcast("capacity.snapshot_observed", 1, legacy_capacity_payload())
+             EventRegistry.upcast("capacity.snapshot_observed", 1, legacy_capacity_payload(),
+               now: @now
+             )
 
     assert {:error, {:invalid_payload, "capacity.snapshot_observed", 2, changeset}} =
              EventRegistry.validate_payload(
                "capacity.snapshot_observed",
                2,
-               Map.delete(payload, "freshness")
+               Map.delete(payload, "freshness"),
+               now: @now
              )
 
     assert "can't be blank" in errors_on(changeset).freshness

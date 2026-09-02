@@ -296,7 +296,7 @@ defmodule Shoestring.Harness.ContractsTest do
     assert "can't be blank" in errors_on(changeset).observed_at
   end
 
-  test "capacity serialization is exact and rejects state or shape drift" do
+  test "capacity serialization allows additive fields but rejects state or shape drift" do
     assert {:ok, snapshot} = CapacitySnapshot.new(observed_snapshot_attrs(), now: @now)
     payload = EventPayload.capacity_snapshot(snapshot, @run_id)
 
@@ -316,13 +316,23 @@ defmodule Shoestring.Harness.ContractsTest do
                now: @now
              )
 
+    assert {:ok, additive_payload} =
+             EventRegistry.validate_payload(
+               "capacity.snapshot_observed",
+               2,
+               put_in(payload, ["source", "format"], "future-format")
+               |> Map.put("future_field", "ignored"),
+               now: @now
+             )
+
+    assert additive_payload["capacity_state"] == "observed"
+
     for malformed <- [
           put_in(payload, ["capacity_state"], "available"),
           put_in(payload, ["windows", "items", Access.at(0), "state"], "known"),
           put_in(payload, ["source", "event"], "terminal_scrape"),
           put_in(payload, ["freshness", "max_age_seconds"], 0),
           put_in(payload, ["expires_at"], "2026-08-30T12:05:01Z"),
-          put_in(payload, ["source", "format"], "drift"),
           put_in(payload, ["windows", "items", Access.at(0)], %{
             "kind" => "primary",
             "state" => "observed"
@@ -341,9 +351,44 @@ defmodule Shoestring.Harness.ContractsTest do
     end
   end
 
+  test "payload state contradictions are rejected at the JSON boundary" do
+    {:ok, observed_snapshot} = CapacitySnapshot.new(observed_snapshot_attrs(), now: @now)
+    observed = EventPayload.capacity_snapshot(observed_snapshot, @run_id)
+
+    assert {:error, changeset} =
+             CapacitySnapshot.from_payload(
+               put_in(observed, ["windows", "items", Access.at(0), "reason"], "contradiction"),
+               now: @now
+             )
+
+    assert "is not allowed for this state" in errors_on(changeset).window_reason
+
+    assert {:error, changeset} =
+             CapacitySnapshot.from_payload(Map.put(observed, "future_field", "secret: value"),
+               now: @now
+             )
+
+    refute inspect(errors_on(changeset)) =~ "secret: value"
+
+    unknown_attrs =
+      unknown_snapshot_attrs(%{
+        windows: [%{kind: "primary", state: :unknown, reason: "not_reported"}]
+      })
+
+    {:ok, unknown_snapshot} = CapacitySnapshot.new(unknown_attrs, now: @now)
+    unknown = EventPayload.capacity_snapshot(unknown_snapshot, @run_id)
+
+    for contradictory <- [
+          put_in(unknown, ["windows", "items", Access.at(0), "used_percent"], 25.0),
+          put_in(unknown, ["windows", "items", Access.at(0), "reset_at"], "2026-08-30T13:00:00Z")
+        ] do
+      assert {:error, _changeset} = CapacitySnapshot.from_payload(contradictory, now: @now)
+    end
+  end
+
   test "contract versions and extensions are explicit and bounded" do
     assert {:error, changeset} = RunRequest.new(Map.put(run_request_attrs(), :version, 2))
-    assert "must equal 1; received 2" in errors_on(changeset).version
+    assert "must equal 1" in errors_on(changeset).version
 
     assert {:error, changeset} =
              RunRequest.new(put_in(run_request_attrs(), [:extensions], %{"unscoped" => "value"}))

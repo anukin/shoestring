@@ -49,7 +49,15 @@ defmodule Shoestring.Harness.ProjectorTest do
     assert Repo.get!(RunRecord, run.id).provider_session_id == "session-a"
     assert Repo.get!(ExecutionLeaseRecord, @grant_id).status == "checkpoint_required"
     assert Repo.get!(CheckpointRecord, @checkpoint_id).stop_reason == "quota_refused"
-    assert Repo.get!(CapacitySnapshotRecord, @snapshot_id).capacity_state == "observed"
+    snapshot = Repo.get!(CapacitySnapshotRecord, @snapshot_id)
+    assert snapshot.capacity_state == "observed"
+    assert snapshot.reason == nil
+
+    assert {:ok, reloaded_snapshot} =
+             Repo.update(CapacitySnapshotRecord.changeset(snapshot, %{"reason" => nil}))
+
+    assert reloaded_snapshot.reason == nil
+    assert Repo.get!(CapacitySnapshotRecord, @snapshot_id).reason == nil
     assert Repo.aggregate(CapacityWindowRecord, :count, :id) == 1
 
     projection_before_rebuild = {
@@ -159,6 +167,78 @@ defmodule Shoestring.Harness.ProjectorTest do
     assert Repo.get!(CapacitySnapshotRecord, legacy_snapshot_id).capacity_state == "degraded"
   end
 
+  test "replay upcasts legacy observations after the event to deterministic unknown capacity", %{
+    test: test_name
+  } do
+    goal = insert_goal("00000000-0000-4000-8000-000000000106")
+    task = insert_task(goal, "00000000-0000-4000-8000-000000000205")
+    run = request_run(goal, task, test_name)
+    snapshot_id = "00000000-0000-4000-8000-000000000014"
+    event_time = ~U[2026-08-30 12:00:00Z]
+
+    append_at(goal.id, run.id, "run.starting", %{"run_id" => run.id}, event_time)
+
+    append_at(
+      goal.id,
+      run.id,
+      "run.running",
+      %{"run_id" => run.id, "provider_session_id" => "future-session"},
+      event_time
+    )
+
+    append_at(
+      goal.id,
+      run.id,
+      "capacity.snapshot_observed",
+      %{
+        "snapshot_id" => snapshot_id,
+        "run_id" => run.id,
+        "contract_version" => 1,
+        "capacity_state" => "known",
+        "windows" => %{
+          "items" => [%{"kind" => "five_hour", "state" => "known", "used_percent" => 25.0}]
+        },
+        "observed_at" => "2026-08-30T12:00:01Z",
+        "expires_at" => "2026-08-30T12:05:01Z",
+        "source" => %{"adapter_id" => "legacy.adapter", "method" => "probe"},
+        "scope" => "account",
+        "confidence" => "high",
+        "support_tier" => "supported",
+        "compatibility_state" => "compatible",
+        "extensions" => %{}
+      },
+      event_time
+    )
+
+    assert {:ok, events} = Trajectory.replay(goal.id)
+    assert {:ok, pure_state} = Projector.replay_events(events)
+    assert pure_state.capacity_snapshots[snapshot_id].capacity_state == "unknown"
+
+    assert {:ok, position} =
+             Projector.project(goal.id,
+               clock: Shoestring.Test.FixedClock,
+               identifier: Shoestring.Test.FixedIdentifier
+             )
+
+    snapshot = Repo.get!(CapacitySnapshotRecord, snapshot_id)
+    assert position.last_sequence == 4
+    assert snapshot.capacity_state == "unknown"
+    assert snapshot.confidence == "none"
+    assert snapshot.reason == "legacy_capacity_observation_after_event"
+    assert Repo.get_by!(CapacityWindowRecord, snapshot_id: snapshot_id).state == "unknown"
+
+    assert {:ok, rebuilt} =
+             Projector.rebuild(goal.id,
+               clock: Shoestring.Test.FixedClock,
+               identifier: Shoestring.Test.FixedIdentifier
+             )
+
+    assert rebuilt.last_sequence == position.last_sequence
+
+    assert Repo.get!(CapacitySnapshotRecord, snapshot_id).reason ==
+             "legacy_capacity_observation_after_event"
+  end
+
   test "run intent uses injected deterministic identifiers and schema compatibility", %{
     test: test_name
   } do
@@ -259,6 +339,10 @@ defmodule Shoestring.Harness.ProjectorTest do
   end
 
   defp append(goal_id, run_id, type, payload, schema_version \\ 1) do
+    append_at(goal_id, run_id, type, payload, Shoestring.Test.FixedClock.now(), schema_version)
+  end
+
+  defp append_at(goal_id, run_id, type, payload, occurred_at, schema_version \\ 1) do
     assert {:ok, _event} =
              Trajectory.append(
                goal_id,
@@ -266,7 +350,7 @@ defmodule Shoestring.Harness.ProjectorTest do
                  "type" => type,
                  "schema_version" => schema_version,
                  "actor" => "harness",
-                 "occurred_at" => Shoestring.Test.FixedClock.now(),
+                 "occurred_at" => occurred_at,
                  "idempotency_key" => "#{type}:#{payload |> Map.values() |> inspect()}",
                  "payload" => payload
                },

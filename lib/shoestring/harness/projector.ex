@@ -59,7 +59,9 @@ defmodule Shoestring.Harness.Projector do
         if event.sequence == expected do
           with {:ok, validated} <- EventRegistry.validate(event_attributes(event)),
                {:ok, payload} <-
-                 EventRegistry.upcast(event.type, event.schema_version, validated.payload),
+                 EventRegistry.upcast(event.type, event.schema_version, validated.payload,
+                   now: event.occurred_at
+                 ),
                {:ok, state} <- ProjectorTransition.apply(acc.state, %{event | payload: payload}) do
             {:cont, {:ok, %{state: state, sequence: event.sequence}}}
           else
@@ -143,7 +145,9 @@ defmodule Shoestring.Harness.Projector do
   defp apply_event(position, event, opts) do
     with {:ok, validated} <- EventRegistry.validate(event_attributes(event)),
          {:ok, payload} <-
-           EventRegistry.upcast(event.type, event.schema_version, validated.payload),
+           EventRegistry.upcast(event.type, event.schema_version, validated.payload,
+             now: event.occurred_at
+           ),
          :ok <- persist_event(event, payload, opts),
          {:ok, position} <- advance(position, event.sequence, opts) do
       {:applied, position}

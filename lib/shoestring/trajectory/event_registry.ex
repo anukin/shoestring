@@ -250,18 +250,20 @@ defmodule Shoestring.Trajectory.EventRegistry do
   end
 
   @doc "Explicitly upcasts a registered payload without mutating stored history."
-  @spec upcast(term(), term(), map()) ::
+  @spec upcast(term(), term(), map(), keyword()) ::
           {:ok, map()}
           | {:error, {:unknown_event_type, term()}}
           | {:error, {:unknown_event_version, term(), term()}}
-  def upcast("capacity.snapshot_observed", 1, payload) do
-    with {:ok, payload} <- validate_payload("capacity.snapshot_observed", 1, payload),
-         {:ok, payload} <- upcast_legacy_capacity_snapshot(payload) do
+  def upcast(type, version, payload, opts \\ [])
+
+  def upcast("capacity.snapshot_observed", 1, payload, opts) do
+    with {:ok, payload} <- validate_payload("capacity.snapshot_observed", 1, payload, opts),
+         {:ok, payload} <- upcast_legacy_capacity_snapshot(payload, opts) do
       {:ok, payload}
     end
   end
 
-  def upcast(type, version, payload) do
+  def upcast(type, version, payload, _opts) do
     case current_version(type) do
       {:error, error} -> {:error, error}
       ^version -> {:ok, payload}
@@ -339,7 +341,6 @@ defmodule Shoestring.Trajectory.EventRegistry do
   defp validate_payload_schema(type, version, schema, payload, opts) when is_map(payload) do
     fields = schema.required ++ schema.optional
     allowed_keys = Enum.map(fields, &Atom.to_string/1)
-    unknown_keys = Map.keys(payload) -- allowed_keys
 
     changeset =
       {%{}, Enum.into(fields, %{}, &{&1, field_type(schema, &1)})}
@@ -347,13 +348,6 @@ defmodule Shoestring.Trajectory.EventRegistry do
       |> validate_required(schema.required)
       |> validate_uuid_fields(schema.uuid_fields)
       |> validate_payload_safety(type, schema, payload)
-
-    changeset =
-      if unknown_keys == [] do
-        changeset
-      else
-        add_error(changeset, :base, "contains unknown fields")
-      end
 
     if changeset.valid? do
       validated = Map.take(payload, allowed_keys)
@@ -406,10 +400,10 @@ defmodule Shoestring.Trajectory.EventRegistry do
         Contract.invalid(:capacity_state, "must be a recognized legacy state")
 
       not valid_legacy_capacity_windows?(Map.get(payload, "windows")) ->
-        Contract.invalid(:windows, "must use the exact legacy windows format")
+        Contract.invalid(:windows, "must use a valid legacy windows format")
 
       not valid_legacy_source?(Map.get(payload, "source")) ->
-        Contract.invalid(:source, "must use the exact legacy source format")
+        Contract.invalid(:source, "must use a valid legacy source format")
 
       Map.get(payload, "confidence") not in ["none", "low", "medium", "high"] ->
         Contract.invalid(:confidence, "must be a recognized legacy confidence")
@@ -432,8 +426,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
   defp valid_legacy_capacity_state?(%{"capacity_state" => "known"} = payload) do
     with %{"items" => windows} when is_list(windows) <- Map.get(payload, "windows"),
-         true <- windows != [],
-         true <- is_binary(Map.get(payload, "expires_at")) do
+         true <- windows != [] do
       true
     else
       _other -> false
@@ -441,13 +434,13 @@ defmodule Shoestring.Trajectory.EventRegistry do
   end
 
   defp valid_legacy_capacity_state?(%{"capacity_state" => "unknown"} = payload) do
-    Map.get(payload, "windows") == %{"items" => []} and Map.get(payload, "confidence") == "none"
+    match?(%{"items" => []}, Map.get(payload, "windows")) and
+      Map.get(payload, "confidence") == "none"
   end
 
   defp valid_legacy_capacity_state?(_payload), do: false
 
-  defp valid_legacy_capacity_windows?(%{"items" => windows} = value)
-       when is_list(windows) and map_size(value) == 1 do
+  defp valid_legacy_capacity_windows?(%{"items" => windows}) when is_list(windows) do
     Enum.all?(windows, &valid_legacy_capacity_window?/1) and
       Enum.uniq_by(windows, &Map.get(&1, "kind")) == windows
   end
@@ -456,26 +449,22 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
   defp valid_legacy_capacity_window?(%{"kind" => kind, "state" => "known"} = window)
        when is_binary(kind) and byte_size(kind) > 0 do
-    Map.keys(window) -- ["kind", "state", "used_percent", "reset_at"] == [] and
-      is_number(Map.get(window, "used_percent")) and
+    is_number(Map.get(window, "used_percent")) and
       Map.get(window, "used_percent") >= 0 and Map.get(window, "used_percent") <= 100 and
       valid_optional_datetime?(Map.get(window, "reset_at"))
   end
 
-  defp valid_legacy_capacity_window?(
-         %{"kind" => kind, "state" => "unknown", "reason" => reason} = window
-       )
+  defp valid_legacy_capacity_window?(%{"kind" => kind, "state" => "unknown", "reason" => reason})
        when is_binary(kind) and byte_size(kind) > 0 and is_binary(reason) and
               byte_size(reason) > 0 do
-    Map.keys(window) -- ["kind", "state", "reason"] == []
+    true
   end
 
   defp valid_legacy_capacity_window?(_window), do: false
 
-  defp valid_legacy_source?(%{"adapter_id" => adapter_id, "method" => method} = source)
+  defp valid_legacy_source?(%{"adapter_id" => adapter_id, "method" => method})
        when is_binary(adapter_id) and byte_size(adapter_id) > 0 do
-    Map.keys(source) -- ["adapter_id", "method"] == [] and
-      method in ["probe", "status", "vendor_api"]
+    method in ["probe", "status", "vendor_api"]
   end
 
   defp valid_legacy_source?(_source), do: false
@@ -486,10 +475,12 @@ defmodule Shoestring.Trajectory.EventRegistry do
     match?({:ok, _datetime}, Contract.datetime(value, :reset_at))
   end
 
-  defp upcast_legacy_capacity_snapshot(payload) do
+  defp upcast_legacy_capacity_snapshot(payload, opts) do
     with {:ok, observed_at} <- Contract.datetime(Map.fetch!(payload, "observed_at"), :observed_at),
          max_age_seconds <- legacy_max_age_seconds(payload, observed_at),
          {:ok, windows} <- upcast_legacy_windows(Map.fetch!(payload, "windows")) do
+      future? = legacy_observation_in_future?(observed_at, opts)
+      windows = if future?, do: mark_future_windows_unknown(windows), else: windows
       has_observed_window? = Enum.any?(windows, &(&1["state"] == "observed"))
 
       # A legacy "known" record with no window that actually upcasts to
@@ -515,6 +506,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
       # "low" rather than dropped -- it is downgraded, not discarded.
       confidence =
         cond do
+          future? -> "none"
           capacity_state == "unknown" -> "none"
           Map.fetch!(payload, "confidence") == "none" -> "low"
           true -> Map.fetch!(payload, "confidence")
@@ -542,10 +534,37 @@ defmodule Shoestring.Trajectory.EventRegistry do
          "confidence" => confidence,
          "support_tier" => support_tier,
          "compatibility_state" => "degraded",
-         "reason" => "legacy_capacity_contract_missing_provenance",
+         "reason" =>
+           if(future?,
+             do: "legacy_capacity_observation_after_event",
+             else: "legacy_capacity_contract_missing_provenance"
+           ),
          "extensions" => Map.fetch!(payload, "extensions")
        }}
     end
+  end
+
+  defp legacy_observation_in_future?(observed_at, opts) do
+    case Keyword.get(opts, :now) do
+      %DateTime{} = now -> DateTime.compare(observed_at, now) == :gt
+      _other -> false
+    end
+  end
+
+  defp mark_future_windows_unknown(windows) do
+    Enum.map(windows, fn window ->
+      case window["state"] do
+        "observed" ->
+          %{
+            "kind" => window["kind"],
+            "state" => "unknown",
+            "reason" => "legacy_capacity_observation_after_event"
+          }
+
+        "unknown" ->
+          window
+      end
+    end)
   end
 
   defp legacy_max_age_seconds(payload, observed_at) do

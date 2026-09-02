@@ -45,8 +45,12 @@ defmodule Shoestring.Harness.CapacityWindowRecord do
       {"observed", _used_percent, _reason} ->
         add_error(changeset, :state, "observed windows require usage and no unknown reason")
 
-      {"unknown", nil, reason} when is_binary(reason) ->
-        changeset
+      {"unknown", nil, reason} ->
+        if is_binary(reason) and String.trim(reason) != "" do
+          changeset
+        else
+          add_error(changeset, :state, "unknown windows require a reason and no usage")
+        end
 
       {"unknown", _used_percent, _reason} ->
         add_error(changeset, :state, "unknown windows require a reason and no usage")

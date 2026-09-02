@@ -122,11 +122,12 @@ defmodule Shoestring.Harness.CapacitySnapshotRecord do
       {"observed", _reason} ->
         add_error(changeset, :reason, "must be blank when capacity is observed")
 
-      {state, reason} when state in ["degraded", "refused", "unknown"] and is_binary(reason) ->
-        changeset
-
-      {state, _reason} when state in ["degraded", "refused", "unknown"] ->
-        add_error(changeset, :reason, "is required for this capacity state")
+      {state, reason} when state in ["degraded", "refused", "unknown"] ->
+        if is_binary(reason) and String.trim(reason) != "" do
+          changeset
+        else
+          add_error(changeset, :reason, "is required for this capacity state")
+        end
 
       _other ->
         changeset
