@@ -15,7 +15,7 @@ defmodule Shoestring.Harness.Runs do
 
   alias Shoestring.Repo
   alias Shoestring.Trajectory
-  alias Shoestring.Trajectory.{Goal, Task}
+  alias Shoestring.Trajectory.{Goal, Task, TrajectoryEvent}
 
   @spec request(RunRequest.t(), Identity.t(), keyword()) ::
           {:ok, RunRecord.t()} | {:error, Error.t() | term()}
@@ -36,15 +36,17 @@ defmodule Shoestring.Harness.Runs do
 
     runs =
       repo.all(
-        from run in RunRecord,
-          where: run.goal_id == ^goal_id and run.projection_sequence == 0,
-          order_by: [asc: run.inserted_at]
+        from run in RunRecord, where: run.goal_id == ^goal_id, order_by: [asc: run.inserted_at]
       )
 
     Enum.reduce_while(runs, {:ok, 0}, fn run, {:ok, count} ->
-      case append_requested_record(run, opts) do
-        :ok -> {:cont, {:ok, count + 1}}
-        {:error, error} -> {:halt, {:error, error}}
+      if requested_event?(run, repo) do
+        {:cont, {:ok, count}}
+      else
+        case append_requested_record(run, opts) do
+          :ok -> {:cont, {:ok, count + 1}}
+          {:error, error} -> {:halt, {:error, error}}
+        end
       end
     end)
   end
@@ -75,16 +77,47 @@ defmodule Shoestring.Harness.Runs do
     clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
     now = Clock.now(clock)
 
-    with :ok <- validate_goal_and_task(repo, request),
-         run_id <- Identifier.generate(identifier),
-         run = %RunRecord{id: run_id},
-         {:ok, run} <-
-           repo.insert(RunRecord.intent_changeset(run, request, identity.adapter_id, now)) do
-      {:ok, run}
-    else
-      {:error, changeset} when is_struct(changeset, Ecto.Changeset) -> {:error, changeset}
-      error -> error
+    with :ok <- validate_goal_and_task(repo, request) do
+      run_id = Identifier.generate(identifier)
+      run = %RunRecord{id: run_id}
+
+      case repo.insert(RunRecord.intent_changeset(run, request, identity.adapter_id, now)) do
+        {:ok, run} ->
+          {:ok, run}
+
+        {:error, changeset} ->
+          recover_existing_dispatch(repo, request.dispatch_id, changeset)
+      end
     end
+  end
+
+  defp recover_existing_dispatch(repo, dispatch_id, changeset) do
+    if dispatch_id_conflict?(changeset) do
+      case repo.get_by(RunRecord, dispatch_id: dispatch_id) do
+        %RunRecord{} = run -> {:ok, run}
+        nil -> {:error, changeset}
+      end
+    else
+      {:error, changeset}
+    end
+  end
+
+  defp dispatch_id_conflict?(changeset) do
+    Enum.any?(changeset.errors, fn
+      {:dispatch_id, {_message, opts}} -> opts[:constraint] == :unique
+      _error -> false
+    end)
+  end
+
+  defp requested_event?(run, repo) do
+    repo.exists?(
+      from event in TrajectoryEvent,
+        where:
+          event.goal_id == ^run.goal_id and
+            event.run_id == ^run.id and
+            event.type == "run.requested" and
+            event.idempotency_key == ^"run-requested:#{run.dispatch_id}"
+    )
   end
 
   defp validate_goal_and_task(repo, request) do

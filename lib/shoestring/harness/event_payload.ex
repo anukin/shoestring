@@ -27,6 +27,19 @@ defmodule Shoestring.Harness.EventPayload do
     }
   end
 
+  @spec dispatch_requested(%{
+          dispatch_id: Ecto.UUID.t(),
+          run_id: Ecto.UUID.t(),
+          request_version: pos_integer()
+        }) :: map()
+  def dispatch_requested(%{dispatch_id: dispatch_id, run_id: run_id, request_version: version}) do
+    %{
+      "dispatch_id" => dispatch_id,
+      "run_id" => run_id,
+      "request_version" => version
+    }
+  end
+
   @spec capacity_snapshot(CapacitySnapshot.t(), Ecto.UUID.t() | nil) :: map()
   def capacity_snapshot(snapshot, run_id \\ nil) do
     %{

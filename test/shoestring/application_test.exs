@@ -11,7 +11,15 @@ defmodule Shoestring.ApplicationTest do
     child_ids = Enum.map(children, fn {id, _pid, _type, _modules} -> id end)
 
     assert Shoestring.Repo in child_ids
+    assert Oban in child_ids
     assert Phoenix.PubSub.Supervisor in child_ids
     assert ShoestringWeb.Endpoint in child_ids
+  end
+
+  test "configures Oban Lite after the SQLite repo with manual test delivery" do
+    assert %Oban.Config{engine: Oban.Engines.Lite, repo: Shoestring.Repo, testing: :manual} =
+             Oban.config()
+
+    assert Oban.config().queues == []
   end
 end

@@ -10,9 +10,12 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
                "harness_capacity_windows",
                "harness_checkpoint_artifact_references",
                "harness_checkpoints",
+               "harness_dispatches",
                "harness_execution_leases",
                "harness_runs",
+               "oban_jobs",
                "projector_positions",
+               "sqlite_sequence",
                "tasks",
                "trajectory_events"
              ]
@@ -48,6 +51,8 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
     assert column_names("harness_checkpoints") |> Enum.member?("stop_reason")
     assert column_names("harness_capacity_snapshots") |> Enum.member?("capacity_state")
     assert column_names("harness_capacity_windows") |> Enum.member?("used_percent")
+    assert column_names("harness_dispatches") |> Enum.member?("job_id")
+    assert column_names("oban_jobs") |> Enum.member?("args")
 
     assert index_names("harness_runs") == [
              "harness_runs_dispatch_id_index",
@@ -59,6 +64,14 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
              "harness_capacity_windows_reset_at_index",
              "harness_capacity_windows_snapshot_id_kind_index"
            ]
+
+    assert index_names("harness_dispatches") == [
+             "harness_dispatches_goal_id_status_index",
+             "harness_dispatches_job_id_index",
+             "harness_dispatches_run_id_status_index"
+           ]
+
+    assert index_names("oban_jobs") == ["oban_jobs_state_queue_priority_scheduled_at_id_index"]
   end
 
   test "sqlite enforces harness status and capacity window constraints directly" do
@@ -132,6 +145,26 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
              Repo.query(
                "INSERT INTO harness_capacity_windows (id, snapshot_id, kind, state, used_percent, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                [window_id, snapshot_id, "five_hour", "known", 101, now, now]
+             )
+
+    dispatch_id = "00000000-0000-4000-8000-000000000408"
+
+    assert {:ok, _} =
+             Repo.query(
+               "INSERT INTO harness_dispatches (dispatch_id, goal_id, task_id, run_id, request_version, status, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+               [dispatch_id, goal_id, task_id, run_id, 1, "requested", now, now]
+             )
+
+    assert {:error, _} =
+             Repo.query(
+               "UPDATE harness_dispatches SET status = 'unsafe' WHERE dispatch_id = ?",
+               [dispatch_id]
+             )
+
+    assert {:error, _} =
+             Repo.query(
+               "INSERT INTO harness_dispatches (dispatch_id, goal_id, task_id, run_id, request_version, status, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+               [dispatch_id, goal_id, task_id, run_id, 1, "requested", now, now]
              )
   end
 
