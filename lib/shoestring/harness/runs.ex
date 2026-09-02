@@ -80,9 +80,18 @@ defmodule Shoestring.Harness.Runs do
       task_id = Ecto.Changeset.get_field(changeset, :task_id)
 
       case repo.get_by(RunRecord, dispatch_id: dispatch_id) do
-        %RunRecord{goal_id: ^goal_id, task_id: ^task_id} = run -> {:ok, run}
-        %RunRecord{} -> {:error, dispatch_id_conflict(dispatch_id)}
-        nil -> {:error, changeset}
+        %RunRecord{goal_id: ^goal_id, task_id: ^task_id} = run ->
+          if request_identity_matches?(run, changeset) do
+            {:ok, run}
+          else
+            {:error, dispatch_id_conflict(dispatch_id)}
+          end
+
+        %RunRecord{} ->
+          {:error, dispatch_id_conflict(dispatch_id)}
+
+        nil ->
+          {:error, changeset}
       end
     else
       {:error, changeset}
@@ -118,16 +127,48 @@ defmodule Shoestring.Harness.Runs do
           order_by: [asc: run.inserted_at]
       )
 
-    Enum.reduce_while(runs, {:ok, 0}, fn run, {:ok, count} ->
+    {repaired, first_error} =
+      Enum.reduce(runs, {0, nil}, fn run, {count, first_error} ->
+        case safe_reconcile_run(run, opts) do
+          :ok -> {count, first_error}
+          {:ok, :repaired} -> {count + 1, first_error}
+          {:error, error} -> {count, first_error || error}
+        end
+      end)
+
+    case first_error do
+      nil -> {:ok, repaired}
+      error -> {:error, error}
+    end
+  end
+
+  @doc false
+  @spec reconcile_run(RunRecord.t(), keyword()) :: :ok | {:ok, :repaired} | {:error, term()}
+  def reconcile_run(%RunRecord{} = run, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    if run.status == "requested" and run.projection_sequence == 0 do
       if requested_event?(run, repo) do
-        {:cont, {:ok, count}}
+        :ok
       else
         case append_requested_record(run, opts) do
-          :ok -> {:cont, {:ok, count + 1}}
-          {:error, error} -> {:halt, {:error, error}}
+          :ok -> {:ok, :repaired}
+          {:error, error} -> {:error, error}
         end
       end
-    end)
+    else
+      :ok
+    end
+  end
+
+  defp safe_reconcile_run(run, opts) do
+    try do
+      reconcile_run(run, opts)
+    rescue
+      _error -> {:error, :reconciliation_failed}
+    catch
+      _kind, _reason -> {:error, :reconciliation_failed}
+    end
   end
 
   @spec owned?(Ecto.UUID.t(), Ecto.UUID.t(), module()) :: boolean()
@@ -214,6 +255,43 @@ defmodule Shoestring.Harness.Runs do
     )
   end
 
+  defp request_identity_matches?(run, changeset) do
+    Enum.all?(
+      [
+        :goal_id,
+        :task_id,
+        :dispatch_id,
+        :provider_id,
+        :workspace_ref,
+        :request_version,
+        :prompt,
+        :continuation,
+        :policy,
+        :requested_capabilities,
+        :extensions
+      ],
+      fn field ->
+        persisted = Map.fetch!(run, field)
+        incoming = Ecto.Changeset.get_field(changeset, field)
+
+        canonical_term(normalize_optional_extensions(field, persisted)) ==
+          canonical_term(incoming)
+      end
+    )
+  end
+
+  defp normalize_optional_extensions(:extensions, nil), do: %{}
+  defp normalize_optional_extensions(_field, value), do: value
+
+  defp canonical_term(value) when is_map(value) do
+    Map.new(value, fn {key, value} -> {to_string(key), canonical_term(value)} end)
+  end
+
+  defp canonical_term(value) when is_list(value), do: Enum.map(value, &canonical_term/1)
+  defp canonical_term(value) when value in [nil, true, false], do: value
+  defp canonical_term(value) when is_atom(value), do: Atom.to_string(value)
+  defp canonical_term(value), do: value
+
   defp append_requested_record(run, opts) do
     now = Clock.now(Keyword.get(opts, :clock, Shoestring.Harness.SystemClock))
 
@@ -233,7 +311,7 @@ defmodule Shoestring.Harness.Runs do
         "continuation" => run.continuation || %{},
         "policy" => run.policy,
         "requested_capabilities" => run.requested_capabilities,
-        "extensions" => %{}
+        "extensions" => run.extensions || %{}
       }
     }
 

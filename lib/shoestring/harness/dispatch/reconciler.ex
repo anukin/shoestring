@@ -13,7 +13,8 @@ defmodule Shoestring.Harness.Dispatch.Reconciler do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  @spec reconcile_now(GenServer.server()) :: {:ok, non_neg_integer()} | {:error, term()}
+  @spec reconcile_now(GenServer.server()) ::
+          {:ok, %{repaired_count: non_neg_integer(), failures: [map()]}} | {:error, term()}
   def reconcile_now(server \\ __MODULE__), do: GenServer.call(server, :reconcile)
 
   @impl true
@@ -43,13 +44,23 @@ defmodule Shoestring.Harness.Dispatch.Reconciler do
     end
   end
 
-  defp report_result({:ok, _count}), do: :ok
+  defp report_result({:ok, %{repaired_count: repaired_count, failures: failures}})
+       when is_integer(repaired_count) and is_list(failures) do
+    if failures != [] do
+      Logger.error("durable dispatch reconciliation completed with failures",
+        repaired_count: repaired_count,
+        failure_count: length(failures)
+      )
+    end
+  end
 
   defp report_result({:error, _reason}) do
     Logger.error("durable dispatch reconciliation failed")
 
-    :telemetry.execute([:shoestring, :harness, :dispatch_reconcile], %{count: 0}, %{
-      result: :error
-    })
+    :telemetry.execute(
+      [:shoestring, :harness, :dispatch_reconcile],
+      %{repaired_count: 0, failure_count: 1},
+      %{result: :error, reason: :dispatch_reconciliation_failed}
+    )
   end
 end

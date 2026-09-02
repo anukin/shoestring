@@ -147,7 +147,7 @@ defmodule Shoestring.Harness.RunsTest do
            )
   end
 
-  test "recovered request events use the persisted run identity and payload" do
+  test "a same-identity dispatch with different request content is a typed conflict" do
     goal = insert_goal()
     task = insert_task(goal)
 
@@ -164,7 +164,12 @@ defmodule Shoestring.Harness.RunsTest do
         where: event.goal_id == ^goal.id and event.run_id == ^run.id
     )
 
-    assert {:ok, recovered} =
+    assert {:error,
+            %Error{
+              category: :task_failed,
+              code: "dispatch_id_conflict",
+              details: %{"shoestring.harness:dispatch_id" => @dispatch_id}
+            } = error} =
              Runs.request(
                run_request(goal, task, prompt: "foreign caller prompt"),
                identity(),
@@ -172,19 +177,65 @@ defmodule Shoestring.Harness.RunsTest do
                clock: Shoestring.Test.FixedClock
              )
 
-    assert recovered.id == run.id
-
-    assert %TrajectoryEvent{payload: %{"prompt" => "canonical prompt"}} =
-             Repo.get_by(TrajectoryEvent,
-               goal_id: goal.id,
-               run_id: run.id,
-               type: "run.requested"
-             )
+    refute inspect(error) =~ "canonical prompt"
+    refute inspect(error) =~ "foreign caller prompt"
 
     refute Repo.exists?(
              from event in TrajectoryEvent,
                where: event.payload["prompt"] == "foreign caller prompt"
            )
+
+    assert Repo.get_by(TrajectoryEvent,
+             goal_id: goal.id,
+             run_id: run.id,
+             type: "run.requested"
+           ) == nil
+  end
+
+  test "recovery rebuilds the requested event from the persisted request extensions" do
+    goal = insert_goal()
+    task = insert_task(goal)
+    extensions = %{"test.adapter:mode" => "scripted"}
+
+    assert {:ok, run} =
+             Runs.request(
+               run_request(
+                 goal,
+                 task,
+                 extensions: extensions,
+                 requested_capabilities: [:resume]
+               ),
+               identity(),
+               identifier: Shoestring.Test.FixedIdentifier,
+               clock: Shoestring.Test.FixedClock
+             )
+
+    Repo.delete_all(
+      from event in TrajectoryEvent,
+        where: event.goal_id == ^goal.id and event.run_id == ^run.id
+    )
+
+    assert {:ok, recovered} =
+             Runs.request(
+               run_request(
+                 goal,
+                 task,
+                 extensions: extensions,
+                 requested_capabilities: [:resume]
+               ),
+               identity(),
+               identifier: Shoestring.Test.FixedIdentifier,
+               clock: Shoestring.Test.FixedClock
+             )
+
+    assert recovered.id == run.id
+
+    assert %TrajectoryEvent{payload: %{"extensions" => ^extensions}} =
+             Repo.get_by(TrajectoryEvent,
+               goal_id: goal.id,
+               run_id: run.id,
+               type: "run.requested"
+             )
   end
 
   test "concurrent duplicate requests recover the single inserted run" do
@@ -241,9 +292,9 @@ defmodule Shoestring.Harness.RunsTest do
                workspace_ref: "workspace/project",
                prompt: Keyword.get(overrides, :prompt, "Repair a durable run intent."),
                policy: %{mode: "supervised", network: false, write_access: true},
-               requested_capabilities: [],
+               requested_capabilities: Keyword.get(overrides, :requested_capabilities, []),
                dispatch_id: Keyword.get(overrides, :dispatch_id, @dispatch_id),
-               extensions: %{}
+               extensions: Keyword.get(overrides, :extensions, %{})
              })
 
     request

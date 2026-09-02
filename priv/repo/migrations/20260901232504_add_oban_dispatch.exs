@@ -22,7 +22,7 @@ defmodule Shoestring.Repo.Migrations.AddObanDispatch do
         check: %{
           name: "harness_dispatches_status_valid",
           expr:
-            "status IN ('requested', 'effect_started', 'effect_failed', 'effect_unknown', 'effect_completed', 'cancelled')"
+            "status IN ('requested', 'effect_started', 'effect_failed', 'effect_unknown', 'effect_deferred', 'effect_completed', 'cancelled')"
         }
 
       add :job_id, references(:oban_jobs, type: :bigint, on_delete: :nilify_all)

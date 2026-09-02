@@ -57,6 +57,7 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
     assert column_names("harness_dispatches") |> Enum.member?("job_id")
     assert column_names("harness_dispatches") |> Enum.member?("outcome_code")
     assert column_names("harness_dispatches") |> Enum.member?("outcome_at")
+    assert column_names("harness_runs") |> Enum.member?("extensions")
     assert column_names("oban_jobs") |> Enum.member?("args")
 
     expected_run_indexes = [

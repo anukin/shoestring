@@ -30,12 +30,20 @@ defmodule Shoestring.Harness.Dispatches do
     "requested",
     "effect_started",
     "effect_failed",
-    "effect_unknown"
+    "effect_unknown",
+    "effect_deferred"
+  ]
+  @terminal_dispatch_statuses [
+    "effect_failed",
+    "effect_unknown",
+    "effect_deferred",
+    "effect_completed",
+    "cancelled"
   ]
   @live_job_states ["available", "scheduled", "executing", "retryable", "suspended"]
 
   @spec enqueue(RunRequest.t(), Identity.t(), keyword()) ::
-          {:ok, DispatchRecord.t(), Job.t()} | {:error, term()}
+          {:ok, DispatchRecord.t(), Job.t() | nil} | {:error, term()}
   def enqueue(%RunRequest{} = request, %Identity{} = identity, opts \\ []) do
     with {:ok, dispatch, job, run, recovered?} <- create_run_and_delivery(request, identity, opts),
          :ok <- Runs.ensure_requested_event(run, request, identity, opts, recovered?),
@@ -91,7 +99,8 @@ defmodule Shoestring.Harness.Dispatches do
   end
 
   @doc "Repairs explicit dispatch intents and requested run-only partial states."
-  @spec reconcile(keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  @spec reconcile(keyword()) ::
+          {:ok, %{repaired_count: non_neg_integer(), failures: [map()]}} | {:error, term()}
   def reconcile(opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
@@ -99,11 +108,15 @@ defmodule Shoestring.Harness.Dispatches do
     dispatches = dispatch_reconciliation_candidates(repo)
     runs = Enum.uniq_by(run_only ++ Enum.map(dispatches, &elem(&1, 1)), & &1.id)
 
-    with :ok <- reconcile_run_goals(runs, opts),
-         {:ok, dispatch_repairs} <- reconcile_dispatches(dispatches, opts),
-         {:ok, run_repairs} <- reconcile_run_only(run_only, opts) do
-      {:ok, dispatch_repairs + run_repairs}
-    end
+    result =
+      new_reconcile_result()
+      |> reconcile_run_goals(runs, opts)
+      |> reconcile_dispatches(dispatches, opts)
+      |> reconcile_run_only(run_only, opts)
+      |> finalize_reconcile_result()
+
+    emit_reconcile_result(result)
+    {:ok, result}
   end
 
   defp run_only_reconciliation_candidates(repo) do
@@ -111,7 +124,9 @@ defmodule Shoestring.Harness.Dispatches do
       from run in RunRecord,
         left_join: dispatch in DispatchRecord,
         on: dispatch.dispatch_id == run.dispatch_id,
-        where: run.status == "requested" and is_nil(dispatch.dispatch_id),
+        where:
+          run.status == "requested" and run.projection_sequence == 0 and
+            is_nil(dispatch.dispatch_id),
         order_by: [asc: run.inserted_at]
     )
   end
@@ -129,23 +144,21 @@ defmodule Shoestring.Harness.Dispatches do
     )
   end
 
-  defp reconcile_run_goals(runs, opts) do
-    runs
-    |> Enum.map(& &1.goal_id)
-    |> Enum.uniq()
-    |> Enum.reduce_while(:ok, fn goal_id, :ok ->
-      case Runs.reconcile(goal_id, clock_opts(opts)) do
-        {:ok, _repaired} -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
+  defp reconcile_run_goals(result, runs, opts) do
+    Enum.reduce(runs, result, fn run, result ->
+      case safe_reconcile_run(run, opts) do
+        :ok -> result
+        {:ok, :repaired} -> result
+        {:error, reason} -> record_failure(result, reconciliation_ids(run), reason)
       end
     end)
   end
 
-  defp reconcile_dispatches(dispatches, opts) do
-    Enum.reduce_while(dispatches, {:ok, 0}, fn {dispatch, run}, {:ok, count} ->
-      case reconcile_dispatch(dispatch, run, opts) do
-        {:ok, repaired} -> {:cont, {:ok, count + repaired}}
-        {:error, reason} -> {:halt, {:error, reason}}
+  defp reconcile_dispatches(result, dispatches, opts) do
+    Enum.reduce(dispatches, result, fn {dispatch, run}, result ->
+      case safe_reconcile_dispatch(dispatch, run, opts) do
+        {:ok, repaired} -> add_repaired(result, repaired)
+        {:error, reason} -> record_failure(result, reconciliation_ids(dispatch), reason)
       end
     end)
   end
@@ -185,15 +198,114 @@ defmodule Shoestring.Harness.Dispatches do
     end
   end
 
-  defp reconcile_run_only(runs, opts) do
-    Enum.reduce_while(runs, {:ok, 0}, fn run, {:ok, count} ->
-      with :ok <- ensure_requested_event(run, opts),
-           {:ok, _dispatch, _job, repaired?} <- ensure_delivery(run, opts) do
-        {:cont, {:ok, count + if(repaired?, do: 1, else: 0)}}
-      else
-        {:error, reason} -> {:halt, {:error, reason}}
+  defp reconcile_run_only(result, runs, opts) do
+    Enum.reduce(runs, result, fn run, result ->
+      case safe_reconcile_run_only(run, opts) do
+        {:ok, repaired?} ->
+          add_repaired(result, if(repaired?, do: 1, else: 0))
+
+        {:error, reason} ->
+          record_failure(result, reconciliation_ids(run), reason)
       end
     end)
+  end
+
+  defp safe_reconcile_run(run, opts) do
+    try do
+      Runs.reconcile_run(run, clock_opts(opts))
+    rescue
+      _error -> {:error, :reconciliation_failed}
+    catch
+      _kind, _reason -> {:error, :reconciliation_failed}
+    end
+  end
+
+  defp safe_reconcile_dispatch(dispatch, run, opts) do
+    try do
+      reconcile_dispatch(dispatch, run, opts)
+    rescue
+      _error -> {:error, :reconciliation_failed}
+    catch
+      _kind, _reason -> {:error, :reconciliation_failed}
+    end
+  end
+
+  defp safe_reconcile_run_only(run, opts) do
+    try do
+      with :ok <- ensure_requested_event(run, opts),
+           {:ok, _dispatch, _job, repaired?} <- ensure_delivery(run, opts) do
+        {:ok, repaired?}
+      else
+        {:error, reason} -> {:error, reason}
+      end
+    rescue
+      _error -> {:error, :reconciliation_failed}
+    catch
+      _kind, _reason -> {:error, :reconciliation_failed}
+    end
+  end
+
+  defp new_reconcile_result do
+    %{repaired_count: 0, failures: [], failure_keys: MapSet.new()}
+  end
+
+  defp add_repaired(result, count), do: %{result | repaired_count: result.repaired_count + count}
+
+  defp record_failure(result, ids, reason) do
+    key = {ids.goal_id, ids.run_id, ids.dispatch_id}
+
+    if MapSet.member?(result.failure_keys, key) do
+      result
+    else
+      %{
+        result
+        | failures: [Map.put(ids, :reason, sanitize_reconcile_reason(reason)) | result.failures],
+          failure_keys: MapSet.put(result.failure_keys, key)
+      }
+    end
+  end
+
+  defp finalize_reconcile_result(result) do
+    result
+    |> Map.update!(:failures, &Enum.reverse/1)
+    |> Map.delete(:failure_keys)
+  end
+
+  defp reconciliation_ids(%RunRecord{} = run) do
+    %{goal_id: run.goal_id, run_id: run.id, dispatch_id: run.dispatch_id}
+  end
+
+  defp reconciliation_ids(%DispatchRecord{} = dispatch) do
+    %{goal_id: dispatch.goal_id, run_id: dispatch.run_id, dispatch_id: dispatch.dispatch_id}
+  end
+
+  defp sanitize_reconcile_reason(%Shoestring.Harness.Error{code: code}) when is_binary(code),
+    do: code
+
+  defp sanitize_reconcile_reason(reason) when is_tuple(reason) do
+    case Tuple.to_list(reason) do
+      [tag | details] when is_atom(tag) ->
+        [Atom.to_string(tag) | Enum.flat_map(details, &safe_reason_detail/1)]
+        |> Enum.join(":")
+
+      _other ->
+        "reconciliation_failed"
+    end
+  end
+
+  defp sanitize_reconcile_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp sanitize_reconcile_reason(_reason), do: "reconciliation_failed"
+
+  defp safe_reason_detail(%Shoestring.Harness.Error{code: code}) when is_binary(code), do: [code]
+  defp safe_reason_detail(reason) when is_atom(reason), do: [Atom.to_string(reason)]
+  defp safe_reason_detail(_reason), do: []
+
+  defp emit_reconcile_result(%{repaired_count: repaired_count, failures: failures}) do
+    :telemetry.execute(
+      [:shoestring, :harness, :dispatch_reconcile],
+      %{repaired_count: repaired_count, failure_count: length(failures)},
+      %{result: :ok, repaired_count: repaired_count, failures: failures}
+    )
   end
 
   @doc false
@@ -203,13 +315,24 @@ defmodule Shoestring.Harness.Dispatches do
   def prepare_for_effect(dispatch_id, opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
-    with {:ok, dispatch} <- fetch(dispatch_id, repo),
-         {:ok, _repaired} <- Runs.reconcile(dispatch.goal_id, clock_opts(opts)),
-         :ok <- ensure_requested_event(dispatch, opts),
-         {:ok, result} <- claim_effect(dispatch, repo, opts) do
-      {:ok, result}
+    with {:ok, dispatch} <- fetch(dispatch_id, repo) do
+      case repo.get_by(RunRecord, id: dispatch.run_id, goal_id: dispatch.goal_id) do
+        %RunRecord{} = run ->
+          with :ok <- reconcile_run_result(Runs.reconcile_run(run, clock_opts(opts))),
+               :ok <- ensure_requested_event(dispatch, opts),
+               {:ok, result} <- claim_effect(dispatch, repo, opts) do
+            {:ok, result}
+          end
+
+        nil ->
+          {:error, :run_not_found}
+      end
     end
   end
+
+  defp reconcile_run_result(:ok), do: :ok
+  defp reconcile_run_result({:ok, :repaired}), do: :ok
+  defp reconcile_run_result({:error, reason}), do: {:error, reason}
 
   @doc false
   @spec complete_effect(Ecto.UUID.t(), keyword()) :: :ok | {:error, term()}
@@ -245,7 +368,7 @@ defmodule Shoestring.Harness.Dispatches do
   @doc false
   @spec record_effect_outcome(Ecto.UUID.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def record_effect_outcome(dispatch_id, status, opts \\ [])
-      when status in ["effect_failed", "effect_unknown"] do
+      when status in ["effect_failed", "effect_unknown", "effect_deferred"] do
     repo = Keyword.get(opts, :repo, Repo)
     now = now(opts)
 
@@ -306,6 +429,14 @@ defmodule Shoestring.Harness.Dispatches do
 
   defp ensure_delivery_for_dispatch(%DispatchRecord{status: "requested"} = dispatch, opts),
     do: ensure_job(dispatch, opts)
+
+  defp ensure_delivery_for_dispatch(
+         %DispatchRecord{status: status} = dispatch,
+         _opts
+       )
+       when status in @terminal_dispatch_statuses do
+    {:ok, dispatch, nil, false}
+  end
 
   defp ensure_delivery_for_dispatch(%DispatchRecord{} = dispatch, opts) do
     case existing_job(dispatch, Keyword.get(opts, :repo, Repo)) do
@@ -368,8 +499,7 @@ defmodule Shoestring.Harness.Dispatches do
     end
   end
 
-  defp existing_job(%DispatchRecord{job_id: nil}, _repo), do: nil
-  defp existing_job(%DispatchRecord{job_id: job_id}, repo), do: repo.get(Job, job_id)
+  defp existing_job(dispatch, repo), do: linked_job(dispatch, repo)
 
   defp insert_missing_job(dispatch, opts) do
     repo = Keyword.get(opts, :repo, Repo)
@@ -414,8 +544,11 @@ defmodule Shoestring.Harness.Dispatches do
       run.status in ["cancelling", "cancelled", "completed", "failed"] ->
         cancel_unstarted_dispatch(dispatch, repo, now)
 
-      dispatch.status == "requested" ->
+      run.status == "requested" and dispatch.status == "requested" ->
         claim_requested_dispatch(dispatch, run, repo, now)
+
+      dispatch.status == "requested" ->
+        defer_requested_dispatch(dispatch, repo, now)
 
       dispatch.status == "effect_started" ->
         {:skip, :effect_outcome_unknown}
@@ -425,6 +558,9 @@ defmodule Shoestring.Harness.Dispatches do
 
       dispatch.status == "effect_unknown" ->
         {:skip, :effect_unknown}
+
+      dispatch.status == "effect_deferred" ->
+        {:skip, :effect_deferred}
 
       dispatch.status == "effect_completed" ->
         {:skip, :effect_completed}
@@ -455,6 +591,23 @@ defmodule Shoestring.Harness.Dispatches do
 
   defp cancel_unstarted_dispatch(%DispatchRecord{status: "effect_unknown"}, _repo, _now),
     do: {:skip, :effect_unknown}
+
+  defp cancel_unstarted_dispatch(%DispatchRecord{status: "effect_deferred"}, _repo, _now),
+    do: {:skip, :effect_deferred}
+
+  defp defer_requested_dispatch(%DispatchRecord{status: "requested"} = dispatch, repo, now) do
+    case repo.update(
+           DispatchRecord.outcome_changeset(
+             dispatch,
+             "effect_deferred",
+             now,
+             "run_state_advanced"
+           )
+         ) do
+      {:ok, _dispatch} -> {:skip, :effect_deferred}
+      {:error, changeset} -> repo.rollback(changeset)
+    end
+  end
 
   defp claim_requested_dispatch(dispatch, run, repo, now) do
     {claimed, _rows} =
@@ -564,6 +717,7 @@ defmodule Shoestring.Harness.Dispatches do
 
   defp outcome_event_type("effect_failed"), do: "dispatch.effect_failed"
   defp outcome_event_type("effect_unknown"), do: "dispatch.effect_unknown"
+  defp outcome_event_type("effect_deferred"), do: "dispatch.effect_deferred"
 
   defp outcome_idempotency_key(status, dispatch_id),
     do: "dispatch-#{String.replace(status, "_", "-")}:#{dispatch_id}"
