@@ -32,6 +32,7 @@ defmodule Shoestring.Harness.CapacityWindowRecord do
     |> foreign_key_constraint(:snapshot_id)
     |> unique_constraint(:kind, name: "harness_capacity_windows_snapshot_id_kind_index")
     |> check_constraint(:state, name: "harness_capacity_windows_state_v2_valid")
+    |> check_constraint(:legacy_state, name: "harness_capacity_windows_state_valid")
     |> check_constraint(:used_percent, name: "harness_capacity_windows_used_percent_range")
   end
 

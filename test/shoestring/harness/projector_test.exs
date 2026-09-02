@@ -146,6 +146,8 @@ defmodule Shoestring.Harness.ProjectorTest do
     assert snapshot.source_provider_id == "legacy"
     assert snapshot.source_event == "none"
     assert snapshot.reason == "legacy_capacity_contract_missing_provenance"
+    assert snapshot.confidence == "high"
+    assert snapshot.support_tier == "conservative_partial"
 
     assert {:ok, rebuilt} =
              Projector.rebuild(goal.id,

@@ -771,7 +771,14 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   end
 
   defp validate_expiry(nil, nil), do: :ok
-  defp validate_expiry(%DateTime{} = expected, %DateTime{} = expected), do: :ok
+
+  defp validate_expiry(%DateTime{} = expected, %DateTime{} = actual) do
+    if DateTime.compare(expected, actual) == :eq do
+      :ok
+    else
+      Contract.invalid(:expires_at, "must equal observed_at plus max_age_seconds")
+    end
+  end
 
   defp validate_expiry(_expected, _actual),
     do: Contract.invalid(:expires_at, "must equal observed_at plus max_age_seconds")

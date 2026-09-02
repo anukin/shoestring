@@ -162,6 +162,67 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     end
   end
 
+  test "legacy capacity upcast produces a v2-valid payload across the full legacy matrix" do
+    window_shapes = %{
+      all_observed: %{
+        "items" => [%{"kind" => "five_hour", "state" => "known", "used_percent" => 25.0}]
+      },
+      all_unknown: %{
+        "items" => [%{"kind" => "five_hour", "state" => "unknown", "reason" => "probe_failed"}]
+      },
+      mixed: %{
+        "items" => [
+          %{"kind" => "five_hour", "state" => "known", "used_percent" => 25.0},
+          %{"kind" => "weekly", "state" => "unknown", "reason" => "probe_failed"}
+        ]
+      }
+    }
+
+    for confidence <- ["none", "low", "medium", "high"],
+        {shape_name, windows} <- window_shapes do
+      payload =
+        legacy_capacity_payload()
+        |> Map.put("confidence", confidence)
+        |> Map.put("windows", windows)
+
+      assert {:ok, ^payload} =
+               EventRegistry.validate_payload("capacity.snapshot_observed", 1, payload),
+             "legacy known/#{confidence}/#{shape_name} should be a valid v1 payload"
+
+      assert {:ok, upcast} = EventRegistry.upcast("capacity.snapshot_observed", 1, payload)
+
+      assert {:ok, _snapshot} =
+               EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast),
+             "legacy known/#{confidence}/#{shape_name} upcast to #{inspect(upcast)} is not v2-valid"
+
+      case shape_name do
+        shape when shape in [:all_observed, :mixed] ->
+          assert upcast["capacity_state"] == "degraded"
+          assert upcast["confidence"] in ["low", "medium", "high"]
+
+        :all_unknown ->
+          assert upcast["capacity_state"] == "unknown"
+          assert upcast["confidence"] == "none"
+      end
+    end
+
+    unknown_payload =
+      legacy_capacity_payload()
+      |> Map.put("capacity_state", "unknown")
+      |> Map.put("windows", %{"items" => []})
+      |> Map.put("confidence", "none")
+
+    assert {:ok, ^unknown_payload} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 1, unknown_payload)
+
+    assert {:ok, upcast} = EventRegistry.upcast("capacity.snapshot_observed", 1, unknown_payload)
+    assert upcast["capacity_state"] == "unknown"
+    assert upcast["confidence"] == "none"
+
+    assert {:ok, _snapshot} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast)
+  end
+
   test "v1 events can explicitly reference artifact metadata" do
     artifact_id = Ecto.UUID.generate()
 

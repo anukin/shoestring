@@ -106,6 +106,7 @@ defmodule Shoestring.Harness.CapacitySnapshotRecord do
     |> foreign_key_constraint(:run_id)
     |> check_constraint(:contract_version, name: "harness_capacity_snapshots_version_positive")
     |> check_constraint(:capacity_state, name: "harness_capacity_snapshots_state_v2_valid")
+    |> check_constraint(:legacy_capacity_state, name: "harness_capacity_snapshots_state_valid")
     |> check_constraint(:freshness_max_age_seconds,
       name: "harness_capacity_snapshots_freshness_positive"
     )
