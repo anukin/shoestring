@@ -13,9 +13,11 @@ defmodule Shoestring.Harness.DispatchesTest do
   @goal_id "00000000-0000-4000-8000-000000000501"
   @task_id "00000000-0000-4000-8000-000000000502"
   @dispatch_id "00000000-0000-4000-8000-000000000503"
+  @preexisting_run_id "00000000-0000-4000-8000-000000000505"
 
   setup do
     previous_effect = Application.get_env(:shoestring, :dispatch_effect)
+    previous_complete_effect = Application.get_env(:shoestring, :dispatch_complete_effect)
     previous_pid = Application.get_env(:shoestring, :dispatch_effect_test_pid)
     previous_result = Application.get_env(:shoestring, :dispatch_effect_test_result)
 
@@ -25,6 +27,7 @@ defmodule Shoestring.Harness.DispatchesTest do
 
     on_exit(fn ->
       restore_env(:dispatch_effect, previous_effect)
+      restore_env(:dispatch_complete_effect, previous_complete_effect)
       restore_env(:dispatch_effect_test_pid, previous_pid)
       restore_env(:dispatch_effect_test_result, previous_result)
     end)
@@ -216,18 +219,127 @@ defmodule Shoestring.Harness.DispatchesTest do
   } do
     assert {:ok, _dispatch, job} = Dispatches.enqueue(run_request(goal, task), identity(), opts())
 
+    telemetry_id = "dispatch-outcome-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      telemetry_id,
+      [:shoestring, :harness, :dispatch_outcome],
+      fn event, measurements, metadata, pid ->
+        send(pid, {:dispatch_outcome, event, measurements, metadata})
+      end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach(telemetry_id) end)
+
     Application.put_env(:shoestring, :dispatch_effect_test_result, {:error, :scripted_failure})
 
     assert {:error, {:effect_failed, :scripted_failure}} = perform_delivery(job)
     assert_receive {:dispatch_effect, _run_id, @dispatch_id}
 
+    assert_receive {:dispatch_outcome, [:shoestring, :harness, :dispatch_outcome], %{count: 1},
+                    %{outcome: "effect_failed", error_code: "effect_failed"}}
+
     Application.put_env(:shoestring, :dispatch_effect_test_result, :ok)
 
-    assert :ok = perform_delivery(job)
-    assert :ok = perform_delivery(job)
+    assert {:error, {:effect_failed, :already_recorded}} = perform_delivery(job)
     refute_receive {:dispatch_effect, _run_id, @dispatch_id}
 
-    assert %DispatchRecord{status: "effect_started"} = Repo.get!(DispatchRecord, @dispatch_id)
+    assert %DispatchRecord{status: "effect_failed", outcome_code: "effect_failed"} =
+             Repo.get!(DispatchRecord, @dispatch_id)
+
+    assert %TrajectoryEvent{} =
+             Repo.get_by(TrajectoryEvent,
+               goal_id: goal.id,
+               type: "dispatch.effect_failed",
+               idempotency_key: "dispatch-effect-failed:#{@dispatch_id}"
+             )
+  end
+
+  test "a completion write failure records an unknown outcome and never reports success", %{
+    goal: goal,
+    task: task
+  } do
+    assert {:ok, _dispatch, job} = Dispatches.enqueue(run_request(goal, task), identity(), opts())
+
+    Application.put_env(:shoestring, :dispatch_complete_effect, fn _dispatch_id ->
+      {:error, :completion_write_failed}
+    end)
+
+    assert {:error, {:effect_completion_not_recorded, :completion_write_failed}} =
+             perform_delivery(job)
+
+    assert_receive {:dispatch_effect, _run_id, @dispatch_id}
+
+    assert %DispatchRecord{
+             status: "effect_unknown",
+             outcome_code: "effect_unknown",
+             outcome_at: outcome_at
+           } = Repo.get!(DispatchRecord, @dispatch_id)
+
+    assert outcome_at
+
+    assert %TrajectoryEvent{} =
+             Repo.get_by(TrajectoryEvent,
+               goal_id: goal.id,
+               type: "dispatch.effect_unknown",
+               idempotency_key: "dispatch-effect-unknown:#{@dispatch_id}"
+             )
+
+    Application.delete_env(:shoestring, :dispatch_complete_effect)
+
+    assert {:error, {:effect_outcome_unknown, :operator_review_required}} = perform_delivery(job)
+    refute_receive {:dispatch_effect, _run_id, @dispatch_id}
+  end
+
+  test "reconciliation repairs a dead discarded job without reusing its delivery", %{
+    goal: goal,
+    task: task
+  } do
+    assert {:ok, dispatch, original_job} =
+             Dispatches.enqueue(run_request(goal, task), identity(), opts())
+
+    original_job
+    |> Ecto.Changeset.change(state: "discarded", discarded_at: Shoestring.Test.FixedClock.now())
+    |> Repo.update!()
+
+    assert {:ok, 1} = Dispatches.reconcile(opts())
+
+    assert %DispatchRecord{job_id: repaired_job_id} =
+             repaired_dispatch = Repo.get!(DispatchRecord, dispatch.dispatch_id)
+
+    assert repaired_job_id != original_job.id
+    assert %Job{state: repaired_state} = Repo.get!(Job, repaired_job_id)
+    assert repaired_state in ["available", "scheduled"]
+    assert :ok = perform_delivery(Repo.get!(Job, repaired_job_id))
+    run_id = dispatch.run_id
+    assert_receive {:dispatch_effect, ^run_id, @dispatch_id}
+    assert repaired_dispatch.status == "requested"
+  end
+
+  test "lifeline rescues an orphaned executing job without creating another delivery", %{
+    goal: goal,
+    task: task
+  } do
+    assert {:ok, dispatch, job} = Dispatches.enqueue(run_request(goal, task), identity(), opts())
+
+    job
+    |> Ecto.Changeset.change(
+      state: "executing",
+      attempted_at: DateTime.add(Shoestring.Test.FixedClock.now(), -600, :second)
+    )
+    |> Repo.update!()
+
+    assert {:ok, rescued_jobs} =
+             Oban.Engine.rescue_jobs(Oban.config(), Job, rescue_after: 0)
+
+    assert Enum.any?(rescued_jobs, &(&1.id == job.id))
+    assert %Job{state: rescued_state} = Repo.get!(Job, job.id)
+    assert rescued_state in ["available", "scheduled"]
+    assert {:ok, 0} = Dispatches.reconcile(opts())
+    assert :ok = perform_delivery(Repo.get!(Job, job.id))
+    run_id = dispatch.run_id
+    assert_receive {:dispatch_effect, ^run_id, @dispatch_id}
   end
 
   test "a cancelled run cancels delivery before any effect", %{goal: goal, task: task} do
@@ -244,6 +356,56 @@ defmodule Shoestring.Harness.DispatchesTest do
     assert :ok = perform_delivery(job)
     refute_receive {:dispatch_effect, _run_id, @dispatch_id}
     assert %DispatchRecord{status: "cancelled"} = Repo.get!(DispatchRecord, @dispatch_id)
+  end
+
+  test "reconciliation ignores a pre-existing projected running run", %{goal: goal, task: task} do
+    run =
+      %RunRecord{id: @preexisting_run_id}
+      |> RunRecord.intent_changeset(
+        run_request(goal, task),
+        "test.adapter",
+        Shoestring.Test.FixedClock.now()
+      )
+      |> Repo.insert!()
+      |> RunRecord.projection_changeset(%{
+        status: "running",
+        projection_sequence: 2,
+        updated_at: Shoestring.Test.FixedClock.now()
+      })
+      |> Repo.update!()
+
+    assert {:ok, 0} = Dispatches.reconcile(opts())
+    refute Repo.exists?(from dispatch in DispatchRecord, where: dispatch.run_id == ^run.id)
+    assert [] = all_enqueued(worker: DispatchWorker)
+  end
+
+  test "reconciliation skips a terminal dispatch even when its job is gone", %{
+    goal: goal,
+    task: task
+  } do
+    assert {:ok, dispatch, job} = Dispatches.enqueue(run_request(goal, task), identity(), opts())
+
+    dispatch
+    |> DispatchRecord.status_changeset("effect_completed", Shoestring.Test.FixedClock.now())
+    |> Repo.update!()
+
+    Repo.delete!(job)
+
+    assert {:ok, 0} = Dispatches.reconcile(opts())
+    assert [] = all_enqueued(worker: DispatchWorker)
+    assert %DispatchRecord{status: "effect_completed"} = Repo.get!(DispatchRecord, @dispatch_id)
+  end
+
+  test "the boot reconciler surfaces repo failures without entering a crash loop" do
+    reconciler =
+      start_supervised!({Reconciler, name: :failed_dispatch_reconciler_test, repo: nil})
+
+    _ = :sys.get_state(reconciler)
+
+    assert %Reconciler{last_result: {:error, :dispatch_reconciliation_failed}} =
+             :sys.get_state(reconciler)
+
+    assert {:error, :dispatch_reconciliation_failed} = Reconciler.reconcile_now(reconciler)
   end
 
   test "a restart reconciliation repairs durable intent whose linked job is missing", %{
@@ -288,6 +450,26 @@ defmodule Shoestring.Harness.DispatchesTest do
 
     assert %DispatchRecord{dispatch_id: @dispatch_id, run_id: ^run_id, job_id: ^job_id} =
              Repo.get!(DispatchRecord, @dispatch_id)
+  end
+
+  test "restart reconciliation repairs a requested run whose projection already advanced", %{
+    goal: goal,
+    task: task
+  } do
+    assert {:ok, run} = Runs.request(run_request(goal, task), identity(), opts())
+
+    run
+    |> RunRecord.projection_changeset(%{
+      status: "requested",
+      projection_sequence: 4,
+      updated_at: Shoestring.Test.FixedClock.now()
+    })
+    |> Repo.update!()
+
+    assert {:ok, 1} = Dispatches.reconcile(opts())
+    run_id = run.id
+    assert %DispatchRecord{run_id: ^run_id} = Repo.get!(DispatchRecord, @dispatch_id)
+    assert [%Job{}] = all_enqueued(worker: DispatchWorker)
   end
 
   defp opts(overrides \\ []) do

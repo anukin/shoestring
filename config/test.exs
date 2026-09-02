@@ -11,7 +11,8 @@ config :shoestring, Shoestring.Repo,
 
 config :shoestring, Oban,
   testing: :manual,
-  queues: false
+  queues: false,
+  plugins: false
 
 config :shoestring, dispatch_reconciler: false
 

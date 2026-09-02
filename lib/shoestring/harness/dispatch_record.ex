@@ -10,12 +10,21 @@ defmodule Shoestring.Harness.DispatchRecord do
   @primary_key {:dispatch_id, :binary_id, autogenerate: false}
   @foreign_key_type :binary_id
 
-  @statuses ["requested", "effect_started", "effect_completed", "cancelled"]
+  @statuses [
+    "requested",
+    "effect_started",
+    "effect_failed",
+    "effect_unknown",
+    "effect_completed",
+    "cancelled"
+  ]
 
   schema "harness_dispatches" do
     field :request_version, :integer
     field :status, :string, default: "requested"
     field :job_id, :integer
+    field :outcome_code, :string
+    field :outcome_at, :utc_datetime_usec
 
     belongs_to :goal, Shoestring.Trajectory.Goal
     belongs_to :task, Shoestring.Trajectory.Task
@@ -62,6 +71,15 @@ defmodule Shoestring.Harness.DispatchRecord do
   def status_changeset(dispatch, status, now) do
     dispatch
     |> change(status: status, updated_at: now)
+    |> validate_inclusion(:status, @statuses)
+    |> check_constraint(:status, name: "harness_dispatches_status_valid")
+  end
+
+  @spec outcome_changeset(t(), String.t(), DateTime.t()) :: Ecto.Changeset.t()
+  def outcome_changeset(dispatch, status, now)
+      when status in ["effect_failed", "effect_unknown"] do
+    dispatch
+    |> change(status: status, outcome_code: status, outcome_at: now, updated_at: now)
     |> validate_inclusion(:status, @statuses)
     |> check_constraint(:status, name: "harness_dispatches_status_valid")
   end

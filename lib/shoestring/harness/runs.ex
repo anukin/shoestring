@@ -23,8 +23,8 @@ defmodule Shoestring.Harness.Runs do
     repo = Keyword.get(opts, :repo, Repo)
 
     with {:ok, changeset} <- build_intent_changeset(request, identity, opts),
-         {:ok, run} <- insert_or_recover(repo, changeset),
-         :ok <- append_requested(run, request, identity, opts) do
+         {:ok, run, recovered?} <- insert_or_recover_with_state(repo, changeset),
+         :ok <- append_requested(run, request, identity, opts, recovered?) do
       {:ok, run}
     else
       {:error, error} -> {:error, error}
@@ -51,9 +51,22 @@ defmodule Shoestring.Harness.Runs do
   @spec insert_or_recover(module(), Ecto.Changeset.t()) ::
           {:ok, RunRecord.t()} | {:error, term()}
   def insert_or_recover(repo, changeset) do
+    case insert_or_recover_with_state(repo, changeset) do
+      {:ok, run, _recovered?} -> {:ok, run}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp insert_or_recover_with_state(repo, changeset) do
     case repo.insert(changeset) do
-      {:ok, run} -> {:ok, run}
-      {:error, changeset} -> recover_existing_run(repo, changeset)
+      {:ok, run} ->
+        {:ok, run, false}
+
+      {:error, changeset} ->
+        case recover_existing_run(repo, changeset) do
+          {:ok, run} -> {:ok, run, true}
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 
@@ -63,9 +76,12 @@ defmodule Shoestring.Harness.Runs do
   def recover_existing_run(repo, changeset) do
     if dispatch_id_conflict?(changeset) do
       dispatch_id = Ecto.Changeset.get_field(changeset, :dispatch_id)
+      goal_id = Ecto.Changeset.get_field(changeset, :goal_id)
+      task_id = Ecto.Changeset.get_field(changeset, :task_id)
 
       case repo.get_by(RunRecord, dispatch_id: dispatch_id) do
-        %RunRecord{} = run -> {:ok, run}
+        %RunRecord{goal_id: ^goal_id, task_id: ^task_id} = run -> {:ok, run}
+        %RunRecord{} -> {:error, dispatch_id_conflict(dispatch_id)}
         nil -> {:error, changeset}
       end
     else
@@ -77,7 +93,16 @@ defmodule Shoestring.Harness.Runs do
   @spec ensure_requested_event(RunRecord.t(), RunRequest.t(), Identity.t(), keyword()) ::
           :ok | {:error, term()}
   def ensure_requested_event(run, request, identity, opts),
-    do: append_requested(run, request, identity, opts)
+    do: append_requested(run, request, identity, opts, false)
+
+  @doc false
+  @spec ensure_requested_event(RunRecord.t(), RunRequest.t(), Identity.t(), keyword(), boolean()) ::
+          :ok | {:error, term()}
+  def ensure_requested_event(run, _request, _identity, opts, true),
+    do: append_requested_record(run, opts)
+
+  def ensure_requested_event(run, request, identity, opts, false),
+    do: append_requested(run, request, identity, opts, false)
 
   @doc "Repairs a persisted intent that has no canonical run.requested event yet."
   @spec reconcile(Ecto.UUID.t(), keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
@@ -86,7 +111,11 @@ defmodule Shoestring.Harness.Runs do
 
     runs =
       repo.all(
-        from run in RunRecord, where: run.goal_id == ^goal_id, order_by: [asc: run.inserted_at]
+        from run in RunRecord,
+          where:
+            run.goal_id == ^goal_id and run.status == "requested" and
+              run.projection_sequence == 0,
+          order_by: [asc: run.inserted_at]
       )
 
     Enum.reduce_while(runs, {:ok, 0}, fn run, {:ok, count} ->
@@ -154,7 +183,11 @@ defmodule Shoestring.Harness.Runs do
     end
   end
 
-  defp append_requested(run, request, identity, opts) do
+  defp append_requested(run, _request, _identity, opts, true) do
+    append_requested_record(run, opts)
+  end
+
+  defp append_requested(run, request, identity, opts, false) do
     attrs =
       requested_event_attributes(
         run,
@@ -170,6 +203,15 @@ defmodule Shoestring.Harness.Runs do
       {:ok, _event} -> :ok
       {:error, reason} -> {:error, {:intent_persisted_without_event, run.id, reason}}
     end
+  end
+
+  defp dispatch_id_conflict(dispatch_id) do
+    Error.new(
+      :task_failed,
+      "dispatch_id_conflict",
+      "dispatch ID is already bound to a different run identity",
+      details: %{"shoestring.harness:dispatch_id" => dispatch_id}
+    )
   end
 
   defp append_requested_record(run, opts) do

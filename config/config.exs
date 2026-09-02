@@ -29,7 +29,11 @@ config :shoestring,
 config :shoestring, Oban,
   engine: Oban.Engines.Lite,
   repo: Shoestring.Repo,
-  queues: [dispatch: 5]
+  queues: [dispatch: 5],
+  plugins: [
+    {Oban.Lifeline, rescue_after: {5, :minutes}},
+    {Oban.Pruner, max_age: {1, :day}}
+  ]
 
 # Configure the endpoint
 config :shoestring, ShoestringWeb.Endpoint,
