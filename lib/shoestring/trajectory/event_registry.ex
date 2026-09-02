@@ -490,9 +490,17 @@ defmodule Shoestring.Trajectory.EventRegistry do
     with {:ok, observed_at} <- Contract.datetime(Map.fetch!(payload, "observed_at"), :observed_at),
          max_age_seconds <- legacy_max_age_seconds(payload, observed_at),
          {:ok, windows} <- upcast_legacy_windows(Map.fetch!(payload, "windows")) do
+      has_observed_window? = Enum.any?(windows, &(&1["state"] == "observed"))
+
+      # A legacy "known" record with no window that actually upcasts to
+      # :observed carries no usable data (e.g. every window was itself
+      # "unknown"), so v2's :degraded state (which requires at least one
+      # observed window) does not apply -- it must fail closed to :unknown
+      # instead, matching the "no data" legacy case.
       capacity_state =
         case Map.fetch!(payload, "capacity_state") do
-          "known" -> "degraded"
+          "known" when has_observed_window? -> "degraded"
+          "known" -> "unknown"
           "unknown" -> "unknown"
         end
 
@@ -500,6 +508,16 @@ defmodule Shoestring.Trajectory.EventRegistry do
         case Map.fetch!(payload, "support_tier") do
           "unsupported" -> "unsupported"
           _tier -> "conservative_partial"
+        end
+
+      # v2's :degraded state forbids "none" confidence, so a legacy record
+      # that claims real observed data but "none" confidence is floored to
+      # "low" rather than dropped -- it is downgraded, not discarded.
+      confidence =
+        cond do
+          capacity_state == "unknown" -> "none"
+          Map.fetch!(payload, "confidence") == "none" -> "low"
+          true -> Map.fetch!(payload, "confidence")
         end
 
       expires_at = DateTime.add(observed_at, max_age_seconds, :second)
@@ -521,8 +539,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
            "event" => "none"
          },
          "scope" => Map.fetch!(payload, "scope"),
-         "confidence" =>
-           if(capacity_state == "unknown", do: "none", else: Map.fetch!(payload, "confidence")),
+         "confidence" => confidence,
          "support_tier" => support_tier,
          "compatibility_state" => "degraded",
          "reason" => "legacy_capacity_contract_missing_provenance",
