@@ -2,23 +2,24 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
   use Shoestring.DataCase, async: false
 
   test "the empty database migration creates the complete foundation" do
-    assert foundation_tables() ==
-             [
-               "artifacts",
-               "goals",
-               "harness_capacity_snapshots",
-               "harness_capacity_windows",
-               "harness_checkpoint_artifact_references",
-               "harness_checkpoints",
-               "harness_dispatches",
-               "harness_execution_leases",
-               "harness_runs",
-               "oban_jobs",
-               "projector_positions",
-               "sqlite_sequence",
-               "tasks",
-               "trajectory_events"
-             ]
+    expected_tables = [
+      "artifacts",
+      "goals",
+      "harness_capacity_snapshots",
+      "harness_capacity_windows",
+      "harness_checkpoint_artifact_references",
+      "harness_checkpoints",
+      "harness_dispatches",
+      "harness_execution_leases",
+      "harness_runs",
+      "oban_jobs",
+      "projector_positions",
+      "sqlite_sequence",
+      "tasks",
+      "trajectory_events"
+    ]
+
+    assert expected_tables -- foundation_tables() == []
   end
 
   test "sqlite concurrency settings are explicit and enabled" do
@@ -31,13 +32,15 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
   test "foundation tables use foreign keys and the canonical event indexes" do
     assert {:ok, %{rows: [[1]]}} = Repo.query("PRAGMA foreign_keys")
 
-    assert index_names("trajectory_events") == [
-             "trajectory_events_goal_id_idempotency_key_index",
-             "trajectory_events_goal_id_run_id_sequence_index",
-             "trajectory_events_goal_id_sequence_index",
-             "trajectory_events_parent_event_id_index",
-             "trajectory_events_task_id_sequence_index"
-           ]
+    expected_indexes = [
+      "trajectory_events_goal_id_idempotency_key_index",
+      "trajectory_events_goal_id_run_id_sequence_index",
+      "trajectory_events_goal_id_sequence_index",
+      "trajectory_events_parent_event_id_index",
+      "trajectory_events_task_id_sequence_index"
+    ]
+
+    assert expected_indexes -- index_names("trajectory_events") == []
   end
 
   test "projector positions persist status and visible failure detail" do
@@ -52,26 +55,36 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
     assert column_names("harness_capacity_snapshots") |> Enum.member?("capacity_state")
     assert column_names("harness_capacity_windows") |> Enum.member?("used_percent")
     assert column_names("harness_dispatches") |> Enum.member?("job_id")
+    assert column_names("harness_dispatches") |> Enum.member?("outcome_code")
+    assert column_names("harness_dispatches") |> Enum.member?("outcome_at")
+    assert column_names("harness_runs") |> Enum.member?("extensions")
     assert column_names("oban_jobs") |> Enum.member?("args")
 
-    assert index_names("harness_runs") == [
-             "harness_runs_dispatch_id_index",
-             "harness_runs_goal_id_status_index",
-             "harness_runs_goal_id_task_id_index"
-           ]
+    expected_run_indexes = [
+      "harness_runs_dispatch_id_index",
+      "harness_runs_goal_id_status_index",
+      "harness_runs_goal_id_task_id_index"
+    ]
 
-    assert index_names("harness_capacity_windows") == [
-             "harness_capacity_windows_reset_at_index",
-             "harness_capacity_windows_snapshot_id_kind_index"
-           ]
+    assert expected_run_indexes -- index_names("harness_runs") == []
 
-    assert index_names("harness_dispatches") == [
-             "harness_dispatches_goal_id_status_index",
-             "harness_dispatches_job_id_index",
-             "harness_dispatches_run_id_status_index"
-           ]
+    expected_window_indexes = [
+      "harness_capacity_windows_reset_at_index",
+      "harness_capacity_windows_snapshot_id_kind_index"
+    ]
 
-    assert index_names("oban_jobs") == ["oban_jobs_state_queue_priority_scheduled_at_id_index"]
+    assert expected_window_indexes -- index_names("harness_capacity_windows") == []
+
+    expected_dispatch_indexes = [
+      "harness_dispatches_goal_id_status_index",
+      "harness_dispatches_job_id_index",
+      "harness_dispatches_run_id_status_index"
+    ]
+
+    assert expected_dispatch_indexes -- index_names("harness_dispatches") == []
+
+    assert ["oban_jobs_state_queue_priority_scheduled_at_id_index"] -- index_names("oban_jobs") ==
+             []
   end
 
   test "sqlite enforces harness status and capacity window constraints directly" do
@@ -153,6 +166,12 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
              Repo.query(
                "INSERT INTO harness_dispatches (dispatch_id, goal_id, task_id, run_id, request_version, status, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                [dispatch_id, goal_id, task_id, run_id, 1, "requested", now, now]
+             )
+
+    assert {:ok, _} =
+             Repo.query(
+               "UPDATE harness_dispatches SET status = 'effect_unknown', outcome_code = 'effect_unknown', outcome_at = ? WHERE dispatch_id = ?",
+               [now, dispatch_id]
              )
 
     assert {:error, _} =

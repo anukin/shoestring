@@ -29,7 +29,13 @@ config :shoestring,
 config :shoestring, Oban,
   engine: Oban.Engines.Lite,
   repo: Shoestring.Repo,
-  queues: [dispatch: 5]
+  queues: [dispatch: 5],
+  plugins: [
+    # An abandoned executing job must become runnable again; DispatchRecord remains the effect claim.
+    {Oban.Lifeline, rescue_after: {5, :minutes}},
+    # Delivery rows are disposable because Dispatches reconciles from durable intent after pruning.
+    {Oban.Pruner, max_age: {1, :day}}
+  ]
 
 # Configure the endpoint
 config :shoestring, ShoestringWeb.Endpoint,

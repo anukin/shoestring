@@ -72,6 +72,30 @@ defmodule Shoestring.Trajectory.EventRegistry do
         types: %{request_version: :integer}
       }
     },
+    "dispatch.effect_failed" => %{
+      1 => %{
+        required: [:dispatch_id, :run_id, :error_code],
+        optional: [],
+        uuid_fields: [:dispatch_id, :run_id],
+        types: %{}
+      }
+    },
+    "dispatch.effect_unknown" => %{
+      1 => %{
+        required: [:dispatch_id, :run_id, :error_code],
+        optional: [],
+        uuid_fields: [:dispatch_id, :run_id],
+        types: %{}
+      }
+    },
+    "dispatch.effect_deferred" => %{
+      1 => %{
+        required: [:dispatch_id, :run_id, :error_code],
+        optional: [],
+        uuid_fields: [:dispatch_id, :run_id],
+        types: %{}
+      }
+    },
     "run.starting" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
     "run.running" => %{
       1 => %{

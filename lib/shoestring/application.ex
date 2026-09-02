@@ -14,14 +14,14 @@ defmodule Shoestring.Application do
       [
         ShoestringWeb.Telemetry,
         Shoestring.Repo,
-        {Oban, Application.fetch_env!(:shoestring, Oban)},
         {Registry, keys: :unique, name: Shoestring.Trajectory.WriterRegistry},
-        Shoestring.Trajectory.WriterSupervisor
+        Shoestring.Trajectory.WriterSupervisor,
+        {Phoenix.PubSub, name: Shoestring.PubSub},
+        {Oban, Application.fetch_env!(:shoestring, Oban)}
       ] ++
         dispatch_reconciler_children() ++
         [
           {DNSCluster, query: Application.get_env(:shoestring, :dns_cluster_query) || :ignore},
-          {Phoenix.PubSub, name: Shoestring.PubSub},
           ShoestringWeb.Endpoint
         ]
 

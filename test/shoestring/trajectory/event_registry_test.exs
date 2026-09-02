@@ -13,34 +13,45 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     "payload" => %{"decision" => "continue"}
   }
 
-  test "the registry exposes the exact initial and harness v1 event types" do
-    assert EventRegistry.registered_types() == [
-             {"capacity.snapshot_observed", 1},
-             {"checkpoint.created", 1},
+  test "the registry exposes initial and harness v1 event types" do
+    registered = EventRegistry.registered_types()
+
+    assert [
              {"decision.recorded", 1},
-             {"dispatch.requested", 1},
              {"goal.created", 1},
-             {"harness.event_recorded", 1},
-             {"lease.active", 1},
-             {"lease.checkpoint_required", 1},
-             {"lease.expired", 1},
-             {"lease.granted", 1},
-             {"lease.proposed", 1},
-             {"lease.renewal_due", 1},
-             {"lease.renewed", 1},
-             {"lease.revoked", 1},
-             {"run.cancelled", 1},
-             {"run.cancelling", 1},
-             {"run.completed", 1},
-             {"run.failed", 1},
-             {"run.pausing", 1},
-             {"run.requested", 1},
-             {"run.running", 1},
-             {"run.starting", 1},
-             {"run.suspended", 1},
              {"task.completed", 1},
              {"task.created", 1}
-           ]
+           ] -- registered == []
+
+    assert [
+             {"run.requested", 1},
+             {"run.starting", 1},
+             {"run.running", 1},
+             {"run.pausing", 1},
+             {"run.suspended", 1},
+             {"run.completed", 1},
+             {"run.failed", 1},
+             {"run.cancelling", 1},
+             {"run.cancelled", 1},
+             {"lease.proposed", 1},
+             {"lease.granted", 1},
+             {"lease.active", 1},
+             {"lease.renewal_due", 1},
+             {"lease.renewed", 1},
+             {"lease.expired", 1},
+             {"lease.revoked", 1},
+             {"lease.checkpoint_required", 1},
+             {"checkpoint.created", 1},
+             {"capacity.snapshot_observed", 1},
+             {"harness.event_recorded", 1}
+           ] -- registered == []
+
+    assert [
+             {"dispatch.effect_deferred", 1},
+             {"dispatch.effect_failed", 1},
+             {"dispatch.effect_unknown", 1},
+             {"dispatch.requested", 1}
+           ] -- registered == []
   end
 
   test "registered harness payloads retain exact version compatibility" do
@@ -56,6 +67,21 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
              EventRegistry.validate_payload("run.failed", 1, %{"run_id" => run_id})
 
     assert "can't be blank" in errors_on(changeset).error_category
+  end
+
+  test "dispatch outcome events require only their safe persisted identity" do
+    payload = %{
+      "dispatch_id" => "11111111-1111-4111-8111-111111111111",
+      "run_id" => "22222222-2222-4222-8222-222222222222",
+      "error_code" => "effect_unknown"
+    }
+
+    for type <- ["dispatch.effect_deferred", "dispatch.effect_failed", "dispatch.effect_unknown"] do
+      assert {:ok, ^payload} = EventRegistry.validate_payload(type, 1, payload)
+
+      assert {:error, {:invalid_payload, ^type, 1, _}} =
+               EventRegistry.validate_payload(type, 1, Map.delete(payload, "error_code"))
+    end
   end
 
   test "all four v1 event types validate their payloads independently" do

@@ -2,7 +2,7 @@ defmodule Shoestring.Harness.RunsTest do
   use Shoestring.DataCase, async: false
 
   alias Elixir.Task, as: AsyncTask
-  alias Shoestring.Harness.{Identity, RunRecord, RunRequest, Runs}
+  alias Shoestring.Harness.{Error, Identity, RunRecord, RunRequest, Runs}
   alias Shoestring.Repo
   alias Shoestring.Trajectory.{Goal, Task, TrajectoryEvent}
 
@@ -10,6 +10,8 @@ defmodule Shoestring.Harness.RunsTest do
   @task_id "00000000-0000-4000-8000-000000000602"
   @run_id "00000000-0000-4000-8000-000000000603"
   @dispatch_id "00000000-0000-4000-8000-000000000604"
+  @other_goal_id "00000000-0000-4000-8000-000000000605"
+  @other_task_id "00000000-0000-4000-8000-000000000606"
 
   test "reconcile repairs only missing canonical run.requested intents" do
     goal = insert_goal()
@@ -32,6 +34,32 @@ defmodule Shoestring.Harness.RunsTest do
              )
 
     assert {:ok, 0} = Runs.reconcile(goal.id, clock: Shoestring.Test.FixedClock)
+  end
+
+  test "reconcile does not backfill a late request event for a projected run" do
+    goal = insert_goal()
+    task = insert_task(goal)
+
+    run =
+      %RunRecord{id: @run_id}
+      |> RunRecord.intent_changeset(
+        run_request(goal, task),
+        "test.adapter",
+        Shoestring.Test.FixedClock.now()
+      )
+      |> Repo.insert!()
+      |> then(fn run ->
+        run
+        |> RunRecord.projection_changeset(%{
+          status: "running",
+          projection_sequence: 2,
+          updated_at: Shoestring.Test.FixedClock.now()
+        })
+        |> Repo.update!()
+      end)
+
+    assert {:ok, 0} = Runs.reconcile(goal.id, clock: Shoestring.Test.FixedClock)
+    refute Repo.exists?(from event in TrajectoryEvent, where: event.run_id == ^run.id)
   end
 
   test "owned? confines a run to its canonical goal" do
@@ -72,6 +100,142 @@ defmodule Shoestring.Harness.RunsTest do
     assert {:dispatch_id, {_message, opts}} = List.keyfind(changeset.errors, :dispatch_id, 0)
     assert opts[:constraint] == :unique
     assert opts[:constraint_name] == "harness_runs_dispatch_id_index"
+  end
+
+  test "a dispatch id collision across goals is typed and cannot disclose or append foreign data" do
+    goal_a = insert_goal()
+    task_a = insert_task(goal_a)
+    goal_b = insert_goal(@other_goal_id)
+    task_b = insert_task(goal_b, @other_task_id)
+
+    assert {:ok, run} =
+             Runs.request(
+               run_request(goal_a, task_a, prompt: "goal A secret"),
+               identity(),
+               identifier: Shoestring.Test.FixedIdentifier,
+               clock: Shoestring.Test.FixedClock
+             )
+
+    Repo.delete_all(
+      from event in TrajectoryEvent,
+        where: event.goal_id == ^goal_a.id and event.run_id == ^run.id
+    )
+
+    assert {:error,
+            %Error{
+              category: :task_failed,
+              code: "dispatch_id_conflict",
+              details: %{"shoestring.harness:dispatch_id" => @dispatch_id}
+            } = error} =
+             Runs.request(
+               run_request(goal_b, task_b, prompt: "goal B secret"),
+               identity(),
+               identifier: Shoestring.Test.AlternateFixedIdentifier,
+               clock: Shoestring.Test.FixedClock
+             )
+
+    refute inspect(error) =~ "goal B secret"
+    refute Repo.exists?(from candidate in RunRecord, where: candidate.goal_id == ^goal_b.id)
+    refute Repo.exists?(from event in TrajectoryEvent, where: event.goal_id == ^goal_b.id)
+
+    refute Repo.exists?(
+             from event in TrajectoryEvent, where: event.payload["prompt"] == "goal B secret"
+           )
+
+    refute Repo.exists?(
+             from event in TrajectoryEvent, where: event.payload["prompt"] == "goal A secret"
+           )
+  end
+
+  test "a same-identity dispatch with different request content is a typed conflict" do
+    goal = insert_goal()
+    task = insert_task(goal)
+
+    assert {:ok, run} =
+             Runs.request(
+               run_request(goal, task, prompt: "canonical prompt"),
+               identity(),
+               identifier: Shoestring.Test.FixedIdentifier,
+               clock: Shoestring.Test.FixedClock
+             )
+
+    Repo.delete_all(
+      from event in TrajectoryEvent,
+        where: event.goal_id == ^goal.id and event.run_id == ^run.id
+    )
+
+    assert {:error,
+            %Error{
+              category: :task_failed,
+              code: "dispatch_id_conflict",
+              details: %{"shoestring.harness:dispatch_id" => @dispatch_id}
+            } = error} =
+             Runs.request(
+               run_request(goal, task, prompt: "foreign caller prompt"),
+               identity(),
+               identifier: Shoestring.Test.AlternateFixedIdentifier,
+               clock: Shoestring.Test.FixedClock
+             )
+
+    refute inspect(error) =~ "canonical prompt"
+    refute inspect(error) =~ "foreign caller prompt"
+
+    refute Repo.exists?(
+             from event in TrajectoryEvent,
+               where: event.payload["prompt"] == "foreign caller prompt"
+           )
+
+    assert Repo.get_by(TrajectoryEvent,
+             goal_id: goal.id,
+             run_id: run.id,
+             type: "run.requested"
+           ) == nil
+  end
+
+  test "recovery rebuilds the requested event from the persisted request extensions" do
+    goal = insert_goal()
+    task = insert_task(goal)
+    extensions = %{"test.adapter:mode" => "scripted"}
+
+    assert {:ok, run} =
+             Runs.request(
+               run_request(
+                 goal,
+                 task,
+                 extensions: extensions,
+                 requested_capabilities: [:resume]
+               ),
+               identity(),
+               identifier: Shoestring.Test.FixedIdentifier,
+               clock: Shoestring.Test.FixedClock
+             )
+
+    Repo.delete_all(
+      from event in TrajectoryEvent,
+        where: event.goal_id == ^goal.id and event.run_id == ^run.id
+    )
+
+    assert {:ok, recovered} =
+             Runs.request(
+               run_request(
+                 goal,
+                 task,
+                 extensions: extensions,
+                 requested_capabilities: [:resume]
+               ),
+               identity(),
+               identifier: Shoestring.Test.FixedIdentifier,
+               clock: Shoestring.Test.FixedClock
+             )
+
+    assert recovered.id == run.id
+
+    assert %TrajectoryEvent{payload: %{"extensions" => ^extensions}} =
+             Repo.get_by(TrajectoryEvent,
+               goal_id: goal.id,
+               run_id: run.id,
+               type: "run.requested"
+             )
   end
 
   test "concurrent duplicate requests recover the single inserted run" do
@@ -119,18 +283,18 @@ defmodule Shoestring.Harness.RunsTest do
              )
   end
 
-  defp run_request(goal, task) do
+  defp run_request(goal, task, overrides \\ []) do
     assert {:ok, request} =
              RunRequest.new(%{
                version: 1,
                goal_id: goal.id,
                task_id: task.id,
                workspace_ref: "workspace/project",
-               prompt: "Repair a durable run intent.",
+               prompt: Keyword.get(overrides, :prompt, "Repair a durable run intent."),
                policy: %{mode: "supervised", network: false, write_access: true},
-               requested_capabilities: [],
-               dispatch_id: @dispatch_id,
-               extensions: %{}
+               requested_capabilities: Keyword.get(overrides, :requested_capabilities, []),
+               dispatch_id: Keyword.get(overrides, :dispatch_id, @dispatch_id),
+               extensions: Keyword.get(overrides, :extensions, %{})
              })
 
     request
@@ -149,15 +313,15 @@ defmodule Shoestring.Harness.RunsTest do
     identity
   end
 
-  defp insert_goal do
-    %Goal{id: @goal_id}
+  defp insert_goal(id \\ @goal_id) do
+    %Goal{id: id}
     |> Goal.changeset(%{"title" => "Run reconciliation goal"})
     |> Ecto.Changeset.put_change(:owner_id, "00000000-0000-4000-8000-000000000607")
     |> Repo.insert!()
   end
 
-  defp insert_task(goal) do
-    %Task{id: @task_id}
+  defp insert_task(goal, id \\ @task_id) do
+    %Task{id: id}
     |> Task.changeset(%{"title" => "Run reconciliation task"})
     |> Ecto.Changeset.put_change(:goal_id, goal.id)
     |> Repo.insert!()

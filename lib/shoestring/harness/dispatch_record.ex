@@ -10,12 +10,22 @@ defmodule Shoestring.Harness.DispatchRecord do
   @primary_key {:dispatch_id, :binary_id, autogenerate: false}
   @foreign_key_type :binary_id
 
-  @statuses ["requested", "effect_started", "effect_completed", "cancelled"]
+  @statuses [
+    "requested",
+    "effect_started",
+    "effect_failed",
+    "effect_unknown",
+    "effect_deferred",
+    "effect_completed",
+    "cancelled"
+  ]
 
   schema "harness_dispatches" do
     field :request_version, :integer
     field :status, :string, default: "requested"
     field :job_id, :integer
+    field :outcome_code, :string
+    field :outcome_at, :utc_datetime_usec
 
     belongs_to :goal, Shoestring.Trajectory.Goal
     belongs_to :task, Shoestring.Trajectory.Task
@@ -42,6 +52,7 @@ defmodule Shoestring.Harness.DispatchRecord do
     |> validate_required([:dispatch_id, :goal_id, :task_id, :run_id, :request_version, :status])
     |> validate_number(:request_version, greater_than: 0)
     |> validate_inclusion(:status, @statuses)
+    |> unique_constraint(:dispatch_id, name: "harness_dispatches_dispatch_id_index")
     |> foreign_key_constraint(:goal_id)
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:run_id)
@@ -61,6 +72,20 @@ defmodule Shoestring.Harness.DispatchRecord do
   def status_changeset(dispatch, status, now) do
     dispatch
     |> change(status: status, updated_at: now)
+    |> validate_inclusion(:status, @statuses)
+    |> check_constraint(:status, name: "harness_dispatches_status_valid")
+  end
+
+  @spec outcome_changeset(t(), String.t(), DateTime.t()) :: Ecto.Changeset.t()
+  def outcome_changeset(dispatch, status, now)
+      when status in ["effect_failed", "effect_unknown", "effect_deferred"],
+      do: outcome_changeset(dispatch, status, now, status)
+
+  @spec outcome_changeset(t(), String.t(), DateTime.t(), String.t()) :: Ecto.Changeset.t()
+  def outcome_changeset(dispatch, status, now, outcome_code)
+      when status in ["effect_failed", "effect_unknown", "effect_deferred"] do
+    dispatch
+    |> change(status: status, outcome_code: outcome_code, outcome_at: now, updated_at: now)
     |> validate_inclusion(:status, @statuses)
     |> check_constraint(:status, name: "harness_dispatches_status_valid")
   end

@@ -96,6 +96,29 @@ defmodule Shoestring.Harness.ProjectorTest do
              )
   end
 
+  test "a late run.requested event cannot regress a projected running run", %{test: test_name} do
+    goal = insert_goal("00000000-0000-4000-8000-000000000105")
+    task = insert_task(goal, "00000000-0000-4000-8000-000000000205")
+    run = request_run(goal, task, test_name)
+    requested_event = Repo.get_by!(Shoestring.Trajectory.TrajectoryEvent, run_id: run.id)
+
+    run
+    |> RunRecord.projection_changeset(%{
+      status: "running",
+      projection_sequence: requested_event.sequence + 1,
+      updated_at: Shoestring.Test.FixedClock.now()
+    })
+    |> Repo.update!()
+
+    assert {:ok, _position} =
+             Projector.project(goal.id,
+               clock: Shoestring.Test.FixedClock,
+               identifier: Shoestring.Test.FixedIdentifier
+             )
+
+    assert %RunRecord{status: "running"} = Repo.get!(RunRecord, run.id)
+  end
+
   test "run intent uses injected deterministic identifiers and schema compatibility", %{
     test: test_name
   } do
