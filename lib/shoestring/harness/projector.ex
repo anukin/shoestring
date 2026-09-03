@@ -6,6 +6,7 @@ defmodule Shoestring.Harness.Projector do
 
   alias Shoestring.Harness.{
     CapacitySnapshotRecord,
+    CapacitySnapshot,
     CapacityWindowRecord,
     CheckpointArtifactReference,
     CheckpointRecord,
@@ -348,49 +349,55 @@ defmodule Shoestring.Harness.Projector do
   end
 
   defp insert_capacity_snapshot(event, payload, snapshot_id, run_id, opts) do
-    source = Map.fetch!(payload, "source")
+    with {:ok, capacity_snapshot} <-
+           CapacitySnapshot.from_payload(payload, now: event.occurred_at) do
+      snapshot =
+        %CapacitySnapshotRecord{
+          id: snapshot_id,
+          goal_id: event.goal_id,
+          run_id: run_id,
+          inserted_at: event.occurred_at,
+          updated_at: event.occurred_at
+        }
+        |> CapacitySnapshotRecord.changeset(%{
+          "contract_version" => capacity_snapshot.version,
+          "capacity_state" => Atom.to_string(capacity_snapshot.capacity_state),
+          "legacy_capacity_state" => legacy_capacity_state(capacity_snapshot.capacity_state),
+          "observed_at" => capacity_snapshot.observed_at,
+          "legacy_observed_at" => capacity_snapshot.observed_at || event.occurred_at,
+          "expires_at" => capacity_snapshot.expires_at,
+          "freshness_max_age_seconds" => capacity_snapshot.freshness.max_age_seconds,
+          "source_adapter_id" => capacity_snapshot.source.adapter_id,
+          "source_method" => Atom.to_string(capacity_snapshot.source.event),
+          "source_provider_id" => capacity_snapshot.source.provider_id,
+          "source_invocation_mode" => capacity_snapshot.source.invocation_mode,
+          "source_event" => Atom.to_string(capacity_snapshot.source.event),
+          "scope" => capacity_snapshot.scope,
+          "confidence" => Atom.to_string(capacity_snapshot.confidence),
+          "support_tier" => Atom.to_string(capacity_snapshot.support_tier),
+          "compatibility_state" => Atom.to_string(capacity_snapshot.compatibility_state),
+          "reason" => capacity_snapshot.reason,
+          "extensions" => capacity_snapshot.extensions,
+          "projection_sequence" => event.sequence
+        })
 
-    snapshot =
-      %CapacitySnapshotRecord{
-        id: snapshot_id,
-        goal_id: event.goal_id,
-        run_id: run_id,
-        inserted_at: event.occurred_at,
-        updated_at: event.occurred_at
-      }
-      |> CapacitySnapshotRecord.changeset(%{
-        "contract_version" => Map.fetch!(payload, "contract_version"),
-        "capacity_state" => Map.fetch!(payload, "capacity_state"),
-        "observed_at" => Map.fetch!(payload, "observed_at"),
-        "expires_at" => Map.get(payload, "expires_at"),
-        "source_adapter_id" => map_value(source, "adapter_id"),
-        "source_method" => map_value(source, "method"),
-        "scope" => Map.fetch!(payload, "scope"),
-        "confidence" => Map.fetch!(payload, "confidence"),
-        "support_tier" => Map.fetch!(payload, "support_tier"),
-        "compatibility_state" => Map.fetch!(payload, "compatibility_state"),
-        "extensions" => Map.fetch!(payload, "extensions"),
-        "projection_sequence" => event.sequence
-      })
-
-    with {:ok, snapshot} <- Repo.insert(snapshot),
-         :ok <- insert_capacity_windows(snapshot, Map.fetch!(payload, "windows"), event, opts) do
-      :ok
+      with {:ok, snapshot} <- Repo.insert(snapshot),
+           :ok <- insert_capacity_windows(snapshot, capacity_snapshot.windows, event, opts) do
+        :ok
+      end
     end
   end
 
   defp insert_capacity_windows(snapshot, windows, event, opts) do
     windows
-    |> map_items()
     |> Enum.reduce_while(:ok, fn window, :ok ->
-      state = map_value(window, "state")
-
       attrs = %{
-        "kind" => map_value(window, "kind"),
-        "state" => state,
-        "used_percent" => map_value(window, "used_percent"),
-        "reset_at" => map_value(window, "reset_at"),
-        "unknown_reason" => map_value(window, "reason")
+        "kind" => window.kind,
+        "state" => Atom.to_string(window.state),
+        "legacy_state" => legacy_window_state(window.state),
+        "used_percent" => Map.get(window, :used_percent),
+        "reset_at" => Map.get(window, :reset_at),
+        "unknown_reason" => Map.get(window, :reason)
       }
 
       window = %CapacityWindowRecord{
@@ -582,6 +589,10 @@ defmodule Shoestring.Harness.Projector do
   defp renewal_state(_action, current), do: current
 
   defp map_value(map, key), do: Map.get(map, key)
+  defp legacy_capacity_state(:observed), do: "known"
+  defp legacy_capacity_state(_state), do: "unknown"
+  defp legacy_window_state(:observed), do: "known"
+  defp legacy_window_state(:unknown), do: "unknown"
   defp map_items(%{"items" => items}) when is_list(items), do: items
   defp map_items(%{items: items}) when is_list(items), do: items
   defp map_items(_value), do: []

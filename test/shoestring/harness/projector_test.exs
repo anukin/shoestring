@@ -36,7 +36,7 @@ defmodule Shoestring.Harness.ProjectorTest do
     assert pure_state.runs[run.id].status == :suspended
     assert pure_state.leases[@grant_id].status == :checkpoint_required
     assert pure_state.checkpoints[@checkpoint_id].stop_reason == "quota_refused"
-    assert pure_state.capacity_snapshots[@snapshot_id].capacity_state == "known"
+    assert pure_state.capacity_snapshots[@snapshot_id].capacity_state == "observed"
 
     assert {:ok, position} =
              Projector.project(goal.id,
@@ -49,7 +49,7 @@ defmodule Shoestring.Harness.ProjectorTest do
     assert Repo.get!(RunRecord, run.id).provider_session_id == "session-a"
     assert Repo.get!(ExecutionLeaseRecord, @grant_id).status == "checkpoint_required"
     assert Repo.get!(CheckpointRecord, @checkpoint_id).stop_reason == "quota_refused"
-    assert Repo.get!(CapacitySnapshotRecord, @snapshot_id).capacity_state == "known"
+    assert Repo.get!(CapacitySnapshotRecord, @snapshot_id).capacity_state == "observed"
     assert Repo.aggregate(CapacityWindowRecord, :count, :id) == 1
 
     projection_before_rebuild = {
@@ -94,6 +94,69 @@ defmodule Shoestring.Harness.ProjectorTest do
                },
                trusted: [run_id: run.id]
              )
+  end
+
+  test "rebuild upcasts legacy v1 capacity events into fail-closed v2 projections", %{
+    test: test_name
+  } do
+    goal = insert_goal("00000000-0000-4000-8000-000000000105")
+    task = insert_task(goal, "00000000-0000-4000-8000-000000000204")
+    run = request_run(goal, task, test_name)
+    legacy_snapshot_id = "00000000-0000-4000-8000-000000000013"
+
+    append(goal.id, run.id, "run.starting", %{"run_id" => run.id})
+
+    append(goal.id, run.id, "run.running", %{
+      "run_id" => run.id,
+      "provider_session_id" => "legacy-session"
+    })
+
+    append(goal.id, run.id, "capacity.snapshot_observed", %{
+      "snapshot_id" => legacy_snapshot_id,
+      "run_id" => run.id,
+      "contract_version" => 1,
+      "capacity_state" => "known",
+      "windows" => %{
+        "items" => [%{"kind" => "five_hour", "state" => "known", "used_percent" => 25.0}]
+      },
+      "observed_at" => "2026-08-30T12:00:00Z",
+      "expires_at" => "2026-08-30T12:05:00Z",
+      "source" => %{"adapter_id" => "legacy.adapter", "method" => "probe"},
+      "scope" => "account",
+      "confidence" => "high",
+      "support_tier" => "supported",
+      "compatibility_state" => "compatible",
+      "extensions" => %{}
+    })
+
+    assert {:ok, events} = Trajectory.replay(goal.id)
+    assert {:ok, pure_state} = Projector.replay_events(events)
+    assert pure_state.capacity_snapshots[legacy_snapshot_id].capacity_state == "degraded"
+
+    assert {:ok, position} =
+             Projector.project(goal.id,
+               clock: Shoestring.Test.FixedClock,
+               identifier: Shoestring.Test.FixedIdentifier
+             )
+
+    assert position.last_sequence == 4
+    snapshot = Repo.get!(CapacitySnapshotRecord, legacy_snapshot_id)
+    assert snapshot.contract_version == 2
+    assert snapshot.capacity_state == "degraded"
+    assert snapshot.source_provider_id == "legacy"
+    assert snapshot.source_event == "none"
+    assert snapshot.reason == "legacy_capacity_contract_missing_provenance"
+    assert snapshot.confidence == "high"
+    assert snapshot.support_tier == "conservative_partial"
+
+    assert {:ok, rebuilt} =
+             Projector.rebuild(goal.id,
+               clock: Shoestring.Test.FixedClock,
+               identifier: Shoestring.Test.FixedIdentifier
+             )
+
+    assert rebuilt.last_sequence == position.last_sequence
+    assert Repo.get!(CapacitySnapshotRecord, legacy_snapshot_id).capacity_state == "degraded"
   end
 
   test "a late run.requested event cannot regress a projected running run", %{test: test_name} do
@@ -150,23 +213,36 @@ defmodule Shoestring.Harness.ProjectorTest do
       "provider_session_id" => "session-a"
     })
 
-    append(goal_id, run_id, "capacity.snapshot_observed", %{
-      "snapshot_id" => @snapshot_id,
-      "run_id" => run_id,
-      "contract_version" => 1,
-      "capacity_state" => "known",
-      "windows" => %{
-        "items" => [%{"kind" => "five_hour", "state" => "known", "used_percent" => 25.0}]
+    append(
+      goal_id,
+      run_id,
+      "capacity.snapshot_observed",
+      %{
+        "snapshot_id" => @snapshot_id,
+        "run_id" => run_id,
+        "contract_version" => 2,
+        "capacity_state" => "observed",
+        "windows" => %{
+          "items" => [%{"kind" => "five_hour", "state" => "observed", "used_percent" => 25.0}]
+        },
+        "observed_at" => "2026-08-30T12:00:00Z",
+        "expires_at" => "2026-08-30T12:05:00Z",
+        "freshness" => %{"max_age_seconds" => 300},
+        "source" => %{
+          "adapter_id" => "test.adapter",
+          "provider_id" => "codex",
+          "invocation_mode" => "app_server",
+          "event" => "explicit_read"
+        },
+        "scope" => "account",
+        "confidence" => "high",
+        "support_tier" => "proactive",
+        "compatibility_state" => "compatible",
+        "reason" => nil,
+        "extensions" => %{}
       },
-      "observed_at" => "2026-08-30T12:00:00Z",
-      "expires_at" => "2026-08-30T12:05:00Z",
-      "source" => %{"adapter_id" => "test.adapter", "method" => "probe"},
-      "scope" => "account",
-      "confidence" => "high",
-      "support_tier" => "supported",
-      "compatibility_state" => "compatible",
-      "extensions" => %{}
-    })
+      2
+    )
 
     append(goal_id, run_id, "lease.proposed", %{
       "grant_id" => @grant_id,
@@ -205,13 +281,13 @@ defmodule Shoestring.Harness.ProjectorTest do
     })
   end
 
-  defp append(goal_id, run_id, type, payload) do
+  defp append(goal_id, run_id, type, payload, schema_version \\ 1) do
     assert {:ok, _event} =
              Trajectory.append(
                goal_id,
                %{
                  "type" => type,
-                 "schema_version" => 1,
+                 "schema_version" => schema_version,
                  "actor" => "harness",
                  "occurred_at" => Shoestring.Test.FixedClock.now(),
                  "idempotency_key" => "#{type}:#{payload |> Map.values() |> inspect()}",
