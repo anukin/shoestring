@@ -691,14 +691,13 @@ defmodule Shoestring.Harness.Capacity.CodexMonitorTest do
       status_connecting3 = CodexMonitor.get_status(monitor3)
       send(monitor3, {:codex_transport_error, status_connecting3.transport_pid, :err})
       _ = :sys.get_state(monitor3)
-      
+
       assert Process.alive?(monitor3)
       status3 = CodexMonitor.get_status(monitor3)
       assert status3.backoff_attempt == 1
       assert Process.read_timer(status3.reconnect_timer) in [0, false]
 
       monitor4 =
-
         start_supervised!(%{
           id: :m4,
           start:
