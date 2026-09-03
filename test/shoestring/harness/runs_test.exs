@@ -102,6 +102,30 @@ defmodule Shoestring.Harness.RunsTest do
     assert opts[:constraint_name] == "harness_runs_dispatch_id_index"
   end
 
+  test "partial-write recovery exposes a typed error without returning the changeset or request" do
+    goal = insert_goal()
+    task = insert_task(goal)
+    prompt = "prompt=private credential=do-not-disclose"
+
+    request = run_request(goal, task, prompt: prompt)
+
+    changeset =
+      %RunRecord{id: @run_id}
+      |> RunRecord.intent_changeset(
+        request,
+        "test.adapter",
+        Shoestring.Test.FixedClock.now()
+      )
+
+    assert {:error,
+            %Error{
+              category: :task_failed,
+              code: "run_recovery_unavailable"
+            } = error} = Runs.recover_existing_run(Repo, changeset)
+
+    refute inspect(error) =~ prompt
+  end
+
   test "a dispatch id collision across goals is typed and cannot disclose or append foreign data" do
     goal_a = insert_goal()
     task_a = insert_task(goal_a)

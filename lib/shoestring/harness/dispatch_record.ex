@@ -78,12 +78,12 @@ defmodule Shoestring.Harness.DispatchRecord do
 
   @spec outcome_changeset(t(), String.t(), DateTime.t()) :: Ecto.Changeset.t()
   def outcome_changeset(dispatch, status, now)
-      when status in ["effect_failed", "effect_unknown", "effect_deferred"],
+      when status in ["effect_failed", "effect_unknown", "effect_deferred", "cancelled"],
       do: outcome_changeset(dispatch, status, now, status)
 
   @spec outcome_changeset(t(), String.t(), DateTime.t(), String.t()) :: Ecto.Changeset.t()
   def outcome_changeset(dispatch, status, now, outcome_code)
-      when status in ["effect_failed", "effect_unknown", "effect_deferred"] do
+      when status in ["effect_failed", "effect_unknown", "effect_deferred", "cancelled"] do
     dispatch
     |> change(status: status, outcome_code: outcome_code, outcome_at: now, updated_at: now)
     |> validate_inclusion(:status, @statuses)

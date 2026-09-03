@@ -31,7 +31,8 @@ defmodule Shoestring.Harness.Dispatches do
     "effect_started",
     "effect_failed",
     "effect_unknown",
-    "effect_deferred"
+    "effect_deferred",
+    "cancelled"
   ]
   @terminal_dispatch_statuses [
     "effect_failed",
@@ -165,13 +166,21 @@ defmodule Shoestring.Harness.Dispatches do
 
   defp reconcile_dispatch(%DispatchRecord{status: "requested"} = dispatch, run, opts) do
     with :ok <- ensure_requested_event(dispatch, opts) do
-      if run.status == "requested" do
-        case ensure_job(dispatch, opts) do
-          {:ok, _dispatch, _job, repaired?} -> {:ok, if(repaired?, do: 1, else: 0)}
-          {:error, reason} -> {:error, reason}
-        end
-      else
-        {:ok, 0}
+      case run.status do
+        "requested" ->
+          case ensure_job(dispatch, opts) do
+            {:ok, _dispatch, _job, repaired?} -> {:ok, if(repaired?, do: 1, else: 0)}
+            {:error, reason} -> {:error, reason}
+          end
+
+        status when status in ["starting", "running", "pausing", "suspended"] ->
+          record_run_state_outcome(dispatch, status, "effect_deferred", opts)
+
+        status when status in ["cancelling", "cancelled", "completed", "failed"] ->
+          record_run_state_outcome(dispatch, status, "cancelled", opts)
+
+        _status ->
+          {:ok, 0}
       end
     end
   end
@@ -190,7 +199,7 @@ defmodule Shoestring.Harness.Dispatches do
   end
 
   defp reconcile_dispatch(%DispatchRecord{} = dispatch, _run, opts) do
-    repaired? = not outcome_event_exists?(dispatch, opts)
+    repaired? = not outcome_event_exists?(dispatch, dispatch.status, opts)
 
     case append_effect_outcome_event(dispatch, dispatch.status, opts) do
       :ok -> {:ok, if(repaired?, do: 1, else: 0)}
@@ -320,7 +329,8 @@ defmodule Shoestring.Harness.Dispatches do
         %RunRecord{} = run ->
           with :ok <- reconcile_run_result(Runs.reconcile_run(run, clock_opts(opts))),
                :ok <- ensure_requested_event(dispatch, opts),
-               {:ok, result} <- claim_effect(dispatch, repo, opts) do
+               {:ok, result} <- claim_effect(dispatch, repo, opts),
+               {:ok, result} <- finalize_claim_result(result, dispatch_id, opts) do
             {:ok, result}
           end
 
@@ -368,21 +378,27 @@ defmodule Shoestring.Harness.Dispatches do
   @doc false
   @spec record_effect_outcome(Ecto.UUID.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def record_effect_outcome(dispatch_id, status, opts \\ [])
-      when status in ["effect_failed", "effect_unknown", "effect_deferred"] do
+      when status in ["effect_failed", "effect_unknown", "effect_deferred", "cancelled"] do
     repo = Keyword.get(opts, :repo, Repo)
     now = now(opts)
+    outcome_code = Keyword.get(opts, :outcome_code, status)
 
     result =
       repo.transaction(fn ->
         case repo.get(DispatchRecord, dispatch_id) do
           %DispatchRecord{status: ^status} = dispatch ->
-            {:ok, dispatch}
+            if is_nil(dispatch.outcome_at) do
+              update_effect_outcome(dispatch, status, now, outcome_code, repo)
+            else
+              {:ok, dispatch, false}
+            end
 
           %DispatchRecord{status: "effect_started"} = dispatch ->
-            case repo.update(DispatchRecord.outcome_changeset(dispatch, status, now)) do
-              {:ok, updated} -> {:ok, updated}
-              {:error, changeset} -> repo.rollback(changeset)
-            end
+            update_effect_outcome(dispatch, status, now, outcome_code, repo)
+
+          %DispatchRecord{status: "requested"} = dispatch
+          when status in ["effect_deferred", "cancelled"] ->
+            update_effect_outcome(dispatch, status, now, outcome_code, repo)
 
           %DispatchRecord{} ->
             repo.rollback(:effect_outcome_not_recordable)
@@ -393,12 +409,25 @@ defmodule Shoestring.Harness.Dispatches do
       end)
 
     case result do
-      {:ok, {:ok, dispatch}} ->
-        emit_effect_outcome(dispatch, status)
-        append_effect_outcome_event(dispatch, status, opts)
+      {:ok, {:ok, dispatch, transitioned?}} ->
+        case append_effect_outcome_event(dispatch, status, opts) do
+          :ok ->
+            if transitioned?, do: emit_effect_outcome(dispatch, status)
+            :ok
+
+          {:error, reason} ->
+            {:error, reason}
+        end
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp update_effect_outcome(dispatch, status, now, outcome_code, repo) do
+    case repo.update(DispatchRecord.outcome_changeset(dispatch, status, now, outcome_code)) do
+      {:ok, updated} -> {:ok, updated, true}
+      {:error, changeset} -> repo.rollback(changeset)
     end
   end
 
@@ -542,13 +571,13 @@ defmodule Shoestring.Harness.Dispatches do
   defp claim_effect(dispatch, run, repo, now) do
     cond do
       run.status in ["cancelling", "cancelled", "completed", "failed"] ->
-        cancel_unstarted_dispatch(dispatch, repo, now)
+        terminal_run_dispatch(dispatch, run.status, repo, now)
 
       run.status == "requested" and dispatch.status == "requested" ->
         claim_requested_dispatch(dispatch, run, repo, now)
 
       dispatch.status == "requested" ->
-        defer_requested_dispatch(dispatch, repo, now)
+        {:skip, {:deferred, "run_state_advanced"}}
 
       dispatch.status == "effect_started" ->
         {:skip, :effect_outcome_unknown}
@@ -570,15 +599,46 @@ defmodule Shoestring.Harness.Dispatches do
     end
   end
 
-  defp cancel_unstarted_dispatch(%DispatchRecord{status: "cancelled"}, _repo, _now),
-    do: {:skip, :cancelled}
+  defp finalize_claim_result({:skip, {:terminal_run, run_status}}, dispatch_id, opts) do
+    outcome_code = "run_#{run_status}"
 
-  defp cancel_unstarted_dispatch(%DispatchRecord{status: "requested"} = dispatch, repo, now) do
-    case repo.update(DispatchRecord.status_changeset(dispatch, "cancelled", now)) do
-      {:ok, _dispatch} -> {:skip, :cancelled}
-      {:error, changeset} -> repo.rollback(changeset)
+    case record_effect_outcome(
+           dispatch_id,
+           "cancelled",
+           Keyword.put(opts, :outcome_code, outcome_code)
+         ) do
+      :ok -> {:ok, {:skip, {:terminal_run, terminal_reason(run_status)}}}
+      {:error, reason} -> {:error, reason}
     end
   end
+
+  defp finalize_claim_result({:skip, {:deferred, outcome_code}}, dispatch_id, opts) do
+    case record_effect_outcome(
+           dispatch_id,
+           "effect_deferred",
+           Keyword.put(opts, :outcome_code, outcome_code)
+         ) do
+      :ok -> {:ok, {:skip, :effect_deferred}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp finalize_claim_result(result, _dispatch_id, _opts), do: {:ok, result}
+
+  defp terminal_run_dispatch(%DispatchRecord{status: status}, run_status, _repo, _now)
+       when status in ["requested", "cancelled"],
+       do: {:skip, {:terminal_run, run_status}}
+
+  defp terminal_run_dispatch(dispatch, _run_status, repo, now),
+    do: cancel_unstarted_dispatch(dispatch, repo, now)
+
+  defp terminal_reason("cancelling"), do: :run_cancelling
+  defp terminal_reason("cancelled"), do: :run_cancelled
+  defp terminal_reason("completed"), do: :run_completed
+  defp terminal_reason("failed"), do: :run_failed
+
+  defp cancel_unstarted_dispatch(%DispatchRecord{status: "cancelled"}, _repo, _now),
+    do: {:skip, :cancelled}
 
   defp cancel_unstarted_dispatch(%DispatchRecord{status: "effect_started"}, _repo, _now),
     do: {:skip, :effect_outcome_unknown}
@@ -594,20 +654,6 @@ defmodule Shoestring.Harness.Dispatches do
 
   defp cancel_unstarted_dispatch(%DispatchRecord{status: "effect_deferred"}, _repo, _now),
     do: {:skip, :effect_deferred}
-
-  defp defer_requested_dispatch(%DispatchRecord{status: "requested"} = dispatch, repo, now) do
-    case repo.update(
-           DispatchRecord.outcome_changeset(
-             dispatch,
-             "effect_deferred",
-             now,
-             "run_state_advanced"
-           )
-         ) do
-      {:ok, _dispatch} -> {:skip, :effect_deferred}
-      {:error, changeset} -> repo.rollback(changeset)
-    end
-  end
 
   defp claim_requested_dispatch(dispatch, run, repo, now) do
     {claimed, _rows} =
@@ -665,7 +711,8 @@ defmodule Shoestring.Harness.Dispatches do
 
     case Trajectory.append(goal_id, attrs,
            trusted: [task_id: task_id, run_id: run_id],
-           writer_opts: Keyword.get(opts, :writer_opts, [])
+           writer_opts: Keyword.get(opts, :writer_opts, []),
+           call_timeout: Keyword.get(opts, :call_timeout, 15_000)
          ) do
       {:ok, _event} -> :ok
       {:error, reason} -> {:error, reason}
@@ -703,8 +750,15 @@ defmodule Shoestring.Harness.Dispatches do
 
   defp outcome_event_exists?(dispatch, opts) do
     repo = Keyword.get(opts, :repo, Repo)
-    status = dispatch.status
+    outcome_event_exists?(dispatch, dispatch.status, opts, repo)
+  end
 
+  defp outcome_event_exists?(dispatch, status, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+    outcome_event_exists?(dispatch, status, opts, repo)
+  end
+
+  defp outcome_event_exists?(dispatch, status, _opts, repo) do
     repo.exists?(
       from event in TrajectoryEvent,
         where:
@@ -718,6 +772,28 @@ defmodule Shoestring.Harness.Dispatches do
   defp outcome_event_type("effect_failed"), do: "dispatch.effect_failed"
   defp outcome_event_type("effect_unknown"), do: "dispatch.effect_unknown"
   defp outcome_event_type("effect_deferred"), do: "dispatch.effect_deferred"
+  defp outcome_event_type("cancelled"), do: "dispatch.cancelled"
+
+  defp record_run_state_outcome(dispatch, run_status, outcome_status, opts) do
+    already_recorded? =
+      dispatch.status == outcome_status and
+        outcome_event_exists?(dispatch, outcome_status, opts)
+
+    outcome_code =
+      case outcome_status do
+        "cancelled" -> "run_#{run_status}"
+        "effect_deferred" -> "run_state_advanced"
+      end
+
+    case record_effect_outcome(
+           dispatch.dispatch_id,
+           outcome_status,
+           Keyword.put(opts, :outcome_code, outcome_code)
+         ) do
+      :ok -> {:ok, if(already_recorded?, do: 0, else: 1)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp outcome_idempotency_key(status, dispatch_id),
     do: "dispatch-#{String.replace(status, "_", "-")}:#{dispatch_id}"

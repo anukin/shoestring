@@ -10,6 +10,18 @@ defmodule Shoestring.Harness.DispatchWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"dispatch_id" => dispatch_id}}) do
+    try do
+      perform_dispatch(dispatch_id)
+    rescue
+      _error -> {:error, :dispatch_delivery_failed}
+    catch
+      _kind, _reason -> {:error, :dispatch_delivery_failed}
+    end
+  end
+
+  def perform(_job), do: {:error, :invalid_dispatch_job}
+
+  defp perform_dispatch(dispatch_id) do
     case Dispatches.prepare_for_effect(dispatch_id, dispatch_opts()) do
       {:ok, {:execute, dispatch, run}} ->
         perform_effect(dispatch, run)
@@ -26,15 +38,25 @@ defmodule Shoestring.Harness.DispatchWorker do
       {:ok, {:skip, :effect_deferred}} ->
         deferred_outcome(dispatch_id)
 
+      {:ok, {:skip, {:terminal_run, reason}}} ->
+        {:cancel, reason}
+
+      {:ok, {:skip, :cancelled}} ->
+        cancelled_outcome(dispatch_id)
+
+      {:ok, {:skip, :effect_completed}} ->
+        {:cancel, :effect_completed}
+
+      {:ok, {:skip, :claimed_by_another_delivery}} ->
+        {:cancel, :claimed_by_another_delivery}
+
       {:ok, {:skip, _reason}} ->
-        :ok
+        {:cancel, :dispatch_not_delivered}
 
       {:error, _reason} ->
         {:error, :dispatch_prepare_failed}
     end
   end
-
-  def perform(_job), do: {:error, :invalid_dispatch_job}
 
   defp perform_effect(dispatch, run) do
     try do
@@ -85,6 +107,13 @@ defmodule Shoestring.Harness.DispatchWorker do
     end
   end
 
+  defp cancelled_outcome(dispatch_id) do
+    case Dispatches.record_effect_outcome(dispatch_id, "cancelled", dispatch_opts()) do
+      :ok -> {:cancel, :dispatch_cancelled}
+      {:error, _outcome_reason} -> {:error, :effect_outcome_not_recorded}
+    end
+  end
+
   defp dispatch_effect do
     Application.get_env(
       :shoestring,
@@ -108,6 +137,10 @@ defmodule Shoestring.Harness.DispatchWorker do
   end
 
   defp dispatch_opts do
-    [clock: Application.get_env(:shoestring, :dispatch_clock, Shoestring.Harness.SystemClock)]
+    [
+      clock: Application.get_env(:shoestring, :dispatch_clock, Shoestring.Harness.SystemClock),
+      call_timeout: Application.get_env(:shoestring, :dispatch_call_timeout, 15_000),
+      writer_opts: Application.get_env(:shoestring, :dispatch_writer_opts, [])
+    ]
   end
 end

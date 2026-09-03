@@ -27,7 +27,7 @@ defmodule Shoestring.Harness.Runs do
          :ok <- append_requested(run, request, identity, opts, recovered?) do
       {:ok, run}
     else
-      {:error, error} -> {:error, error}
+      {:error, error} -> {:error, normalize_public_error(error)}
     end
   end
 
@@ -91,10 +91,10 @@ defmodule Shoestring.Harness.Runs do
           {:error, dispatch_id_conflict(dispatch_id)}
 
         nil ->
-          {:error, changeset}
+          {:error, recovery_unavailable(dispatch_id)}
       end
     else
-      {:error, changeset}
+      {:error, recovery_unavailable(Ecto.Changeset.get_field(changeset, :dispatch_id))}
     end
   end
 
@@ -239,7 +239,8 @@ defmodule Shoestring.Harness.Runs do
 
     case Trajectory.append(run.goal_id, attrs,
            trusted: [task_id: run.task_id, run_id: run.id],
-           writer_opts: Keyword.get(opts, :writer_opts, [])
+           writer_opts: Keyword.get(opts, :writer_opts, []),
+           call_timeout: Keyword.get(opts, :call_timeout, 15_000)
          ) do
       {:ok, _event} -> :ok
       {:error, reason} -> {:error, {:intent_persisted_without_event, run.id, reason}}
@@ -252,6 +253,38 @@ defmodule Shoestring.Harness.Runs do
       "dispatch_id_conflict",
       "dispatch ID is already bound to a different run identity",
       details: %{"shoestring.harness:dispatch_id" => dispatch_id}
+    )
+  end
+
+  defp normalize_public_error(%Error{} = error), do: error
+
+  defp normalize_public_error({:intent_persisted_without_event, run_id, _reason}) do
+    Error.new(
+      :task_failed,
+      "run_event_persistence_failed",
+      "the durable run intent was saved but its canonical event was not recorded",
+      retryable: true,
+      details: %{"shoestring.harness:run_id" => run_id}
+    )
+  end
+
+  defp normalize_public_error(%Ecto.Changeset{} = changeset),
+    do: recovery_unavailable(Ecto.Changeset.get_field(changeset, :dispatch_id))
+
+  defp normalize_public_error(_error), do: recovery_unavailable(nil)
+
+  defp recovery_unavailable(dispatch_id) do
+    details =
+      if is_binary(dispatch_id),
+        do: %{"shoestring.harness:dispatch_id" => dispatch_id},
+        else: %{}
+
+    Error.new(
+      :task_failed,
+      "run_recovery_unavailable",
+      "the durable run intent could not be recovered",
+      retryable: true,
+      details: details
     )
   end
 
@@ -317,7 +350,8 @@ defmodule Shoestring.Harness.Runs do
 
     case Trajectory.append(run.goal_id, attrs,
            trusted: [task_id: run.task_id, run_id: run.id],
-           writer_opts: Keyword.get(opts, :writer_opts, [])
+           writer_opts: Keyword.get(opts, :writer_opts, []),
+           call_timeout: Keyword.get(opts, :call_timeout, 15_000)
          ) do
       {:ok, _event} -> :ok
       {:error, reason} -> {:error, reason}

@@ -66,14 +66,14 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
       "harness_runs_goal_id_task_id_index"
     ]
 
-    assert expected_run_indexes -- index_names("harness_runs") == []
+    assert index_names("harness_runs") == expected_run_indexes
 
     expected_window_indexes = [
       "harness_capacity_windows_reset_at_index",
       "harness_capacity_windows_snapshot_id_kind_index"
     ]
 
-    assert expected_window_indexes -- index_names("harness_capacity_windows") == []
+    assert index_names("harness_capacity_windows") == expected_window_indexes
 
     expected_dispatch_indexes = [
       "harness_dispatches_goal_id_status_index",
@@ -81,10 +81,9 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
       "harness_dispatches_run_id_status_index"
     ]
 
-    assert expected_dispatch_indexes -- index_names("harness_dispatches") == []
+    assert index_names("harness_dispatches") == expected_dispatch_indexes
 
-    assert ["oban_jobs_state_queue_priority_scheduled_at_id_index"] -- index_names("oban_jobs") ==
-             []
+    assert index_names("oban_jobs") == ["oban_jobs_state_queue_priority_scheduled_at_id_index"]
   end
 
   test "sqlite enforces harness status and capacity window constraints directly" do

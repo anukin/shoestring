@@ -4,6 +4,7 @@ defmodule Shoestring.Harness.DispatchesTest do
 
   alias Elixir.Task, as: AsyncTask
   alias Oban.Job
+  alias Oban.Queues.Executor
   alias Shoestring.Harness.{DispatchRecord, DispatchWorker, Identity, RunRecord, RunRequest, Runs}
   alias Shoestring.Harness.Dispatch.Reconciler
   alias Shoestring.Harness.Dispatches
@@ -21,6 +22,8 @@ defmodule Shoestring.Harness.DispatchesTest do
     previous_pid = Application.get_env(:shoestring, :dispatch_effect_test_pid)
     previous_result = Application.get_env(:shoestring, :dispatch_effect_test_result)
     previous_clock = Application.get_env(:shoestring, :dispatch_clock)
+    previous_call_timeout = Application.get_env(:shoestring, :dispatch_call_timeout)
+    previous_writer_opts = Application.get_env(:shoestring, :dispatch_writer_opts)
 
     Application.put_env(:shoestring, :dispatch_effect, Shoestring.Test.DispatchEffect)
     Application.put_env(:shoestring, :dispatch_effect_test_pid, self())
@@ -33,6 +36,8 @@ defmodule Shoestring.Harness.DispatchesTest do
       restore_env(:dispatch_effect_test_pid, previous_pid)
       restore_env(:dispatch_effect_test_result, previous_result)
       restore_env(:dispatch_clock, previous_clock)
+      restore_env(:dispatch_call_timeout, previous_call_timeout)
+      restore_env(:dispatch_writer_opts, previous_writer_opts)
     end)
 
     goal = insert_goal()
@@ -175,6 +180,20 @@ defmodule Shoestring.Harness.DispatchesTest do
     assert %Task{status: "pending"} = Repo.get!(Task, task.id)
   end
 
+  test "a delivery that loses after another claimant completes is a typed benign cancellation", %{
+    goal: goal,
+    task: task
+  } do
+    assert {:ok, _dispatch, job} = Dispatches.enqueue(run_request(goal, task), identity(), opts())
+
+    assert :ok = perform_delivery(job)
+    assert_receive {:dispatch_effect, _run_id, @dispatch_id}
+
+    assert {:cancel, :effect_completed} = perform_delivery(job)
+    refute_receive {:dispatch_effect, _run_id, @dispatch_id}
+    assert %DispatchRecord{status: "effect_completed"} = Repo.get!(DispatchRecord, @dispatch_id)
+  end
+
   test "worker reconciles missing canonical run and dispatch intent before invoking an effect", %{
     goal: goal,
     task: task
@@ -248,6 +267,7 @@ defmodule Shoestring.Harness.DispatchesTest do
 
     assert {:cancel, :effect_failed} = perform_delivery(job)
     refute_receive {:dispatch_effect, _run_id, @dispatch_id}
+    refute_receive {:dispatch_outcome, _event, _measurements, _metadata}
 
     assert %DispatchRecord{status: "effect_failed", outcome_code: "effect_failed"} =
              Repo.get!(DispatchRecord, @dispatch_id)
@@ -372,9 +392,127 @@ defmodule Shoestring.Harness.DispatchesTest do
     })
     |> Repo.update!()
 
-    assert :ok = perform_delivery(job)
+    assert {:cancel, :run_cancelled} = perform_delivery(job)
     refute_receive {:dispatch_effect, _run_id, @dispatch_id}
-    assert %DispatchRecord{status: "cancelled"} = Repo.get!(DispatchRecord, @dispatch_id)
+
+    assert %DispatchRecord{
+             status: "cancelled",
+             outcome_code: "run_cancelled",
+             outcome_at: outcome_at
+           } = Repo.get!(DispatchRecord, @dispatch_id)
+
+    assert outcome_at == Shoestring.Test.FixedClock.now()
+
+    assert %TrajectoryEvent{} =
+             Repo.get_by(TrajectoryEvent,
+               goal_id: goal.id,
+               run_id: dispatch.run_id,
+               type: "dispatch.cancelled",
+               idempotency_key: "dispatch-cancelled:#{@dispatch_id}"
+             )
+  end
+
+  test "real delivery cancels every terminal run state with one durable outcome" do
+    telemetry_id = "dispatch-terminal-outcome-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      telemetry_id,
+      [:shoestring, :harness, :dispatch_outcome],
+      fn event, measurements, metadata, pid ->
+        send(pid, {:terminal_outcome, event, measurements, metadata})
+      end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach(telemetry_id) end)
+
+    for status <- ["cancelling", "cancelled", "completed", "failed"] do
+      goal = insert_goal(Ecto.UUID.generate())
+      task = insert_task(goal, Ecto.UUID.generate())
+      dispatch_id = Ecto.UUID.generate()
+
+      assert {:ok, dispatch, job} =
+               Dispatches.enqueue(
+                 run_request(goal, task, dispatch_id: dispatch_id),
+                 identity(),
+                 opts(identifier: Shoestring.Harness.SystemIdentifier)
+               )
+
+      Repo.get!(RunRecord, dispatch.run_id)
+      |> RunRecord.projection_changeset(%{
+        status: status,
+        projection_sequence: 2,
+        updated_at: Shoestring.Test.FixedClock.now()
+      })
+      |> Repo.update!()
+
+      reason =
+        %{
+          "cancelling" => :run_cancelling,
+          "cancelled" => :run_cancelled,
+          "completed" => :run_completed,
+          "failed" => :run_failed
+        }
+        |> Map.fetch!(status)
+
+      expected_code = "run_#{status}"
+      assert {:cancel, ^reason} = perform_real_delivery(job)
+      refute_receive {:dispatch_effect, _run_id, ^dispatch_id}
+
+      assert %DispatchRecord{
+               status: "cancelled",
+               outcome_code: outcome_code,
+               outcome_at: outcome_at
+             } = Repo.get!(DispatchRecord, dispatch_id)
+
+      assert outcome_code == expected_code
+      assert outcome_at == Shoestring.Test.FixedClock.now()
+
+      assert %TrajectoryEvent{} =
+               Repo.get_by(TrajectoryEvent,
+                 goal_id: goal.id,
+                 run_id: dispatch.run_id,
+                 type: "dispatch.cancelled",
+                 idempotency_key: "dispatch-cancelled:#{dispatch_id}"
+               )
+
+      assert {:cancel, ^reason} = perform_real_delivery(Repo.get!(Job, job.id))
+    end
+
+    for status <- ["cancelling", "cancelled", "completed", "failed"] do
+      expected_code = "run_#{status}"
+
+      assert_receive {:terminal_outcome, [:shoestring, :harness, :dispatch_outcome], %{count: 1},
+                      %{outcome: "cancelled", error_code: ^expected_code}}
+    end
+
+    refute_receive {:terminal_outcome, _event, _measurements, _metadata}
+  end
+
+  test "reconciliation defers a requested dispatch whose job is lost after the run advances",
+       %{goal: goal, task: task} do
+    assert {:ok, dispatch, job} = Dispatches.enqueue(run_request(goal, task), identity(), opts())
+    Repo.delete!(job)
+
+    Repo.get!(RunRecord, dispatch.run_id)
+    |> RunRecord.projection_changeset(%{
+      status: "running",
+      projection_sequence: 2,
+      updated_at: Shoestring.Test.FixedClock.now()
+    })
+    |> Repo.update!()
+
+    assert {:ok, %{repaired_count: 1, failures: []}} = Dispatches.reconcile(opts())
+    assert [] = all_enqueued(worker: DispatchWorker)
+
+    assert %DispatchRecord{
+             status: "effect_deferred",
+             outcome_code: "run_state_advanced",
+             outcome_at: outcome_at
+           } = Repo.get!(DispatchRecord, dispatch.dispatch_id)
+
+    assert outcome_at == Shoestring.Test.FixedClock.now()
+    assert {:ok, %{repaired_count: 0, failures: []}} = Dispatches.reconcile(opts())
   end
 
   test "worker defers every advanced run state without firing or completing an effect" do
@@ -608,6 +746,61 @@ defmodule Shoestring.Harness.DispatchesTest do
     refute inspect(Repo.get!(Job, job.id).errors) =~ secret
   end
 
+  test "real executor sanitizes a writer timeout before persisting Oban errors", %{
+    goal: goal,
+    task: task
+  } do
+    prompt = "prompt=sentinel credential=secret-token"
+    credential_path = "workspace/private/project"
+
+    assert {:ok, _dispatch, job} =
+             Dispatches.enqueue(
+               run_request(goal, task, prompt: prompt, workspace_ref: credential_path),
+               identity(),
+               opts()
+             )
+
+    Repo.delete_all(from event in TrajectoryEvent, where: event.goal_id == ^goal.id)
+    stop_writer(goal.id)
+
+    test_pid = self()
+
+    Application.put_env(:shoestring, :dispatch_call_timeout, 1)
+
+    Application.put_env(:shoestring, :dispatch_writer_opts,
+      attempt_fun: fn input, _references, _state ->
+        send(test_pid, {:writer_blocked, self(), input})
+
+        receive do
+          :release_writer -> {:error, :released}
+        end
+      end
+    )
+
+    result_task =
+      AsyncTask.async(fn ->
+        perform_real_delivery(job)
+      end)
+
+    assert_receive {:writer_blocked, writer_pid, %Shoestring.Trajectory.AppendInput{} = input}
+    assert input.payload["prompt"] == prompt
+    assert input.payload["workspace_ref"] == credential_path
+
+    assert {:error, :dispatch_delivery_failed} = AsyncTask.await(result_task, :infinity)
+
+    errors = Repo.get!(Job, job.id).errors |> inspect()
+    refute errors =~ prompt
+    refute errors =~ "secret-token"
+    refute errors =~ credential_path
+    refute errors =~ "AppendInput"
+    refute errors =~ "timeout"
+    refute errors =~ "released"
+    assert errors =~ "dispatch_delivery_failed"
+
+    send(writer_pid, :release_writer)
+    stop_writer(goal.id)
+  end
+
   test "reconciliation ignores a pre-existing projected running run", %{goal: goal, task: task} do
     run =
       %RunRecord{id: @preexisting_run_id}
@@ -737,8 +930,8 @@ defmodule Shoestring.Harness.DispatchesTest do
                version: 1,
                goal_id: goal.id,
                task_id: task.id,
-               workspace_ref: "workspace/project",
-               prompt: "Dispatch a deterministic fake run.",
+               workspace_ref: Keyword.get(overrides, :workspace_ref, "workspace/project"),
+               prompt: Keyword.get(overrides, :prompt, "Dispatch a deterministic fake run."),
                policy: %{mode: "supervised", network: false, write_access: true},
                requested_capabilities: [],
                dispatch_id: Keyword.get(overrides, :dispatch_id, @dispatch_id),
@@ -783,5 +976,35 @@ defmodule Shoestring.Harness.DispatchesTest do
     |> Map.put(:attempted_at, Shoestring.Test.FixedClock.now())
     |> Map.put(:scheduled_at, Shoestring.Test.FixedClock.now())
     |> perform_job()
+  end
+
+  defp perform_real_delivery(job) do
+    job =
+      job
+      |> Map.put(:attempted_at, Shoestring.Test.FixedClock.now())
+      |> Map.put(:scheduled_at, Shoestring.Test.FixedClock.now())
+
+    Oban.config()
+    |> Executor.new(job, safe: false, ack: true)
+    |> Executor.call()
+    |> Map.fetch!(:result)
+  end
+
+  defp stop_writer(goal_id) do
+    case Registry.lookup(Shoestring.Trajectory.WriterRegistry, goal_id) do
+      [{writer_pid, _value}] ->
+        monitor_ref = Process.monitor(writer_pid)
+
+        assert :ok =
+                 DynamicSupervisor.terminate_child(
+                   Shoestring.Trajectory.WriterSupervisor,
+                   writer_pid
+                 )
+
+        assert_receive {:DOWN, ^monitor_ref, :process, ^writer_pid, _reason}
+
+      [] ->
+        :ok
+    end
   end
 end

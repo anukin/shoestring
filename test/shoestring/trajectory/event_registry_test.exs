@@ -50,6 +50,7 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
              {"dispatch.effect_deferred", 1},
              {"dispatch.effect_failed", 1},
              {"dispatch.effect_unknown", 1},
+             {"dispatch.cancelled", 1},
              {"dispatch.requested", 1}
            ] -- registered == []
   end
@@ -76,7 +77,12 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
       "error_code" => "effect_unknown"
     }
 
-    for type <- ["dispatch.effect_deferred", "dispatch.effect_failed", "dispatch.effect_unknown"] do
+    for type <- [
+          "dispatch.effect_deferred",
+          "dispatch.effect_failed",
+          "dispatch.effect_unknown",
+          "dispatch.cancelled"
+        ] do
       assert {:ok, ^payload} = EventRegistry.validate_payload(type, 1, payload)
 
       assert {:error, {:invalid_payload, ^type, 1, _}} =

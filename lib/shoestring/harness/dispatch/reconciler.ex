@@ -49,7 +49,8 @@ defmodule Shoestring.Harness.Dispatch.Reconciler do
     if failures != [] do
       Logger.error("durable dispatch reconciliation completed with failures",
         repaired_count: repaired_count,
-        failure_count: length(failures)
+        failure_count: length(failures),
+        failures: failures
       )
     end
   end
