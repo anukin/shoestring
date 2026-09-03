@@ -206,8 +206,7 @@ defmodule Shoestring.Harness.Projector do
          {:ok, snapshot_id} <- payload_uuid(payload, "admitted_snapshot_id"),
          :ok <- matching_run_id(event, run_id),
          %RunRecord{} <- Repo.get_by(RunRecord, id: run_id, goal_id: event.goal_id),
-         %CapacitySnapshotRecord{} <-
-           Repo.get_by(CapacitySnapshotRecord, id: snapshot_id, goal_id: event.goal_id) do
+         %CapacitySnapshotRecord{} <- find_admitted_snapshot(event.goal_id, snapshot_id) do
       case Repo.get(ExecutionLeaseRecord, grant_id) do
         nil -> insert_lease(event, payload, grant_id, run_id, snapshot_id, opts)
         %ExecutionLeaseRecord{goal_id: goal_id} when goal_id == event.goal_id -> :ok
@@ -239,6 +238,17 @@ defmodule Shoestring.Harness.Projector do
       false -> {:error, {:lease_not_owned, Map.get(payload, "grant_id")}}
       error -> error
     end
+  end
+
+  defp find_admitted_snapshot(goal_id, snapshot_id) do
+    observatory_goal_id = Shoestring.Harness.Observatory.observatory_goal_id()
+
+    Repo.one(
+      from snapshot in CapacitySnapshotRecord,
+        where:
+          snapshot.id == ^snapshot_id and
+            (snapshot.goal_id == ^goal_id or snapshot.goal_id == ^observatory_goal_id)
+    )
   end
 
   defp persist_checkpoint(event, payload, opts) do
