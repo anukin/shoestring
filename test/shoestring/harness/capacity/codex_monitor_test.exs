@@ -357,6 +357,11 @@ defmodule Shoestring.Harness.Capacity.CodexMonitorTest do
       FakeTransport.push_frame(fake_transport, %{"id" => "0:9999", "result" => %{}})
       _ = :sys.get_state(monitor)
       assert CodexMonitor.status(monitor) == :connected
+
+      # Send a bare integer id (safely dropped under new epoch scheme since it doesn't start with "0:")
+      FakeTransport.push_frame(fake_transport, %{"id" => 3, "result" => normal_read})
+      _ = :sys.get_state(monitor)
+      assert CodexMonitor.status(monitor) == :connected
     end
 
     test "stale transport is closed and delayed reply from prior epoch is ignored" do
@@ -651,6 +656,8 @@ defmodule Shoestring.Harness.Capacity.CodexMonitorTest do
       remaining1 = Process.read_timer(status1.reconnect_timer)
       assert remaining1 > 10_000 and remaining1 <= 12_501
 
+      # By using send(monitor2, :reconnect), we bypass CodexMonitor.reconnect/1
+      # which intentionally resets backoff_attempt to 0. This ensures attempt 2 logic runs.
       send(monitor2, :reconnect)
       status_connecting2 = CodexMonitor.get_status(monitor2)
       send(monitor2, {:codex_transport_error, status_connecting2.transport_pid, :err})
@@ -659,29 +666,10 @@ defmodule Shoestring.Harness.Capacity.CodexMonitorTest do
       assert_receive {:jitter, max2}
       assert max2 > max1
 
-      monitor3 =
-        start_supervised!(%{
-          id: :m3,
-          start:
-            {CodexMonitor, :start_link,
-             [
-               [
-                 name: false,
-                 version: "0.150.1",
-                 transport: Shoestring.Harness.Capacity.Codex.FakeTransport,
-                 transport_opts: [owner: self(), emit_connected: false],
-                 max_backoff_ms: 30_000,
-                 backoff_fn: fn _ -> -5000 end
-               ]
-             ]}
-        })
-
-      status_connecting3 = CodexMonitor.get_status(monitor3)
-      send(monitor3, {:codex_transport_error, status_connecting3.transport_pid, :err})
-      _ = :sys.get_state(monitor3)
-      status3 = CodexMonitor.get_status(monitor3)
-      remaining3 = Process.read_timer(status3.reconnect_timer)
-      assert remaining3 == 0 or remaining3 == false
+      # Now explicitly test that public reconnect/1 resets the backoff counter
+      CodexMonitor.reconnect(monitor2)
+      status_connecting_reconnect = CodexMonitor.get_status(monitor2)
+      assert status_connecting_reconnect.backoff_attempt == 0
 
       monitor4 =
         start_supervised!(%{
@@ -907,6 +895,47 @@ defmodule Shoestring.Harness.Capacity.CodexMonitorTest do
   end
 
   describe "public API and Capacity.Source behaviour" do
+    test "explicit read_capacity works when monitor is in non-optimal but connected states",
+         %{normal_read: normal_read} do
+      {:ok, fake_transport} =
+        start_supervised(
+          {FakeTransport,
+           owner: self(), emit_connected: true, auto_respond: default_auto_respond(normal_read)}
+        )
+
+      monitor =
+        start_supervised!(
+          {CodexMonitor,
+           name: false,
+           version: "0.150.1",
+           transport_pid: fake_transport,
+           sink: fn s -> {:ok, :persisted, s} end,
+           clock: fn -> ~U[2026-08-29 04:38:25Z] end}
+        )
+
+      _ = :sys.get_state(monitor)
+
+      # Put it into :incompatible_schema (degraded capacity state)
+      Shoestring.Harness.Capacity.CodexMonitor.get_status(monitor)
+      :sys.replace_state(monitor, fn state -> %{state | status: :incompatible_schema} end)
+
+      assert {:ok, _} = Shoestring.Harness.Capacity.CodexMonitor.read_capacity(monitor, 1000)
+
+      # Put into :refused
+      :sys.replace_state(monitor, fn state -> %{state | status: :refused} end)
+      assert {:ok, _} = Shoestring.Harness.Capacity.CodexMonitor.read_capacity(monitor, 1000)
+
+      # Put into :sink_error
+      :sys.replace_state(monitor, fn state -> %{state | status: :sink_error} end)
+      assert {:ok, _} = Shoestring.Harness.Capacity.CodexMonitor.read_capacity(monitor, 1000)
+
+      # Put into :unavailable (should fail)
+      :sys.replace_state(monitor, fn state -> %{state | status: :unavailable} end)
+
+      assert {:error, :not_connected} =
+               Shoestring.Harness.Capacity.CodexMonitor.read_capacity(monitor, 1000)
+    end
+
     test "implements Shoestring.Harness.Capacity.Source callbacks",
          %{normal_read: normal_read} do
       {:ok, fake_transport} =

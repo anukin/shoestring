@@ -104,9 +104,12 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
   Possible values:
   - `:connected` - healthy connection with compatible version and valid observations
   - `:disconnected` - transport not active (e.g. before initial connection or explicitly stopped)
-  - `:backoff` - transport disconnected or failed, currently waiting to reconnect
+  - `:backoff` - transient transport disconnected or failed while connected, currently waiting to reconnect
+  - `:unavailable` - transport failed repeatedly or before connection completed
   - `:auth_required` - provider indicated authentication / login is required
-  - `:degraded` - untested CLI version, structured quota refusal, parse error, or sink error
+  - `:incompatible_schema` - untested CLI version, parse error, or unrecognized schema. (connected? == true meaning transport up, but capacity not guaranteed)
+  - `:refused` - structured quota refusal. (connected? == true meaning transport up, but NOT dispatchable/available)
+  - `:sink_error` - persistence failed. (connected? == true meaning transport up, but capacity not dispatchable)
   - `:incompatible` - provider CLI missing or incompatible mode/version
   """
   @spec status(GenServer.server()) :: status()
@@ -152,6 +155,13 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
 
   # --- Capacity.Source Behaviour ---
 
+  @doc """
+  Returns the base provenance map for the codex app_server_stdio adapter.
+
+  Note on limitations: Since this function takes no server argument, it hardcodes `GenServer.whereis(__MODULE__)`.
+  Named or test instances that do not register globally as `__MODULE__` will receive the `:explicit_read` fallback.
+  Additionally, calling this function from inside the monitor process itself would deadlock because `last_observation` relies on a `GenServer.call`.
+  """
   @impl Shoestring.Harness.Capacity.Source
   def provenance do
     event =
@@ -337,7 +347,8 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
 
   def handle_call({:read_capacity, timeout}, from, state) do
     cond do
-      state.status not in [:connected, :degraded] or state.connection_phase != :connected ->
+      state.status not in [:connected, :incompatible_schema, :refused, :sink_error] or
+          state.connection_phase != :connected ->
         {:reply, {:error, :not_connected}, state}
 
       map_size(state.pending_requests) >= state.max_pending_requests ->
@@ -491,7 +502,7 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
             {version, compat, :incompatible}
 
           :degraded ->
-            {version, compat, :degraded}
+            {version, compat, :incompatible_schema}
 
           :compatible ->
             {version, compat, :disconnected}
