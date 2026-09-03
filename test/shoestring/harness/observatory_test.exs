@@ -355,9 +355,12 @@ defmodule Shoestring.Harness.ObservatoryTest do
         )
         |> Enum.to_list()
 
-      for {:ok, res} <- results do
-        assert match?({:ok, status, _snap} when status in [:persisted, :deduplicated], res)
-      end
+      assert length(results) == 10
+
+      Enum.each(results, fn result ->
+        assert {:ok, {:ok, status, _snapshot}} = result
+        assert status in [:persisted, :deduplicated]
+      end)
 
       # Exactly ONE event in trajectory
       goal_id = Observatory.observatory_goal_id()
