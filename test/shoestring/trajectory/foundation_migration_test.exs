@@ -5,13 +5,14 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
   alias Shoestring.Trajectory.EventRegistry
 
   @base_migration 20_260_831_050_006
-  @capacity_migration 20_260_901_232_628
+  @harden_migration 20_260_903_000_650
   @legacy_reason "legacy_capacity_contract_missing_provenance"
   @migrations [
     {20_260_830_012_112, Shoestring.Repo.Migrations.CreateTrajectoryFoundation},
     {20_260_830_023_603, Shoestring.Repo.Migrations.AddProjectorStatusAndFailureDetails},
     {20_260_831_050_006, Shoestring.Repo.Migrations.AddHarnessFoundation},
-    {20_260_901_232_628, Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2}
+    {20_260_901_232_628, Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2},
+    {20_260_903_000_650, Shoestring.Repo.Migrations.HardenCapacitySnapshotContractV2}
   ]
 
   test "the empty database migration creates the complete foundation" do
@@ -557,7 +558,7 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
 
     assert is_list(
              Ecto.Migrator.run(Shoestring.Test.MigrationRepo, @migrations, :up,
-               to: @capacity_migration
+               to: @harden_migration
              )
            )
 
@@ -776,7 +777,7 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
 
     assert @legacy_reason == migrated_snapshot["reason"]
 
-    assert [@capacity_migration] ==
+    assert [@harden_migration] ==
              Ecto.Migrator.run(Shoestring.Test.MigrationRepo, @migrations, :down, step: 1)
 
     {:ok, %{rows: snapshot_columns_after_down}} =
@@ -802,7 +803,14 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
              "extensions",
              "projection_sequence",
              "inserted_at",
-             "updated_at"
+             "updated_at",
+             "capacity_state_v2",
+             "observed_at_v2",
+             "freshness_max_age_seconds",
+             "source_provider_id",
+             "source_invocation_mode",
+             "source_event",
+             "reason"
            ]
 
     assert Enum.map(window_columns_after_down, &Enum.at(&1, 1)) == [
@@ -814,7 +822,8 @@ defmodule Shoestring.Trajectory.FoundationMigrationTest do
              "reset_at",
              "unknown_reason",
              "inserted_at",
-             "updated_at"
+             "updated_at",
+             "state_v2"
            ]
 
     {:ok, %{rows: restored_snapshots}} =
