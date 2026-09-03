@@ -59,14 +59,44 @@ defmodule Shoestring.Harness.Capacity do
       command_name = Keyword.get(opts, :command, default_cmd)
       timeout = Keyword.get(opts, :timeout, 5_000)
 
-      task =
-        Task.async(fn ->
-          execute_version_command(runner, command_name, opts)
+      parent = self()
+      ref = make_ref()
+
+      {pid, mon} =
+        spawn_monitor(fn ->
+          result =
+            try do
+              execute_version_command(runner, command_name, opts)
+            rescue
+              _ -> {:error, :invalid_runner}
+            catch
+              :exit, _ -> {:error, :invalid_runner}
+              :throw, _ -> {:error, :invalid_runner}
+              _, _ -> {:error, :invalid_runner}
+            end
+
+          send(parent, {ref, result})
         end)
 
-      case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
-        {:ok, result} -> result
-        nil -> {:error, :timeout}
+      receive do
+        {^ref, result} ->
+          Process.demonitor(mon, [:flush])
+          result
+
+        {:DOWN, ^mon, :process, ^pid, _reason} ->
+          {:error, :invalid_runner}
+      after
+        timeout ->
+          Process.demonitor(mon, [:flush])
+          Process.exit(pid, :kill)
+
+          receive do
+            {:DOWN, ^mon, :process, ^pid, _} -> :ok
+          after
+            0 -> :ok
+          end
+
+          {:error, :timeout}
       end
     end
   end
@@ -1185,6 +1215,8 @@ defmodule Shoestring.Harness.Capacity do
           _ -> {:error, :invalid_runner}
         catch
           :exit, _ -> {:error, :invalid_runner}
+          :throw, _ -> {:error, :invalid_runner}
+          _, _ -> {:error, :invalid_runner}
         end
 
       is_function(runner, 3) ->
@@ -1200,6 +1232,8 @@ defmodule Shoestring.Harness.Capacity do
           _ -> {:error, :invalid_runner}
         catch
           :exit, _ -> {:error, :invalid_runner}
+          :throw, _ -> {:error, :invalid_runner}
+          _, _ -> {:error, :invalid_runner}
         end
 
       is_function(runner, 2) ->
@@ -1215,6 +1249,8 @@ defmodule Shoestring.Harness.Capacity do
           _ -> {:error, :invalid_runner}
         catch
           :exit, _ -> {:error, :invalid_runner}
+          :throw, _ -> {:error, :invalid_runner}
+          _, _ -> {:error, :invalid_runner}
         end
 
       is_function(runner, 1) ->
@@ -1230,21 +1266,31 @@ defmodule Shoestring.Harness.Capacity do
           _ -> {:error, :invalid_runner}
         catch
           :exit, _ -> {:error, :invalid_runner}
+          :throw, _ -> {:error, :invalid_runner}
+          _, _ -> {:error, :invalid_runner}
         end
 
       is_map(runner) ->
-        case Map.get(runner, command_name) do
-          nil ->
-            {:error, :not_found}
+        try do
+          case Map.get(runner, command_name) do
+            nil ->
+              {:error, :not_found}
 
-          {output, status} when is_binary(output) and is_integer(status) ->
-            parse_cmd_output(output, status)
+            {output, status} when is_binary(output) and is_integer(status) ->
+              parse_cmd_output(output, status)
 
-          output when is_binary(output) ->
-            parse_cmd_output(output, 0)
+            output when is_binary(output) ->
+              parse_cmd_output(output, 0)
 
-          _other ->
-            {:error, :invalid_runner}
+            _other ->
+              {:error, :invalid_runner}
+          end
+        rescue
+          _ -> {:error, :invalid_runner}
+        catch
+          :exit, _ -> {:error, :invalid_runner}
+          :throw, _ -> {:error, :invalid_runner}
+          _, _ -> {:error, :invalid_runner}
         end
 
       true ->
@@ -1272,12 +1318,16 @@ defmodule Shoestring.Harness.Capacity do
       _ -> {:error, :invalid_runner}
     catch
       :exit, _ -> {:error, :invalid_runner}
+      :throw, _ -> {:error, :invalid_runner}
+      _, _ -> {:error, :invalid_runner}
     end
   end
 
   defp parse_cmd_output(output, 0) do
+    bounded_output = String.slice(output, 0, 1024)
+
     raw =
-      output
+      bounded_output
       |> String.trim()
       |> String.split(~r/\r?\n/)
       |> List.first() || ""
@@ -1294,6 +1344,7 @@ defmodule Shoestring.Harness.Capacity do
   defp parse_cmd_output(output, exit_status) do
     snippet =
       output
+      |> String.slice(0, 1024)
       |> Security.redact()
       |> String.trim()
       |> String.slice(0, 200)

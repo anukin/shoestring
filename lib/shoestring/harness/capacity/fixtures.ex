@@ -28,10 +28,8 @@ defmodule Shoestring.Harness.Capacity.Fixtures do
   end
 
   @doc "Lists all tracked capacity fixture relative paths sorted."
-  @spec list_fixtures() :: [String.t()]
-  def list_fixtures do
-    root = fixture_root()
-
+  @spec list_fixtures(String.t()) :: [String.t()]
+  def list_fixtures(root \\ fixture_root()) do
     root
     |> Path.join("**/*.json")
     |> Path.wildcard()
@@ -66,16 +64,14 @@ defmodule Shoestring.Harness.Capacity.Fixtures do
   end
 
   @doc "Scans all tracked fixtures on disk for secret patterns and forbidden keys."
-  @spec scan_all_fixtures() ::
+  @spec scan_all_fixtures(String.t()) ::
           {:ok, pos_integer()} | {:error, :no_fixtures_found | [{String.t(), [String.t()]}]}
-  def scan_all_fixtures do
-    fixtures = list_fixtures()
+  def scan_all_fixtures(root \\ fixture_root()) do
+    fixtures = list_fixtures(root)
 
     if fixtures == [] do
       {:error, :no_fixtures_found}
     else
-      root = fixture_root()
-
       violations =
         Enum.flat_map(fixtures, fn rel_path ->
           path = Path.join(root, rel_path)

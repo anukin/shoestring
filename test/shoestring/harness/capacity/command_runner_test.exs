@@ -130,11 +130,11 @@ defmodule Shoestring.Harness.Capacity.CommandRunnerTest do
       @impl true
       def cmd(_path, _args, _opts) do
         leaking_output = """
-        error: authentication failed using api_key: sk-1234567890abcdef123456
+        auth failed: api_key: sk-1234567890abcdef123456
         Authorization: Bearer secret-bearer-token-123456
         password=super_secret_password_here
-        failed to read config at /Users/developer_alice/.config/codex.json
-        failed to read cache at /home/developer_bob/.cache/codex
+        path: /Users/developer_alice/codex.json
+        cache: /home/developer_bob/codex
         """
 
         {leaking_output, 1}
@@ -217,6 +217,56 @@ defmodule Shoestring.Harness.Capacity.CommandRunnerTest do
     test "handles non-runner types gracefully" do
       assert {:error, :invalid_runner} = Capacity.discover_version(:codex, runner: 99_999)
       assert {:error, :invalid_runner} = Capacity.discover_version(:codex, runner: [:a, :b])
+    end
+
+    test "runner throwing never kills the caller and returns {:error, :invalid_runner}" do
+      throw_runner = fn _cmd -> throw(:unexpected_throw_payload) end
+      caller = self()
+
+      assert {:error, :invalid_runner} =
+               Capacity.discover_version(:codex, runner: throw_runner)
+
+      assert Process.alive?(caller)
+    end
+
+    test "runner calling exit never kills the caller and returns {:error, :invalid_runner}" do
+      exit_runner = fn _cmd -> exit(:forced_runner_abnormal_exit) end
+      caller = self()
+
+      assert {:error, :invalid_runner} =
+               Capacity.discover_version(:codex, runner: exit_runner)
+
+      assert Process.alive?(caller)
+    end
+
+    test "redaction removes entire Authorization Basic credential and bare token= assignments" do
+      basic_runner = fn _cmd ->
+        out = """
+        Authorization: Basic dXNlcjpzdXBlcl9zZWNyZXRfcGFzc3dvcmQ=
+        token=my_bare_token_secret_value_123
+        token: "another_secret_token"
+        password: 
+        api_key = 
+        secret:
+        password=""
+        access_token:""
+        """
+
+        {out, 1}
+      end
+
+      assert {:error, {:command_failed, 1, snippet}} =
+               Capacity.discover_version(:codex, runner: basic_runner)
+
+      refute snippet =~ "dXNlcjpzdXBlcl9zZWNyZXRfcGFzc3dvcmQ="
+      refute snippet =~ "my_bare_token_secret_value_123"
+      refute snippet =~ "another_secret_token"
+
+      assert snippet =~ "Authorization: [REDACTED]"
+      assert snippet =~ "token=[REDACTED]"
+      assert snippet =~ "token:[REDACTED]"
+      assert snippet =~ "password:[REDACTED]"
+      assert snippet =~ "api_key=[REDACTED]"
     end
   end
 

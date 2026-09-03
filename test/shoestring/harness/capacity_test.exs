@@ -1116,4 +1116,109 @@ defmodule Shoestring.Harness.CapacityTest do
       assert secondary.used_percent == 16
     end
   end
+
+  describe "fail-closed credential markers with absent/empty values" do
+    @empty_marker_cases [
+      "password: ",
+      "api_key =",
+      "secret:",
+      "password=\"\"",
+      "access_token:\"\"",
+      "token: ",
+      "token = "
+    ]
+
+    test "safe_observation?/1 rejects observations containing absent or empty credential markers" do
+      for marker <- @empty_marker_cases do
+        obs = %{
+          "captured_at" => "2026-08-29T04:38:16.163Z",
+          "note" => "Authentication details: #{marker}",
+          "payload" => %{
+            "result" => %{
+              "rateLimits" => %{
+                "primary" => %{"usedPercent" => 10},
+                "secondary" => %{"usedPercent" => 20}
+              }
+            }
+          }
+        }
+
+        refute Capacity.safe_observation?(obs),
+               "Expected safe_observation?/1 to reject empty credential marker: #{inspect(marker)}"
+
+        assert {:error, :contains_secrets_or_forbidden_content} =
+                 Capacity.normalize(
+                   :codex,
+                   :app_server_stdio,
+                   obs,
+                   version: "0.150.1",
+                   now: @evaluation_time
+                 )
+      end
+    end
+  end
+
+  describe "generic Contract validation vs Capacity observation boundaries" do
+    test "Contract.safe_term?/1 permits filesystem paths in prompts and checkpoints" do
+      alias Shoestring.Harness.Contract
+
+      # Ordinary prompts, event texts, and checkpoint paths must remain valid in Contract
+      assert Contract.safe_term?("/Users/developer/project")
+      assert Contract.safe_term?("/home/developer/project")
+
+      assert Contract.safe_term?(%{
+               "prompt" => "Inspect /Users/alice/repo and fix bugs",
+               "workspace" => "/Users/alice/projects/shoestring"
+             })
+
+      assert Contract.safe_term?(%{
+               "checkpoint" => "/home/bob/checkpoints/ckpt-1",
+               "note" => "Saving snapshot to /home/bob/data"
+             })
+
+      # But generic secrets in Contract are still rejected
+      refute Contract.safe_term?("Authorization: Bearer my-secret-token")
+      refute Contract.safe_term?("password: supersecret")
+      refute Contract.safe_term?("sk-1234567890abcdef12345")
+    end
+
+    test "Capacity.safe_observation?/1 rejects filesystem paths at capacity boundary" do
+      refute Capacity.safe_observation?(%{"home" => "/Users/developer/code"})
+      refute Capacity.safe_observation?(%{"home" => "/home/developer/code"})
+    end
+  end
+
+  describe "key tokenization prevents false positives" do
+    test "allows benign keys such as prompt_tokens, transcription, and secretary" do
+      benign_obs = %{
+        "captured_at" => "2026-08-29T04:38:16.163Z",
+        "usage" => %{"prompt_tokens" => 50, "completion_tokens" => 30, "total_tokens" => 80},
+        "transcription" => "valid transcribed text",
+        "secretary" => "administrative assistant notes",
+        "session" => "session_a",
+        "payload" => %{
+          "result" => %{
+            "rateLimits" => %{
+              "primary" => %{"usedPercent" => 10},
+              "secondary" => %{"usedPercent" => 20}
+            }
+          }
+        }
+      }
+
+      assert Capacity.safe_observation?(benign_obs)
+
+      assert {:ok, snapshot} =
+               Capacity.normalize(
+                 :codex,
+                 :app_server_stdio,
+                 benign_obs,
+                 version: "0.150.1",
+                 now: @evaluation_time
+               )
+
+      assert snapshot.capacity_state == :observed
+      assert snapshot.confidence == :high
+    end
+  end
 end
