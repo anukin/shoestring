@@ -560,6 +560,7 @@ defmodule Shoestring.Harness.CapacityTest do
       assert snapshot.capacity_state == :refused
       assert snapshot.confidence == :low
       assert snapshot.reason == "cli_reported_rate_limit_refusal_without_capacity_snapshot"
+      assert snapshot.source.event == :status_line_input
     end
   end
 
@@ -705,6 +706,547 @@ defmodule Shoestring.Harness.CapacityTest do
 
       compat = Capacity.compatibility(:codex, :app_server_stdio, long_reason)
       assert String.length(compat.reason) <= 300
+    end
+  end
+
+  describe "normalize/4 nested non-map payloads (B1)" do
+    test "Codex observation with non-map payload fails closed without BadMapError" do
+      for bad_payload <- ["string_payload", [1, 2, 3], 42, true, false] do
+        bad_obs = %{
+          "captured_at" => "2026-08-29T04:38:16.163Z",
+          "payload" => bad_payload
+        }
+
+        assert {:ok, snapshot} =
+                 Capacity.normalize(
+                   :codex,
+                   :app_server_stdio,
+                   bad_obs,
+                   version: "0.150.1",
+                   now: @evaluation_time
+                 )
+
+        assert snapshot.capacity_state == :unknown
+        assert snapshot.confidence == :none
+        assert snapshot.reason == "malformed_payload"
+        assert Enum.all?(snapshot.windows, &(&1.state == :unknown))
+      end
+    end
+
+    test "Claude observation with non-map payload fails closed without BadMapError" do
+      for bad_payload <- ["raw_string_response", [1, 2, 3], 99.5, false] do
+        bad_obs = %{
+          "captured_at" => "2026-08-29T07:34:25.000Z",
+          "payload" => bad_payload
+        }
+
+        assert {:ok, snapshot} =
+                 Capacity.normalize(
+                   :claude,
+                   :interactive_status_line,
+                   bad_obs,
+                   version: "2.1.251",
+                   now: ~U[2026-08-29 07:34:25Z]
+                 )
+
+        assert snapshot.capacity_state == :unknown
+        assert snapshot.confidence == :none
+        assert snapshot.reason == "malformed_payload"
+        assert Enum.all?(snapshot.windows, &(&1.state == :unknown))
+      end
+    end
+
+    test "preserves last-known observation when nested payload is not a map" do
+      fixture = CapacityFixtures.load_fixture!("codex/normal-read.json")
+
+      {:ok, last_known} =
+        Capacity.normalize(
+          :codex,
+          :app_server_stdio,
+          fixture,
+          version: "0.150.1",
+          now: @evaluation_time
+        )
+
+      bad_obs = %{
+        "captured_at" => "2026-08-29T04:38:20.000Z",
+        "payload" => "non_map_string"
+      }
+
+      assert {:ok, preserved} =
+               Capacity.normalize(
+                 :codex,
+                 :app_server_stdio,
+                 bad_obs,
+                 version: "0.150.1",
+                 now: @evaluation_time,
+                 last_known_snapshot: last_known
+               )
+
+      assert preserved.capacity_state == :degraded
+      assert preserved.compatibility_state == :degraded
+      assert preserved.confidence == :low
+      assert preserved.reason =~ "preserving last-known observation"
+      assert [primary, secondary] = preserved.windows
+      assert primary.used_percent == 13
+      assert secondary.used_percent == 16
+    end
+  end
+
+  describe "version handling non-string values (B2)" do
+    test "compatibility/3 never crashes on non-string version values" do
+      for non_string_version <- [123, 0.150, %{"ver" => "1.0"}, [:a, :b], :untested] do
+        compat = Capacity.compatibility(:codex, :app_server_stdio, non_string_version)
+
+        assert compat.compatibility_state == :degraded
+        assert compat.version == nil
+        assert compat.reason =~ "untested_cli_version"
+        assert String.length(compat.reason) <= 300
+      end
+    end
+
+    test "normalize/4 handles non-string version in payload without crashing" do
+      obs_with_number_version = %{
+        "captured_at" => "2026-08-29T04:38:16.163Z",
+        "payload" => %{
+          "version" => 12345,
+          "result" => %{
+            "rateLimits" => %{
+              "primary" => %{"usedPercent" => 10},
+              "secondary" => %{"usedPercent" => 20}
+            }
+          }
+        }
+      }
+
+      assert {:ok, snapshot} =
+               Capacity.normalize(
+                 :codex,
+                 :app_server_stdio,
+                 obs_with_number_version,
+                 now: @evaluation_time
+               )
+
+      assert snapshot.compatibility_state == :degraded
+      assert snapshot.capacity_state == :degraded
+      assert snapshot.reason =~ "untested_cli_version"
+    end
+  end
+
+  describe "credential key and sensitive pattern detection (B3)" do
+    @poisoned_cases [
+      {"token", %{"token" => "harmless_sample_token"}},
+      {"api_key", %{"api_key" => "harmless_sample_key"}},
+      {"apiKey", %{"apiKey" => "harmless_camel_key"}},
+      {"access_token", %{"access_token" => "harmless_access"}},
+      {"refresh_token", %{"refresh_token" => "harmless_refresh"}},
+      {"password", %{"password" => "harmless_password_val"}},
+      {"secret", %{"secret" => "harmless_secret_val"}},
+      {"cookie", %{"cookie" => "harmless_cookie_val"}},
+      {"authorization", %{"authorization" => "harmless_auth_val"}},
+      {"private_key", %{"private_key" => "harmless_private_key"}},
+      {"privateKey", %{"privateKey" => "harmless_private_key"}},
+      {"oauth_token", %{"oauth_token" => "harmless_oauth_token"}},
+      {"oauthToken", %{"oauthToken" => "harmless_oauth_token"}},
+      {"prompt", %{"prompt" => "harmless prompt text"}},
+      {"transcript", %{"transcript" => "harmless transcript text"}},
+      {"raw_transcript", %{"raw_transcript" => "harmless raw transcript"}},
+      {"mac_user_path", %{"home" => "/Users/developer/code"}},
+      {"linux_user_path", %{"home" => "/home/developer/code"}}
+    ]
+
+    test "safe_observation?/1 rejects harmless non-sk credential keys and user paths" do
+      for {label, poison} <- @poisoned_cases do
+        obs =
+          Map.merge(
+            %{
+              "captured_at" => "2026-08-29T04:38:16.163Z",
+              "payload" => %{
+                "result" => %{
+                  "rateLimits" => %{
+                    "primary" => %{"usedPercent" => 10},
+                    "secondary" => %{"usedPercent" => 20}
+                  }
+                }
+              }
+            },
+            poison
+          )
+
+        refute Capacity.safe_observation?(obs),
+               "Expected safe_observation?/1 to reject poison case: #{label}"
+      end
+    end
+
+    test "normalize/4 fails closed on harmless non-sk credential keys and paths" do
+      for {label, poison} <- @poisoned_cases do
+        obs =
+          Map.merge(
+            %{
+              "captured_at" => "2026-08-29T04:38:16.163Z",
+              "payload" => %{
+                "result" => %{
+                  "rateLimits" => %{
+                    "primary" => %{"usedPercent" => 10},
+                    "secondary" => %{"usedPercent" => 20}
+                  }
+                }
+              }
+            },
+            poison
+          )
+
+        assert {:error, :contains_secrets_or_forbidden_content} =
+                 Capacity.normalize(
+                   :codex,
+                   :app_server_stdio,
+                   obs,
+                   version: "0.150.1",
+                   now: @evaluation_time
+                 ),
+               "Expected normalize/4 to reject poison case: #{label}"
+      end
+    end
+
+    test "normalize/4 allows live observations containing session identifiers (PR #14 / PR #13 regression)" do
+      obs = %{
+        "captured_at" => "2026-08-29T04:38:16.163Z",
+        "session_id" => "real_claude_session_123",
+        "account_id" => "acc_999",
+        "thread_id" => "thread_abc",
+        "turn_id" => "turn_xyz",
+        "payload" => %{
+          "rate_limits" => %{
+            "five_hour" => %{"used_percentage" => 25.5},
+            "seven_day" => %{"used_percentage" => 40.0}
+          }
+        }
+      }
+
+      assert {:ok, snapshot} =
+               Capacity.normalize(
+                 :claude,
+                 :interactive_status_line,
+                 obs,
+                 version: "2.1.251",
+                 now: @evaluation_time
+               )
+
+      assert snapshot.capacity_state == :degraded
+      assert snapshot.support_tier == :conservative_partial
+      assert [five_hour, seven_day] = snapshot.windows
+      assert five_hour.used_percent == 25.5
+      assert seven_day.used_percent == 40.0
+    end
+  end
+
+  describe "truthful bounds violations (:payload_too_large, :payload_too_deep)" do
+    test "rejects maps exceeding 64 keys with :payload_too_large" do
+      oversized_map =
+        Enum.into(1..70, %{"captured_at" => "2026-08-29T04:38:16.163Z"}, fn i ->
+          {"additive_field_#{i}", i}
+        end)
+
+      assert {:error, :payload_too_large} =
+               Capacity.normalize(
+                 :codex,
+                 :app_server_stdio,
+                 oversized_map,
+                 version: "0.150.1",
+                 now: @evaluation_time
+               )
+    end
+
+    test "rejects lists exceeding 128 items with :payload_too_large" do
+      oversized_list_obs = %{
+        "captured_at" => "2026-08-29T04:38:16.163Z",
+        "payload" => %{
+          "result" => %{
+            "rateLimits" => %{
+              "primary" => %{"usedPercent" => 10},
+              "secondary" => %{"usedPercent" => 20}
+            },
+            "extra_list" => Enum.to_list(1..130)
+          }
+        }
+      }
+
+      assert {:error, :payload_too_large} =
+               Capacity.normalize(
+                 :codex,
+                 :app_server_stdio,
+                 oversized_list_obs,
+                 version: "0.150.1",
+                 now: @evaluation_time
+               )
+    end
+
+    test "rejects nesting depth exceeding 10 with :payload_too_deep" do
+      deep_nested =
+        Enum.reduce(1..12, %{"leaf" => 42}, fn i, acc ->
+          %{"layer_#{i}" => acc}
+        end)
+
+      deep_obs = %{
+        "captured_at" => "2026-08-29T04:38:16.163Z",
+        "payload" => deep_nested
+      }
+
+      assert {:error, :payload_too_deep} =
+               Capacity.normalize(
+                 :codex,
+                 :app_server_stdio,
+                 deep_obs,
+                 version: "0.150.1",
+                 now: @evaluation_time
+               )
+    end
+
+    test "tolerates additive vendor fields within resource bounds" do
+      additive_obs = %{
+        "captured_at" => "2026-08-29T04:38:16.163Z",
+        "vendor_tracking_id" => "vnd_12345",
+        "feature_flags" => %{"beta_pricing" => true},
+        "payload" => %{
+          "result" => %{
+            "rateLimits" => %{
+              "primary" => %{"usedPercent" => 10, "resetsAt" => 1_787_994_541},
+              "secondary" => %{"usedPercent" => 20, "resetsAt" => 1_788_494_929}
+            },
+            "unrecognized_future_metadata" => %{"score" => 0.95}
+          }
+        }
+      }
+
+      assert {:ok, snapshot} =
+               Capacity.normalize(
+                 :codex,
+                 :app_server_stdio,
+                 additive_obs,
+                 version: "0.150.1",
+                 now: @evaluation_time
+               )
+
+      assert snapshot.capacity_state == :observed
+      assert snapshot.confidence == :high
+    end
+  end
+
+  describe "simultaneous reasons preservation and joining" do
+    test "Codex joins drift, staleness, and missing window within 300 chars" do
+      stale_partial_obs = %{
+        "captured_at" => "2026-08-29T04:00:00.000Z",
+        "payload" => %{
+          "result" => %{
+            "rateLimits" => %{
+              "primary" => %{"usedPercent" => 15}
+              # secondary is intentionally absent
+            }
+          }
+        }
+      }
+
+      # Drift version 0.151.0, evaluation time 04:30:00 (> 300s after captured_at)
+      assert {:ok, snapshot} =
+               Capacity.normalize(
+                 :codex,
+                 :app_server_stdio,
+                 stale_partial_obs,
+                 version: "0.151.0",
+                 now: @evaluation_time
+               )
+
+      assert snapshot.capacity_state == :degraded
+      assert snapshot.compatibility_state == :degraded
+      assert snapshot.confidence == :low
+
+      assert snapshot.reason =~ "untested_cli_version: 0.151.0"
+      assert snapshot.reason =~ "stale_observation"
+      assert snapshot.reason =~ "missing_window: secondary"
+      assert String.length(snapshot.reason) <= 300
+    end
+
+    test "Claude joins drift, staleness, and partial window within 300 chars" do
+      stale_partial_claude = %{
+        "captured_at" => "2026-08-29T06:00:00.000Z",
+        "payload" => %{
+          "rate_limits" => %{
+            "five_hour" => %{"used_percentage" => 20.0}
+            # seven_day absent
+          }
+        }
+      }
+
+      assert {:ok, snapshot} =
+               Capacity.normalize(
+                 :claude,
+                 :interactive_status_line,
+                 stale_partial_claude,
+                 version: "2.2.0",
+                 now: ~U[2026-08-29 07:34:25Z]
+               )
+
+      assert snapshot.capacity_state == :degraded
+      assert snapshot.compatibility_state == :degraded
+      assert snapshot.confidence == :low
+
+      assert snapshot.reason =~ "untested_cli_version: 2.2.0"
+      assert snapshot.reason =~ "stale_observation"
+      assert snapshot.reason =~ "partial_window_observation"
+      assert String.length(snapshot.reason) <= 300
+    end
+  end
+
+  describe "binary malformed JSON handling" do
+    test "malformed JSON string returns unknown snapshot without raising" do
+      assert {:ok, snapshot} =
+               Capacity.normalize(
+                 :codex,
+                 :app_server_stdio,
+                 "{\"incomplete_json\":",
+                 version: "0.150.1",
+                 now: @evaluation_time
+               )
+
+      assert snapshot.capacity_state == :unknown
+      assert snapshot.confidence == :none
+      assert snapshot.reason == "malformed_json"
+    end
+
+    test "malformed JSON string preserves last-known snapshot when provided" do
+      fixture = CapacityFixtures.load_fixture!("codex/normal-read.json")
+
+      {:ok, last_known} =
+        Capacity.normalize(
+          :codex,
+          :app_server_stdio,
+          fixture,
+          version: "0.150.1",
+          now: @evaluation_time
+        )
+
+      assert {:ok, preserved} =
+               Capacity.normalize(
+                 :codex,
+                 :app_server_stdio,
+                 "not_even_json{{{",
+                 version: "0.150.1",
+                 now: @evaluation_time,
+                 last_known_snapshot: last_known
+               )
+
+      assert preserved.capacity_state == :degraded
+      assert preserved.compatibility_state == :degraded
+      assert preserved.reason =~ "preserving last-known observation"
+      assert preserved.reason =~ "malformed_json"
+      assert [primary, secondary] = preserved.windows
+      assert primary.used_percent == 13
+      assert secondary.used_percent == 16
+    end
+  end
+
+  describe "fail-closed credential markers with absent/empty values" do
+    @empty_marker_cases [
+      "password: ",
+      "api_key =",
+      "secret:",
+      "password=\"\"",
+      "access_token:\"\"",
+      "token: ",
+      "token = "
+    ]
+
+    test "safe_observation?/1 rejects observations containing absent or empty credential markers" do
+      for marker <- @empty_marker_cases do
+        obs = %{
+          "captured_at" => "2026-08-29T04:38:16.163Z",
+          "note" => "Authentication details: #{marker}",
+          "payload" => %{
+            "result" => %{
+              "rateLimits" => %{
+                "primary" => %{"usedPercent" => 10},
+                "secondary" => %{"usedPercent" => 20}
+              }
+            }
+          }
+        }
+
+        refute Capacity.safe_observation?(obs),
+               "Expected safe_observation?/1 to reject empty credential marker: #{inspect(marker)}"
+
+        assert {:error, :contains_secrets_or_forbidden_content} =
+                 Capacity.normalize(
+                   :codex,
+                   :app_server_stdio,
+                   obs,
+                   version: "0.150.1",
+                   now: @evaluation_time
+                 )
+      end
+    end
+  end
+
+  describe "generic Contract validation vs Capacity observation boundaries" do
+    test "Contract.safe_term?/1 permits filesystem paths in prompts and checkpoints" do
+      alias Shoestring.Harness.Contract
+
+      # Ordinary prompts, event texts, and checkpoint paths must remain valid in Contract
+      assert Contract.safe_term?("/Users/developer/project")
+      assert Contract.safe_term?("/home/developer/project")
+
+      assert Contract.safe_term?(%{
+               "prompt" => "Inspect /Users/alice/repo and fix bugs",
+               "workspace" => "/Users/alice/projects/shoestring"
+             })
+
+      assert Contract.safe_term?(%{
+               "checkpoint" => "/home/bob/checkpoints/ckpt-1",
+               "note" => "Saving snapshot to /home/bob/data"
+             })
+
+      # But generic secrets in Contract are still rejected
+      refute Contract.safe_term?("Authorization: Bearer my-secret-token")
+      refute Contract.safe_term?("password: supersecret")
+      refute Contract.safe_term?("sk-1234567890abcdef12345")
+    end
+
+    test "Capacity.safe_observation?/1 rejects filesystem paths at capacity boundary" do
+      refute Capacity.safe_observation?(%{"home" => "/Users/developer/code"})
+      refute Capacity.safe_observation?(%{"home" => "/home/developer/code"})
+    end
+  end
+
+  describe "key tokenization prevents false positives" do
+    test "allows benign keys such as prompt_tokens, transcription, and secretary" do
+      benign_obs = %{
+        "captured_at" => "2026-08-29T04:38:16.163Z",
+        "usage" => %{"prompt_tokens" => 50, "completion_tokens" => 30, "total_tokens" => 80},
+        "transcription" => "valid transcribed text",
+        "secretary" => "administrative assistant notes",
+        "session" => "session_a",
+        "payload" => %{
+          "result" => %{
+            "rateLimits" => %{
+              "primary" => %{"usedPercent" => 10},
+              "secondary" => %{"usedPercent" => 20}
+            }
+          }
+        }
+      }
+
+      assert Capacity.safe_observation?(benign_obs)
+
+      assert {:ok, snapshot} =
+               Capacity.normalize(
+                 :codex,
+                 :app_server_stdio,
+                 benign_obs,
+                 version: "0.150.1",
+                 now: @evaluation_time
+               )
+
+      assert snapshot.capacity_state == :observed
+      assert snapshot.confidence == :high
     end
   end
 end

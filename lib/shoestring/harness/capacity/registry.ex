@@ -91,7 +91,7 @@ defmodule Shoestring.Harness.Capacity.Registry do
   def tested_version?(_entry, _version), do: false
 
   @doc "Normalizes a CLI version string to bare semver (e.g. 'codex-cli 0.150.1' -> '0.150.1')."
-  @spec normalize_version(String.t() | nil) :: String.t() | nil
+  @spec normalize_version(String.t() | nil | term()) :: String.t() | nil
   def normalize_version(nil), do: nil
 
   def normalize_version(version_string) when is_binary(version_string) do
@@ -102,6 +102,8 @@ defmodule Shoestring.Harness.Capacity.Registry do
       _ -> trimmed
     end
   end
+
+  def normalize_version(_other), do: nil
 
   @doc "Normalizes provider atom or string."
   @spec normalize_provider(atom() | String.t()) :: {:ok, atom()} | {:error, :unsupported_provider}

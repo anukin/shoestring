@@ -27,7 +27,7 @@ flowchart TD
 On startup, the monitor discovers the installed CLI version via the injectable command runner:
 
 ```elixir
-case Shoestring.Harness.Capacity.discover_version(:codex) do
+case Shoestring.Harness.Capacity.discover_version(:codex, timeout: 5_000) do
   {:ok, %{raw: raw_version, version: semver}} ->
     # e.g. %{raw: "codex-cli 0.150.1", version: "0.150.1"}
     ...
@@ -37,13 +37,28 @@ case Shoestring.Harness.Capacity.discover_version(:codex) do
     ...
 
   {:error, {:command_failed, status, snippet}} ->
-    # Exit status non-zero
+    # Exit status non-zero; snippet is bounded to 200 chars and redacted of any credentials
+    ...
+
+  {:error, :timeout} ->
+    # Command execution exceeded bounded timeout
+    ...
+
+  {:error, :invalid_runner} ->
+    # Injected runner module, function, or map was malformed
+    ...
+
+  {:error, :unsupported_provider} ->
+    # Provider is not supported
     ...
 end
 ```
 
-In unit tests, an injected runner must be passed via `opts[:runner]` (e.g. a mock module
-or function) so that tests run completely offline without installed CLIs or network access.
+In unit tests, an injected runner must be passed via `opts[:runner]` (e.g. a mock module,
+1/2/3-arity function, or string/tuple map) so that tests run completely offline without
+installed CLIs or network access. CLI failure diagnostics are automatically sanitized
+using `Shoestring.Harness.Security.redact/1`, stripping tokens, passwords, API keys,
+and user filesystem paths before returning.
 
 ### Phase 2: Compatibility Evaluation
 
@@ -63,6 +78,9 @@ The resulting map contains:
 * `:version` - normalized semver string or `nil`
 * `:reason` - bounded explanation string if degraded or incompatible (`nil` when compatible)
 
+Non-string version inputs (e.g. integers, maps, lists, atoms) fail closed as untested/unknown
+with degraded state and bounded reason without crashing.
+
 #### Compatibility Policy Rules:
 1. **Tested version match** (`0.150.1` for Codex, `2.1.251` for Claude):
    * Codex: `:proactive` tier, `:compatible` outcome.
@@ -80,29 +98,60 @@ an `account/rateLimits/updated` notification, or a Claude `statusLine` callback)
 normalizes the raw payload into a versioned `Shoestring.Harness.CapacitySnapshot`:
 
 ```elixir
-{:ok, snapshot} =
-  Shoestring.Harness.Capacity.normalize(
-    :codex,
-    :app_server_stdio,
-    raw_payload,
-    version: discovered_version,
-    captured_at: DateTime.utc_now(),
-    source_event: :explicit_read, # or :update_notification / :status_line_input
-    scope: "subscription",
-    last_known_snapshot: state.last_known_snapshot
-  )
+case Shoestring.Harness.Capacity.normalize(
+  :codex,
+  :app_server_stdio,
+  raw_payload,
+  version: discovered_version,
+  captured_at: DateTime.utc_now(),
+  source_event: :explicit_read, # or :update_notification / :status_line_input
+  scope: "subscription",
+  last_known_snapshot: state.last_known_snapshot
+) do
+  {:ok, %Shoestring.Harness.CapacitySnapshot{} = snapshot} ->
+    ...
+
+  {:error, :contains_secrets_or_forbidden_content} ->
+    # Payload contains actual credential keys (token, api_key, password, private_key, oauth_token, etc.), secret patterns, or paths.
+    # Note: correlation identifiers like `session_id`, `account_id`, `thread_id`, and `turn_id` are explicitly 
+    # allowed in live observations (they are only rejected by the static fixture-hygiene scanner).
+    ...
+
+  {:error, :payload_too_large} ->
+    # Map size exceeds 64 keys or list exceeds 128 elements
+    ...
+
+  {:error, :payload_too_deep} ->
+    # JSON nesting depth exceeds 10 levels
+    ...
+end
 ```
 
 #### Normalization Semantics:
-* **Additive unknown fields:** Tolerated without error. Unknown vendor JSON keys are ignored.
+* **Security & Secret Scanning:** All observations are checked for quoted/unquoted
+  credential keys (`token`, `api_key`, `access_token`, `refresh_token`, `password`, `secret`,
+  `cookie`, `authorization`, `private_key`, `oauth_token`), prompts,
+  transcripts, and user paths (`/Users/`, `/home/`) regardless of value shape.
+  Note: correlation identifiers like `session_id`, `account_id`, `thread_id`, and `turn_id` are explicitly 
+  allowed in live observations and are only rejected by the static fixture-hygiene scanner.
+* **Truthful Bounds Outcomes:** Benign size and depth limits return truthful `:payload_too_large`
+  and `:payload_too_deep` errors rather than secret violations.
+* **Additive unknown fields:** Tolerated without error within documented bounds.
+* **Nested non-map payload resilience:** Observations containing non-map payload values fail
+  closed returning `:unknown` with reason `"malformed_payload"` (or preserve last known snapshot),
+  never raising `BadMapError`.
+* **Binary malformed JSON:** Unparseable JSON strings fail closed returning `:unknown` with
+  reason `"malformed_json"` (or preserve last known snapshot).
 * **Missing required fields:** Missing rate-limit containers or windows degrade or reject
   with bounded reasons (`"no_valid_windows"`, `"missing_window: secondary"`).
 * **Malformed values:** Invalid numbers, negative percentages, or bad types become
   `:unknown` or `:degraded` with explicit reasons; they **never** fabricate zero usage.
 * **Refusal indicators:** Vendor rate-limit reached indicators yield `:refused` state
-  with `:low` confidence.
+  with `:low` confidence. Claude interactive refusals preserve `:status_line_input` provenance.
 * **Freshness & Stale windows:** Observations older than 300 seconds automatically degrade
   to `:stale_observation` with `:low` confidence. Future timestamps fail closed as `:unknown`.
+* **Simultaneous Reason Joining:** Simultaneous version-drift, staleness, and partiality reasons
+  are preserved and joined with `"; "` within a 300-character bound (e.g. `"untested_cli_version: 0.151.0; stale_observation; missing_window: secondary"`).
 
 ### Phase 4: Preserving Last-Known Observations on Protocol Failure
 

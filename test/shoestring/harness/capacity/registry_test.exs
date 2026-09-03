@@ -137,6 +137,26 @@ defmodule Shoestring.Harness.Capacity.RegistryTest do
       assert Registry.normalize_version("0.150.1-beta.1") == "0.150.1-beta.1"
       assert Registry.normalize_version("non_semver_string") == "non_semver_string"
       assert Registry.normalize_version(nil) == nil
+      assert Registry.normalize_version(123) == nil
+      assert Registry.normalize_version(0.150) == nil
+      assert Registry.normalize_version(%{"ver" => "1.0"}) == nil
+      assert Registry.normalize_version([1, 2, 3]) == nil
+      assert Registry.normalize_version(:some_atom) == nil
+    end
+
+    test "tested_version?/2 safely rejects non-string versions", %{
+      codex_entry: codex,
+      claude_entry: claude
+    } do
+      refute Registry.tested_version?(codex, 123)
+      refute Registry.tested_version?(codex, %{"version" => "0.150.1"})
+      refute Registry.tested_version?(codex, [:a, :b])
+      refute Registry.tested_version?(codex, :atom)
+
+      refute Registry.tested_version?(claude, 123)
+      refute Registry.tested_version?(claude, %{"version" => "2.1.251"})
+      refute Registry.tested_version?(claude, [:a, :b])
+      refute Registry.tested_version?(claude, :atom)
     end
   end
 end

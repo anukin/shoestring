@@ -16,20 +16,10 @@ defmodule Shoestring.Harness.Capacity do
 
   alias Shoestring.Harness.CapacitySnapshot
   alias Shoestring.Harness.Capacity.Registry
+  alias Shoestring.Harness.Security
 
   @default_freshness_seconds 300
   @max_reason_length 300
-
-  @forbidden_content_keys ~w(
-    raw_transcript raw_output stdout stderr prompt_messages messages
-    model_response response_text completion_text
-  )
-
-  @secret_patterns [
-    ~r/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i,
-    ~r/\b(?:api[_-]?key|access[_-]?token|password)\s*[:=]/i,
-    ~r/\bsk-[A-Za-z0-9_-]{12,}/
-  ]
 
   @doc "Returns all registered compatibility entries from the Gate 0A matrix."
   @spec registry_entries() :: [Registry.Entry.t()]
@@ -49,20 +39,65 @@ defmodule Shoestring.Harness.Capacity do
 
   ## Options
 
-    * `:runner` - module implementing `CommandRunner`, or a 2/3-arity function,
+    * `:runner` - module implementing `CommandRunner`, or a 1/2/3-arity function,
       or a map `%{command => version_output}`. Defaults to `Shoestring.Harness.Capacity.SystemCommandRunner`.
     * `:command` - binary command name/path override (defaults to `"codex"` or `"claude"`).
+    * `:timeout` - execution timeout in milliseconds (defaults to 5000).
   """
   @spec discover_version(atom() | String.t(), keyword()) ::
           {:ok, %{raw: String.t(), version: String.t()}}
-          | {:error, :not_found | {:command_failed, non_neg_integer(), String.t()} | term()}
+          | {:error,
+             :not_found
+             | {:command_failed, non_neg_integer(), String.t()}
+             | :timeout
+             | :invalid_runner
+             | term()}
   def discover_version(provider, opts \\ []) do
     with {:ok, provider_atom} <- Registry.normalize_provider(provider) do
       runner = Keyword.get(opts, :runner, Shoestring.Harness.Capacity.SystemCommandRunner)
       default_cmd = if provider_atom == :codex, do: "codex", else: "claude"
       command_name = Keyword.get(opts, :command, default_cmd)
+      timeout = Keyword.get(opts, :timeout, 5_000)
 
-      execute_version_command(runner, command_name, opts)
+      parent = self()
+      ref = make_ref()
+
+      {pid, mon} =
+        spawn_monitor(fn ->
+          result =
+            try do
+              execute_version_command(runner, command_name, opts)
+            rescue
+              _ -> {:error, :invalid_runner}
+            catch
+              :exit, _ -> {:error, :invalid_runner}
+              :throw, _ -> {:error, :invalid_runner}
+              _, _ -> {:error, :invalid_runner}
+            end
+
+          send(parent, {ref, result})
+        end)
+
+      receive do
+        {^ref, result} ->
+          Process.demonitor(mon, [:flush])
+          result
+
+        {:DOWN, ^mon, :process, ^pid, _reason} ->
+          {:error, :invalid_runner}
+      after
+        timeout ->
+          Process.demonitor(mon, [:flush])
+          Process.exit(pid, :kill)
+
+          receive do
+            {:DOWN, ^mon, :process, ^pid, _} -> :ok
+          after
+            0 -> :ok
+          end
+
+          {:error, :timeout}
+      end
     end
   end
 
@@ -132,13 +167,20 @@ defmodule Shoestring.Harness.Capacity do
 
         cond do
           is_nil(normalized_version) ->
+            reason =
+              if is_nil(version) do
+                "untested_cli_version: unknown"
+              else
+                bound_reason("untested_cli_version: #{inspect(version)}")
+              end
+
             %{
               provider: entry.provider,
               invocation_mode: entry.invocation_mode,
               support_tier: entry.supported_tier,
               compatibility_state: :degraded,
               version: nil,
-              reason: "untested_cli_version: unknown"
+              reason: reason
             }
 
           Registry.tested_version?(entry, normalized_version) ->
@@ -180,7 +222,12 @@ defmodule Shoestring.Harness.Capacity do
     * `:last_known_snapshot` - `%CapacitySnapshot{}` to preserve when parsing fails.
   """
   @spec normalize(atom() | String.t(), atom() | String.t(), map() | binary(), keyword()) ::
-          {:ok, CapacitySnapshot.t()} | {:error, term()}
+          {:ok, CapacitySnapshot.t()}
+          | {:error,
+             :payload_too_large
+             | :payload_too_deep
+             | :contains_secrets_or_forbidden_content
+             | term()}
   def normalize(provider, mode, raw_observation, opts \\ [])
 
   def normalize(provider, mode, raw_observation, opts) when is_binary(raw_observation) do
@@ -199,10 +246,12 @@ defmodule Shoestring.Harness.Capacity do
   end
 
   def normalize(provider, mode, raw_observation, opts) when is_map(raw_observation) do
-    if safe_observation?(raw_observation) do
-      do_normalize(provider, mode, raw_observation, opts)
-    else
-      {:error, :contains_secrets_or_forbidden_content}
+    case Security.validate_observation(raw_observation) do
+      :ok ->
+        do_normalize(provider, mode, raw_observation, opts)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -266,33 +315,23 @@ defmodule Shoestring.Harness.Capacity do
     )
   end
 
-  # --- Internal Safety Scanner ---
+  # --- Safety Scanner ---
 
-  @doc false
-  def safe_observation?(term, depth \\ 0)
-  def safe_observation?(_term, depth) when depth > 10, do: false
-  def safe_observation?(%DateTime{}, _depth), do: true
+  @doc """
+  Checks if an untrusted observation is safe, bounded, and contains no secrets
+  or forbidden credential keys.
+  """
+  @spec safe_observation?(term()) :: boolean()
+  def safe_observation?(term), do: Security.safe_observation?(term)
 
-  def safe_observation?(value, _depth)
-      when is_nil(value) or is_boolean(value) or is_number(value), do: true
-
-  def safe_observation?(value, _depth) when is_binary(value) do
-    not Enum.any?(@secret_patterns, &Regex.match?(&1, value))
-  end
-
-  def safe_observation?(value, depth) when is_list(value) do
-    length(value) <= 128 and Enum.all?(value, &safe_observation?(&1, depth + 1))
-  end
-
-  def safe_observation?(value, depth) when is_map(value) do
-    map_size(value) <= 64 and
-      Enum.all?(value, fn {k, v} ->
-        k_str = to_string(k)
-        k_str not in @forbidden_content_keys and safe_observation?(v, depth + 1)
-      end)
-  end
-
-  def safe_observation?(_other, _depth), do: false
+  @doc """
+  Validates an observation against resource bounds and security policies.
+  """
+  @spec validate_observation(term()) ::
+          :ok
+          | {:error,
+             :payload_too_large | :payload_too_deep | :contains_secrets_or_forbidden_content}
+  def validate_observation(term), do: Security.validate_observation(term)
 
   # --- Internal Normalization ---
 
@@ -319,6 +358,32 @@ defmodule Shoestring.Harness.Capacity do
           freshness_seconds,
           opts
         )
+
+      not is_map(payload) ->
+        cond do
+          compat.provider == :codex ->
+            handle_codex_parse_failure(
+              "malformed_payload",
+              compat,
+              captured_at,
+              now,
+              freshness_seconds,
+              opts
+            )
+
+          compat.provider == :claude ->
+            handle_claude_parse_failure(
+              "malformed_payload",
+              compat,
+              captured_at,
+              now,
+              freshness_seconds,
+              opts
+            )
+
+          true ->
+            handle_parse_failure(provider, mode, "malformed_payload", opts)
+        end
 
       compat.provider == :codex ->
         normalize_codex(payload, compat, captured_at, now, freshness_seconds, opts)
@@ -497,88 +562,56 @@ defmodule Shoestring.Harness.Capacity do
 
         all_observed? = primary_res != :absent and secondary_res != :absent
 
-        cond do
-          freshness_state == :stale ->
-            reason = bound_reason(compat.reason || "stale_observation")
+        partial_reason =
+          cond do
+            secondary_res == :absent and primary_res == :absent -> "no_valid_windows"
+            secondary_res == :absent -> "missing_window: secondary"
+            primary_res == :absent -> "missing_window: primary"
+            true -> nil
+          end
 
-            build_snapshot_struct(
-              :degraded,
-              compat.support_tier,
-              compat.compatibility_state,
-              windows,
-              captured_at,
-              freshness_seconds,
-              compat.provider,
-              compat.invocation_mode,
-              source_event,
-              :low,
-              reason,
-              extensions,
-              now,
-              opts
-            )
+        stale_reason = if freshness_state == :stale, do: "stale_observation", else: nil
 
-          not all_observed? ->
-            partial_reason =
-              if secondary_res == :absent,
-                do: "missing_window: secondary",
-                else: "missing_window: primary"
+        reasons =
+          Enum.reject([compat.reason, stale_reason, partial_reason], &is_nil/1)
 
-            reason = bound_reason(compat.reason || partial_reason)
+        combined_reason =
+          case reasons do
+            [] -> nil
+            list -> bound_reason(Enum.join(list, "; "))
+          end
 
-            build_snapshot_struct(
-              :degraded,
-              compat.support_tier,
-              compat.compatibility_state,
-              windows,
-              captured_at,
-              freshness_seconds,
-              compat.provider,
-              compat.invocation_mode,
-              source_event,
-              :medium,
-              reason,
-              extensions,
-              now,
-              opts
-            )
+        confidence =
+          cond do
+            freshness_state == :stale -> :low
+            not all_observed? or compat.compatibility_state == :degraded -> :medium
+            true -> :high
+          end
 
-          compat.compatibility_state == :degraded ->
-            build_snapshot_struct(
-              :degraded,
-              compat.support_tier,
-              :degraded,
-              windows,
-              captured_at,
-              freshness_seconds,
-              compat.provider,
-              compat.invocation_mode,
-              source_event,
-              :medium,
-              compat.reason,
-              extensions,
-              now,
-              opts
-            )
+        capacity_state =
+          if freshness_state == :stale or not all_observed? or
+               compat.compatibility_state == :degraded do
+            :degraded
+          else
+            :observed
+          end
 
-          true ->
-            build_snapshot_struct(
-              :observed,
-              compat.support_tier,
-              :compatible,
-              windows,
-              captured_at,
-              freshness_seconds,
-              compat.provider,
-              compat.invocation_mode,
-              source_event,
-              :high,
-              nil,
-              extensions,
-              now,
-              opts
-            )
-        end
+        build_snapshot_struct(
+          capacity_state,
+          compat.support_tier,
+          compat.compatibility_state,
+          windows,
+          captured_at,
+          freshness_seconds,
+          compat.provider,
+          compat.invocation_mode,
+          source_event,
+          confidence,
+          combined_reason,
+          extensions,
+          now,
+          opts
+        )
     end
   end
 
@@ -593,7 +626,7 @@ defmodule Shoestring.Harness.Capacity do
           :claude,
           "cli_reported_rate_limit_refusal_without_capacity_snapshot",
           ["five_hour", "seven_day"],
-          :headless_result_error,
+          source_event,
           captured_at,
           now,
           freshness_seconds,
@@ -760,19 +793,18 @@ defmodule Shoestring.Harness.Capacity do
 
         all_observed? = five_hour_res != :absent and seven_day_res != :absent
 
-        reason =
-          cond do
-            freshness_state == :stale ->
-              bound_reason(compat.reason || "stale_observation")
+        partial_reason =
+          if not all_observed?, do: "partial_window_observation", else: nil
 
-            not all_observed? ->
-              bound_reason(compat.reason || "partial_window_observation")
+        stale_reason = if freshness_state == :stale, do: "stale_observation", else: nil
 
-            compat.compatibility_state == :degraded ->
-              compat.reason
+        reasons =
+          Enum.reject([compat.reason, stale_reason, partial_reason], &is_nil/1)
 
-            true ->
-              "conservative_partial_observation"
+        combined_reason =
+          case reasons do
+            [] -> "conservative_partial_observation"
+            list -> bound_reason(Enum.join(list, "; "))
           end
 
         confidence = if freshness_state == :stale, do: :low, else: :medium
@@ -788,7 +820,7 @@ defmodule Shoestring.Harness.Capacity do
           compat.invocation_mode,
           source_event,
           confidence,
-          reason,
+          combined_reason,
           %{},
           now,
           opts
@@ -1162,31 +1194,103 @@ defmodule Shoestring.Harness.Capacity do
   defp execute_version_command(runner, command_name, opts) do
     cond do
       is_atom(runner) ->
-        case runner.find_executable(command_name) do
-          nil ->
-            {:error, :not_found}
+        try do
+          if Code.ensure_loaded?(runner) and
+               function_exported?(runner, :find_executable, 1) and
+               (function_exported?(runner, :cmd, 3) or function_exported?(runner, :cmd, 2)) do
+            case runner.find_executable(command_name) do
+              nil ->
+                {:error, :not_found}
 
-          exec_path ->
-            run_cmd(runner, exec_path, ["--version"], opts)
+              exec_path when is_binary(exec_path) ->
+                run_cmd(runner, exec_path, ["--version"], opts)
+
+              _other ->
+                {:error, :invalid_runner}
+            end
+          else
+            {:error, :invalid_runner}
+          end
+        rescue
+          _ -> {:error, :invalid_runner}
+        catch
+          :exit, _ -> {:error, :invalid_runner}
+          :throw, _ -> {:error, :invalid_runner}
+          _, _ -> {:error, :invalid_runner}
         end
 
       is_function(runner, 3) ->
-        {output, status} = runner.(command_name, ["--version"], opts)
-        parse_cmd_output(output, status)
+        try do
+          case runner.(command_name, ["--version"], opts) do
+            {output, status} when is_binary(output) and is_integer(status) ->
+              parse_cmd_output(output, status)
+
+            _other ->
+              {:error, :invalid_runner}
+          end
+        rescue
+          _ -> {:error, :invalid_runner}
+        catch
+          :exit, _ -> {:error, :invalid_runner}
+          :throw, _ -> {:error, :invalid_runner}
+          _, _ -> {:error, :invalid_runner}
+        end
 
       is_function(runner, 2) ->
-        {output, status} = runner.(command_name, ["--version"])
-        parse_cmd_output(output, status)
+        try do
+          case runner.(command_name, ["--version"]) do
+            {output, status} when is_binary(output) and is_integer(status) ->
+              parse_cmd_output(output, status)
+
+            _other ->
+              {:error, :invalid_runner}
+          end
+        rescue
+          _ -> {:error, :invalid_runner}
+        catch
+          :exit, _ -> {:error, :invalid_runner}
+          :throw, _ -> {:error, :invalid_runner}
+          _, _ -> {:error, :invalid_runner}
+        end
 
       is_function(runner, 1) ->
-        {output, status} = runner.(command_name)
-        parse_cmd_output(output, status)
+        try do
+          case runner.(command_name) do
+            {output, status} when is_binary(output) and is_integer(status) ->
+              parse_cmd_output(output, status)
+
+            _other ->
+              {:error, :invalid_runner}
+          end
+        rescue
+          _ -> {:error, :invalid_runner}
+        catch
+          :exit, _ -> {:error, :invalid_runner}
+          :throw, _ -> {:error, :invalid_runner}
+          _, _ -> {:error, :invalid_runner}
+        end
 
       is_map(runner) ->
-        case Map.get(runner, command_name) do
-          nil -> {:error, :not_found}
-          {output, status} -> parse_cmd_output(output, status)
-          output when is_binary(output) -> parse_cmd_output(output, 0)
+        try do
+          case Map.get(runner, command_name) do
+            nil ->
+              {:error, :not_found}
+
+            {output, status} when is_binary(output) and is_integer(status) ->
+              parse_cmd_output(output, status)
+
+            output when is_binary(output) ->
+              parse_cmd_output(output, 0)
+
+            _other ->
+              {:error, :invalid_runner}
+          end
+        rescue
+          _ -> {:error, :invalid_runner}
+        catch
+          :exit, _ -> {:error, :invalid_runner}
+          :throw, _ -> {:error, :invalid_runner}
+          _, _ -> {:error, :invalid_runner}
         end
 
       true ->
@@ -1195,25 +1299,56 @@ defmodule Shoestring.Harness.Capacity do
   end
 
   defp run_cmd(runner, exec_path, args, opts) do
-    {output, status} = runner.cmd(exec_path, args, Keyword.take(opts, [:stderr_to_stdout]))
-    parse_cmd_output(output, status)
-  rescue
-    e -> {:error, e}
+    cmd_opts = Keyword.take(opts, [:stderr_to_stdout])
+
+    try do
+      {output, status} =
+        if function_exported?(runner, :cmd, 3) do
+          runner.cmd(exec_path, args, cmd_opts)
+        else
+          runner.cmd(exec_path, args)
+        end
+
+      if is_binary(output) and is_integer(status) do
+        parse_cmd_output(output, status)
+      else
+        {:error, :invalid_runner}
+      end
+    rescue
+      _ -> {:error, :invalid_runner}
+    catch
+      :exit, _ -> {:error, :invalid_runner}
+      :throw, _ -> {:error, :invalid_runner}
+      _, _ -> {:error, :invalid_runner}
+    end
   end
 
   defp parse_cmd_output(output, 0) do
+    bounded_output = String.slice(output, 0, 1024)
+
     raw =
-      output
+      bounded_output
       |> String.trim()
       |> String.split(~r/\r?\n/)
       |> List.first() || ""
 
+    bounded_raw =
+      raw
+      |> Security.redact()
+      |> String.slice(0, 200)
+
     version = Registry.normalize_version(raw)
-    {:ok, %{raw: raw, version: version}}
+    {:ok, %{raw: bounded_raw, version: version}}
   end
 
   defp parse_cmd_output(output, exit_status) do
-    snippet = output |> String.trim() |> String.slice(0, 200)
+    snippet =
+      output
+      |> String.slice(0, 1024)
+      |> Security.redact()
+      |> String.trim()
+      |> String.slice(0, 200)
+
     {:error, {:command_failed, exit_status, snippet}}
   end
 end

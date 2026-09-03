@@ -21,9 +21,6 @@ defmodule Mix.Tasks.Shoestring.Capacity.Fixtures do
 
   alias Shoestring.Harness.Capacity.Fixtures
 
-  @evidence_root Path.expand("plans/evidence/00a-capacity-feasibility/fixtures")
-  @target_root Path.expand("test/fixtures/capacity")
-
   @impl Mix.Task
   def run(args) do
     cond do
@@ -36,14 +33,32 @@ defmodule Mix.Tasks.Shoestring.Capacity.Fixtures do
     end
   end
 
+  defp project_root do
+    case File.cwd() do
+      {:ok, cwd} -> cwd
+      _ -> Path.expand("../../../..", __DIR__)
+    end
+  end
+
+  defp evidence_root do
+    Path.expand("plans/evidence/00a-capacity-feasibility/fixtures", project_root())
+  end
+
+  defp target_root do
+    Fixtures.fixture_root()
+  end
+
   defp sync_fixtures do
-    if not File.dir?(@evidence_root) do
-      Mix.raise("Evidence fixture directory #{@evidence_root} does not exist")
+    source = evidence_root()
+    target = target_root()
+
+    if not File.dir?(source) do
+      Mix.raise("Evidence fixture directory #{source} does not exist")
     end
 
-    File.mkdir_p!(@target_root)
-    File.cp_r!(@evidence_root, @target_root)
-    Mix.shell().info("Synced fixtures from #{@evidence_root} to #{@target_root}")
+    File.mkdir_p!(target)
+    File.cp_r!(source, target)
+    Mix.shell().info("Synced fixtures from #{source} to #{target}")
   end
 
   defp scan_fixtures do
@@ -51,7 +66,14 @@ defmodule Mix.Tasks.Shoestring.Capacity.Fixtures do
       {:ok, count} ->
         Mix.shell().info("Secret scan passed: #{count} tracked capacity fixtures verified clean.")
 
-      {:error, violations} ->
+      {:error, :no_fixtures_found} ->
+        Mix.shell().error(
+          "Secret scan failed: no tracked capacity fixtures found in #{target_root()}"
+        )
+
+        Mix.raise("Secret scan detected no tracked capacity fixtures")
+
+      {:error, violations} when is_list(violations) ->
         Mix.shell().error("Secret scan failed with violations:")
 
         Enum.each(violations, fn {path, issues} ->

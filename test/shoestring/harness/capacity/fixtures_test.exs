@@ -1,5 +1,5 @@
 defmodule Shoestring.Harness.Capacity.FixturesTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Shoestring.Harness.Capacity
   alias Shoestring.Harness.Capacity.Fixtures, as: CapacityFixtures
@@ -13,21 +13,118 @@ defmodule Shoestring.Harness.Capacity.FixturesTest do
       assert count == 21
     end
 
-    test "scanner successfully flags forbidden patterns" do
-      bad_secret = %{"token" => "sk-1234567890abcdef", "sub" => "safe"}
+    test "scanner successfully flags forbidden patterns with safe diagnostics" do
+      bad_secret = %{"safe_key" => "sk-1234567890abcdef", "sub" => "safe"}
       violations = CapacityFixtures.scan_term(bad_secret)
       assert violations != []
-      assert Enum.any?(violations, &(&1 =~ "forbidden pattern"))
+      assert Enum.any?(violations, &(&1 =~ "sk_token"))
+      # Diagnostic must never leak the secret substring itself
+      refute Enum.any?(violations, &(&1 =~ "sk-1234567890abcdef"))
 
       bad_path = %{"directory" => "/Users/developer/code"}
       path_violations = CapacityFixtures.scan_term(bad_path)
       assert path_violations != []
-      assert Enum.any?(path_violations, &(&1 =~ "/Users/"))
+      assert Enum.any?(path_violations, &(&1 =~ "user_filesystem_path"))
+      # Diagnostic must never leak the path substring itself
+      refute Enum.any?(path_violations, &(&1 =~ "/Users/developer/code"))
 
       bad_key = %{"raw_transcript" => "some text"}
       key_violations = CapacityFixtures.scan_term(bad_key)
       assert key_violations != []
       assert Enum.any?(key_violations, &(&1 =~ "forbidden key"))
+    end
+
+    test "scan_all_fixtures/1 fails when zero fixtures are found without mutating global env" do
+      tmp_empty_dir =
+        Path.join(System.tmp_dir!(), "empty_capacity_fixtures_#{Ecto.UUID.generate()}")
+
+      File.mkdir_p!(tmp_empty_dir)
+
+      try do
+        assert {:error, :no_fixtures_found} = CapacityFixtures.scan_all_fixtures(tmp_empty_dir)
+      after
+        File.rm_rf!(tmp_empty_dir)
+      end
+    end
+
+    test "does not produce false positives on benign keys like prompt_tokens, transcription, or secretary" do
+      benign_fixture = %{
+        "usage" => %{"prompt_tokens" => 42, "total_tokens" => 100},
+        "transcription" => "audio transcription text",
+        "secretary" => "administrative assistant notes",
+        "session" => "valid_session_tag"
+      }
+
+      assert CapacityFixtures.scan_term(benign_fixture) == []
+    end
+
+    test "poisoned JSON fixtures with harmless non-sk values are rejected by scanner and safe_observation?/1" do
+      poisoned_payloads = [
+        {"token", ~s({"captured_at": "2026-08-29T04:38:16Z", "token": "harmless_token_val"})},
+        {"api_key", ~s({"captured_at": "2026-08-29T04:38:16Z", "api_key": "harmless_key_val"})},
+        {"apiKey", ~s({"captured_at": "2026-08-29T04:38:16Z", "apiKey": "harmless_key_val"})},
+        {"access_token",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "access_token": "harmless_access"})},
+        {"refresh_token",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "refresh_token": "harmless_refresh"})},
+        {"password", ~s({"captured_at": "2026-08-29T04:38:16Z", "password": "harmless_pass"})},
+        {"secret", ~s({"captured_at": "2026-08-29T04:38:16Z", "secret": "harmless_secret"})},
+        {"cookie", ~s({"captured_at": "2026-08-29T04:38:16Z", "cookie": "harmless_cookie"})},
+        {"authorization",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "authorization": "harmless_auth"})},
+        {"private_key",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "private_key": "harmless_private_key"})},
+        {"privateKey",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "privateKey": "harmless_private_key"})},
+        {"oauth_token",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "oauth_token": "harmless_oauth_token"})},
+        {"oauthToken",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "oauthToken": "harmless_oauth_token"})},
+        {"account_id",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "account_id": "harmless_acct"})},
+        {"session_id",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "session_id": "harmless_sess"})},
+        {"sessionId", ~s({"captured_at": "2026-08-29T04:38:16Z", "sessionId": "harmless_sess"})},
+        {"thread_id",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "thread_id": "harmless_thread"})},
+        {"threadId", ~s({"captured_at": "2026-08-29T04:38:16Z", "threadId": "harmless_thread"})},
+        {"turn_id", ~s({"captured_at": "2026-08-29T04:38:16Z", "turn_id": "harmless_turn"})},
+        {"turnId", ~s({"captured_at": "2026-08-29T04:38:16Z", "turnId": "harmless_turn"})},
+        {"prompt", ~s({"captured_at": "2026-08-29T04:38:16Z", "prompt": "harmless prompt"})},
+        {"transcript",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "transcript": "harmless transcript"})},
+        {"raw_transcript",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "raw_transcript": "harmless raw transcript"})},
+        {"mac_path",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "path": "/Users/developer/project"})},
+        {"linux_path",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "path": "/home/developer/project"})}
+      ]
+
+      for {name, json_str} <- poisoned_payloads do
+        raw_violations = Shoestring.Harness.Security.scan_json(json_str)
+        assert raw_violations != [], "Expected scanner to reject raw JSON for: #{name}"
+
+        decoded = Jason.decode!(json_str)
+        term_violations = CapacityFixtures.scan_term(decoded)
+        assert term_violations != [], "Expected scan_term to reject term for: #{name}"
+
+        if name not in [
+             "account_id",
+             "session_id",
+             "sessionId",
+             "thread_id",
+             "threadId",
+             "turn_id",
+             "turnId"
+           ] do
+          refute Capacity.safe_observation?(decoded),
+                 "Expected safe_observation?/1 to reject: #{name}"
+
+          assert {:error, :contains_secrets_or_forbidden_content} =
+                   Capacity.normalize(:codex, :app_server_stdio, decoded)
+        end
+      end
     end
   end
 
