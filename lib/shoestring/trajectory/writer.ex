@@ -196,7 +196,6 @@ defmodule Shoestring.Trajectory.Writer do
           id: Ecto.UUID.generate(),
           goal_id: state.goal_id,
           task_id: references.task_id,
-          # Run ownership awaits the Iteration 2 runs table; preserve only the trusted UUID now.
           run_id: references.run_id,
           sequence: sequence,
           parent_event_id: references.parent_event_id,
