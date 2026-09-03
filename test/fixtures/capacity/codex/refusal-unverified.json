@@ -1,0 +1,19 @@
+{
+  "fixture_kind": "refusal",
+  "evidence_status": "synthetic_from_official_schema_shape",
+  "captured_at": "2026-08-29T04:30:38.350Z",
+  "payload": {
+    "id": 3,
+    "result": {
+      "rateLimits": {
+        "primary": {
+          "usedPercent": 100,
+          "windowDurationMins": 300,
+          "resetsAt": 1787994541
+        },
+        "secondary": null,
+        "rateLimitReachedType": "rate_limit_reached"
+      }
+    }
+  }
+}

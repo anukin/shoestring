@@ -1,0 +1,59 @@
+{
+  "fixture_kind": "status_line_tools_attempted",
+  "evidence_status": "live_observed",
+  "captured_at": "2026-08-29T07:37:45.283Z",
+  "tool_allowlist": "Bash(printf *)",
+  "tool_execution": "not_asserted_by_sanitized_capture",
+  "payload": {
+    "version": "2.1.251",
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 27,
+        "resets_at": 1787994000
+      },
+      "seven_day": {
+        "used_percentage": 94,
+        "resets_at": 1788033600
+      },
+      "spend_limit": null
+    }
+  },
+  "observations": [
+    {
+      "observed_at": "2026-08-29T07:37:43.230Z",
+      "rate_limit_signal": "absent",
+      "rate_limits": null
+    },
+    {
+      "observed_at": "2026-08-29T07:37:45.283Z",
+      "rate_limit_signal": "observed",
+      "rate_limits": {
+        "five_hour": {
+          "used_percentage": 27,
+          "resets_at": 1787994000
+        },
+        "seven_day": {
+          "used_percentage": 94,
+          "resets_at": 1788033600
+        },
+        "spend_limit": null
+      }
+    },
+    {
+      "observed_at": "2026-08-29T07:37:50.851Z",
+      "rate_limit_signal": "observed",
+      "rate_limits": {
+        "five_hour": {
+          "used_percentage": 27,
+          "resets_at": 1787994000
+        },
+        "seven_day": {
+          "used_percentage": 94,
+          "resets_at": 1788033600
+        },
+        "spend_limit": null
+      }
+    }
+  ],
+  "comparison": "callbacks_received"
+}

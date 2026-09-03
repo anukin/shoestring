@@ -1,0 +1,13 @@
+{
+  "fixture_kind": "malformed",
+  "evidence_status": "synthetic_parser_evaluation",
+  "captured_at": "2026-08-29T04:30:00.000Z",
+  "payload": {
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": "23.5",
+        "resets_at": 1738425600
+      }
+    }
+  }
+}
