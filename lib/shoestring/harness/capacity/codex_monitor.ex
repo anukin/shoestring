@@ -31,9 +31,12 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
           :connected
           | :disconnected
           | :backoff
+          | :unavailable
           | :auth_required
-          | :degraded
+          | :refused
+          | :incompatible_schema
           | :incompatible
+          | :sink_error
 
   @default_max_frame_size 262_144
   @default_max_pending_requests 10
@@ -73,6 +76,7 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
     :backoff_fn,
     :random_fn,
     :reconnect_timer,
+    :connection_generation,
     :scope,
     :client_info
   ]
@@ -150,11 +154,23 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
 
   @impl Shoestring.Harness.Capacity.Source
   def provenance do
+    event =
+      case GenServer.whereis(__MODULE__) do
+        nil ->
+          :explicit_read
+
+        pid ->
+          case last_observation(pid) do
+            %CapacitySnapshot{source: %{event: ev}} -> ev
+            _ -> :explicit_read
+          end
+      end
+
     %{
       adapter_id: "codex_app_server_stdio",
       provider_id: "codex",
       invocation_mode: "app_server_stdio",
-      event: :explicit_read
+      event: event
     }
   end
 
@@ -271,6 +287,7 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
       backoff_fn: backoff_fn,
       random_fn: random_fn,
       reconnect_timer: nil,
+      connection_generation: 0,
       scope: scope,
       client_info: client_info
     }
@@ -308,9 +325,11 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
       account_info: state.account_info,
       backoff_attempt: state.backoff_attempt,
       connected?:
-        state.status in [:connected, :degraded] and state.connection_phase == :connected,
+        state.status in [:connected, :incompatible_schema, :refused, :sink_error] and
+          state.connection_phase == :connected,
       pending_request_count: map_size(state.pending_requests),
-      transport_pid: state.transport_pid
+      transport_pid: state.transport_pid,
+      reconnect_timer: state.reconnect_timer
     }
 
     {:reply, summary, state}
@@ -496,8 +515,8 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
       # Ensure injected transport delivers frames to this monitor
       try do
         GenServer.call(target_pid, {:set_owner, self()})
-      rescue
-        _ -> :ok
+      catch
+        :exit, _ -> :ok
       end
 
       ref = Process.monitor(target_pid)
@@ -538,7 +557,8 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
   end
 
   defp send_request(state, method, params, context, timeout \\ nil) do
-    id = state.next_id
+    raw_id = state.next_id
+    id = "#{state.connection_generation || 0}:#{raw_id}"
     timeout_ms = timeout || state.request_timeout_ms
     timer_ref = Process.send_after(self(), {:request_timeout, id}, timeout_ms)
 
@@ -562,7 +582,7 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
     }
 
     updated_pending = Map.put(state.pending_requests, id, pending_entry)
-    state = %{state | pending_requests: updated_pending, next_id: id + 1}
+    state = %{state | pending_requests: updated_pending, next_id: raw_id + 1}
 
     if state.transport_pid do
       state.transport_mod.send_frame(state.transport_pid, request_map)
@@ -618,15 +638,20 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
 
   defp handle_decoded_message(%{"id" => id} = message, state) when not is_nil(id) do
     # JSON-RPC Response matching a request
-    case Map.pop(state.pending_requests, id) do
-      {nil, _} ->
-        # Uncorrelated or duplicate response: ignore safely without crashing
-        state
+    current_gen_prefix = "#{state.connection_generation || 0}:"
 
-      {pending_entry, remaining_requests} ->
-        Process.cancel_timer(pending_entry.timer_ref)
-        state = %{state | pending_requests: remaining_requests}
-        handle_request_response(pending_entry, message, state)
+    if is_binary(id) and String.starts_with?(id, current_gen_prefix) do
+      case Map.pop(state.pending_requests, id) do
+        {nil, _} ->
+          state
+
+        {pending_entry, remaining_requests} ->
+          Process.cancel_timer(pending_entry.timer_ref)
+          state = %{state | pending_requests: remaining_requests}
+          handle_request_response(pending_entry, message, state)
+      end
+    else
+      state
     end
   end
 
@@ -792,7 +817,7 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
 
       {:error, _reason, state} ->
         # Keep last known observation intact, mark degraded
-        %{state | status: :degraded}
+        %{state | status: :incompatible_schema}
     end
   end
 
@@ -849,7 +874,7 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
             {:ok, snapshot,
              %{
                state
-               | status: :degraded,
+               | status: :sink_error,
                  last_observation: snapshot,
                  last_known_provider_state: merged_payload
              }}
@@ -859,10 +884,11 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
         # Normalization rejected payload (e.g. malformed or secrets detected)
         case preserve_observation_on_error(state, "normalization_failed", now) do
           {:ok, preserved_snapshot} ->
-            {:error, reason, %{state | last_observation: preserved_snapshot, status: :degraded}}
+            {:error, reason,
+             %{state | last_observation: preserved_snapshot, status: :incompatible_schema}}
 
           _ ->
-            {:error, reason, %{state | status: :degraded}}
+            {:error, reason, %{state | status: :incompatible_schema}}
         end
     end
   end
@@ -980,19 +1006,19 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
 
   # --- Status Resolution & Classification ---
 
-  defp resolve_operational_status(%CapacitySnapshot{} = snapshot, state, sink_degraded? \\ false) do
+  defp resolve_operational_status(%CapacitySnapshot{} = snapshot, state, sink_error? \\ false) do
     cond do
-      sink_degraded? ->
-        :degraded
+      sink_error? ->
+        :sink_error
 
       snapshot.capacity_state == :refused ->
-        :degraded
+        :refused
 
       state.compatibility.compatibility_state == :degraded ->
-        :degraded
+        :incompatible_schema
 
       snapshot.capacity_state == :degraded ->
-        :degraded
+        :incompatible_schema
 
       true ->
         :connected
@@ -1036,7 +1062,7 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
 
     delay =
       if state.backoff_fn do
-        state.backoff_fn.(new_attempt)
+        state.backoff_fn.(new_attempt) |> max(0) |> min(state.max_backoff_ms)
       else
         calculate_backoff_delay(
           new_attempt,
@@ -1048,9 +1074,16 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
 
     timer_ref = Process.send_after(self(), :reconnect, delay)
 
+    new_status =
+      if state.connection_phase == :connected or state.status == :backoff do
+        :backoff
+      else
+        :unavailable
+      end
+
     %{
       state
-      | status: :backoff,
+      | status: new_status,
         connection_phase: :backoff,
         backoff_attempt: new_attempt,
         reconnect_timer: timer_ref
@@ -1073,7 +1106,7 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
     min(raw_delay + jitter, max_ms)
   end
 
-  defp cleanup_transport(state, reason) do
+  defp cleanup_transport(state, _reason) do
     if state.reconnect_timer do
       Process.cancel_timer(state.reconnect_timer)
     end
@@ -1084,7 +1117,11 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
 
     if is_pid(state.transport_pid) and Process.alive?(state.transport_pid) and
          is_nil(state.configured_transport_pid) do
-      state.transport_mod.close(state.transport_pid)
+      try do
+        state.transport_mod.close(state.transport_pid)
+      catch
+        :exit, _ -> :ok
+      end
     end
 
     # Fail all pending synchronous callers
@@ -1093,13 +1130,25 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
       if entry.caller, do: GenServer.reply(entry.caller, {:error, :transport_closed})
     end)
 
+    new_generation = (state.connection_generation || 0) + 1
+
+    if is_pid(state.transport_pid) do
+      receive do
+        {:codex_transport_frame, pid, _} when pid == state.transport_pid -> :ok
+        {:codex_transport_error, pid, _} when pid == state.transport_pid -> :ok
+        {:codex_transport_closed, pid, _} when pid == state.transport_pid -> :ok
+      after
+        0 -> :ok
+      end
+    end
+
     %{
       state
-      | transport_pid:
-          if(reason in [:terminate, :disconnected], do: nil, else: state.transport_pid),
+      | transport_pid: nil,
         transport_ref: nil,
         reconnect_timer: nil,
-        pending_requests: %{}
+        pending_requests: %{},
+        connection_generation: new_generation
     }
   end
 
