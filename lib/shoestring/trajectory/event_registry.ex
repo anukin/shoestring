@@ -4,6 +4,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
   A later milestone can add a new `{type, version}` entry here with its own
   payload schema and an explicit upcaster, without changing stored history.
+
+  `validate_payload/4` is the strict write boundary. The v2 capacity schema
+  explicitly opts into additive fields, but sanitizes every nested object
+  before a payload can be persisted. `validate/1` additionally enables the
+  historical compatibility path for already-stored envelopes: it accepts
+  fields that were valid before a schema tightened, scans them for secrets,
+  and drops them before returning the validated envelope so replay remains
+  compatible without weakening new writes.
   """
 
   import Ecto.Changeset
@@ -212,6 +220,10 @@ defmodule Shoestring.Trajectory.EventRegistry do
         }
       },
       2 => %{
+        # v2 is the one explicitly additive event schema. Unknown fields are
+        # validated for safety and removed from the persisted canonical
+        # payload by sanitize_capacity_snapshot_payload/1.
+        allow_unknown: true,
         required: [
           :snapshot_id,
           :contract_version,
@@ -282,18 +294,20 @@ defmodule Shoestring.Trajectory.EventRegistry do
   end
 
   @doc "Explicitly upcasts a registered payload without mutating stored history."
-  @spec upcast(term(), term(), map()) ::
+  @spec upcast(term(), term(), map(), keyword()) ::
           {:ok, map()}
           | {:error, {:unknown_event_type, term()}}
           | {:error, {:unknown_event_version, term(), term()}}
-  def upcast("capacity.snapshot_observed", 1, payload) do
-    with {:ok, payload} <- validate_payload("capacity.snapshot_observed", 1, payload),
-         {:ok, payload} <- upcast_legacy_capacity_snapshot(payload) do
+  def upcast(type, version, payload, opts \\ [])
+
+  def upcast("capacity.snapshot_observed", 1, payload, opts) do
+    with {:ok, payload} <- validate_payload("capacity.snapshot_observed", 1, payload, opts),
+         {:ok, payload} <- upcast_legacy_capacity_snapshot(payload, opts) do
       {:ok, payload}
     end
   end
 
-  def upcast(type, version, payload) do
+  def upcast(type, version, payload, _opts) do
     case current_version(type) do
       {:error, error} -> {:error, error}
       ^version -> {:ok, payload}
@@ -310,7 +324,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
   def export_payload(type, version, payload) when is_map(payload) do
     with {:ok, schema} <- schema_for(type, version),
          sanitized = Map.take(payload, allowed_keys(schema)),
-         {:ok, validated} <- validate_payload(type, version, sanitized) do
+         {:ok, validated} <-
+           validate_payload(type, version, sanitized, legacy_validation_opts(type, version)) do
       {:ok, validated}
     end
   end
@@ -328,11 +343,18 @@ defmodule Shoestring.Trajectory.EventRegistry do
   def validate(attrs) do
     case EventEnvelope.validate(attrs) do
       {:ok, envelope} ->
-        case validate_payload(envelope.type, envelope.schema_version, envelope.payload,
-               now: envelope.occurred_at
+        case validate_payload(
+               envelope.type,
+               envelope.schema_version,
+               envelope.payload,
+               [now: envelope.occurred_at] ++
+                 legacy_validation_opts(envelope.type, envelope.schema_version)
              ) do
-          {:ok, payload} -> {:ok, %{envelope: envelope, payload: payload}}
-          error -> error
+          {:ok, payload} ->
+            {:ok, %{envelope: %{envelope | payload: payload}, payload: payload}}
+
+          error ->
+            error
         end
 
       {:error, changeset} ->
@@ -371,24 +393,20 @@ defmodule Shoestring.Trajectory.EventRegistry do
   defp validate_payload_schema(type, version, schema, payload, opts) when is_map(payload) do
     fields = schema.required ++ schema.optional
     allowed_keys = Enum.map(fields, &Atom.to_string/1)
-    unknown_keys = Map.keys(payload) -- allowed_keys
 
     changeset =
       {%{}, Enum.into(fields, %{}, &{&1, field_type(schema, &1)})}
       |> cast(payload, fields)
       |> validate_required(schema.required)
       |> validate_uuid_fields(schema.uuid_fields)
+      |> validate_unknown_keys(schema, payload, allowed_keys, opts)
       |> validate_payload_safety(type, schema, payload)
 
-    changeset =
-      if unknown_keys == [] do
-        changeset
-      else
-        add_error(changeset, :base, "contains unknown fields")
-      end
-
     if changeset.valid? do
-      validated = Map.take(payload, allowed_keys)
+      validated =
+        payload
+        |> Map.take(allowed_keys)
+        |> sanitize_payload(type, version, opts)
 
       case validate_capacity_snapshot(type, version, validated, opts) do
         :ok -> {:ok, validated}
@@ -417,6 +435,82 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
   defp field_type(schema, field), do: schema |> Map.get(:types, %{}) |> Map.get(field, :string)
 
+  defp validate_unknown_keys(changeset, schema, payload, allowed_keys, opts) do
+    if Map.get(schema, :allow_unknown, false) or
+         Keyword.get(opts, :allow_legacy_unknown, false) or
+         Enum.all?(Map.keys(payload), &(to_string(&1) in allowed_keys)) do
+      changeset
+    else
+      add_error(changeset, :base, "contains unsupported fields")
+    end
+  end
+
+  defp sanitize_payload(payload, "capacity.snapshot_observed", 2, _opts),
+    do: sanitize_capacity_snapshot_payload(payload)
+
+  defp sanitize_payload(payload, "capacity.snapshot_observed", 1, opts) do
+    if Keyword.get(opts, :allow_legacy_unknown, false) do
+      sanitize_legacy_capacity_snapshot_payload(payload)
+    else
+      payload
+    end
+  end
+
+  defp sanitize_payload(payload, _type, _version, _opts), do: payload
+
+  defp sanitize_legacy_capacity_snapshot_payload(payload) do
+    payload
+    |> sanitize_nested_map("source", ["adapter_id", "method"])
+    |> sanitize_nested_list_map("windows", "items", [
+      "kind",
+      "state",
+      "used_percent",
+      "reset_at",
+      "reason"
+    ])
+  end
+
+  defp sanitize_capacity_snapshot_payload(payload) do
+    payload
+    |> sanitize_nested_map("freshness", ["max_age_seconds"])
+    |> sanitize_nested_map("source", ["adapter_id", "provider_id", "invocation_mode", "event"])
+    |> sanitize_nested_list_map("windows", "items", [
+      "kind",
+      "state",
+      "used_percent",
+      "reset_at",
+      "reason"
+    ])
+  end
+
+  defp sanitize_nested_map(payload, key, allowed_keys) do
+    case Map.get(payload, key) do
+      value when is_map(value) -> Map.put(payload, key, Map.take(value, allowed_keys))
+      _other -> payload
+    end
+  end
+
+  defp sanitize_nested_list_map(payload, parent_key, list_key, allowed_keys) do
+    case Map.get(payload, parent_key) do
+      parent when is_map(parent) ->
+        case Map.get(parent, list_key) do
+          items when is_list(items) ->
+            sanitized_items =
+              Enum.map(items, fn item ->
+                if is_map(item), do: Map.take(item, allowed_keys), else: item
+              end)
+
+            Map.put(payload, parent_key, %{list_key => sanitized_items})
+
+          _other ->
+            payload
+        end
+
+      _other ->
+        payload
+    end
+  end
+
   defp validate_payload_safety(changeset, type, schema, payload) do
     if normalized_harness_event?(type) do
       validate_normalized_payload_safety(changeset, schema, payload)
@@ -432,16 +526,16 @@ defmodule Shoestring.Trajectory.EventRegistry do
     end
   end
 
-  defp validate_capacity_snapshot("capacity.snapshot_observed", 1, payload, _opts) do
+  defp validate_capacity_snapshot("capacity.snapshot_observed", 1, payload, opts) do
     cond do
       Map.get(payload, "capacity_state") not in ["known", "unknown"] ->
         Contract.invalid(:capacity_state, "must be a recognized legacy state")
 
-      not valid_legacy_capacity_windows?(Map.get(payload, "windows")) ->
-        Contract.invalid(:windows, "must use the exact legacy windows format")
+      not valid_legacy_capacity_windows?(Map.get(payload, "windows"), opts) ->
+        Contract.invalid(:windows, "must use a valid legacy windows format")
 
-      not valid_legacy_source?(Map.get(payload, "source")) ->
-        Contract.invalid(:source, "must use the exact legacy source format")
+      not valid_legacy_source?(Map.get(payload, "source"), opts) ->
+        Contract.invalid(:source, "must use a valid legacy source format")
 
       Map.get(payload, "confidence") not in ["none", "low", "medium", "high"] ->
         Contract.invalid(:confidence, "must be a recognized legacy confidence")
@@ -452,7 +546,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
       Map.get(payload, "compatibility_state") not in ["compatible", "degraded", "incompatible"] ->
         Contract.invalid(:compatibility_state, "must be a recognized legacy compatibility state")
 
-      not valid_legacy_capacity_state?(payload) ->
+      not valid_legacy_capacity_state?(payload, opts) ->
         Contract.invalid(:capacity_state, "does not match its legacy windows and freshness")
 
       true ->
@@ -462,55 +556,73 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
   defp validate_capacity_snapshot(_type, _version, _payload, _opts), do: :ok
 
-  defp valid_legacy_capacity_state?(%{"capacity_state" => "known"} = payload) do
-    with %{"items" => windows} when is_list(windows) <- Map.get(payload, "windows"),
-         true <- windows != [],
-         true <- is_binary(Map.get(payload, "expires_at")) do
+  defp valid_legacy_capacity_state?(%{"capacity_state" => "known"} = payload, opts) do
+    with %{"items" => windows} = windows_payload when is_list(windows) <-
+           Map.get(payload, "windows"),
+         true <- legacy_unknown_allowed?(opts) or supported_keys?(windows_payload, ["items"]),
+         true <- windows != [] do
       true
     else
       _other -> false
     end
   end
 
-  defp valid_legacy_capacity_state?(%{"capacity_state" => "unknown"} = payload) do
-    Map.get(payload, "windows") == %{"items" => []} and Map.get(payload, "confidence") == "none"
+  defp valid_legacy_capacity_state?(%{"capacity_state" => "unknown"} = payload, opts) do
+    match?(%{"items" => []}, Map.get(payload, "windows")) and
+      (legacy_unknown_allowed?(opts) or supported_keys?(Map.get(payload, "windows"), ["items"])) and
+      Map.get(payload, "confidence") == "none"
   end
 
-  defp valid_legacy_capacity_state?(_payload), do: false
+  defp valid_legacy_capacity_state?(_payload, _opts), do: false
 
-  defp valid_legacy_capacity_windows?(%{"items" => windows} = value)
-       when is_list(windows) and map_size(value) == 1 do
-    Enum.all?(windows, &valid_legacy_capacity_window?/1) and
+  defp valid_legacy_capacity_windows?(%{"items" => windows}, opts) when is_list(windows) do
+    Enum.all?(windows, &valid_legacy_capacity_window?(&1, opts)) and
       Enum.uniq_by(windows, &Map.get(&1, "kind")) == windows
   end
 
-  defp valid_legacy_capacity_windows?(_value), do: false
+  defp valid_legacy_capacity_windows?(_value, _opts), do: false
 
-  defp valid_legacy_capacity_window?(%{"kind" => kind, "state" => "known"} = window)
+  defp valid_legacy_capacity_window?(%{"kind" => kind, "state" => "known"} = window, opts)
        when is_binary(kind) and byte_size(kind) > 0 do
-    Map.keys(window) -- ["kind", "state", "used_percent", "reset_at"] == [] and
+    (legacy_unknown_allowed?(opts) or
+       supported_keys?(window, ["kind", "state", "used_percent", "reset_at"])) and
       is_number(Map.get(window, "used_percent")) and
       Map.get(window, "used_percent") >= 0 and Map.get(window, "used_percent") <= 100 and
       valid_optional_datetime?(Map.get(window, "reset_at"))
   end
 
   defp valid_legacy_capacity_window?(
-         %{"kind" => kind, "state" => "unknown", "reason" => reason} = window
+         %{"kind" => kind, "state" => "unknown", "reason" => reason} = window,
+         opts
        )
        when is_binary(kind) and byte_size(kind) > 0 and is_binary(reason) and
               byte_size(reason) > 0 do
-    Map.keys(window) -- ["kind", "state", "reason"] == []
+    legacy_unknown_allowed?(opts) or supported_keys?(window, ["kind", "state", "reason"])
   end
 
-  defp valid_legacy_capacity_window?(_window), do: false
+  defp valid_legacy_capacity_window?(_window, _opts), do: false
 
-  defp valid_legacy_source?(%{"adapter_id" => adapter_id, "method" => method} = source)
+  defp valid_legacy_source?(%{"adapter_id" => adapter_id, "method" => method} = source, opts)
        when is_binary(adapter_id) and byte_size(adapter_id) > 0 do
-    Map.keys(source) -- ["adapter_id", "method"] == [] and
+    (legacy_unknown_allowed?(opts) or supported_keys?(source, ["adapter_id", "method"])) and
       method in ["probe", "status", "vendor_api"]
   end
 
-  defp valid_legacy_source?(_source), do: false
+  defp valid_legacy_source?(_source, _opts), do: false
+
+  defp legacy_unknown_allowed?(opts),
+    do: Keyword.get(opts, :allow_legacy_unknown, false)
+
+  defp supported_keys?(map, allowed_keys) do
+    Enum.all?(Map.keys(map), &supported_key?(&1, allowed_keys))
+  end
+
+  defp supported_key?(key, allowed_keys) when is_binary(key), do: key in allowed_keys
+
+  defp supported_key?(key, allowed_keys) when is_atom(key),
+    do: Atom.to_string(key) in allowed_keys
+
+  defp supported_key?(_key, _allowed_keys), do: false
 
   defp valid_optional_datetime?(nil), do: true
 
@@ -518,10 +630,12 @@ defmodule Shoestring.Trajectory.EventRegistry do
     match?({:ok, _datetime}, Contract.datetime(value, :reset_at))
   end
 
-  defp upcast_legacy_capacity_snapshot(payload) do
+  defp upcast_legacy_capacity_snapshot(payload, opts) do
     with {:ok, observed_at} <- Contract.datetime(Map.fetch!(payload, "observed_at"), :observed_at),
          max_age_seconds <- legacy_max_age_seconds(payload, observed_at),
          {:ok, windows} <- upcast_legacy_windows(Map.fetch!(payload, "windows")) do
+      future? = legacy_observation_in_future?(observed_at, opts)
+      windows = if future?, do: mark_future_windows_unknown(windows), else: windows
       has_observed_window? = Enum.any?(windows, &(&1["state"] == "observed"))
 
       # A legacy "known" record with no window that actually upcasts to
@@ -547,6 +661,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
       # "low" rather than dropped -- it is downgraded, not discarded.
       confidence =
         cond do
+          future? -> "none"
           capacity_state == "unknown" -> "none"
           Map.fetch!(payload, "confidence") == "none" -> "low"
           true -> Map.fetch!(payload, "confidence")
@@ -574,10 +689,37 @@ defmodule Shoestring.Trajectory.EventRegistry do
          "confidence" => confidence,
          "support_tier" => support_tier,
          "compatibility_state" => "degraded",
-         "reason" => "legacy_capacity_contract_missing_provenance",
+         "reason" =>
+           if(future?,
+             do: "legacy_capacity_observation_after_event",
+             else: "legacy_capacity_contract_missing_provenance"
+           ),
          "extensions" => Map.fetch!(payload, "extensions")
        }}
     end
+  end
+
+  defp legacy_observation_in_future?(observed_at, opts) do
+    case Keyword.get(opts, :now) do
+      %DateTime{} = now -> DateTime.compare(observed_at, now) == :gt
+      _other -> false
+    end
+  end
+
+  defp mark_future_windows_unknown(windows) do
+    Enum.map(windows, fn window ->
+      case window["state"] do
+        "observed" ->
+          %{
+            "kind" => window["kind"],
+            "state" => "unknown",
+            "reason" => "legacy_capacity_observation_after_event"
+          }
+
+        "unknown" ->
+          window
+      end
+    end)
   end
 
   defp legacy_max_age_seconds(payload, observed_at) do
@@ -661,6 +803,12 @@ defmodule Shoestring.Trajectory.EventRegistry do
       changeset
     end
   end
+
+  # Stored v1 envelopes were accepted before the strict write boundary was
+  # restored. Replay/import may therefore use this explicit compatibility
+  # option; callers creating new events must use validate_payload/4 without it.
+  defp legacy_validation_opts(_type, 1), do: [allow_legacy_unknown: true]
+  defp legacy_validation_opts(_type, _version), do: []
 
   defp normalized_harness_event?(type) do
     String.starts_with?(type, ["run.", "lease.", "checkpoint.", "capacity.", "harness."])

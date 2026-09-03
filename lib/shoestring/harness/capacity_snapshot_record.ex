@@ -102,6 +102,8 @@ defmodule Shoestring.Harness.CapacitySnapshotRecord do
       "none"
     ])
     |> validate_capacity_state()
+    |> validate_support_tier()
+    |> validate_refusal()
     |> foreign_key_constraint(:goal_id)
     |> foreign_key_constraint(:run_id)
     |> check_constraint(:contract_version, name: "harness_capacity_snapshots_version_positive")
@@ -121,14 +123,43 @@ defmodule Shoestring.Harness.CapacitySnapshotRecord do
       {"observed", _reason} ->
         add_error(changeset, :reason, "must be blank when capacity is observed")
 
-      {state, reason} when state in ["degraded", "refused", "unknown"] and is_binary(reason) ->
-        changeset
-
-      {state, _reason} when state in ["degraded", "refused", "unknown"] ->
-        add_error(changeset, :reason, "is required for this capacity state")
+      {state, reason} when state in ["degraded", "refused", "unknown"] ->
+        if is_binary(reason) and String.trim(reason) != "" do
+          changeset
+        else
+          add_error(changeset, :reason, "is required for this capacity state")
+        end
 
       _other ->
         changeset
+    end
+  end
+
+  defp validate_support_tier(changeset) do
+    case {get_field(changeset, :capacity_state), get_field(changeset, :support_tier)} do
+      {"observed", "proactive"} ->
+        changeset
+
+      {"observed", _support_tier} ->
+        add_error(changeset, :support_tier, "observed capacity requires proactive support")
+
+      {"unknown", _support_tier} ->
+        changeset
+
+      {"refused", "unsupported"} ->
+        add_error(changeset, :support_tier, "unsupported sources cannot report a refusal")
+
+      _other ->
+        changeset
+    end
+  end
+
+  defp validate_refusal(changeset) do
+    if get_field(changeset, :capacity_state) == "refused" and
+         get_field(changeset, :confidence) == "high" do
+      add_error(changeset, :confidence, "refused capacity cannot have high confidence")
+    else
+      changeset
     end
   end
 

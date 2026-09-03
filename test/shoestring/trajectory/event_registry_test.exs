@@ -13,6 +13,8 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     "payload" => %{"decision" => "continue"}
   }
 
+  @now ~U[2026-08-30 12:00:00Z]
+
   test "the registry exposes initial and harness v1 event types" do
     registered = EventRegistry.registered_types()
 
@@ -130,6 +132,44 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     assert "must be a UUID" in errors_on(changeset).task_id
   end
 
+  test "unknown fields are rejected for strict schemas and explicitly additive v2 is sanitized" do
+    assert {:error, {:invalid_payload, "decision.recorded", 1, changeset}} =
+             EventRegistry.validate_payload("decision.recorded", 1, %{
+               "decision" => "continue",
+               "linkage_typo" => "ignored"
+             })
+
+    assert "contains unsupported fields" in errors_on(changeset).base
+
+    {:ok, legacy} =
+      EventRegistry.upcast("capacity.snapshot_observed", 1, legacy_capacity_payload())
+
+    additive =
+      legacy
+      |> Map.put("future_field", "ignored")
+      |> put_in(["source", "future_field"], "ignored")
+      |> put_in(["windows", "items", Access.at(0), "future_field"], "ignored")
+
+    assert {:ok, sanitized} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 2, additive, now: @now)
+
+    refute Map.has_key?(sanitized, "future_field")
+    refute Map.has_key?(sanitized["source"], "future_field")
+    refute Map.has_key?(hd(sanitized["windows"]["items"]), "future_field")
+  end
+
+  test "additive v2 fields remain secret-scanned without echoing their values" do
+    {:ok, legacy} =
+      EventRegistry.upcast("capacity.snapshot_observed", 1, legacy_capacity_payload())
+
+    payload = Map.put(legacy, "future_field", "api_key: sentinel-value")
+
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 2, changeset}} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 2, payload, now: @now)
+
+    refute inspect(errors_on(changeset)) =~ "sentinel-value"
+  end
+
   test "unknown event types and versions are rejected without atomizing input" do
     unknown_type = "future.#{System.unique_integer([:positive])}"
 
@@ -161,17 +201,22 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
     assert EventRegistry.current_version("capacity.snapshot_observed") == 2
   end
 
-  test "legacy capacity event states are strict and upcast into fail-closed v2 metadata" do
+  test "legacy capacity event states remain compatible and upcast into fail-closed v2 metadata" do
     payload = legacy_capacity_payload()
 
     assert {:ok, ^payload} =
              EventRegistry.validate_payload("capacity.snapshot_observed", 1, payload)
 
-    assert {:ok, upcast} = EventRegistry.upcast("capacity.snapshot_observed", 1, payload)
+    assert {:ok, upcast} =
+             EventRegistry.upcast("capacity.snapshot_observed", 1, payload, now: @now)
+
     assert upcast["contract_version"] == 2
     assert upcast["capacity_state"] == "degraded"
     assert upcast["source"]["provider_id"] == "legacy"
+    assert upcast["source"]["invocation_mode"] == "unknown"
     assert upcast["source"]["event"] == "none"
+    assert upcast["support_tier"] == "conservative_partial"
+    assert upcast["compatibility_state"] == "degraded"
     assert upcast["reason"] == "legacy_capacity_contract_missing_provenance"
 
     for malformed <- [
@@ -180,8 +225,85 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
           put_in(payload, ["support_tier"], "proactive")
         ] do
       assert {:error, {:invalid_payload, "capacity.snapshot_observed", 1, _changeset}} =
-               EventRegistry.validate_payload("capacity.snapshot_observed", 1, malformed)
+               EventRegistry.validate_payload("capacity.snapshot_observed", 1, malformed,
+                 now: @now
+               )
     end
+  end
+
+  test "new legacy payloads are strict while stored legacy replay stays compatible" do
+    payload =
+      legacy_capacity_payload()
+      |> Map.put("future_field", "ignored")
+      |> put_in(["windows", "future_window_metadata"], %{"version" => 3})
+      |> put_in(["windows", "items", Access.at(0), "future_field"], "ignored")
+      |> put_in(["source", "future_field"], "ignored")
+
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 1, changeset}} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 1, payload, now: @now)
+
+    assert "contains unsupported fields" in errors_on(changeset).base
+
+    nested_payload = Map.delete(payload, "future_field")
+
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 1, nested_changeset}} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 1, nested_payload,
+               now: @now
+             )
+
+    assert "must use a valid legacy windows format" in errors_on(nested_changeset).windows
+
+    assert {:ok, validated} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 1, nested_payload,
+               now: @now,
+               allow_legacy_unknown: true
+             )
+
+    refute Map.has_key?(validated["windows"], "future_window_metadata")
+
+    replay_payload = Map.put(nested_payload, "historical_typo", "ignored")
+
+    replay_envelope =
+      Map.merge(@valid_envelope, %{
+        "type" => "capacity.snapshot_observed",
+        "payload" => replay_payload
+      })
+
+    assert {:ok, %{payload: replay_validated}} = EventRegistry.validate(replay_envelope)
+    refute Map.has_key?(replay_validated, "historical_typo")
+    refute Map.has_key?(replay_validated["windows"], "future_window_metadata")
+
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 1, _changeset}} =
+             EventRegistry.validate_payload(
+               "capacity.snapshot_observed",
+               1,
+               Map.delete(payload, "observed_at"),
+               now: @now
+             )
+  end
+
+  test "legacy observations after the event are upcast to deterministic unknown capacity" do
+    payload =
+      legacy_capacity_payload()
+      |> Map.put("observed_at", "2026-08-30T12:00:01Z")
+
+    assert {:ok, upcast} =
+             EventRegistry.upcast("capacity.snapshot_observed", 1, payload, now: @now)
+
+    assert upcast["capacity_state"] == "unknown"
+    assert upcast["confidence"] == "none"
+    assert upcast["reason"] == "legacy_capacity_observation_after_event"
+
+    assert upcast["windows"]["items"] == [
+             %{
+               "kind" => "five_hour",
+               "state" => "unknown",
+               "reason" => "legacy_capacity_observation_after_event"
+             }
+           ]
+
+    assert {:ok, _snapshot} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast, now: @now)
   end
 
   test "legacy capacity upcast produces a v2-valid payload across the full legacy matrix" do
@@ -208,13 +330,14 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
         |> Map.put("windows", windows)
 
       assert {:ok, ^payload} =
-               EventRegistry.validate_payload("capacity.snapshot_observed", 1, payload),
+               EventRegistry.validate_payload("capacity.snapshot_observed", 1, payload, now: @now),
              "legacy known/#{confidence}/#{shape_name} should be a valid v1 payload"
 
-      assert {:ok, upcast} = EventRegistry.upcast("capacity.snapshot_observed", 1, payload)
+      assert {:ok, upcast} =
+               EventRegistry.upcast("capacity.snapshot_observed", 1, payload, now: @now)
 
       assert {:ok, _snapshot} =
-               EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast),
+               EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast, now: @now),
              "legacy known/#{confidence}/#{shape_name} upcast to #{inspect(upcast)} is not v2-valid"
 
       case shape_name do
@@ -235,14 +358,41 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
       |> Map.put("confidence", "none")
 
     assert {:ok, ^unknown_payload} =
-             EventRegistry.validate_payload("capacity.snapshot_observed", 1, unknown_payload)
+             EventRegistry.validate_payload("capacity.snapshot_observed", 1, unknown_payload,
+               now: @now
+             )
 
-    assert {:ok, upcast} = EventRegistry.upcast("capacity.snapshot_observed", 1, unknown_payload)
+    assert {:ok, upcast} =
+             EventRegistry.upcast("capacity.snapshot_observed", 1, unknown_payload, now: @now)
+
     assert upcast["capacity_state"] == "unknown"
     assert upcast["confidence"] == "none"
 
     assert {:ok, _snapshot} =
-             EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast)
+             EventRegistry.validate_payload("capacity.snapshot_observed", 2, upcast, now: @now)
+  end
+
+  test "capacity required fields and unregistered versions remain visible failures" do
+    assert {:ok, payload} =
+             EventRegistry.upcast("capacity.snapshot_observed", 1, legacy_capacity_payload(),
+               now: @now
+             )
+
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 2, changeset}} =
+             EventRegistry.validate_payload(
+               "capacity.snapshot_observed",
+               2,
+               Map.delete(payload, "freshness"),
+               now: @now
+             )
+
+    assert "can't be blank" in errors_on(changeset).freshness
+
+    assert {:error, {:unknown_event_version, "capacity.snapshot_observed", 3}} =
+             EventRegistry.validate_payload("capacity.snapshot_observed", 3, payload)
+
+    assert {:error, {:unknown_event_version, "capacity.snapshot_observed", 3}} =
+             EventRegistry.upcast("capacity.snapshot_observed", 3, payload)
   end
 
   test "v1 events can explicitly reference artifact metadata" do

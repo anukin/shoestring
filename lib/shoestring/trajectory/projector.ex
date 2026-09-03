@@ -187,7 +187,9 @@ defmodule Shoestring.Trajectory.Projector do
   defp project_event_from_storage(event) do
     with {:ok, validated} <- EventRegistry.validate(event_attributes(event)),
          {:ok, payload} <-
-           EventRegistry.upcast(event.type, event.schema_version, validated.payload) do
+           EventRegistry.upcast(event.type, event.schema_version, validated.payload,
+             now: event.occurred_at
+           ) do
       {:ok, %{event | payload: payload}}
     end
   end

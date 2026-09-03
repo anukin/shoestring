@@ -91,8 +91,8 @@ defmodule Shoestring.Trajectory.Writer do
   defp handle_append(input, references, state) do
     reply =
       case validate_input(input) do
-        :ok ->
-          case append_with_retries(input, references, state, 0) do
+        {:ok, validated_input} ->
+          case append_with_retries(validated_input, references, state, 0) do
             {:ok, :inserted, event} -> publish(event, state)
             {:ok, :duplicate, event} -> {:ok, event}
             {:error, reason} -> {:error, reason}
@@ -293,7 +293,7 @@ defmodule Shoestring.Trajectory.Writer do
     now = input.occurred_at || DateTime.utc_now()
 
     case EventRegistry.validate_payload(input.type, input.schema_version, input.payload, now: now) do
-      {:ok, _payload} -> :ok
+      {:ok, payload} -> {:ok, %{input | payload: payload}}
       error -> error
     end
   end

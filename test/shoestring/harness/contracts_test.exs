@@ -54,10 +54,12 @@ defmodule Shoestring.Harness.ContractsTest do
   test "provider and mode support metadata distinguishes proactive Codex from Claude telemetry" do
     assert {:ok, codex} = CapacitySnapshot.new(observed_snapshot_attrs(), now: @now)
     assert codex.support_tier == :proactive
+    assert codex.source.provider_id == "codex"
     assert codex.source.invocation_mode == "app_server"
+    assert codex.compatibility_state == :compatible
     assert CapacitySnapshot.eligible?(codex, @now)
 
-    assert {:ok, claude_interactive} =
+    assert {:error, claude_interactive_error} =
              CapacitySnapshot.new(
                observed_snapshot_attrs(%{
                  source: %{
@@ -71,7 +73,33 @@ defmodule Shoestring.Harness.ContractsTest do
                now: @now
              )
 
-    refute CapacitySnapshot.eligible?(claude_interactive, @now)
+    assert "observed capacity requires proactive support" in errors_on(claude_interactive_error).support_tier
+
+    for non_proactive_tier <- [:reactive_only, :unsupported] do
+      assert {:error, changeset} =
+               CapacitySnapshot.new(
+                 observed_snapshot_attrs(%{support_tier: non_proactive_tier}),
+                 now: @now
+               )
+
+      assert "observed capacity requires proactive support" in errors_on(changeset).support_tier
+    end
+
+    assert {:ok, claude_degraded} =
+             CapacitySnapshot.new(
+               degraded_snapshot_attrs(%{
+                 source: %{
+                   adapter_id: "fixture.capacity",
+                   provider_id: "claude",
+                   invocation_mode: "interactive_status_line",
+                   event: :status_line_input
+                 },
+                 support_tier: :conservative_partial
+               }),
+               now: @now
+             )
+
+    refute CapacitySnapshot.eligible?(claude_degraded, @now)
 
     assert {:ok, startup_omission} =
              CapacitySnapshot.new(
@@ -243,6 +271,58 @@ defmodule Shoestring.Harness.ContractsTest do
 
     assert {:error, changeset} =
              CapacitySnapshot.new(
+               %{
+                 version: 2,
+                 snapshot_id: @snapshot_id,
+                 capacity_state: :refused,
+                 windows: [],
+                 observed_at: nil,
+                 freshness: %{max_age_seconds: 300},
+                 source: %{
+                   adapter_id: "fixture.capacity",
+                   provider_id: "claude",
+                   invocation_mode: "print_json",
+                   event: :headless_result_error
+                 },
+                 scope: "account",
+                 confidence: :none,
+                 support_tier: :unsupported,
+                 compatibility_state: :degraded,
+                 reason: "headless_capacity_signal_unsupported",
+                 extensions: %{}
+               },
+               now: @now
+             )
+
+    assert "unsupported sources cannot report a refusal" in errors_on(changeset).support_tier
+
+    assert {:error, changeset} =
+             CapacitySnapshot.new(
+               unknown_snapshot_attrs(%{
+                 capacity_state: :refused,
+                 confidence: :high,
+                 support_tier: :proactive,
+                 reason: "reported_limit"
+               }),
+               now: @now
+             )
+
+    assert "refused capacity cannot have high confidence" in errors_on(changeset).confidence
+
+    assert {:error, changeset} =
+             CapacitySnapshot.new(
+               observed_snapshot_attrs(%{
+                 capacity_state: :refused,
+                 confidence: :none,
+                 reason: "reported_limit"
+               }),
+               now: @now
+             )
+
+    assert "refused capacity cannot contain observed windows" in errors_on(changeset).windows
+
+    assert {:error, changeset} =
+             CapacitySnapshot.new(
                observed_snapshot_attrs(%{
                  windows: [%{kind: "primary", state: :observed, used_percent: "0"}]
                }),
@@ -267,7 +347,7 @@ defmodule Shoestring.Harness.ContractsTest do
     assert "can't be blank" in errors_on(changeset).observed_at
   end
 
-  test "capacity serialization is exact and rejects state or shape drift" do
+  test "capacity serialization allows additive fields but rejects state or shape drift" do
     assert {:ok, snapshot} = CapacitySnapshot.new(observed_snapshot_attrs(), now: @now)
     payload = EventPayload.capacity_snapshot(snapshot, @run_id)
 
@@ -277,13 +357,41 @@ defmodule Shoestring.Harness.ContractsTest do
     assert {:ok, decoded} = CapacitySnapshot.from_payload(payload, now: @now)
     assert decoded == snapshot
 
+    equivalent_expiry = Map.put(payload, "expires_at", "2026-08-30T05:05:00-07:00")
+
+    assert {:ok, _decoded} =
+             EventRegistry.validate_payload(
+               "capacity.snapshot_observed",
+               2,
+               equivalent_expiry,
+               now: @now
+             )
+
+    assert {:ok, additive_payload} =
+             EventRegistry.validate_payload(
+               "capacity.snapshot_observed",
+               2,
+               put_in(payload, ["source", "format"], "future-format")
+               |> Map.put("future_field", "ignored"),
+               now: @now
+             )
+
+    assert additive_payload["capacity_state"] == "observed"
+
+    assert {:error, {:invalid_payload, "capacity.snapshot_observed", 2, _changeset}} =
+             EventRegistry.validate_payload(
+               "capacity.snapshot_observed",
+               2,
+               Map.put(payload, "support_tier", "reactive_only"),
+               now: @now
+             )
+
     for malformed <- [
           put_in(payload, ["capacity_state"], "available"),
           put_in(payload, ["windows", "items", Access.at(0), "state"], "known"),
           put_in(payload, ["source", "event"], "terminal_scrape"),
           put_in(payload, ["freshness", "max_age_seconds"], 0),
           put_in(payload, ["expires_at"], "2026-08-30T12:05:01Z"),
-          put_in(payload, ["source", "format"], "drift"),
           put_in(payload, ["windows", "items", Access.at(0)], %{
             "kind" => "primary",
             "state" => "observed"
@@ -302,9 +410,44 @@ defmodule Shoestring.Harness.ContractsTest do
     end
   end
 
+  test "payload state contradictions are rejected at the JSON boundary" do
+    {:ok, observed_snapshot} = CapacitySnapshot.new(observed_snapshot_attrs(), now: @now)
+    observed = EventPayload.capacity_snapshot(observed_snapshot, @run_id)
+
+    assert {:error, changeset} =
+             CapacitySnapshot.from_payload(
+               put_in(observed, ["windows", "items", Access.at(0), "reason"], "contradiction"),
+               now: @now
+             )
+
+    assert "is not allowed for this state" in errors_on(changeset).window_reason
+
+    assert {:error, changeset} =
+             CapacitySnapshot.from_payload(Map.put(observed, "future_field", "secret: value"),
+               now: @now
+             )
+
+    refute inspect(errors_on(changeset)) =~ "secret: value"
+
+    unknown_attrs =
+      unknown_snapshot_attrs(%{
+        windows: [%{kind: "primary", state: :unknown, reason: "not_reported"}]
+      })
+
+    {:ok, unknown_snapshot} = CapacitySnapshot.new(unknown_attrs, now: @now)
+    unknown = EventPayload.capacity_snapshot(unknown_snapshot, @run_id)
+
+    for contradictory <- [
+          put_in(unknown, ["windows", "items", Access.at(0), "used_percent"], 25.0),
+          put_in(unknown, ["windows", "items", Access.at(0), "reset_at"], "2026-08-30T13:00:00Z")
+        ] do
+      assert {:error, _changeset} = CapacitySnapshot.from_payload(contradictory, now: @now)
+    end
+  end
+
   test "contract versions and extensions are explicit and bounded" do
     assert {:error, changeset} = RunRequest.new(Map.put(run_request_attrs(), :version, 2))
-    assert "must equal 1; received 2" in errors_on(changeset).version
+    assert "must equal 1" in errors_on(changeset).version
 
     assert {:error, changeset} =
              RunRequest.new(put_in(run_request_attrs(), [:extensions], %{"unscoped" => "value"}))

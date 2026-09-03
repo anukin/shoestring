@@ -21,7 +21,7 @@ defmodule Shoestring.Harness.FakeTest do
       scenario = Scenario.normal_completion()
       opts = %{scenario: scenario, clock: FixedClock, request_log: log}
 
-      assert {:ok, %CapacitySnapshot{capacity_state: :known}} = Fake.probe(opts)
+      assert {:ok, %CapacitySnapshot{capacity_state: :observed}} = Fake.probe(opts)
     end
 
     test "start records request and returns run identity", %{log: log} do
@@ -187,7 +187,7 @@ defmodule Shoestring.Harness.FakeTest do
       {:ok, snapshot} = Fake.probe(opts)
 
       # The snapshot expires_at is before ManualClock.now(), making it stale
-      assert snapshot.capacity_state == :known
+      assert snapshot.capacity_state == :observed
       stale = CapacitySnapshot.freshness(snapshot, ManualClock.now())
       assert stale == :stale
     end

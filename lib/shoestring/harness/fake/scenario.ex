@@ -407,24 +407,34 @@ defmodule Shoestring.Harness.Fake.Scenario do
   @spec capacity_event(String.t(), float(), DateTime.t(), keyword()) :: event_spec()
   def capacity_event(snapshot_id, used_percent, observed_at, opts \\ []) do
     now = observed_at
+    event_observed_at = DateTime.add(now, Keyword.get(opts, :offset_ms, 0), :millisecond)
 
     {:ok, snapshot} =
-      CapacitySnapshot.new(%{
-        version: 1,
-        snapshot_id: snapshot_id,
-        capacity_state: :known,
-        windows: [
-          %{kind: "five_hour", state: :known, used_percent: used_percent, reset_at: nil}
-        ],
-        observed_at: DateTime.add(now, Keyword.get(opts, :offset_ms, 0), :millisecond),
-        expires_at: DateTime.add(now, 300, :second),
-        source: %{adapter_id: @adapter_id, method: "probe"},
-        scope: "subscription",
-        confidence: :medium,
-        support_tier: :partial,
-        compatibility_state: :compatible,
-        extensions: %{}
-      })
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: snapshot_id,
+          capacity_state: :observed,
+          windows: [
+            %{kind: "five_hour", state: :observed, used_percent: used_percent, reset_at: nil}
+          ],
+          observed_at: event_observed_at,
+          freshness: %{max_age_seconds: 300},
+          source: %{
+            adapter_id: @adapter_id,
+            provider_id: "fake",
+            invocation_mode: "fake",
+            event: :explicit_read
+          },
+          scope: "subscription",
+          confidence: :high,
+          support_tier: :proactive,
+          compatibility_state: :compatible,
+          reason: nil,
+          extensions: %{}
+        },
+        now: event_observed_at
+      )
 
     %{
       kind: :capacity,
@@ -442,22 +452,31 @@ defmodule Shoestring.Harness.Fake.Scenario do
   @spec healthy_snapshot(String.t(), DateTime.t()) :: CapacitySnapshot.t()
   def healthy_snapshot(snapshot_id, now) do
     {:ok, snapshot} =
-      CapacitySnapshot.new(%{
-        version: 1,
-        snapshot_id: snapshot_id,
-        capacity_state: :known,
-        windows: [
-          %{kind: "five_hour", state: :known, used_percent: 20.0, reset_at: nil}
-        ],
-        observed_at: now,
-        expires_at: DateTime.add(now, 300, :second),
-        source: %{adapter_id: @adapter_id, method: "probe"},
-        scope: "subscription",
-        confidence: :high,
-        support_tier: :supported,
-        compatibility_state: :compatible,
-        extensions: %{}
-      })
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: snapshot_id,
+          capacity_state: :observed,
+          windows: [
+            %{kind: "five_hour", state: :observed, used_percent: 20.0, reset_at: nil}
+          ],
+          observed_at: now,
+          freshness: %{max_age_seconds: 300},
+          source: %{
+            adapter_id: @adapter_id,
+            provider_id: "fake",
+            invocation_mode: "fake",
+            event: :explicit_read
+          },
+          scope: "subscription",
+          confidence: :high,
+          support_tier: :proactive,
+          compatibility_state: :compatible,
+          reason: nil,
+          extensions: %{}
+        },
+        now: now
+      )
 
     snapshot
   end
@@ -465,22 +484,31 @@ defmodule Shoestring.Harness.Fake.Scenario do
   @spec stale_snapshot(String.t(), DateTime.t()) :: CapacitySnapshot.t()
   def stale_snapshot(snapshot_id, observed_at) do
     {:ok, snapshot} =
-      CapacitySnapshot.new(%{
-        version: 1,
-        snapshot_id: snapshot_id,
-        capacity_state: :known,
-        windows: [
-          %{kind: "five_hour", state: :known, used_percent: 50.0, reset_at: nil}
-        ],
-        observed_at: observed_at,
-        expires_at: DateTime.add(observed_at, 60, :second),
-        source: %{adapter_id: @adapter_id, method: "probe"},
-        scope: "subscription",
-        confidence: :medium,
-        support_tier: :supported,
-        compatibility_state: :compatible,
-        extensions: %{}
-      })
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: snapshot_id,
+          capacity_state: :observed,
+          windows: [
+            %{kind: "five_hour", state: :observed, used_percent: 50.0, reset_at: nil}
+          ],
+          observed_at: observed_at,
+          freshness: %{max_age_seconds: 60},
+          source: %{
+            adapter_id: @adapter_id,
+            provider_id: "fake",
+            invocation_mode: "fake",
+            event: :explicit_read
+          },
+          scope: "subscription",
+          confidence: :high,
+          support_tier: :proactive,
+          compatibility_state: :compatible,
+          reason: nil,
+          extensions: %{}
+        },
+        now: observed_at
+      )
 
     snapshot
   end
@@ -488,20 +516,29 @@ defmodule Shoestring.Harness.Fake.Scenario do
   @spec unknown_snapshot(String.t(), DateTime.t()) :: CapacitySnapshot.t()
   def unknown_snapshot(snapshot_id, now) do
     {:ok, snapshot} =
-      CapacitySnapshot.new(%{
-        version: 1,
-        snapshot_id: snapshot_id,
-        capacity_state: :unknown,
-        windows: [],
-        observed_at: now,
-        expires_at: nil,
-        source: %{adapter_id: @adapter_id, method: "probe"},
-        scope: "subscription",
-        confidence: :none,
-        support_tier: :partial,
-        compatibility_state: :compatible,
-        extensions: %{}
-      })
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: snapshot_id,
+          capacity_state: :unknown,
+          windows: [],
+          observed_at: now,
+          freshness: %{max_age_seconds: 300},
+          source: %{
+            adapter_id: @adapter_id,
+            provider_id: "fake",
+            invocation_mode: "fake",
+            event: :explicit_read
+          },
+          scope: "subscription",
+          confidence: :none,
+          support_tier: :unsupported,
+          compatibility_state: :compatible,
+          reason: "probe_unconfigured",
+          extensions: %{}
+        },
+        now: now
+      )
 
     snapshot
   end
@@ -509,20 +546,29 @@ defmodule Shoestring.Harness.Fake.Scenario do
   @spec degraded_snapshot(String.t(), DateTime.t()) :: CapacitySnapshot.t()
   def degraded_snapshot(snapshot_id, now) do
     {:ok, snapshot} =
-      CapacitySnapshot.new(%{
-        version: 1,
-        snapshot_id: snapshot_id,
-        capacity_state: :unknown,
-        windows: [],
-        observed_at: now,
-        expires_at: nil,
-        source: %{adapter_id: @adapter_id, method: "probe"},
-        scope: "subscription",
-        confidence: :none,
-        support_tier: :partial,
-        compatibility_state: :degraded,
-        extensions: %{"shoestring.fake:degraded_reason" => "required_field_removed"}
-      })
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: snapshot_id,
+          capacity_state: :unknown,
+          windows: [],
+          observed_at: now,
+          freshness: %{max_age_seconds: 300},
+          source: %{
+            adapter_id: @adapter_id,
+            provider_id: "fake",
+            invocation_mode: "fake",
+            event: :explicit_read
+          },
+          scope: "subscription",
+          confidence: :none,
+          support_tier: :unsupported,
+          compatibility_state: :degraded,
+          reason: "required_field_removed",
+          extensions: %{"shoestring.fake:degraded_reason" => "required_field_removed"}
+        },
+        now: now
+      )
 
     snapshot
   end

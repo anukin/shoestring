@@ -146,60 +146,89 @@ defmodule Shoestring.Test.CapabilityAdapter do
 
   defp known_snapshot do
     {:ok, snapshot} =
-      CapacitySnapshot.new(%{
-        version: 1,
-        snapshot_id: @snapshot_id,
-        capacity_state: :known,
-        windows: [
-          %{kind: "five_hour", state: :known, used_percent: 25.0, reset_at: @expires_at}
-        ],
-        observed_at: @observed_at,
-        expires_at: @expires_at,
-        source: %{adapter_id: @adapter_id, method: "probe"},
-        scope: "account",
-        confidence: :high,
-        support_tier: :supported,
-        compatibility_state: :compatible,
-        extensions: %{}
-      })
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: @snapshot_id,
+          capacity_state: :observed,
+          windows: [
+            %{kind: "five_hour", state: :observed, used_percent: 25.0, reset_at: @expires_at}
+          ],
+          observed_at: @observed_at,
+          freshness: %{max_age_seconds: 300},
+          source: %{
+            adapter_id: @adapter_id,
+            provider_id: "test",
+            invocation_mode: "fake",
+            event: :explicit_read
+          },
+          scope: "account",
+          confidence: :high,
+          support_tier: :proactive,
+          compatibility_state: :compatible,
+          reason: nil,
+          extensions: %{}
+        },
+        now: @observed_at
+      )
 
     snapshot
   end
 
   defp unknown_snapshot do
     {:ok, snapshot} =
-      CapacitySnapshot.new(%{
-        version: 1,
-        snapshot_id: @snapshot_id,
-        capacity_state: :unknown,
-        windows: [],
-        observed_at: @observed_at,
-        source: %{adapter_id: @adapter_id, method: "probe"},
-        scope: "account",
-        confidence: :none,
-        support_tier: :unsupported,
-        compatibility_state: :degraded,
-        extensions: %{}
-      })
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: @snapshot_id,
+          capacity_state: :unknown,
+          windows: [],
+          observed_at: @observed_at,
+          freshness: %{max_age_seconds: 300},
+          source: %{
+            adapter_id: @adapter_id,
+            provider_id: "test",
+            invocation_mode: "fake",
+            event: :explicit_read
+          },
+          scope: "account",
+          confidence: :none,
+          support_tier: :unsupported,
+          compatibility_state: :degraded,
+          reason: "probe_unconfigured",
+          extensions: %{}
+        },
+        now: @observed_at
+      )
 
     snapshot
   end
 
   defp incompatible_snapshot do
     {:ok, snapshot} =
-      CapacitySnapshot.new(%{
-        version: 1,
-        snapshot_id: @snapshot_id,
-        capacity_state: :unknown,
-        windows: [],
-        observed_at: @observed_at,
-        source: %{adapter_id: @adapter_id, method: "probe"},
-        scope: "account",
-        confidence: :none,
-        support_tier: :unsupported,
-        compatibility_state: :incompatible,
-        extensions: %{}
-      })
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: @snapshot_id,
+          capacity_state: :unknown,
+          windows: [],
+          observed_at: @observed_at,
+          freshness: %{max_age_seconds: 300},
+          source: %{
+            adapter_id: @adapter_id,
+            provider_id: "test",
+            invocation_mode: "fake",
+            event: :explicit_read
+          },
+          scope: "account",
+          confidence: :none,
+          support_tier: :unsupported,
+          compatibility_state: :incompatible,
+          reason: "adapter_version_incompatible",
+          extensions: %{}
+        },
+        now: @observed_at
+      )
 
     snapshot
   end

@@ -42,41 +42,6 @@ defmodule Shoestring.Harness.CapacitySnapshot do
     :extensions
   ]
 
-  @snapshot_v1_keys [
-    :version,
-    :snapshot_id,
-    :capacity_state,
-    :windows,
-    :observed_at,
-    :expires_at,
-    :source,
-    :scope,
-    :confidence,
-    :support_tier,
-    :compatibility_state,
-    :extensions,
-    :reason,
-    :freshness
-  ]
-
-  @payload_keys [
-    "snapshot_id",
-    "run_id",
-    "contract_version",
-    "capacity_state",
-    "windows",
-    "observed_at",
-    "expires_at",
-    "freshness",
-    "source",
-    "scope",
-    "confidence",
-    "support_tier",
-    "compatibility_state",
-    "reason",
-    "extensions"
-  ]
-
   @enforce_keys [
     :version,
     :snapshot_id,
@@ -113,7 +78,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   @type window ::
           %{
             kind: String.t(),
-            state: :observed | :known,
+            state: :observed,
             used_percent: number(),
             reset_at: DateTime.t() | nil
           }
@@ -129,9 +94,9 @@ defmodule Shoestring.Harness.CapacitySnapshot do
         }
 
   @type t :: %__MODULE__{
-          version: pos_integer(),
+          version: 2,
           snapshot_id: Ecto.UUID.t(),
-          capacity_state: :observed | :degraded | :refused | :unknown | :known,
+          capacity_state: :observed | :degraded | :refused | :unknown,
           windows: [window()],
           observed_at: DateTime.t() | nil,
           expires_at: DateTime.t() | nil,
@@ -167,14 +132,6 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   @spec new(map(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
   def new(attrs, opts \\ [])
 
-  def new(%{version: 1} = attrs, opts) when is_list(opts) do
-    new_v1(attrs, opts)
-  end
-
-  def new(%{"version" => 1} = attrs, opts) when is_list(opts) do
-    new_v1(attrs, opts)
-  end
-
   def new(attrs, opts) when is_map(attrs) and is_list(opts) do
     with :ok <- ensure_only_keys(attrs, @snapshot_keys, :snapshot),
          {:ok, now} <- now(opts),
@@ -207,6 +164,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
          {:ok, extensions} <-
            attrs |> Contract.optional(:extensions) |> then(&Contract.extensions/1),
          expires_at = expires_at(observed_at, freshness),
+         :ok <- validate_support_tier(capacity_state, support_tier),
          :ok <-
            validate_state(
              capacity_state,
@@ -241,12 +199,12 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   def new(_attrs, _opts), do: Contract.invalid(:base, "must be an object")
 
-  @doc "Decodes and strictly validates the v2 JSON event representation."
+  @doc "Decodes known v2 JSON fields and ignores additive fields."
   @spec from_payload(map(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
   def from_payload(payload, opts \\ [])
 
   def from_payload(payload, opts) when is_map(payload) and is_list(opts) do
-    with :ok <- ensure_only_keys(payload, @payload_keys, :capacity_payload),
+    with :ok <- payload_safety(payload),
          {:ok, version} <-
            payload |> fetch_payload("contract_version") |> then(&payload_version/1),
          {:ok, capacity_state} <-
@@ -297,6 +255,14 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   def from_payload(_payload, _opts), do: Contract.invalid(:base, "must be an object")
 
+  defp payload_safety(payload) do
+    if Contract.safe_term?(payload) do
+      :ok
+    else
+      Contract.invalid(:base, "must not contain secrets or raw transcripts")
+    end
+  end
+
   @doc "Computes freshness at an injected time; it never treats the future as fresh."
   @spec freshness(t(), DateTime.t()) :: :fresh | :stale | :unknown
   def freshness(%__MODULE__{capacity_state: :unknown}, _now), do: :unknown
@@ -313,10 +279,6 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   @doc "Only complete, fresh proactive observations are eligible for admission."
   @spec eligible?(t(), DateTime.t()) :: boolean()
-  def eligible?(%__MODULE__{version: 1} = snapshot, now) do
-    snapshot.capacity_state in [:known, :observed] and freshness(snapshot, now) == :fresh
-  end
-
   def eligible?(snapshot, now) do
     snapshot.capacity_state == :observed and
       snapshot.confidence == :high and
@@ -485,6 +447,20 @@ defmodule Shoestring.Harness.CapacitySnapshot do
     end
   end
 
+  # A support tier describes what the source can establish, not whether the
+  # provider happened to be at its limit. Only a proactive source may make a
+  # canonical observed claim. A proactive source may also report a refusal,
+  # but an unsupported source cannot claim a reliable one.
+  defp validate_support_tier(:observed, :proactive), do: :ok
+
+  defp validate_support_tier(:observed, _support_tier),
+    do: Contract.invalid(:support_tier, "observed capacity requires proactive support")
+
+  defp validate_support_tier(:refused, :unsupported),
+    do: Contract.invalid(:support_tier, "unsupported sources cannot report a refusal")
+
+  defp validate_support_tier(_capacity_state, _support_tier), do: :ok
+
   defp validate_state(
          :observed,
          windows,
@@ -513,9 +489,6 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
       :future ->
         Contract.invalid(:capacity_state, "future capacity must be unknown")
-
-      :unknown ->
-        Contract.invalid(:capacity_state, "timestamp-unknown capacity must be unknown")
     end
   end
 
@@ -560,28 +533,22 @@ defmodule Shoestring.Harness.CapacitySnapshot do
           :capacity_state,
           "degraded capacity requires a timestamped observed window and reason"
         )
-
-      :future ->
-        Contract.invalid(:capacity_state, "future capacity must be unknown")
-
-      :unknown ->
-        Contract.invalid(:capacity_state, "timestamp-unknown capacity must be unknown")
     end
   end
 
   defp validate_state(
          :refused,
-         _windows,
+         windows,
          _observed_at,
          _freshness,
          _source,
-         _confidence,
+         confidence,
          _compatibility,
          reason,
          _now
        )
        when is_binary(reason),
-       do: :ok
+       do: validate_refusal(confidence, windows)
 
   defp validate_state(
          :refused,
@@ -632,6 +599,19 @@ defmodule Shoestring.Harness.CapacitySnapshot do
            "unknown capacity requires none confidence and a reason"
          )
 
+  defp validate_refusal(confidence, windows) do
+    cond do
+      confidence == :high ->
+        Contract.invalid(:confidence, "refused capacity cannot have high confidence")
+
+      Enum.any?(windows, &(&1.state == :observed)) ->
+        Contract.invalid(:windows, "refused capacity cannot contain observed windows")
+
+      true ->
+        :ok
+    end
+  end
+
   defp freshness_for(nil, _freshness, _now), do: :unknown
 
   defp freshness_for(observed_at, freshness, now) do
@@ -650,7 +630,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
     do: DateTime.add(observed_at, max_age_seconds, :second)
 
   defp all_windows_observed?(windows),
-    do: windows != [] and Enum.all?(windows, &(&1.state in [:observed, :known]))
+    do: windows != [] and Enum.all?(windows, &(&1.state == :observed))
 
   defp fetch_payload(payload, key) do
     case Map.fetch(payload, key) do
@@ -663,8 +643,8 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   defp payload_version({:ok, @version}), do: {:ok, @version}
 
-  defp payload_version({:ok, value}),
-    do: Contract.invalid(:contract_version, "must equal #{@version}; received #{inspect(value)}")
+  defp payload_version({:ok, _value}),
+    do: Contract.invalid(:contract_version, "must equal #{@version}")
 
   defp payload_version(error), do: error
 
@@ -684,6 +664,8 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   defp payload_windows({:ok, %{"items" => items} = value}) when map_size(value) == 1,
     do: payload_windows(items)
+
+  defp payload_windows({:ok, %{"items" => items}}), do: payload_windows(items)
 
   defp payload_windows({:ok, _value}),
     do: Contract.invalid(:windows, "must contain only an items list")
@@ -707,13 +689,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   defp payload_windows(_items), do: Contract.invalid(:windows, "items must be a list")
 
   defp payload_window(value) when is_map(value) do
-    with :ok <-
-           ensure_only_keys(
-             value,
-             ["kind", "state", "used_percent", "reset_at", "reason"],
-             :window
-           ),
-         {:ok, state} <- payload_enum(Map.fetch(value, "state"), :window_state, @window_states),
+    with {:ok, state} <- payload_enum(Map.fetch(value, "state"), :window_state, @window_states),
          {:ok, kind} <-
            value |> fetch_payload("kind") |> Contract.text(:window_kind, max: 100) do
       case state do
@@ -738,9 +714,8 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   defp payload_window(_value), do: Contract.invalid(:windows, "entries must be objects")
 
-  defp payload_freshness({:ok, %{"max_age_seconds" => max_age_seconds} = value})
-       when map_size(value) == 1,
-       do: freshness(%{max_age_seconds: max_age_seconds})
+  defp payload_freshness({:ok, %{"max_age_seconds" => max_age_seconds}}),
+    do: freshness(%{max_age_seconds: max_age_seconds})
 
   defp payload_freshness({:ok, _value}),
     do: Contract.invalid(:freshness, "must contain max_age_seconds")
@@ -748,13 +723,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   defp payload_freshness(error), do: error
 
   defp payload_source({:ok, value}) when is_map(value) do
-    with :ok <-
-           ensure_only_keys(
-             value,
-             ["adapter_id", "provider_id", "invocation_mode", "event"],
-             :source
-           ),
-         {:ok, event} <- payload_enum(Map.fetch(value, "event"), :source_event, @source_events),
+    with {:ok, event} <- payload_enum(Map.fetch(value, "event"), :source_event, @source_events),
          {:ok, adapter_id} <-
            fetch_payload(value, "adapter_id") |> Contract.text(:source_adapter_id, max: 200),
          {:ok, provider_id} <-
@@ -779,7 +748,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
     case Map.fetch(payload, key) do
       {:ok, nil} -> {:ok, nil}
       {:ok, value} -> Contract.datetime(value, payload_field(key))
-      :error -> Contract.invalid(payload_field(key), "can't be blank")
+      :error -> {:ok, nil}
     end
   end
 
@@ -795,7 +764,7 @@ defmodule Shoestring.Harness.CapacitySnapshot do
     case Map.fetch(payload, key) do
       {:ok, nil} -> {:ok, nil}
       {:ok, value} -> Contract.text(value, payload_field(key), opts)
-      :error -> Contract.invalid(payload_field(key), "can't be blank")
+      :error -> {:ok, nil}
     end
   end
 
@@ -815,12 +784,16 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   defp ensure_only_keys(map, allowed, field) do
     allowed = Enum.map(allowed, &to_string/1)
 
-    if Enum.all?(Map.keys(map), &(to_string(&1) in allowed)) do
+    if Enum.all?(Map.keys(map), &supported_key?(&1, allowed)) do
       :ok
     else
       Contract.invalid(field, "contains unsupported fields")
     end
   end
+
+  defp supported_key?(key, allowed) when is_binary(key), do: key in allowed
+  defp supported_key?(key, allowed) when is_atom(key), do: Atom.to_string(key) in allowed
+  defp supported_key?(_key, _allowed), do: false
 
   defp payload_field("contract_version"), do: :contract_version
   defp payload_field("capacity_state"), do: :capacity_state
@@ -844,211 +817,4 @@ defmodule Shoestring.Harness.CapacitySnapshot do
   defp payload_field("invocation_mode"), do: :source_invocation_mode
   defp payload_field("event"), do: :source_event
   defp payload_field(_key), do: :base
-
-  defp new_v1(attrs, _opts) do
-    with :ok <- ensure_only_keys(attrs, @snapshot_v1_keys, :snapshot),
-         {:ok, version} <- Contract.version(attrs, 1),
-         {:ok, snapshot_id} <-
-           attrs |> Contract.required(:snapshot_id) |> then(&uuid_result(&1, :snapshot_id)),
-         {:ok, capacity_state} <-
-           attrs
-           |> Contract.required(:capacity_state)
-           |> then(
-             &Contract.enum(&1, :capacity_state, [
-               :known,
-               :unknown,
-               :observed,
-               :degraded,
-               :refused
-             ])
-           ),
-         {:ok, windows} <- attrs |> Contract.required(:windows) |> then(&windows_v1/1),
-         {:ok, observed_at} <- nullable_required_datetime(attrs, :observed_at),
-         {:ok, expires_at} <- optional_datetime(attrs, :expires_at),
-         {:ok, source} <- attrs |> Contract.required(:source) |> then(&source_v1/1),
-         {:ok, scope} <-
-           attrs |> Contract.required(:scope) |> then(&Contract.text(&1, :scope, max: 300)),
-         {:ok, confidence} <-
-           attrs
-           |> Contract.required(:confidence)
-           |> then(&Contract.enum(&1, :confidence, @confidence)),
-         {:ok, support_tier} <-
-           attrs
-           |> Contract.required(:support_tier)
-           |> then(
-             &Contract.enum(&1, :support_tier, [
-               :supported,
-               :partial,
-               :unsupported | @support_tiers
-             ])
-           ),
-         {:ok, compatibility_state} <-
-           attrs
-           |> Contract.required(:compatibility_state)
-           |> then(&Contract.enum(&1, :compatibility_state, @compatibility)),
-         {:ok, reason} <- nullable_text(attrs, :reason, max: 300),
-         {:ok, extensions} <-
-           attrs |> Contract.optional(:extensions) |> then(&Contract.extensions/1),
-         freshness = compute_or_extract_freshness(attrs, observed_at, expires_at),
-         expires_at = expires_at || expires_at(observed_at, freshness),
-         :ok <- validate_state_v1(capacity_state, windows, expires_at, confidence) do
-      {:ok,
-       %__MODULE__{
-         version: version,
-         snapshot_id: snapshot_id,
-         capacity_state: capacity_state,
-         windows: windows,
-         observed_at: observed_at,
-         expires_at: expires_at,
-         freshness: freshness,
-         source: source,
-         scope: scope,
-         confidence: confidence,
-         support_tier: support_tier,
-         compatibility_state: compatibility_state,
-         reason: reason,
-         extensions: extensions
-       }}
-    end
-  end
-
-  defp compute_or_extract_freshness(attrs, observed_at, expires_at) do
-    case Contract.fetch(attrs, :freshness) do
-      {:ok, %{max_age_seconds: s}} when is_integer(s) and s > 0 ->
-        %{max_age_seconds: min(s, @maximum_freshness_seconds)}
-
-      _ ->
-        max_age =
-          if expires_at && observed_at do
-            max(1, DateTime.diff(expires_at, observed_at, :second))
-          else
-            300
-          end
-
-        %{max_age_seconds: min(max_age, @maximum_freshness_seconds)}
-    end
-  end
-
-  defp windows_v1({:ok, value}), do: windows_v1(value)
-
-  defp windows_v1(value) do
-    with {:ok, windows} <- Contract.list(value, :windows, max: 16) do
-      Enum.reduce_while(windows, {:ok, []}, fn window, {:ok, acc} ->
-        case window_v1(window) do
-          {:ok, window} -> {:cont, {:ok, [window | acc]}}
-          error -> {:halt, error}
-        end
-      end)
-      |> case do
-        {:ok, windows} -> {:ok, Enum.reverse(windows)}
-        error -> error
-      end
-    end
-  end
-
-  defp window_v1(value) when is_map(value) do
-    with :ok <-
-           ensure_only_keys(value, [:kind, :state, :used_percent, :reset_at, :reason], :window),
-         {:ok, kind} <-
-           value |> Contract.required(:kind) |> then(&Contract.text(&1, :window_kind, max: 100)),
-         {:ok, state} <-
-           value
-           |> Contract.required(:state)
-           |> then(&Contract.enum(&1, :window_state, [:known, :unknown, :observed])) do
-      case state do
-        s when s in [:known, :observed] ->
-          with {:ok, used_percent} <-
-                 value
-                 |> Contract.required(:used_percent)
-                 |> then(&Contract.percentage(&1, :used_percent)),
-               {:ok, reset_at} <- optional_datetime(value, :reset_at) do
-            {:ok, %{kind: kind, state: s, used_percent: used_percent, reset_at: reset_at}}
-          end
-
-        :unknown ->
-          case Contract.fetch(value, :reason) do
-            {:ok, reason} ->
-              with {:ok, reason} <- Contract.text(reason, :window_reason, max: 300) do
-                {:ok, %{kind: kind, state: :unknown, reason: reason}}
-              end
-
-            :error ->
-              {:ok, %{kind: kind, state: :unknown, reason: "unknown"}}
-          end
-      end
-    end
-  end
-
-  defp window_v1(_value), do: Contract.invalid(:windows, "entries must be objects")
-
-  defp source_v1({:ok, value}), do: source_v1(value)
-
-  defp source_v1(value) when is_map(value) do
-    with {:ok, adapter_id} <-
-           value
-           |> Contract.required(:adapter_id)
-           |> then(&Contract.text(&1, :source_adapter_id, max: 200)) do
-      provider_id = Map.get(value, :provider_id, Map.get(value, "provider_id", "legacy"))
-
-      invocation_mode =
-        Map.get(
-          value,
-          :invocation_mode,
-          Map.get(
-            value,
-            "invocation_mode",
-            Map.get(value, :method, Map.get(value, "method", "probe"))
-          )
-        )
-
-      event =
-        case Map.get(value, :event, Map.get(value, "event")) do
-          nil ->
-            :none
-
-          a when is_atom(a) ->
-            a
-
-          s when is_binary(s) ->
-            case s do
-              "explicit_read" -> :explicit_read
-              "update_notification" -> :update_notification
-              "status_line_input" -> :status_line_input
-              "headless_result_error" -> :headless_result_error
-              _ -> :none
-            end
-        end
-
-      {:ok,
-       %{
-         adapter_id: adapter_id,
-         provider_id: provider_id,
-         invocation_mode: invocation_mode,
-         event: event
-       }}
-    end
-  end
-
-  defp source_v1(_value), do: Contract.invalid(:source, "must be an object")
-
-  defp validate_state_v1(state, [], _expires_at, _confidence) when state in [:known, :observed],
-    do: Contract.invalid(:windows, "must include at least one window when known")
-
-  defp validate_state_v1(state, _windows, nil, _confidence) when state in [:known, :observed],
-    do: Contract.invalid(:expires_at, "is required when capacity is known")
-
-  defp validate_state_v1(:unknown, windows, _expires_at, :none) when windows == [], do: :ok
-
-  defp validate_state_v1(:unknown, windows, _expires_at, _confidence) do
-    if windows == [] or Enum.all?(windows, &(&1.state == :unknown)) do
-      :ok
-    else
-      Contract.invalid(
-        :capacity_state,
-        "unknown capacity requires no windows and none confidence"
-      )
-    end
-  end
-
-  defp validate_state_v1(_state, _windows, _expires_at, _confidence), do: :ok
 end
