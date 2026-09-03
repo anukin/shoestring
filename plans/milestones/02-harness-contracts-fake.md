@@ -241,7 +241,7 @@ iteration 4.
   - `ExecutionLease` v1 (`grant_id`, `run_id`, `admitted_snapshot_id`, `reserves`, `response_budget`, `tool_budget`, `deadline`, `checkpoint_cadence`, `renewal_state`, `extensions`);
   - `Checkpoint` v1 (`checkpoint_id`, `goal_id`, `run_id`, `acceptance_contract`, `repository_state`, `evidence`, `decisions`, `unresolved_issues`, `next_action`, `provider_session_id`, `stop_reason`, `artifact_ids`, `extensions`);
   - `HarnessEvent` v1 (`run_id`, `source_event_id`, `ordinal`, `occurred_at`, `kind`, `process_id`, `provider_session_id`, `artifact_id`, `capacity_snapshot_id`, `error`, `result`, `extensions`);
-  - `Error` struct with typed normalized categories (`:transport`, `:schema_incompatible`, `:auth_required`, `:quota_refused`, `:cancelled`, `:task_failed`, `:unsupported_capability`, `:invalid_transition`).
+  - `Error` struct with typed normalized categories (`:transport`, `:schema_incompatible`, `:authentication_required`, `:quota_refused`, `:cancelled`, `:task_failed`, `:unsupported_capability`, `:invalid_transition`).
 - **Schemas/migrations:**
   - Ecto schemas: `RunRecord` (`harness_runs`), `ExecutionLeaseRecord` (`harness_execution_leases`), `CheckpointRecord` (`harness_checkpoints`), `CheckpointArtifactReference` (`harness_checkpoint_artifact_references`), `CapacitySnapshotRecord` (`harness_capacity_snapshots`), `CapacityWindowRecord` (`harness_capacity_windows`), `DispatchRecord` (`harness_dispatches`), and Oban Lite SQLite tables (`oban_jobs`, `oban_peers`);
   - Migrations: `20260831050006_add_harness_foundation.exs`, `20260901232504_add_oban_dispatch.exs`, `20260901232628_evolve_capacity_snapshot_contract_v2.exs`, `20260902232748_add_harness_run_request_extensions.exs`, `20260903000650_harden_capacity_snapshot_contract_v2.exs`.
@@ -276,3 +276,4 @@ iteration 4.
   - Wrap provider CLI transports (Claude Code and Codex) in `Shoestring.Harness.Adapter` implementations.
   - Execute the shared contract suite (`Shoestring.Harness.ContractSuite`) against all production adapters.
   - Guarantee that continuation requests use only `Checkpoint` references and structured task prompts, preserving the zero-raw-transcript-leakage invariant proven in Iteration 2.
+  - Before treating zero-model-call and zero-transcript-leakage checks as load-bearing production invariants, extend `Shoestring.Harness.Fake.RequestLog` to record and test the `Fake.send/3` path in addition to start, resume, and cancel calls.
