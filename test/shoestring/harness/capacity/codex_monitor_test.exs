@@ -317,7 +317,7 @@ defmodule Shoestring.Harness.Capacity.CodexMonitorTest do
 
       # Now provide the response to the pending request (id: 3)
       FakeTransport.push_frame(fake_transport, %{
-        "id" => 3,
+        "id" => "0:3",
         "result" => normal_read
       })
 
@@ -651,7 +651,7 @@ defmodule Shoestring.Harness.Capacity.CodexMonitorTest do
       remaining1 = Process.read_timer(status1.reconnect_timer)
       assert remaining1 > 10_000 and remaining1 <= 12_501
 
-      CodexMonitor.reconnect(monitor2)
+      send(monitor2, :reconnect)
       status_connecting2 = CodexMonitor.get_status(monitor2)
       send(monitor2, {:codex_transport_error, status_connecting2.transport_pid, :err})
       _ = :sys.get_state(monitor2)
@@ -707,336 +707,241 @@ defmodule Shoestring.Harness.Capacity.CodexMonitorTest do
       remaining4 = Process.read_timer(status4.reconnect_timer)
       assert remaining4 > 29_000 and remaining4 <= 30_000
     end
-
-    monitor =
-      start_supervised!({
-        CodexMonitor,
-        # dummy, will trigger start_link failure because self() doesn't respond to set_owner
-        name: false,
-        version: "0.150.1",
-        transport_pid: self(),
-        base_backoff_ms: 10_000,
-        max_backoff_ms: 30_000,
-        random_fn: random_fn
-      })
-
-    # Since configured_transport_pid is self(), do_connect will call set_owner and we must reply
-    # Wait, no, it will try to call set_owner on self(), which throws if unhandled. But we have catch :exit, _ -> :ok!
-    # But wait, self() is ALIVE. do_connect will think it's connected and wait for connected message.
-    # Let's use a dead pid instead.
-
-    dead_pid = spawn(fn -> :ok end)
-    Process.sleep(10)
-
-    monitor2 =
-      start_supervised!(
-        {CodexMonitor,
-         name: false,
-         version: "0.150.1",
-         transport: Shoestring.Harness.Capacity.Codex.FakeTransport,
-         transport_opts: [owner: self(), emit_connected: false],
-         base_backoff_ms: 10_000,
-         max_backoff_ms: 30_000,
-         random_fn: random_fn}
-      )
-
-    # Now it starts FakeTransport but emit_connected: false, so it hangs in :connecting.
-    # We send an error to trigger backoff
-    status_connecting = CodexMonitor.get_status(monitor2)
-    send(monitor2, {:codex_transport_error, status_connecting.transport_pid, :err})
-    _ = :sys.get_state(monitor2)
-
-    assert_receive {:jitter, max1}
-    assert max1 > 0
-
-    status1 = CodexMonitor.get_status(monitor2)
-    assert status1.backoff_attempt == 1
-    assert status1.status == :unavailable
-    remaining1 = Process.read_timer(status1.reconnect_timer)
-    assert remaining1 > 10_000 and remaining1 <= 12_501
-
-    # Force reconnect
-    CodexMonitor.reconnect(monitor2)
-    status_connecting2 = CodexMonitor.get_status(monitor2)
-    send(monitor2, {:codex_transport_error, status_connecting2.transport_pid, :err})
-    _ = :sys.get_state(monitor2)
-
-    assert_receive {:jitter, max2}
-    # Jitter bound increases
-    assert max2 > max1
-
-    # Test hostile backoff_fn negative
-    monitor3 =
-      start_supervised!(
-        {CodexMonitor,
-         name: false,
-         version: "0.150.1",
-         transport: Shoestring.Harness.Capacity.Codex.FakeTransport,
-         transport_opts: [owner: self(), emit_connected: false],
-         max_backoff_ms: 30_000,
-         backoff_fn: fn _ -> -5000 end}
-      )
-
-    status_connecting3 = CodexMonitor.get_status(monitor3)
-    send(monitor3, {:codex_transport_error, status_connecting3.transport_pid, :err})
-    _ = :sys.get_state(monitor3)
-    status3 = CodexMonitor.get_status(monitor3)
-    remaining3 = Process.read_timer(status3.reconnect_timer)
-    assert remaining3 == 0 or remaining3 == false
-
-    # Test hostile backoff_fn enormous
-    monitor4 =
-      start_supervised!(
-        {CodexMonitor,
-         name: false,
-         version: "0.150.1",
-         transport: Shoestring.Harness.Capacity.Codex.FakeTransport,
-         transport_opts: [owner: self(), emit_connected: false],
-         max_backoff_ms: 30_000,
-         backoff_fn: fn _ -> 999_999_999 end}
-      )
-
-    status_connecting4 = CodexMonitor.get_status(monitor4)
-    send(monitor4, {:codex_transport_error, status_connecting4.transport_pid, :err})
-    _ = :sys.get_state(monitor4)
-    status4 = CodexMonitor.get_status(monitor4)
-    remaining4 = Process.read_timer(status4.reconnect_timer)
-    assert remaining4 > 29_000 and remaining4 <= 30_000
   end
 
-describe "malformed and oversized input safety" do
-  test "safely rejects malformed JSON string without crashing",
-       %{normal_read: normal_read} do
-    {:ok, fake_transport} =
-      start_supervised(
-        {FakeTransport,
-         owner: self(), emit_connected: false, auto_respond: default_auto_respond(normal_read)}
-      )
+  describe "malformed and oversized input safety" do
+    test "safely rejects malformed JSON string without crashing",
+         %{normal_read: normal_read} do
+      {:ok, fake_transport} =
+        start_supervised(
+          {FakeTransport,
+           owner: self(), emit_connected: false, auto_respond: default_auto_respond(normal_read)}
+        )
 
-    monitor =
-      start_supervised!(
-        {CodexMonitor,
-         name: false,
-         version: "0.150.1",
-         transport_pid: fake_transport,
-         sink: fn s -> {:ok, :persisted, s} end,
-         clock: fn -> @eval_time end}
-      )
+      monitor =
+        start_supervised!(
+          {CodexMonitor,
+           name: false,
+           version: "0.150.1",
+           transport_pid: fake_transport,
+           sink: fn s -> {:ok, :persisted, s} end,
+           clock: fn -> @eval_time end}
+        )
 
-    sync_handshake(monitor, fake_transport)
-    assert CodexMonitor.status(monitor) == :connected
+      sync_handshake(monitor, fake_transport)
+      assert CodexMonitor.status(monitor) == :connected
 
-    # Push garbage JSON line
-    FakeTransport.push_frame(fake_transport, "NOT JSON AT ALL {{{")
-    _ = :sys.get_state(monitor)
+      # Push garbage JSON line
+      FakeTransport.push_frame(fake_transport, "NOT JSON AT ALL {{{")
+      _ = :sys.get_state(monitor)
 
-    # Still connected and healthy
-    assert CodexMonitor.status(monitor) == :connected
-  end
-
-  test "safely rejects oversized frame without buffer exhaustion",
-       %{normal_read: normal_read} do
-    {:ok, fake_transport} =
-      start_supervised(
-        {FakeTransport,
-         owner: self(),
-         emit_connected: false,
-         auto_respond: default_auto_respond(normal_read),
-         max_frame_size: 2_000}
-      )
-
-    monitor =
-      start_supervised!(
-        {CodexMonitor,
-         name: false,
-         version: "0.150.1",
-         transport_pid: fake_transport,
-         sink: fn s -> {:ok, :persisted, s} end,
-         max_frame_size: 2_000,
-         clock: fn -> @eval_time end}
-      )
-
-    sync_handshake(monitor, fake_transport)
-    assert CodexMonitor.status(monitor) == :connected
-
-    # Push an oversized payload exceeding 2,000 bytes
-    oversized = %{
-      "method" => "account/rateLimits/updated",
-      "params" => %{"huge" => String.duplicate("x", 5_000)}
-    }
-
-    FakeTransport.push_frame(fake_transport, oversized)
-    _ = :sys.get_state(monitor)
-
-    # Does not crash
-    assert CodexMonitor.status(monitor) == :backoff
-  end
-end
-
-describe "sink failure and recovery" do
-  test "marks :degraded on sink error and recovers on subsequent success",
-       %{normal_read: normal_read, sparse_update: sparse_update} do
-    test_pid = self()
-
-    agent =
-      start_supervised!(%{
-        id: :test_sink_state,
-        start: {Agent, :start_link, [fn -> :succeed end]}
-      })
-
-    sink = fn snapshot ->
-      case Agent.get(agent, & &1) do
-        :fail ->
-          send(test_pid, :sink_failed)
-          {:error, :database_unreachable}
-
-        :succeed ->
-          send(test_pid, {:ingested, snapshot})
-          {:ok, :persisted, snapshot}
-      end
+      # Still connected and healthy
+      assert CodexMonitor.status(monitor) == :connected
     end
 
-    {:ok, fake_transport} =
-      start_supervised(
-        {FakeTransport,
-         owner: self(), emit_connected: false, auto_respond: default_auto_respond(normal_read)}
-      )
+    test "safely rejects oversized frame without buffer exhaustion",
+         %{normal_read: normal_read} do
+      {:ok, fake_transport} =
+        start_supervised(
+          {FakeTransport,
+           owner: self(),
+           emit_connected: false,
+           auto_respond: default_auto_respond(normal_read),
+           max_frame_size: 2_000}
+        )
 
-    monitor =
-      start_supervised!(
-        {CodexMonitor,
-         name: false,
-         version: "0.150.1",
-         transport_pid: fake_transport,
-         sink: sink,
-         clock: fn -> @eval_time end}
-      )
+      monitor =
+        start_supervised!(
+          {CodexMonitor,
+           name: false,
+           version: "0.150.1",
+           transport_pid: fake_transport,
+           sink: fn s -> {:ok, :persisted, s} end,
+           max_frame_size: 2_000,
+           clock: fn -> @eval_time end}
+        )
 
-    _ = :sys.get_state(monitor)
-    assert_receive {:ingested, _snapshot}
-    assert CodexMonitor.status(monitor) == :connected
+      sync_handshake(monitor, fake_transport)
+      assert CodexMonitor.status(monitor) == :connected
 
-    # Set sink to fail
-    Agent.update(agent, fn _ -> :fail end)
-
-    FakeTransport.push_notification(
-      fake_transport,
-      "account/rateLimits/updated",
-      sparse_update
-    )
-
-    _ = :sys.get_state(monitor)
-    assert_receive :sink_failed
-    assert CodexMonitor.status(monitor) == :sink_error
-
-    # Set sink to succeed again
-    Agent.update(agent, fn _ -> :succeed end)
-
-    FakeTransport.push_notification(
-      fake_transport,
-      "account/rateLimits/updated",
-      sparse_update
-    )
-
-    _ = :sys.get_state(monitor)
-    assert_receive {:ingested, _recovered_snapshot}
-    assert CodexMonitor.status(monitor) == :connected
-  end
-end
-
-describe "secret redaction" do
-  test "payloads containing auth tokens or secret patterns are rejected",
-       %{normal_read: normal_read} do
-    test_pid = self()
-
-    sink = fn snapshot ->
-      send(test_pid, {:ingested, snapshot})
-      {:ok, :persisted, snapshot}
-    end
-
-    {:ok, fake_transport} =
-      start_supervised(
-        {FakeTransport,
-         owner: self(), emit_connected: false, auto_respond: default_auto_respond(normal_read)}
-      )
-
-    monitor =
-      start_supervised!(
-        {CodexMonitor,
-         name: false,
-         version: "0.150.1",
-         transport_pid: fake_transport,
-         sink: sink,
-         clock: fn -> @eval_time end}
-      )
-
-    _ = :sys.get_state(monitor)
-    assert_receive {:ingested, initial}
-
-    # Push an update with an illegal secret bearer token pattern
-    leak_attempt = %{
-      "rateLimits" => %{
-        "primary" => %{
-          "usedPercent" => 50,
-          "windowDurationMins" => 300,
-          "resetsAt" => 1_787_994_541
-        },
-        "auth" => "Bearer sk-secret1234567890abcdef"
+      # Push an oversized payload exceeding 2,000 bytes
+      oversized = %{
+        "method" => "account/rateLimits/updated",
+        "params" => %{"huge" => String.duplicate("x", 5_000)}
       }
-    }
 
-    FakeTransport.push_notification(
-      fake_transport,
-      "account/rateLimits/updated",
-      leak_attempt
-    )
+      FakeTransport.push_frame(fake_transport, oversized)
+      _ = :sys.get_state(monitor)
 
-    _ = :sys.get_state(monitor)
-
-    # The current snapshot was NOT overwritten with the leaking payload
-    current = CodexMonitor.last_observation(monitor)
-    assert current.snapshot_id == initial.snapshot_id or current.capacity_state == :degraded
-    # No secret is in extensions or reason
-    refute inspect(current) =~ "sk-secret"
+      # Does not crash
+      assert CodexMonitor.status(monitor) == :backoff
+    end
   end
-end
 
-describe "public API and Capacity.Source behaviour" do
-  test "implements Shoestring.Harness.Capacity.Source callbacks",
-       %{normal_read: normal_read} do
-    {:ok, fake_transport} =
-      start_supervised(
-        {FakeTransport,
-         owner: self(), emit_connected: false, auto_respond: default_auto_respond(normal_read)}
+  describe "sink failure and recovery" do
+    test "marks :degraded on sink error and recovers on subsequent success",
+         %{normal_read: normal_read, sparse_update: sparse_update} do
+      test_pid = self()
+
+      agent =
+        start_supervised!(%{
+          id: :test_sink_state,
+          start: {Agent, :start_link, [fn -> :succeed end]}
+        })
+
+      sink = fn snapshot ->
+        case Agent.get(agent, & &1) do
+          :fail ->
+            send(test_pid, :sink_failed)
+            {:error, :database_unreachable}
+
+          :succeed ->
+            send(test_pid, {:ingested, snapshot})
+            {:ok, :persisted, snapshot}
+        end
+      end
+
+      {:ok, fake_transport} =
+        start_supervised(
+          {FakeTransport,
+           owner: self(), emit_connected: false, auto_respond: default_auto_respond(normal_read)}
+        )
+
+      monitor =
+        start_supervised!(
+          {CodexMonitor,
+           name: false,
+           version: "0.150.1",
+           transport_pid: fake_transport,
+           sink: sink,
+           clock: fn -> @eval_time end}
+        )
+
+      _ = :sys.get_state(monitor)
+      assert_receive {:ingested, _snapshot}
+      assert CodexMonitor.status(monitor) == :connected
+
+      # Set sink to fail
+      Agent.update(agent, fn _ -> :fail end)
+
+      FakeTransport.push_notification(
+        fake_transport,
+        "account/rateLimits/updated",
+        sparse_update
       )
 
-    monitor =
-      start_supervised!(
-        {CodexMonitor,
-         name: :test_codex_monitor,
-         version: "0.150.1",
-         transport_pid: fake_transport,
-         sink: fn s -> {:ok, :persisted, s} end,
-         clock: fn -> @eval_time end}
+      _ = :sys.get_state(monitor)
+      assert_receive :sink_failed
+      assert CodexMonitor.status(monitor) == :sink_error
+
+      # Set sink to succeed again
+      Agent.update(agent, fn _ -> :succeed end)
+
+      FakeTransport.push_notification(
+        fake_transport,
+        "account/rateLimits/updated",
+        sparse_update
       )
 
-    sync_handshake(monitor, fake_transport)
-
-    assert CodexMonitor.provenance() == %{
-             adapter_id: "codex_app_server_stdio",
-             provider_id: "codex",
-             invocation_mode: "app_server_stdio",
-             event: :explicit_read
-           }
-
-    assert CodexMonitor.support_tier() == :proactive
-
-    assert {:ok, snapshot} = CodexMonitor.observe(:test_codex_monitor)
-    assert snapshot.capacity_state == :observed
-
-    # Test alias Shoestring.Harness.CodexMonitor
-    assert HarnessCodexMonitor.status(:test_codex_monitor) == :connected
-    assert {:ok, _} = HarnessCodexMonitor.observe(:test_codex_monitor)
+      _ = :sys.get_state(monitor)
+      assert_receive {:ingested, _recovered_snapshot}
+      assert CodexMonitor.status(monitor) == :connected
+    end
   end
-end
+
+  describe "secret redaction" do
+    test "payloads containing auth tokens or secret patterns are rejected",
+         %{normal_read: normal_read} do
+      test_pid = self()
+
+      sink = fn snapshot ->
+        send(test_pid, {:ingested, snapshot})
+        {:ok, :persisted, snapshot}
+      end
+
+      {:ok, fake_transport} =
+        start_supervised(
+          {FakeTransport,
+           owner: self(), emit_connected: false, auto_respond: default_auto_respond(normal_read)}
+        )
+
+      monitor =
+        start_supervised!(
+          {CodexMonitor,
+           name: false,
+           version: "0.150.1",
+           transport_pid: fake_transport,
+           sink: sink,
+           clock: fn -> @eval_time end}
+        )
+
+      _ = :sys.get_state(monitor)
+      assert_receive {:ingested, initial}
+
+      # Push an update with an illegal secret bearer token pattern
+      leak_attempt = %{
+        "rateLimits" => %{
+          "primary" => %{
+            "usedPercent" => 50,
+            "windowDurationMins" => 300,
+            "resetsAt" => 1_787_994_541
+          },
+          "auth" => "Bearer sk-secret1234567890abcdef"
+        }
+      }
+
+      FakeTransport.push_notification(
+        fake_transport,
+        "account/rateLimits/updated",
+        leak_attempt
+      )
+
+      _ = :sys.get_state(monitor)
+
+      # The current snapshot was NOT overwritten with the leaking payload
+      current = CodexMonitor.last_observation(monitor)
+      assert current.snapshot_id == initial.snapshot_id or current.capacity_state == :degraded
+      # No secret is in extensions or reason
+      refute inspect(current) =~ "sk-secret"
+    end
+  end
+
+  describe "public API and Capacity.Source behaviour" do
+    test "implements Shoestring.Harness.Capacity.Source callbacks",
+         %{normal_read: normal_read} do
+      {:ok, fake_transport} =
+        start_supervised(
+          {FakeTransport,
+           owner: self(), emit_connected: false, auto_respond: default_auto_respond(normal_read)}
+        )
+
+      monitor =
+        start_supervised!(
+          {CodexMonitor,
+           name: :test_codex_monitor,
+           version: "0.150.1",
+           transport_pid: fake_transport,
+           sink: fn s -> {:ok, :persisted, s} end,
+           clock: fn -> @eval_time end}
+        )
+
+      sync_handshake(monitor, fake_transport)
+
+      assert CodexMonitor.provenance() == %{
+               adapter_id: "codex_app_server_stdio",
+               provider_id: "codex",
+               invocation_mode: "app_server_stdio",
+               event: :explicit_read
+             }
+
+      assert CodexMonitor.support_tier() == :proactive
+
+      assert {:ok, snapshot} = CodexMonitor.observe(:test_codex_monitor)
+      assert snapshot.capacity_state == :observed
+
+      # Test alias Shoestring.Harness.CodexMonitor
+      assert HarnessCodexMonitor.status(:test_codex_monitor) == :connected
+      assert {:ok, _} = HarnessCodexMonitor.observe(:test_codex_monitor)
+    end
+  end
 end
