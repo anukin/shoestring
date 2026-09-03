@@ -74,6 +74,8 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
            ]}
         )
 
+      _ = :sys.get_state(monitor)
+
       # Only version discovery is permitted on startup
       assert_received {:cli_invoked, "claude", ["--version"]}
       refute_received {:cli_invoked, _, _}
