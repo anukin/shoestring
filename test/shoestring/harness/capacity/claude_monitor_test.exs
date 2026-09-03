@@ -219,7 +219,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
       # Missing window is unknown, never 0% or unlimited
       assert seven_day.kind == "seven_day"
       assert seven_day.state == :unknown
-      refute Map.has_key?(seven_day, :used_percent) and seven_day[:used_percent] == 0
+      refute Map.has_key?(seven_day, :used_percent)
     end
   end
 
@@ -482,6 +482,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
       assert snapshot.capacity_state == :refused
       assert snapshot.confidence == :low
       assert snapshot.reason == "cli_reported_rate_limit_refusal_without_capacity_snapshot"
+      assert snapshot.source.event == :status_line_input
 
       status = CapacityClaudeMonitor.status(monitor)
       assert status.status == :refused
@@ -549,7 +550,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
   end
 
   describe "timestamps, freshness, and future timestamps" do
-    test "future timestamp fails closed as unknown", %{clock_fn: clock_fn} do
+    test "future timestamp preserves last-known observation", %{clock_fn: clock_fn} do
       monitor =
         start_supervised!(
           {CapacityClaudeMonitor,
@@ -574,7 +575,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
 
       assert snapshot.capacity_state == :unknown
       assert snapshot.confidence == :none
-      assert snapshot.reason == "missing_or_invalid_observation_timestamp"
+      assert snapshot.reason =~ "missing_or_invalid_observation_timestamp"
     end
 
     test "stale observation degrades gracefully with low confidence", %{

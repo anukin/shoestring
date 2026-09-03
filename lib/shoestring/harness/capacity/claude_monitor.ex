@@ -5,6 +5,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
   ## Locked Policy
   Passive, response-driven `statusLine` observation only.
   - Never launches Claude CLI subprocesses to refresh or prompt.
+    (Except for an asynchronous version check on startup if version is omitted).
   - Never creates synthetic prompts or consumes model turns.
   - Never runs headless JSON/stream-json modes or scrapes ANSI pixels.
   - Accepts local `statusLine` callbacks delivered via the receiver boundary.
@@ -52,6 +53,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
     :freshness_seconds,
     :status,
     :last_observation,
+    :last_observation_scope,
     :last_callback_at,
     :last_captured_at,
     :reason,
@@ -126,6 +128,8 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
 
   @doc """
   Returns the current capacity snapshot evaluated against the clock.
+  The snapshot is scoped to the provided `:scope` (or the default scope).
+  Scope snapshots are never conflated.
   """
   @spec current_snapshot(GenServer.server(), keyword()) ::
           {:ok, CapacitySnapshot.t()} | {:error, term()}
@@ -168,12 +172,21 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
     sink = Keyword.get(opts, :sink, Observatory)
     scope = Keyword.get(opts, :scope, @default_scope)
     freshness_seconds = Keyword.get(opts, :freshness_seconds, @default_freshness_seconds)
+    auto_ingest = Keyword.get(opts, :auto_ingest_initial, false)
 
     now = resolve_now(clock)
-    version = resolve_version(opts)
-    compat = Capacity.compatibility(:claude, :interactive_status_line, version)
 
-    # Initial pre-first-response snapshot: unknown / conservative_partial
+    # We delay version discovery if not provided explicitly to avoid blocking init
+    {version, compat} =
+      case Keyword.get(opts, :version) do
+        v when is_binary(v) ->
+          norm_v = Capacity.Registry.normalize_version(v)
+          {norm_v, Capacity.compatibility(:claude, :interactive_status_line, norm_v)}
+
+        _ ->
+          {nil, Capacity.compatibility(:claude, :interactive_status_line, "0.0.0")}
+      end
+
     initial_snapshot = build_initial_snapshot(compat, version, scope, freshness_seconds, now)
 
     initial_status =
@@ -192,6 +205,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
       freshness_seconds: freshness_seconds,
       status: initial_status,
       last_observation: initial_snapshot,
+      last_observation_scope: scope,
       last_callback_at: nil,
       last_captured_at: nil,
       reason: initial_snapshot.reason,
@@ -200,11 +214,46 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
       sessions: %{}
     }
 
-    if Keyword.get(opts, :auto_ingest_initial, false) do
+    if auto_ingest do
       _ = safe_ingest(sink, initial_snapshot, now)
     end
 
-    {:ok, state}
+    if version == nil do
+      {:ok, state, {:continue, :discover_version}}
+    else
+      {:ok, state}
+    end
+  end
+
+  @impl GenServer
+  def handle_continue(:discover_version, state) do
+    now = resolve_now(state.clock)
+
+    version =
+      case Capacity.discover_version(:claude, state.opts) do
+        {:ok, %{version: v}} -> v
+        _ -> nil
+      end
+
+    compat = Capacity.compatibility(:claude, :interactive_status_line, version)
+
+    initial_snapshot =
+      build_initial_snapshot(compat, version, state.scope, state.freshness_seconds, now)
+
+    initial_status =
+      if compat.compatibility_state == :incompatible, do: :incompatible, else: :ready
+
+    new_state = %{
+      state
+      | version: version,
+        compatibility: compat,
+        status: initial_status,
+        last_observation: initial_snapshot,
+        last_observation_scope: state.scope,
+        reason: initial_snapshot.reason
+    }
+
+    {:noreply, new_state}
   end
 
   @impl GenServer
@@ -221,8 +270,29 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
   @impl GenServer
   def handle_call({:current_snapshot, opts}, _from, state) do
     now = Keyword.get(opts, :now) || resolve_now(state.clock)
-    snapshot = evaluate_snapshot_freshness(state.last_observation, now, state.freshness_seconds)
-    {:reply, {:ok, snapshot}, state}
+    scope = Keyword.get(opts, :scope, state.scope)
+
+    snapshot =
+      case Map.get(state.sessions, scope) do
+        %{last_snapshot: s} when not is_nil(s) ->
+          s
+
+        _ ->
+          if state.last_observation_scope == scope do
+            state.last_observation
+          else
+            build_initial_snapshot(
+              state.compatibility,
+              state.version,
+              scope,
+              state.freshness_seconds,
+              now
+            )
+          end
+      end
+
+    evaluated = evaluate_snapshot_freshness(snapshot, now, state.freshness_seconds)
+    {:reply, {:ok, evaluated}, state}
   end
 
   @impl GenServer
@@ -236,8 +306,26 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
         nil
       end
 
-    evaluated_snapshot =
-      evaluate_snapshot_freshness(state.last_observation, now, state.freshness_seconds)
+    snapshot =
+      case Map.get(state.sessions, state.scope) do
+        %{last_snapshot: s} when not is_nil(s) ->
+          s
+
+        _ ->
+          if state.last_observation_scope == state.scope do
+            state.last_observation
+          else
+            build_initial_snapshot(
+              state.compatibility,
+              state.version,
+              state.scope,
+              state.freshness_seconds,
+              now
+            )
+          end
+      end
+
+    evaluated_snapshot = evaluate_snapshot_freshness(snapshot, now, state.freshness_seconds)
 
     effective_status =
       cond do
@@ -272,7 +360,8 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
   @impl GenServer
   def handle_call({:disconnect, reason}, _from, state) do
     now = resolve_now(state.clock)
-    bounded_reason = bound_reason("session_disconnected: #{reason}")
+    safe_reason = bound_reason(reason)
+    bounded_reason = bound_reason("session_disconnected: #{safe_reason}")
 
     degraded_snapshot =
       case state.last_observation do
@@ -313,6 +402,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
       state
       | status: :ready,
         last_observation: initial_snapshot,
+        last_observation_scope: state.scope,
         last_callback_at: nil,
         last_captured_at: nil,
         reason: initial_snapshot.reason,
@@ -324,44 +414,65 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
     {:reply, :ok, new_state}
   end
 
+  @impl GenServer
+  def handle_info(msg, state) do
+    require Logger
+    Logger.warning("ClaudeMonitor received unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
+
   # --- Internal Pipeline ---
 
   defp do_receive_status_line(payload, call_opts, now, state) do
-    case parse_through_receiver(state.receiver, payload, call_opts) do
-      {:error, :payload_oversized} ->
-        handle_rejection(
-          :payload_oversized,
-          "oversized_status_line_payload",
-          now,
-          state
-        )
+    if is_map(payload) and :erlang.external_size(payload) > 64 * 1024 do
+      handle_rejection(
+        :payload_oversized,
+        "oversized_status_line_payload",
+        now,
+        call_opts,
+        state
+      )
+    else
+      case parse_through_receiver(state.receiver, payload, call_opts) do
+        {:error, :payload_oversized} ->
+          handle_rejection(
+            :payload_oversized,
+            "oversized_status_line_payload",
+            now,
+            call_opts,
+            state
+          )
 
-      {:error, :contains_secrets_or_forbidden_content} ->
-        handle_rejection(
-          :contains_secrets_or_forbidden_content,
-          "status_line_payload_contains_forbidden_content",
-          now,
-          state
-        )
+        {:error, :contains_secrets_or_forbidden_content} ->
+          handle_rejection(
+            :contains_secrets_or_forbidden_content,
+            "status_line_payload_contains_forbidden_content",
+            now,
+            call_opts,
+            state
+          )
 
-      {:error, :malformed_json} ->
-        handle_rejection(
-          :malformed_json,
-          "malformed_json",
-          now,
-          state
-        )
+        {:error, :malformed_json} ->
+          handle_rejection(
+            :malformed_json,
+            "malformed_json",
+            now,
+            call_opts,
+            state
+          )
 
-      {:error, reason} ->
-        handle_rejection(
-          reason,
-          "malformed_payload: #{inspect(reason)}",
-          now,
-          state
-        )
+        {:error, reason} ->
+          handle_rejection(
+            reason,
+            "malformed_payload: #{inspect(reason)}",
+            now,
+            call_opts,
+            state
+          )
 
-      {:ok, parsed} ->
-        process_parsed_payload(parsed, call_opts, now, state)
+        {:ok, parsed} ->
+          process_parsed_payload(parsed, call_opts, now, state)
+      end
     end
   end
 
@@ -398,7 +509,13 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
   end
 
   defp normalize_and_ingest(parsed, scope, session_id, captured_at, now, scope_data, state) do
-    last_known = scope_data.last_snapshot || state.last_observation
+    last_known =
+      scope_data.last_snapshot ||
+        if state.last_observation_scope == scope do
+          state.last_observation
+        else
+          nil
+        end
 
     norm_opts = [
       version: state.version,
@@ -406,7 +523,8 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
       captured_at: captured_at,
       scope: scope,
       freshness_seconds: state.freshness_seconds,
-      last_known_snapshot: last_known
+      last_known_snapshot: last_known,
+      source_event: :status_line_input
     ]
 
     case Capacity.normalize(:claude, :interactive_status_line, parsed, norm_opts) do
@@ -442,6 +560,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
             new_state = %{
               state
               | last_observation: final_snapshot,
+                last_observation_scope: scope,
                 last_callback_at: now,
                 last_captured_at: captured_at,
                 status: new_status,
@@ -472,6 +591,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
             new_state = %{
               state
               | last_observation: degraded_snapshot,
+                last_observation_scope: scope,
                 status: :degraded,
                 reason: bounded_sink_reason,
                 sink_status: {:error, sink_error},
@@ -489,11 +609,19 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
             %CapacitySnapshot{} = lk ->
               case Capacity.preserve_last_known(lk, bounded_error_reason, now: now) do
                 {:ok, preserved} -> preserved
-                _ -> state.last_observation
+                _ -> lk
               end
 
             _ ->
-              state.last_observation
+              build_initial_snapshot(
+                state.compatibility,
+                state.version,
+                scope,
+                state.freshness_seconds,
+                now
+              )
+              |> Map.put(:capacity_state, :degraded)
+              |> Map.put(:reason, bounded_error_reason)
           end
 
         new_state = %{
@@ -509,49 +637,91 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
   end
 
   defp handle_future_timestamp(parsed, scope, captured_at, now, state) do
-    # Future timestamp fails closed as unknown
-    {:ok, unknown_snap} =
-      Capacity.normalize(
-        :claude,
-        :interactive_status_line,
-        parsed,
-        version: state.version,
-        now: now,
-        captured_at: captured_at,
-        scope: scope,
-        freshness_seconds: state.freshness_seconds
-      )
+    scope_data = Map.get(state.sessions, scope, %{last_snapshot: nil})
 
-    new_state = %{
-      state
-      | last_observation: unknown_snap,
-        last_callback_at: now,
-        status: :unknown,
-        reason: unknown_snap.reason,
-        callback_count: state.callback_count + 1
-    }
+    last_known =
+      scope_data.last_snapshot ||
+        if state.last_observation_scope == scope do
+          state.last_observation
+        else
+          nil
+        end
 
-    {:reply, {:ok, :persisted, unknown_snap}, new_state}
-  end
-
-  defp handle_rejection(error_tag, diagnostic_reason, now, state) do
-    bounded = bound_reason(diagnostic_reason)
+    bounded_reason = bound_reason("missing_or_invalid_observation_timestamp")
 
     degraded_snapshot =
-      case state.last_observation do
-        %CapacitySnapshot{} = last_known ->
-          case Capacity.preserve_last_known(last_known, bounded, now: now) do
+      case last_known do
+        %CapacitySnapshot{} = lk ->
+          case Capacity.preserve_last_known(lk, bounded_reason, now: now) do
             {:ok, preserved} -> preserved
-            _ -> state.last_observation
+            _ -> lk
           end
 
         _ ->
-          state.last_observation
+          Capacity.normalize(
+            :claude,
+            :interactive_status_line,
+            parsed,
+            version: state.version,
+            now: now,
+            captured_at: captured_at,
+            scope: scope,
+            freshness_seconds: state.freshness_seconds,
+            force_invalid: "missing_or_invalid_observation_timestamp"
+          )
+          |> elem(1)
       end
 
     new_state = %{
       state
       | last_observation: degraded_snapshot,
+        last_observation_scope: scope,
+        last_callback_at: now,
+        status: degraded_snapshot.capacity_state,
+        reason: degraded_snapshot.reason,
+        callback_count: state.callback_count + 1
+    }
+
+    {:reply, {:ok, :persisted, degraded_snapshot}, new_state}
+  end
+
+  defp handle_rejection(error_tag, diagnostic_reason, now, call_opts, state) do
+    bounded = bound_reason(diagnostic_reason)
+    scope = Keyword.get(call_opts, :scope, state.scope)
+    scope_data = Map.get(state.sessions, scope, %{last_snapshot: nil})
+
+    last_known =
+      scope_data.last_snapshot ||
+        if state.last_observation_scope == scope do
+          state.last_observation
+        else
+          nil
+        end
+
+    degraded_snapshot =
+      case last_known do
+        %CapacitySnapshot{} = lk ->
+          case Capacity.preserve_last_known(lk, bounded, now: now) do
+            {:ok, preserved} -> preserved
+            _ -> lk
+          end
+
+        _ ->
+          build_initial_snapshot(
+            state.compatibility,
+            state.version,
+            scope,
+            state.freshness_seconds,
+            now
+          )
+          |> Map.put(:capacity_state, :degraded)
+          |> Map.put(:reason, bounded)
+      end
+
+    new_state = %{
+      state
+      | last_observation: degraded_snapshot,
+        last_observation_scope: scope,
         status: :degraded,
         reason: bounded,
         callback_count: state.callback_count + 1
@@ -701,24 +871,32 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
   end
 
   defp safe_ingest(sink, %CapacitySnapshot{} = snapshot, now) do
-    try do
-      cond do
-        is_atom(sink) ->
-          sink.ingest(snapshot, now: now)
+    task =
+      Task.async(fn ->
+        try do
+          cond do
+            is_atom(sink) ->
+              sink.ingest(snapshot, now: now)
 
-        is_function(sink, 2) ->
-          sink.(snapshot, now: now)
+            is_function(sink, 2) ->
+              sink.(snapshot, now: now)
 
-        is_function(sink, 1) ->
-          sink.(snapshot)
+            is_function(sink, 1) ->
+              sink.(snapshot)
 
-        true ->
-          {:error, :invalid_sink}
-      end
-    rescue
-      e -> {:error, e}
-    catch
-      _kind, reason -> {:error, reason}
+            true ->
+              {:error, :invalid_sink}
+          end
+        rescue
+          e -> {:error, e}
+        catch
+          _kind, reason -> {:error, reason}
+        end
+      end)
+
+    case Task.yield(task, 3000) || Task.shutdown(task) do
+      {:ok, result} -> result
+      nil -> {:error, :timeout}
     end
   end
 
@@ -726,16 +904,27 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
 
   defp evaluate_snapshot_freshness(nil, _now, _freshness_seconds), do: nil
 
-  defp evaluate_snapshot_freshness(%CapacitySnapshot{} = snapshot, now, _freshness_seconds) do
+  defp evaluate_snapshot_freshness(%CapacitySnapshot{} = snapshot, now, freshness_seconds) do
     if snapshot.observed_at do
-      freshness = CapacitySnapshot.freshness(snapshot, now)
+      is_stale = DateTime.diff(now, snapshot.observed_at, :second) > freshness_seconds
 
-      if freshness == :stale and snapshot.capacity_state in [:observed, :degraded] do
+      if is_stale and snapshot.capacity_state in [:observed, :degraded] do
+        new_reason =
+          if snapshot.reason && String.contains?(snapshot.reason, "stale_observation") do
+            snapshot.reason
+          else
+            bound_reason(
+              [snapshot.reason, "stale_observation"]
+              |> Enum.reject(&is_nil/1)
+              |> Enum.join("; ")
+            )
+          end
+
         %{
           snapshot
           | capacity_state: :degraded,
             confidence: :low,
-            reason: bound_reason(snapshot.reason || "stale_observation")
+            reason: new_reason
         }
       else
         snapshot
@@ -760,19 +949,6 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
     snapshot
   end
 
-  defp resolve_version(opts) do
-    case Keyword.get(opts, :version) do
-      v when is_binary(v) ->
-        Capacity.Registry.normalize_version(v)
-
-      _ ->
-        case Capacity.discover_version(:claude, opts) do
-          {:ok, %{version: v}} -> v
-          _ -> nil
-        end
-    end
-  end
-
   defp resolve_scope(parsed, opts, default_scope) do
     Keyword.get(opts, :scope) ||
       Map.get(parsed, "scope") ||
@@ -785,7 +961,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
       "default"
   end
 
-  defp resolve_captured_at(parsed, opts, fallback_now) do
+  defp resolve_captured_at(parsed, opts, _fallback_now) do
     case Keyword.get(opts, :captured_at) || Keyword.get(opts, :observed_at) do
       %DateTime{} = dt ->
         dt
@@ -793,7 +969,7 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
       iso when is_binary(iso) ->
         case DateTime.from_iso8601(iso) do
           {:ok, dt, _} -> dt
-          _ -> fallback_now
+          _ -> nil
         end
 
       nil ->
@@ -802,10 +978,10 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
         if is_binary(str) do
           case DateTime.from_iso8601(str) do
             {:ok, dt, _} -> dt
-            _ -> fallback_now
+            _ -> nil
           end
         else
-          fallback_now
+          nil
         end
     end
   end
