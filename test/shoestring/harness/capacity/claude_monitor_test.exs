@@ -341,6 +341,151 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
       assert "session_b" in status.active_scopes
     end
 
+    test "keeps durable status and failure paths isolated by scope", %{clock_fn: clock_fn} do
+      test_pid = self()
+      {:ok, sink_mode} = Agent.start_link(fn -> :ok end)
+
+      sink = fn snapshot, _opts ->
+        send(test_pid, {:scope_sink_ingested, snapshot.scope, snapshot.snapshot_id})
+
+        case Agent.get(sink_mode, & &1) do
+          :ok -> {:ok, :persisted, snapshot}
+          {:error, reason} -> {:error, reason}
+        end
+      end
+
+      monitor =
+        start_supervised!(
+          {CapacityClaudeMonitor,
+           [
+             name: nil,
+             version: "2.1.251",
+             clock: clock_fn,
+             sink: sink
+           ]}
+        )
+
+      scope_a_payload = %{
+        "captured_at" => "2026-08-29T07:34:18.000Z",
+        "rate_limits" => %{
+          "five_hour" => %{"used_percentage" => 11, "resets_at" => 1_787_994_000},
+          "seven_day" => %{"used_percentage" => 22, "resets_at" => 1_788_033_600}
+        }
+      }
+
+      scope_b_payload = %{
+        "captured_at" => "2026-08-29T07:34:20.000Z",
+        "rate_limits" => %{
+          "five_hour" => %{"used_percentage" => 77, "resets_at" => 1_787_994_000},
+          "seven_day" => %{"used_percentage" => 88, "resets_at" => 1_788_033_600}
+        }
+      }
+
+      assert {:ok, :persisted, scope_a_snapshot} =
+               CapacityClaudeMonitor.receive_status_line(monitor, scope_a_payload,
+                 scope: "scope-a"
+               )
+
+      assert_receive {:scope_sink_ingested, "scope-a", scope_a_snapshot_id}
+      assert scope_a_snapshot_id == scope_a_snapshot.snapshot_id
+
+      assert {:error, :payload_oversized} =
+               CapacityClaudeMonitor.receive_status_line(
+                 monitor,
+                 String.duplicate("a", 70_000),
+                 scope: "scope-b"
+               )
+
+      refute_received {:scope_sink_ingested, "scope-b", _snapshot_id}
+
+      assert {:ok, rejected_scope_b} =
+               CapacityClaudeMonitor.current_snapshot(monitor, scope: "scope-b")
+
+      assert rejected_scope_b.scope == "scope-b"
+      assert rejected_scope_b.windows == []
+
+      rejected_scope_b_status = CapacityClaudeMonitor.status(monitor, scope: "scope-b")
+      assert rejected_scope_b_status.scope == "scope-b"
+      assert rejected_scope_b_status.last_observation.windows == []
+      assert rejected_scope_b_status.reason == "oversized_status_line_payload"
+
+      scope_a_status_after_rejection = CapacityClaudeMonitor.status(monitor, scope: "scope-a")
+
+      assert Enum.map(scope_a_status_after_rejection.last_observation.windows, & &1.used_percent) ==
+               [11, 22]
+
+      assert scope_a_status_after_rejection.reason == "conservative_partial_observation"
+
+      assert {:ok, :persisted, scope_b_snapshot} =
+               CapacityClaudeMonitor.receive_status_line(monitor, scope_b_payload,
+                 scope: "scope-b"
+               )
+
+      assert_receive {:scope_sink_ingested, "scope-b", scope_b_snapshot_id}
+      assert scope_b_snapshot_id == scope_b_snapshot.snapshot_id
+
+      Agent.update(sink_mode, fn _ -> {:error, :scope_b_sink_down} end)
+
+      changed_scope_b_payload =
+        put_in(scope_b_payload, ["rate_limits", "five_hour", "used_percentage"], 99)
+        |> Map.put("captured_at", "2026-08-29T07:34:21.000Z")
+
+      assert {:error, {:sink_failure, :scope_b_sink_down}} =
+               CapacityClaudeMonitor.receive_status_line(monitor, changed_scope_b_payload,
+                 scope: "scope-b"
+               )
+
+      assert_receive {:scope_sink_ingested, "scope-b", _snapshot_id}
+
+      assert {:ok, :deduplicated, duplicate_a} =
+               CapacityClaudeMonitor.receive_status_line(monitor, scope_a_payload,
+                 scope: "scope-a"
+               )
+
+      assert duplicate_a.scope == "scope-a"
+      assert Enum.map(duplicate_a.windows, & &1.used_percent) == [11, 22]
+      refute_received {:scope_sink_ingested, "scope-a", _snapshot_id}
+
+      assert {:ok, :deduplicated, duplicate_b} =
+               CapacityClaudeMonitor.receive_status_line(monitor, scope_b_payload,
+                 scope: "scope-b"
+               )
+
+      assert duplicate_b.scope == "scope-b"
+      assert Enum.map(duplicate_b.windows, & &1.used_percent) == [77, 88]
+      refute_received {:scope_sink_ingested, "scope-b", _snapshot_id}
+
+      assert {:ok, disconnected_a} =
+               CapacityClaudeMonitor.disconnect(monitor, "scope_a_closed", scope: "scope-a")
+
+      assert disconnected_a.scope == "scope-a"
+      assert Enum.map(disconnected_a.windows, & &1.used_percent) == [11, 22]
+
+      assert {:ok, current_a} =
+               CapacityClaudeMonitor.current_snapshot(monitor, scope: "scope-a")
+
+      assert {:ok, current_b} =
+               CapacityClaudeMonitor.current_snapshot(monitor, scope: "scope-b")
+
+      assert current_a.scope == "scope-a"
+      assert Enum.map(current_a.windows, & &1.used_percent) == [11, 22]
+      assert current_b.scope == "scope-b"
+      assert Enum.map(current_b.windows, & &1.used_percent) == [77, 88]
+
+      status_a = CapacityClaudeMonitor.status(monitor, scope: "scope-a")
+      status_b = CapacityClaudeMonitor.status(monitor, scope: "scope-b")
+
+      assert status_a.scope == "scope-a"
+      assert status_a.status == :disconnected
+      assert status_a.sink_status == :ok
+      refute status_a.reason =~ "sink_failure"
+      assert Enum.map(status_a.last_observation.windows, & &1.used_percent) == [11, 22]
+      assert status_b.scope == "scope-b"
+      assert status_b.sink_status == {:error, :scope_b_sink_down}
+      assert status_b.reason =~ "sink_failure"
+      assert Enum.map(status_b.last_observation.windows, & &1.used_percent) == [77, 88]
+    end
+
     test "concurrent session divergence degrades confidence to low", %{clock_fn: clock_fn} do
       monitor =
         start_supervised!(
@@ -524,25 +669,38 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
     test "oversized payload is rejected and preserves last-known observation", %{
       clock_fn: clock_fn
     } do
+      test_pid = self()
+
+      sink = fn snapshot, _opts ->
+        send(test_pid, {:oversized_test_sink_ingested, snapshot.snapshot_id})
+        {:ok, :persisted, snapshot}
+      end
+
       monitor =
         start_supervised!(
           {CapacityClaudeMonitor,
            [
              name: nil,
              version: "2.1.251",
-             clock: clock_fn
+             clock: clock_fn,
+             sink: sink
            ]}
         )
 
       valid_fixture = CapacityFixtures.load_fixture!("claude/status-line-single-live.json")
 
-      assert {:ok, :persisted, _} =
+      assert {:ok, :persisted, valid_snapshot} =
                CapacityClaudeMonitor.receive_status_line(monitor, valid_fixture)
+
+      assert_receive {:oversized_test_sink_ingested, valid_snapshot_id}
+      assert valid_snapshot_id == valid_snapshot.snapshot_id
 
       oversized = String.duplicate("a", 70_000)
 
       assert {:error, :payload_oversized} =
                CapacityClaudeMonitor.receive_status_line(monitor, oversized)
+
+      refute_received {:oversized_test_sink_ingested, _snapshot_id}
 
       status = CapacityClaudeMonitor.status(monitor)
       assert status.status == :degraded
@@ -563,6 +721,13 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
            ]}
         )
 
+      valid_fixture = CapacityFixtures.load_fixture!("claude/status-line-single-live.json")
+
+      assert {:ok, :persisted, last_known} =
+               CapacityClaudeMonitor.receive_status_line(monitor, valid_fixture)
+
+      assert Enum.map(last_known.windows, & &1.used_percent) == [25, 94]
+
       future_payload = %{
         "captured_at" => "2026-08-29T07:40:00.000Z",
         "rate_limits" => %{
@@ -575,9 +740,44 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
                  captured_at: ~U[2026-08-29 07:40:00Z]
                )
 
+      assert snapshot.capacity_state == :degraded
+      assert snapshot.confidence == :low
+      assert snapshot.reason =~ "missing_or_invalid_observation_timestamp"
+      assert Enum.map(snapshot.windows, & &1.used_percent) == [25, 94]
+
+      assert {:ok, current} = CapacityClaudeMonitor.current_snapshot(monitor)
+      assert Enum.map(current.windows, & &1.used_percent) == [25, 94]
+    end
+
+    test "future timestamp without last-known observation stays unknown", %{clock_fn: clock_fn} do
+      monitor =
+        start_supervised!(
+          {CapacityClaudeMonitor,
+           [
+             name: nil,
+             version: "2.1.251",
+             clock: clock_fn
+           ]}
+        )
+
+      future_payload = %{
+        "captured_at" => "2026-08-29T07:40:00.000Z",
+        "rate_limits" => %{
+          "five_hour" => %{"used_percentage" => 20, "resets_at" => 1_787_994_000}
+        }
+      }
+
+      assert {:ok, :persisted, snapshot} =
+               CapacityClaudeMonitor.receive_status_line(monitor, future_payload,
+                 captured_at: ~U[2026-08-29 07:40:00Z],
+                 scope: "future-empty"
+               )
+
+      assert snapshot.scope == "future-empty"
       assert snapshot.capacity_state == :unknown
       assert snapshot.confidence == :none
-      assert snapshot.reason =~ "missing_or_invalid_observation_timestamp"
+      assert snapshot.reason == "missing_or_invalid_observation_timestamp"
+      refute Enum.any?(snapshot.windows, &(&1.state == :observed))
     end
 
     test "stale observation degrades gracefully with low confidence", %{
@@ -658,17 +858,52 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
       recovered_status = CapacityClaudeMonitor.status(monitor)
       assert recovered_status.sink_status == :ok
     end
-  end
 
-  describe "security, secret scanning, and disconnect" do
-    test "rejects callback containing secret token and redacts", %{clock_fn: clock_fn} do
+    test "treats a crashing sink task as a sink failure without crashing the monitor", %{
+      clock_fn: clock_fn
+    } do
+      crashing_sink = fn _snapshot, _opts -> Process.exit(self(), :kill) end
+
       monitor =
         start_supervised!(
           {CapacityClaudeMonitor,
            [
              name: nil,
              version: "2.1.251",
-             clock: clock_fn
+             clock: clock_fn,
+             sink: crashing_sink
+           ]}
+        )
+
+      fixture = CapacityFixtures.load_fixture!("claude/status-line-single-live.json")
+
+      assert {:error, {:sink_failure, :killed}} =
+               CapacityClaudeMonitor.receive_status_line(monitor, fixture)
+
+      status = CapacityClaudeMonitor.status(monitor)
+      assert status.status == :degraded
+      assert status.sink_status == {:error, :killed}
+      assert status.reason =~ "sink_failure"
+    end
+  end
+
+  describe "security, secret scanning, and disconnect" do
+    test "rejects callback containing secret token and redacts", %{clock_fn: clock_fn} do
+      test_pid = self()
+
+      sink = fn snapshot, _opts ->
+        send(test_pid, {:secret_test_sink_ingested, snapshot.snapshot_id})
+        {:ok, :persisted, snapshot}
+      end
+
+      monitor =
+        start_supervised!(
+          {CapacityClaudeMonitor,
+           [
+             name: nil,
+             version: "2.1.251",
+             clock: clock_fn,
+             sink: sink
            ]}
         )
 
@@ -679,6 +914,8 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
 
       assert {:error, :contains_secrets_or_forbidden_content} =
                CapacityClaudeMonitor.receive_status_line(monitor, secret_payload)
+
+      refute_received {:secret_test_sink_ingested, _snapshot_id}
 
       status = CapacityClaudeMonitor.status(monitor)
       refute status.reason =~ "sk-ant"
@@ -708,6 +945,30 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitorTest do
 
       status = CapacityClaudeMonitor.status(monitor)
       assert status.status == :disconnected
+    end
+
+    test "redacts secrets from stored disconnect reasons", %{clock_fn: clock_fn} do
+      monitor =
+        start_supervised!(
+          {CapacityClaudeMonitor,
+           [
+             name: nil,
+             version: "2.1.251",
+             clock: clock_fn
+           ]}
+        )
+
+      secret_reason = "api_key=sk-ant-api03-abcdef1234567890"
+
+      assert {:ok, snapshot} = CapacityClaudeMonitor.disconnect(monitor, secret_reason)
+      assert snapshot.reason =~ "[REDACTED]"
+      refute snapshot.reason =~ "sk-ant"
+      refute snapshot.reason =~ "abcdef"
+
+      status = CapacityClaudeMonitor.status(monitor)
+      assert status.reason =~ "[REDACTED]"
+      refute status.reason =~ "sk-ant"
+      refute status.reason =~ "abcdef"
     end
 
     test "reset/1 restores pre-first-response initial state", %{clock_fn: clock_fn} do

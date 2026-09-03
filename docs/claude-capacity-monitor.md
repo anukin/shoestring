@@ -68,9 +68,11 @@ alias Shoestring.Harness.Capacity.ClaudeMonitor
 
 # Query comprehensive diagnostic status
 status = ClaudeMonitor.status()
+scoped_status = ClaudeMonitor.status(pid, scope: "team-a")
 
 # Signal session disconnect (preserves last-known data in degraded state)
-{:ok, degraded_snapshot} = ClaudeMonitor.disconnect("session_exited")
+{:ok, degraded_snapshot} =
+  ClaudeMonitor.disconnect(pid, "session_exited", scope: "team-a")
 
 # Source behavior implementations
 {:ok, snapshot} = ClaudeMonitor.observe()

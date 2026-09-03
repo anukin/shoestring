@@ -15,12 +15,13 @@ defmodule Shoestring.Harness.ClaudeMonitor do
   defdelegate current_snapshot(server \\ Shoestring.Harness.Capacity.ClaudeMonitor, opts \\ []),
     to: Shoestring.Harness.Capacity.ClaudeMonitor
 
-  defdelegate status(server \\ Shoestring.Harness.Capacity.ClaudeMonitor),
+  defdelegate status(server \\ Shoestring.Harness.Capacity.ClaudeMonitor, opts \\ []),
     to: Shoestring.Harness.Capacity.ClaudeMonitor
 
   defdelegate disconnect(
                 server \\ Shoestring.Harness.Capacity.ClaudeMonitor,
-                reason \\ "session_disconnected"
+                reason \\ "session_disconnected",
+                opts \\ []
               ),
               to: Shoestring.Harness.Capacity.ClaudeMonitor
 
