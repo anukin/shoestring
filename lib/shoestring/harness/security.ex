@@ -66,7 +66,8 @@ defmodule Shoestring.Harness.Security do
         tokens == ["auth", "header"] or tokens == ["auth", "key"] ->
         true
 
-      tokens == ["api", "key"] or tokens == ["apikey"] ->
+      tokens == ["api", "key"] or tokens == ["apikey"] or tokens == ["private", "key"] or
+          tokens == ["privatekey"] ->
         true
 
       # Auth tokens: "token", "access_token", "refresh_token", "auth_token", "bearer_token", etc.
@@ -79,17 +80,9 @@ defmodule Shoestring.Harness.Security do
             ["bearer", "token"],
             ["session", "token"],
             ["id", "token"],
-            ["api", "token"]
+            ["api", "token"],
+            ["oauth", "token"]
           ] ->
-        true
-
-      # Sensitive identifiers (must have id and identifier category)
-      tokens in [
-        ["account", "id"],
-        ["session", "id"],
-        ["thread", "id"],
-        ["turn", "id"]
-      ] ->
         true
 
       # Prompts (content, not token counters)
@@ -118,6 +111,32 @@ defmodule Shoestring.Harness.Security do
   end
 
   def credential_key?(_), do: false
+
+  @doc """
+  Returns true if the key name is forbidden in fixtures (includes all credentials,
+  plus sensitive identifiers that would break hygiene).
+  """
+  @spec fixture_forbidden_key?(atom() | String.t()) :: boolean()
+  def fixture_forbidden_key?(key) when is_atom(key) do
+    fixture_forbidden_key?(Atom.to_string(key))
+  end
+
+  def fixture_forbidden_key?(key) when is_binary(key) do
+    if credential_key?(key) do
+      true
+    else
+      tokens = tokenize_key(key)
+
+      tokens in [
+        ["account", "id"],
+        ["session", "id"],
+        ["thread", "id"],
+        ["turn", "id"]
+      ]
+    end
+  end
+
+  def fixture_forbidden_key?(_), do: false
 
   @doc """
   Splits a key name into constituent word tokens by camelCase boundaries and delimiters.
@@ -253,7 +272,7 @@ defmodule Shoestring.Harness.Security do
       current_path = if path == "", do: key_str, else: "#{path}.#{key_str}"
 
       key_violations =
-        if credential_key?(key_str) do
+        if fixture_forbidden_key?(key_str) do
           ["Found credential or forbidden key #{inspect(key_str)} at #{current_path}"]
         else
           []
@@ -292,7 +311,7 @@ defmodule Shoestring.Harness.Security do
     raw_key_violations =
       Regex.scan(@json_key_regex, raw_json)
       |> Enum.flat_map(fn [_, key] ->
-        if credential_key?(key) do
+        if fixture_forbidden_key?(key) do
           ["Raw JSON contains credential key #{inspect(key)}"]
         else
           []

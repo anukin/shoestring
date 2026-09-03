@@ -844,13 +844,6 @@ defmodule Shoestring.Harness.CapacityTest do
       {"secret", %{"secret" => "harmless_secret_val"}},
       {"cookie", %{"cookie" => "harmless_cookie_val"}},
       {"authorization", %{"authorization" => "harmless_auth_val"}},
-      {"account_id", %{"account_id" => "harmless_acct_123"}},
-      {"session_id", %{"session_id" => "harmless_session_uuid"}},
-      {"sessionId", %{"sessionId" => "harmless_session_uuid"}},
-      {"thread_id", %{"thread_id" => "harmless_thread_1"}},
-      {"threadId", %{"threadId" => "harmless_thread_1"}},
-      {"turn_id", %{"turn_id" => "harmless_turn_1"}},
-      {"turnId", %{"turnId" => "harmless_turn_1"}},
       {"prompt", %{"prompt" => "harmless prompt text"}},
       {"transcript", %{"transcript" => "harmless transcript text"}},
       {"raw_transcript", %{"raw_transcript" => "harmless raw transcript"}},
@@ -909,6 +902,32 @@ defmodule Shoestring.Harness.CapacityTest do
                  ),
                "Expected normalize/4 to reject poison case: #{label}"
       end
+    end
+
+    test "normalize/4 allows live observations containing session identifiers (PR #14 / PR #13 regression)" do
+      obs = %{
+        "captured_at" => "2026-08-29T04:38:16.163Z",
+        "session_id" => "real_claude_session_123",
+        "account_id" => "acc_999",
+        "thread_id" => "thread_abc",
+        "turn_id" => "turn_xyz",
+        "payload" => %{
+          "result" => %{
+            "rateLimits" => %{
+              "primary" => %{"usedPercent" => 10}
+            }
+          }
+        }
+      }
+
+      assert {:ok, _snapshot} =
+               Capacity.normalize(
+                 :claude,
+                 :app_server_stdio,
+                 obs,
+                 version: "0.150.1",
+                 now: @evaluation_time
+               )
     end
   end
 

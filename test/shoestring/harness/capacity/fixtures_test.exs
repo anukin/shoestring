@@ -101,11 +101,21 @@ defmodule Shoestring.Harness.Capacity.FixturesTest do
         term_violations = CapacityFixtures.scan_term(decoded)
         assert term_violations != [], "Expected scan_term to reject term for: #{name}"
 
-        refute Capacity.safe_observation?(decoded),
-               "Expected safe_observation?/1 to reject: #{name}"
+        if name not in [
+             "account_id",
+             "session_id",
+             "sessionId",
+             "thread_id",
+             "threadId",
+             "turn_id",
+             "turnId"
+           ] do
+          refute Capacity.safe_observation?(decoded),
+                 "Expected safe_observation?/1 to reject: #{name}"
 
-        assert {:error, :contains_secrets_or_forbidden_content} =
-                 Capacity.normalize(:codex, :app_server_stdio, decoded)
+          assert {:error, :contains_secrets_or_forbidden_content} =
+                   Capacity.normalize(:codex, :app_server_stdio, decoded)
+        end
       end
     end
   end

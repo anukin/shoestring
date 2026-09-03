@@ -112,7 +112,9 @@ case Shoestring.Harness.Capacity.normalize(
     ...
 
   {:error, :contains_secrets_or_forbidden_content} ->
-    # Payload contains credential keys (token, api_key, password, etc.), secret patterns, or paths
+    # Payload contains actual credential keys (token, api_key, password, private_key, oauth_token, etc.), secret patterns, or paths.
+    # Note: correlation identifiers like `session_id`, `account_id`, `thread_id`, and `turn_id` are explicitly 
+    # allowed in live observations (they are only rejected by the static fixture-hygiene scanner).
     ...
 
   {:error, :payload_too_large} ->

@@ -45,7 +45,7 @@ defmodule Shoestring.Harness.Capacity do
     * `:timeout` - execution timeout in milliseconds (defaults to 5000).
   """
   @spec discover_version(atom() | String.t(), keyword()) ::
-          {:ok, %{raw: String.t(), version: String.t() | nil}}
+          {:ok, %{raw: String.t(), version: String.t()}}
           | {:error,
              :not_found
              | {:command_failed, non_neg_integer(), String.t()}
@@ -168,7 +168,7 @@ defmodule Shoestring.Harness.Capacity do
         cond do
           is_nil(normalized_version) ->
             reason =
-              if is_nil(version) or is_binary(version) do
+              if is_nil(version) do
                 "untested_cli_version: unknown"
               else
                 bound_reason("untested_cli_version: #{inspect(version)}")
