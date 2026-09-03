@@ -108,6 +108,108 @@ defmodule Shoestring.Harness.ObservatoryTest do
 
       assert "cannot create goal with protected observatory owner" in errors_on(changeset).owner_id
     end
+
+    test "ensure_provisioned refuses to adopt pre-existing conflicting goal" do
+      reserved_id = Observatory.observatory_goal_id()
+      victim_owner = Ecto.UUID.generate()
+
+      Repo.query!("DROP TRIGGER IF EXISTS protect_observatory_goal_delete")
+      Repo.query!("DROP TRIGGER IF EXISTS protect_observatory_goal_update")
+      Repo.delete_all(from g in Goal, where: g.id == ^reserved_id)
+
+      _conflicting =
+        %Goal{
+          id: reserved_id,
+          owner_id: victim_owner,
+          title: "Victim Goal",
+          status: "active",
+          inserted_at: @t0,
+          updated_at: @t0
+        }
+        |> Repo.insert!()
+
+      assert {:error, {:conflicting_goal_at_observatory_id, found}} =
+               Observatory.ensure_provisioned()
+
+      assert found.id == reserved_id
+      assert found.owner_id == victim_owner
+      assert found.status == "active"
+    end
+
+    test "Goal.changeset closes bypasses with field-specific errors and allows victim row updates" do
+      reserved_id = Observatory.observatory_goal_id()
+      observatory_owner = Observatory.observatory_owner_id()
+      user_id = Ecto.UUID.generate()
+
+      # 1. Attempting to create goal with reserved ID via create_changeset
+      cs1 = Goal.create_changeset(%Goal{id: reserved_id}, user_id, %{"title" => "Normal"})
+      refute cs1.valid?
+      assert "cannot use protected observatory goal id" in errors_on(cs1).id
+
+      # Also attempting to set ID via put_change followed by changeset validation
+      cs1_change =
+        %Goal{}
+        |> Goal.changeset(%{"title" => "Normal"})
+        |> Ecto.Changeset.put_change(:id, reserved_id)
+        |> Goal.changeset(%{})
+
+      refute cs1_change.valid?
+      assert "cannot use protected observatory goal id" in errors_on(cs1_change).id
+
+      # 2. Attempting to assign reserved owner on new goal
+      cs2 =
+        %Goal{}
+        |> Goal.changeset(%{"title" => "Normal"})
+        |> Ecto.Changeset.put_change(:owner_id, observatory_owner)
+        |> Goal.changeset(%{})
+
+      refute cs2.valid?
+      assert "cannot create goal with protected observatory owner" in errors_on(cs2).owner_id
+
+      # 3. Attempting to assign protected status on new goal
+      cs3 =
+        %Goal{}
+        |> Goal.changeset(%{"title" => "Normal", "status" => "protected"})
+
+      refute cs3.valid?
+      assert "cannot use protected status" in errors_on(cs3).status
+
+      # 4. Updating a victim user goal (holding reserved_id but user owner and active status) is allowed
+      victim =
+        %Goal{
+          id: reserved_id,
+          owner_id: user_id,
+          title: "Victim",
+          status: "active"
+        }
+        |> Ecto.put_meta(state: :loaded)
+
+      cs4 = Goal.changeset(victim, %{"title" => "Victim Updated"})
+      assert cs4.valid?
+      assert Ecto.Changeset.get_change(cs4, :title) == "Victim Updated"
+    end
+
+    test "user_goals query scope does not hide a victim user row sharing reserved ID" do
+      reserved_id = Observatory.observatory_goal_id()
+      victim_owner = Ecto.UUID.generate()
+
+      victim = %Goal{
+        id: reserved_id,
+        owner_id: victim_owner,
+        title: "Victim User Goal",
+        status: "active",
+        inserted_at: @t0,
+        updated_at: @t0
+      }
+
+      Repo.query!("DROP TRIGGER IF EXISTS protect_observatory_goal_delete")
+      Repo.query!("DROP TRIGGER IF EXISTS protect_observatory_goal_update")
+      Repo.delete_all(from g in Goal, where: g.id == ^reserved_id)
+      Repo.insert!(victim)
+
+      user_goals = Repo.all(Goal.user_goals())
+      assert Enum.any?(user_goals, &(&1.id == reserved_id and &1.title == "Victim User Goal"))
+    end
   end
 
   describe "ingestion, canonical event, and projection" do
@@ -187,6 +289,95 @@ defmodule Shoestring.Harness.ObservatoryTest do
       # Invalid map fails validation
       invalid = Map.put(attrs, :capacity_state, :unknown)
       assert {:error, _changeset} = Observatory.ingest(invalid, now: @t0)
+    end
+
+    test "truthful state when event append succeeds but projection fails, and deterministic rebuild path" do
+      goal_id = Observatory.observatory_goal_id()
+      {:ok, _goal} = Observatory.ensure_provisioned()
+
+      # Simulate a failed projector state for the observatory goal
+      failed_position = %Shoestring.Trajectory.ProjectorPosition{
+        id: Ecto.UUID.generate(),
+        goal_id: goal_id,
+        projector: "harness",
+        version: 1,
+        last_sequence: 0,
+        status: "failed",
+        error_detail: "simulated_projection_failure"
+      }
+
+      Repo.insert!(failed_position)
+
+      snapshot = make_snapshot(%{scope: "truthful-failure"})
+
+      # Ingest must report truthful state: event was appended, but projection failed
+      assert {:error, {:projection_failed, event, error}} =
+               Observatory.ingest(snapshot, now: @t0)
+
+      assert event.type == "capacity.snapshot_observed"
+
+      assert match?(
+               {:harness_projection_failed, _seq,
+                {:projection_failed_detail, "simulated_projection_failure"}, _pos},
+               error
+             )
+
+      # Deterministic reconciliation/rebuild path restores the projection
+      assert {:ok, _pos} = Observatory.rebuild()
+
+      rebuilt_snap =
+        Observatory.get_latest_observation(
+          snapshot.source.provider_id,
+          snapshot.source.invocation_mode,
+          snapshot.scope
+        )
+
+      assert rebuilt_snap != nil
+      assert rebuilt_snap.snapshot_id == snapshot.snapshot_id
+    end
+
+    test "concurrent equivalent ingest is idempotent and writes exactly one event (Task.async_stream)" do
+      snapshots =
+        for _i <- 1..10 do
+          make_snapshot(%{
+            snapshot_id: Ecto.UUID.generate(),
+            scope: "concurrent-test-scope",
+            observed_at: @t0
+          })
+        end
+
+      results =
+        Task.async_stream(
+          snapshots,
+          fn snap -> Observatory.ingest(snap, now: @t0) end,
+          max_concurrency: 10,
+          timeout: :infinity
+        )
+        |> Enum.to_list()
+
+      for {:ok, res} <- results do
+        assert match?({:ok, status, _snap} when status in [:persisted, :deduplicated], res)
+      end
+
+      # Exactly ONE event in trajectory
+      goal_id = Observatory.observatory_goal_id()
+
+      events =
+        Repo.all(
+          from e in TrajectoryEvent,
+            where: e.goal_id == ^goal_id and e.payload["scope"] == "concurrent-test-scope"
+        )
+
+      assert length(events) == 1
+
+      # Exactly ONE snapshot record in database
+      records =
+        Repo.all(
+          from s in CapacitySnapshotRecord,
+            where: s.goal_id == ^goal_id and s.scope == "concurrent-test-scope"
+        )
+
+      assert length(records) == 1
     end
   end
 
@@ -441,6 +632,115 @@ defmodule Shoestring.Harness.ObservatoryTest do
                Observatory.latest_observation("unknown", "none", "nonexistent")
 
       assert nil == Observatory.get_latest_observation("unknown", "none", "nonexistent")
+    end
+
+    test "current observation selection orders by provider observation time, not projection sequence (B6)" do
+      # Ingest a newer observation observed at @t1
+      newer_snap =
+        make_snapshot(%{
+          scope: "b6-scope",
+          observed_at: @t1,
+          windows: [
+            %{
+              kind: "primary",
+              state: :observed,
+              used_percent: 75.0,
+              reset_at: ~U[2026-08-30 13:00:00Z]
+            }
+          ]
+        })
+
+      assert {:ok, :persisted, _} = Observatory.ingest(newer_snap, now: @t1)
+
+      # Ingest an out-of-order historical observation observed at @t0 (earlier time, but later projection)
+      older_historical_snap =
+        make_snapshot(%{
+          scope: "b6-scope",
+          observed_at: @t0,
+          windows: [
+            %{
+              kind: "primary",
+              state: :observed,
+              used_percent: 10.0,
+              reset_at: ~U[2026-08-30 13:00:00Z]
+            }
+          ]
+        })
+
+      assert {:ok, :persisted, _} = Observatory.ingest(older_historical_snap, now: @t1)
+
+      # Both events exist in trajectory and projection
+      goal_id = Observatory.observatory_goal_id()
+
+      assert length(
+               Repo.all(
+                 from e in TrajectoryEvent,
+                   where: e.goal_id == ^goal_id and e.payload["scope"] == "b6-scope"
+               )
+             ) == 2
+
+      # Query must order by provider observation time: returning newer_snap (75.0% used), NOT older_historical_snap!
+      latest =
+        Observatory.get_latest_observation(
+          newer_snap.source.provider_id,
+          newer_snap.source.invocation_mode,
+          "b6-scope"
+        )
+
+      assert latest != nil
+      assert latest.snapshot_id == newer_snap.snapshot_id
+      assert DateTime.compare(latest.observed_at, @t1) == :eq
+
+      # latest_observations must also select newer_snap for b6-scope
+      all = Observatory.latest_observations()
+      b6_entry = Enum.find(all, &(&1.scope == "b6-scope"))
+      assert b6_entry != nil
+      assert b6_entry.snapshot_id == newer_snap.snapshot_id
+    end
+
+    test "latest_observations bounds results and get_latest_observation uses index without temp sort (B5)" do
+      # Ingest snapshots across multiple scopes
+      for i <- 1..5 do
+        snap =
+          make_snapshot(%{
+            scope: "bounded-scope-#{i}",
+            observed_at: @t0
+          })
+
+        assert {:ok, :persisted, _} = Observatory.ingest(snap, now: @t0)
+      end
+
+      # Bounded query: limit 2
+      bounded = Observatory.latest_observations(limit: 2)
+      assert length(bounded) == 2
+
+      # Verify query plan for get_latest_observation: uses index and avoids temp b-tree sorts
+      goal_id = Observatory.observatory_goal_id()
+
+      {:ok, %{rows: plan_rows}} =
+        Repo.query(
+          """
+          EXPLAIN QUERY PLAN
+          SELECT id FROM harness_capacity_snapshots
+          WHERE goal_id = ?
+            AND source_provider_id = ?
+            AND source_invocation_mode = ?
+            AND scope = ?
+          ORDER BY observed_at_v2 DESC, projection_sequence DESC, id DESC
+          LIMIT 1
+          """,
+          [goal_id, "codex", "app_server", "bounded-scope-1"]
+        )
+
+      plan_text =
+        plan_rows
+        |> Enum.map(&Enum.join(&1, " "))
+        |> Enum.join("\n")
+
+      # Plan must use the covering/lookup index
+      assert String.contains?(plan_text, "harness_capacity_snapshots_observatory_lookup_idx")
+      # Plan must NOT require a temporary sort B-tree
+      refute String.contains?(plan_text, "TEMP B-TREE")
     end
   end
 end

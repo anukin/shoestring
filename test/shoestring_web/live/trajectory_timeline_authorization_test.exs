@@ -64,6 +64,49 @@ defmodule ShoestringWeb.TrajectoryTimelineAuthorizationTest do
     assert socket.assigns.timeline_error == nil
   end
 
+  test "nil scope (local mode) denies direct-ID access to the protected observatory goal" do
+    obs_goal = %Goal{
+      id: Shoestring.Harness.Observatory.observatory_goal_id(),
+      owner_id: Shoestring.Harness.Observatory.observatory_owner_id(),
+      status: "protected"
+    }
+
+    refute TrajectoryTimelineLive.authorized_goal?(obs_goal, nil)
+
+    assert {:ok, socket} =
+             TrajectoryTimelineLive.mount(
+               %{"goal_id" => obs_goal.id},
+               %{},
+               socket_with_scope(nil)
+             )
+
+    assert socket.assigns.goal == nil
+    assert socket.assigns.timeline_error == "Goal unavailable."
+    assert socket.assigns.streams.events.inserts == []
+  end
+
+  test "present scopes (authenticated mode) deny direct-ID access to the protected observatory goal" do
+    obs_goal = %Goal{
+      id: Shoestring.Harness.Observatory.observatory_goal_id(),
+      owner_id: Shoestring.Harness.Observatory.observatory_owner_id(),
+      status: "protected"
+    }
+
+    refute TrajectoryTimelineLive.authorized_goal?(obs_goal, %{user_id: obs_goal.owner_id})
+    refute TrajectoryTimelineLive.authorized_goal?(obs_goal, %{user: %{id: obs_goal.owner_id}})
+
+    assert {:ok, socket} =
+             TrajectoryTimelineLive.mount(
+               %{"goal_id" => obs_goal.id},
+               %{},
+               socket_with_scope(%{user_id: obs_goal.owner_id})
+             )
+
+    assert socket.assigns.goal == nil
+    assert socket.assigns.timeline_error == "Goal unavailable."
+    assert socket.assigns.streams.events.inserts == []
+  end
+
   defp socket_with_scope(scope) do
     %Phoenix.LiveView.Socket{
       assigns: %{__changed__: %{}, current_scope: scope},

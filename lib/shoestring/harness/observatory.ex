@@ -96,14 +96,12 @@ defmodule Shoestring.Harness.Observatory do
 
   @doc "Returns true if the given goal or ID is the observatory singleton."
   @spec observatory_goal?(Goal.t() | Ecto.UUID.t() | nil) :: boolean()
-  def observatory_goal?(%Goal{id: id}), do: id == @observatory_goal_id
-  def observatory_goal?(%Goal{status: "protected"}), do: true
-  def observatory_goal?(id) when is_binary(id), do: id == @observatory_goal_id
-  def observatory_goal?(_other), do: false
+  def observatory_goal?(goal_or_id), do: Goal.observatory?(goal_or_id)
 
   @doc """
   Idempotently provisions the observatory goal in the database if not present.
   Survives restarts and uses standard repository schema conventions.
+  Validates existing rows to ensure they match exact protected observatory semantics.
   """
   @spec ensure_provisioned(keyword()) :: {:ok, Goal.t()} | {:error, term()}
   def ensure_provisioned(opts \\ []) do
@@ -111,7 +109,11 @@ defmodule Shoestring.Harness.Observatory do
 
     case repo.get(Goal, @observatory_goal_id) do
       %Goal{} = goal ->
-        {:ok, goal}
+        if valid_observatory_goal?(goal) do
+          {:ok, goal}
+        else
+          {:error, {:conflicting_goal_at_observatory_id, goal}}
+        end
 
       nil ->
         now = DateTime.utc_now()
@@ -132,11 +134,26 @@ defmodule Shoestring.Harness.Observatory do
 
           {:error, _changeset} ->
             case repo.get(Goal, @observatory_goal_id) do
-              %Goal{} = existing -> {:ok, existing}
-              nil -> {:error, :observatory_provisioning_failed}
+              %Goal{} = existing ->
+                if valid_observatory_goal?(existing) do
+                  {:ok, existing}
+                else
+                  {:error, {:conflicting_goal_at_observatory_id, existing}}
+                end
+
+              nil ->
+                {:error, :observatory_provisioning_failed}
             end
         end
     end
+  end
+
+  defp valid_observatory_goal?(%Goal{} = goal) do
+    goal.id == @observatory_goal_id and
+      goal.owner_id == @observatory_owner_id and
+      goal.status == @observatory_status and
+      goal.title == @observatory_title and
+      goal.description == @observatory_description
   end
 
   @doc """
@@ -207,15 +224,17 @@ defmodule Shoestring.Harness.Observatory do
   defp persist_snapshot_event(%CapacitySnapshot{} = snapshot, opts) do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
+    repo = Keyword.get(opts, :repo, Repo)
 
     occurred_at = snapshot.observed_at || now
+    idempotency_key = event_idempotency_key(snapshot, opts)
 
     event_attrs = %{
       "type" => "capacity.snapshot_observed",
       "schema_version" => 2,
       "actor" => Keyword.get(opts, :actor, "capacity_observatory"),
       "occurred_at" => occurred_at,
-      "idempotency_key" => "capacity-observed:#{snapshot.snapshot_id}",
+      "idempotency_key" => idempotency_key,
       "payload" => snapshot_to_payload(snapshot)
     }
 
@@ -223,12 +242,99 @@ defmodule Shoestring.Harness.Observatory do
       writer_opts: Keyword.get(opts, :writer_opts, [])
     ]
 
-    with {:ok, _event} <-
-           Trajectory.append(@observatory_goal_id, event_attrs, trajectory_opts),
-         {:ok, _position} <-
-           Projector.project(@observatory_goal_id, clock: clock) do
-      {:ok, :persisted, snapshot}
+    case Trajectory.append(@observatory_goal_id, event_attrs, trajectory_opts) do
+      {:ok, event} ->
+        case Projector.project(@observatory_goal_id, clock: clock) do
+          {:ok, _position} ->
+            appended_snapshot_id = event.payload["snapshot_id"]
+
+            if appended_snapshot_id != snapshot.snapshot_id do
+              case repo.get(CapacitySnapshotRecord, appended_snapshot_id) do
+                %CapacitySnapshotRecord{} = record ->
+                  record = repo.preload(record, :windows)
+                  {:ok, :deduplicated, record_to_snapshot(record, opts)}
+
+                nil ->
+                  {:ok, :persisted, snapshot}
+              end
+            else
+              {:ok, :persisted, snapshot}
+            end
+
+          {:error, error} ->
+            {:error, {:projection_failed, event, error}}
+        end
+
+      {:error, error} ->
+        {:error, error}
     end
+  end
+
+  @doc """
+  Computes a stable event idempotency key for an observation.
+  Ensures concurrent equivalent ingestion requests share the same atomic idempotency key.
+  """
+  @spec event_idempotency_key(CapacitySnapshot.t(), keyword()) :: String.t()
+  def event_idempotency_key(%CapacitySnapshot{} = snapshot, opts \\ []) do
+    case Keyword.get(opts, :idempotency_key) do
+      key when is_binary(key) and key != "" ->
+        key
+
+      _ ->
+        fingerprint = semantic_fingerprint(snapshot)
+        hash = :crypto.hash(:sha256, fingerprint) |> Base.encode16(case: :lower)
+
+        "capacity-observed:#{snapshot.source.provider_id}:#{snapshot.source.invocation_mode}:#{snapshot.scope}:#{hash}"
+    end
+  end
+
+  defp semantic_fingerprint(%CapacitySnapshot{} = snapshot) do
+    sorted_windows =
+      (snapshot.windows || [])
+      |> Enum.sort_by(&Map.get(&1, :kind))
+      |> Enum.map(fn w ->
+        reset_at = Map.get(w, :reset_at)
+
+        reset_at_str =
+          if is_struct(reset_at, DateTime), do: DateTime.to_iso8601(reset_at), else: reset_at
+
+        {Map.get(w, :kind), Map.get(w, :state), Map.get(w, :used_percent), reset_at_str,
+         Map.get(w, :reason)}
+      end)
+
+    {
+      snapshot.source.provider_id,
+      snapshot.source.invocation_mode,
+      snapshot.source.adapter_id,
+      snapshot.source.event,
+      snapshot.scope,
+      snapshot.observed_at && DateTime.to_iso8601(snapshot.observed_at),
+      snapshot.capacity_state,
+      snapshot.confidence,
+      snapshot.support_tier,
+      snapshot.compatibility_state,
+      snapshot.reason,
+      snapshot.freshness.max_age_seconds,
+      sorted_windows,
+      snapshot.extensions || %{}
+    }
+    |> :erlang.term_to_binary()
+  end
+
+  @doc """
+  Deterministically rebuilds the observatory projection from historical trajectory events.
+  """
+  @spec rebuild(keyword()) :: {:ok, term()} | {:error, term()}
+  def rebuild(opts \\ []) do
+    Projector.rebuild(@observatory_goal_id, opts)
+  end
+
+  @doc """
+  Deterministically reconciles or advances the observatory projection.
+  """
+  @spec reconcile(keyword()) :: {:ok, term()} | {:error, term()}
+  def reconcile(opts \\ []) do
+    Projector.project(@observatory_goal_id, opts)
   end
 
   @doc """
@@ -340,6 +446,8 @@ defmodule Shoestring.Harness.Observatory do
 
   @doc """
   Fetches the latest observation for a specific provider, mode, and scope.
+  Orders by provider observation time (`observed_at`), with deterministic
+  tie-breakers (`projection_sequence`, `id`), not insertion/projection sequence.
   Returns `%CapacitySnapshot{}` or `nil` if not found.
   """
   @spec get_latest_observation(String.t(), String.t(), String.t(), keyword()) ::
@@ -354,7 +462,11 @@ defmodule Shoestring.Harness.Observatory do
             snapshot.source_provider_id == ^to_string(provider_id) and
             snapshot.source_invocation_mode == ^to_string(invocation_mode) and
             snapshot.scope == ^to_string(scope),
-        order_by: [desc: snapshot.projection_sequence, desc: snapshot.inserted_at],
+        order_by: [
+          desc: snapshot.observed_at,
+          desc: snapshot.projection_sequence,
+          desc: snapshot.id
+        ],
         limit: 1,
         preload: [:windows]
 
@@ -366,20 +478,35 @@ defmodule Shoestring.Harness.Observatory do
 
   @doc """
   Returns the latest observation across all distinct provider/mode/scope targets.
+  Avoids full partition scans and temp sorts by querying distinct targets and
+  performing indexed lookups ordered by provider observation time.
+  Supports `:limit` option (defaulting to 100).
   """
   @spec latest_observations(keyword()) :: [CapacitySnapshot.t()]
   def latest_observations(opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
+    limit = Keyword.get(opts, :limit, 100)
 
-    query =
-      from snapshot in CapacitySnapshotRecord,
+    targets =
+      from(snapshot in CapacitySnapshotRecord,
         where: snapshot.goal_id == ^@observatory_goal_id,
-        order_by: [desc: snapshot.projection_sequence, desc: snapshot.inserted_at],
-        preload: [:windows]
+        select: {snapshot.source_provider_id, snapshot.source_invocation_mode, snapshot.scope},
+        distinct: true,
+        order_by: [
+          asc: snapshot.source_provider_id,
+          asc: snapshot.source_invocation_mode,
+          asc: snapshot.scope
+        ],
+        limit: ^limit
+      )
+      |> repo.all()
 
-    repo.all(query)
-    |> Enum.uniq_by(fn s -> {s.source_provider_id, s.source_invocation_mode, s.scope} end)
-    |> Enum.map(&record_to_snapshot(&1, opts))
+    Enum.flat_map(targets, fn {provider_id, invocation_mode, scope} ->
+      case get_latest_observation(provider_id, invocation_mode, scope, opts) do
+        %CapacitySnapshot{} = snapshot -> [snapshot]
+        nil -> []
+      end
+    end)
   end
 
   @doc """
@@ -443,9 +570,23 @@ defmodule Shoestring.Harness.Observatory do
   canonical `CapacitySnapshot.t()`. Preserves true original observation timestamp and age.
   """
   @spec record_to_snapshot(CapacitySnapshotRecord.t(), keyword()) :: CapacitySnapshot.t()
-  def record_to_snapshot(%CapacitySnapshotRecord{} = record, _opts \\ []) do
+  def record_to_snapshot(%CapacitySnapshotRecord{} = record, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    record_windows =
+      case record.windows do
+        %Ecto.Association.NotLoaded{} ->
+          repo.preload(record, :windows).windows || []
+
+        list when is_list(list) ->
+          list
+
+        _ ->
+          []
+      end
+
     windows =
-      Enum.map(record.windows || [], fn window ->
+      Enum.map(record_windows, fn window ->
         case window.state do
           "observed" ->
             %{
