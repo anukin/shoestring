@@ -29,6 +29,79 @@ defmodule Shoestring.Harness.Capacity.FixturesTest do
       assert key_violations != []
       assert Enum.any?(key_violations, &(&1 =~ "forbidden key"))
     end
+
+    test "scan_all_fixtures/0 fails when zero fixtures are found" do
+      tmp_empty_dir =
+        Path.join(System.tmp_dir!(), "empty_capacity_fixtures_#{Ecto.UUID.generate()}")
+
+      File.mkdir_p!(tmp_empty_dir)
+
+      original_env = Application.get_env(:shoestring, :capacity_fixture_root)
+      Application.put_env(:shoestring, :capacity_fixture_root, tmp_empty_dir)
+
+      try do
+        assert {:error, :no_fixtures_found} = CapacityFixtures.scan_all_fixtures()
+      after
+        if original_env do
+          Application.put_env(:shoestring, :capacity_fixture_root, original_env)
+        else
+          Application.delete_env(:shoestring, :capacity_fixture_root)
+        end
+
+        File.rm_rf!(tmp_empty_dir)
+      end
+    end
+
+    test "poisoned JSON fixtures with harmless non-sk values are rejected by scanner and safe_observation?/1" do
+      poisoned_payloads = [
+        {"token", ~s({"captured_at": "2026-08-29T04:38:16Z", "token": "harmless_token_val"})},
+        {"api_key", ~s({"captured_at": "2026-08-29T04:38:16Z", "api_key": "harmless_key_val"})},
+        {"apiKey", ~s({"captured_at": "2026-08-29T04:38:16Z", "apiKey": "harmless_key_val"})},
+        {"access_token",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "access_token": "harmless_access"})},
+        {"refresh_token",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "refresh_token": "harmless_refresh"})},
+        {"password", ~s({"captured_at": "2026-08-29T04:38:16Z", "password": "harmless_pass"})},
+        {"secret", ~s({"captured_at": "2026-08-29T04:38:16Z", "secret": "harmless_secret"})},
+        {"cookie", ~s({"captured_at": "2026-08-29T04:38:16Z", "cookie": "harmless_cookie"})},
+        {"authorization",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "authorization": "harmless_auth"})},
+        {"account_id",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "account_id": "harmless_acct"})},
+        {"session_id",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "session_id": "harmless_sess"})},
+        {"sessionId", ~s({"captured_at": "2026-08-29T04:38:16Z", "sessionId": "harmless_sess"})},
+        {"thread_id",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "thread_id": "harmless_thread"})},
+        {"threadId", ~s({"captured_at": "2026-08-29T04:38:16Z", "threadId": "harmless_thread"})},
+        {"turn_id", ~s({"captured_at": "2026-08-29T04:38:16Z", "turn_id": "harmless_turn"})},
+        {"turnId", ~s({"captured_at": "2026-08-29T04:38:16Z", "turnId": "harmless_turn"})},
+        {"prompt", ~s({"captured_at": "2026-08-29T04:38:16Z", "prompt": "harmless prompt"})},
+        {"transcript",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "transcript": "harmless transcript"})},
+        {"raw_transcript",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "raw_transcript": "harmless raw transcript"})},
+        {"mac_path",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "path": "/Users/developer/project"})},
+        {"linux_path",
+         ~s({"captured_at": "2026-08-29T04:38:16Z", "path": "/home/developer/project"})}
+      ]
+
+      for {name, json_str} <- poisoned_payloads do
+        raw_violations = Shoestring.Harness.Security.scan_json(json_str)
+        assert raw_violations != [], "Expected scanner to reject raw JSON for: #{name}"
+
+        decoded = Jason.decode!(json_str)
+        term_violations = CapacityFixtures.scan_term(decoded)
+        assert term_violations != [], "Expected scan_term to reject term for: #{name}"
+
+        refute Capacity.safe_observation?(decoded),
+               "Expected safe_observation?/1 to reject: #{name}"
+
+        assert {:error, :contains_secrets_or_forbidden_content} =
+                 Capacity.normalize(:codex, :app_server_stdio, decoded)
+      end
+    end
   end
 
   describe "all Claude tracked fixtures normalize deterministically" do

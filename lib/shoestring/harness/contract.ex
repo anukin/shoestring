@@ -3,16 +3,7 @@ defmodule Shoestring.Harness.Contract do
 
   import Ecto.Changeset
 
-  @secret_patterns [
-    ~r/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i,
-    ~r/\b(?:api[_-]?key|access[_-]?token|secret|password)\s*[:=]/i,
-    ~r/\bsk-[A-Za-z0-9_-]{12,}/
-  ]
-
-  @forbidden_content_keys ~w(
-    transcript raw_transcript raw_output stdout stderr prompt_messages messages
-    model_response response_text completion_text
-  )
+  alias Shoestring.Harness.Security
 
   @type result(value) :: {:ok, value} | {:error, Ecto.Changeset.t()}
 
@@ -146,6 +137,11 @@ defmodule Shoestring.Harness.Contract do
 
   def map(_value, field, _opts), do: invalid(field, "must be an object")
 
+  @forbidden_content_keys ~w(
+    transcript raw_transcript raw_output stdout stderr prompt_messages messages
+    model_response response_text completion_text
+  )
+
   @doc "Provider extensions are bounded, namespaced, JSON-safe, and secret-free."
   def extensions(nil), do: {:ok, %{}}
   def extensions({:ok, value}), do: extensions(value)
@@ -222,5 +218,5 @@ defmodule Shoestring.Harness.Contract do
   defp safe_key_string(key) when is_atom(key), do: Atom.to_string(key)
   defp safe_key_string(_key), do: nil
 
-  defp secret?(value), do: Enum.any?(@secret_patterns, &Regex.match?(&1, value))
+  defp secret?(value), do: Security.secret_value?(value)
 end
