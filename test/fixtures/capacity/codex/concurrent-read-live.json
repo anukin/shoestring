@@ -1,0 +1,65 @@
+{
+  "fixture_kind": "concurrent_read",
+  "evidence_status": "live_observed",
+  "captured_at": "2026-08-29T05:35:03.082Z",
+  "payload": {
+    "result": {
+      "rateLimits": {
+        "primary": {
+          "usedPercent": 26,
+          "windowDurationMins": 300,
+          "resetsAt": 1787994541
+        },
+        "secondary": {
+          "usedPercent": 18,
+          "windowDurationMins": 10080,
+          "resetsAt": 1788494929
+        },
+        "rateLimitReachedType": null,
+        "spendControlReached": false,
+        "planType": "plus"
+      }
+    }
+  },
+  "observations": [
+    {
+      "session": "session_a",
+      "observed_at": "2026-08-29T05:35:03.069Z",
+      "rate_limits": {
+        "primary": {
+          "used_percent": 26,
+          "window_duration_minutes": 300,
+          "resets_at": 1787994541
+        },
+        "secondary": {
+          "used_percent": 18,
+          "window_duration_minutes": 10080,
+          "resets_at": 1788494929
+        },
+        "rate_limit_reached_type": null,
+        "spend_control_reached": false,
+        "plan_type": "plus"
+      }
+    },
+    {
+      "session": "session_b",
+      "observed_at": "2026-08-29T05:35:03.029Z",
+      "rate_limits": {
+        "primary": {
+          "used_percent": 26,
+          "window_duration_minutes": 300,
+          "resets_at": 1787994541
+        },
+        "secondary": {
+          "used_percent": 18,
+          "window_duration_minutes": 10080,
+          "resets_at": 1788494929
+        },
+        "rate_limit_reached_type": null,
+        "spend_control_reached": false,
+        "plan_type": "plus"
+      }
+    }
+  ],
+  "comparison": "identical"
+}

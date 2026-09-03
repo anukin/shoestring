@@ -1,0 +1,66 @@
+{
+  "fixture_kind": "status_line_process_restart",
+  "evidence_status": "live_observed",
+  "captured_at": "2026-08-29T07:35:45.437Z",
+  "payload": {
+    "version": "2.1.251",
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 26,
+        "resets_at": 1787994000
+      },
+      "seven_day": {
+        "used_percentage": 94,
+        "resets_at": 1788033600
+      },
+      "spend_limit": null
+    }
+  },
+  "observations": [
+    {
+      "probe_run": "before_restart",
+      "observed_at": "2026-08-29T07:35:35.072Z",
+      "rate_limit_signal": "absent",
+      "rate_limits": null
+    },
+    {
+      "probe_run": "before_restart",
+      "observed_at": "2026-08-29T07:35:36.745Z",
+      "rate_limit_signal": "observed",
+      "rate_limits": {
+        "five_hour": {
+          "used_percentage": 25,
+          "resets_at": 1787994000
+        },
+        "seven_day": {
+          "used_percentage": 94,
+          "resets_at": 1788033600
+        },
+        "spend_limit": null
+      }
+    },
+    {
+      "probe_run": "after_restart",
+      "observed_at": "2026-08-29T07:35:43.709Z",
+      "rate_limit_signal": "absent",
+      "rate_limits": null
+    },
+    {
+      "probe_run": "after_restart",
+      "observed_at": "2026-08-29T07:35:45.437Z",
+      "rate_limit_signal": "observed",
+      "rate_limits": {
+        "five_hour": {
+          "used_percentage": 26,
+          "resets_at": 1787994000
+        },
+        "seven_day": {
+          "used_percentage": 94,
+          "resets_at": 1788033600
+        },
+        "spend_limit": null
+      }
+    }
+  ],
+  "comparison": "divergent"
+}

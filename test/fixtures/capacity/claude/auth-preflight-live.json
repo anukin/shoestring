@@ -1,0 +1,36 @@
+{
+  "fixture_kind": "authentication_preflight",
+  "evidence_status": "live_observed",
+  "captured_at": "2026-08-29T06:22:56.629Z",
+  "payload": {
+    "loggedIn": true,
+    "authMethod": "claude.ai"
+  },
+  "live_capacity_probe": "authenticated_headless_probe",
+  "headless_probes": [
+    {
+      "mode": "json",
+      "invocation_mode": "claude --print --no-session-persistence --output-format json",
+      "outcome": "completed",
+      "exit_status": 0,
+      "signal": null,
+      "elapsed_ms": 2415,
+      "message_type_counts": {
+        "result": 1
+      },
+      "rate_limit_signal": "absent",
+      "rate_limits": null
+    },
+    {
+      "mode": "stream-json",
+      "invocation_mode": "claude --print --no-session-persistence --output-format stream-json",
+      "outcome": "process_error",
+      "exit_status": 1,
+      "signal": null,
+      "elapsed_ms": 1056,
+      "message_type_counts": {},
+      "rate_limit_signal": "absent",
+      "rate_limits": null
+    }
+  ]
+}

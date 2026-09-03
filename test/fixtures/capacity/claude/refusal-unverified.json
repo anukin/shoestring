@@ -1,0 +1,9 @@
+{
+  "fixture_kind": "refusal",
+  "evidence_status": "synthetic_fallback_simulation_not_live",
+  "payload": {
+    "type": "result",
+    "subtype": "rate_limit",
+    "is_error": true
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "fixture_kind": "status_line_concurrent",
+  "evidence_status": "live_observed",
+  "captured_at": "2026-08-29T07:36:15.332Z",
+  "payload": {
+    "version": "2.1.251",
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 26,
+        "resets_at": 1787994000
+      },
+      "seven_day": {
+        "used_percentage": 94,
+        "resets_at": 1788033600
+      },
+      "spend_limit": null
+    }
+  },
+  "observations": [
+    {
+      "probe_run": "session_a",
+      "observed_at": "2026-08-29T07:36:13.535Z",
+      "rate_limit_signal": "absent",
+      "rate_limits": null
+    },
+    {
+      "probe_run": "session_b",
+      "observed_at": "2026-08-29T07:36:13.563Z",
+      "rate_limit_signal": "absent",
+      "rate_limits": null
+    },
+    {
+      "probe_run": "session_b",
+      "observed_at": "2026-08-29T07:36:15.268Z",
+      "rate_limit_signal": "observed",
+      "rate_limits": {
+        "five_hour": {
+          "used_percentage": 26,
+          "resets_at": 1787994000
+        },
+        "seven_day": {
+          "used_percentage": 94,
+          "resets_at": 1788033600
+        },
+        "spend_limit": null
+      }
+    },
+    {
+      "probe_run": "session_a",
+      "observed_at": "2026-08-29T07:36:15.332Z",
+      "rate_limit_signal": "observed",
+      "rate_limits": {
+        "five_hour": {
+          "used_percentage": 26,
+          "resets_at": 1787994000
+        },
+        "seven_day": {
+          "used_percentage": 94,
+          "resets_at": 1788033600
+        },
+        "spend_limit": null
+      }
+    }
+  ],
+  "comparison": "identical"
+}
