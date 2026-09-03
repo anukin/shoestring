@@ -844,6 +844,10 @@ defmodule Shoestring.Harness.CapacityTest do
       {"secret", %{"secret" => "harmless_secret_val"}},
       {"cookie", %{"cookie" => "harmless_cookie_val"}},
       {"authorization", %{"authorization" => "harmless_auth_val"}},
+      {"private_key", %{"private_key" => "harmless_private_key"}},
+      {"privateKey", %{"privateKey" => "harmless_private_key"}},
+      {"oauth_token", %{"oauth_token" => "harmless_oauth_token"}},
+      {"oauthToken", %{"oauthToken" => "harmless_oauth_token"}},
       {"prompt", %{"prompt" => "harmless prompt text"}},
       {"transcript", %{"transcript" => "harmless transcript text"}},
       {"raw_transcript", %{"raw_transcript" => "harmless raw transcript"}},
@@ -912,22 +916,27 @@ defmodule Shoestring.Harness.CapacityTest do
         "thread_id" => "thread_abc",
         "turn_id" => "turn_xyz",
         "payload" => %{
-          "result" => %{
-            "rateLimits" => %{
-              "primary" => %{"usedPercent" => 10}
-            }
+          "rate_limits" => %{
+            "five_hour" => %{"used_percentage" => 25.5},
+            "seven_day" => %{"used_percentage" => 40.0}
           }
         }
       }
 
-      assert {:ok, _snapshot} =
+      assert {:ok, snapshot} =
                Capacity.normalize(
                  :claude,
-                 :app_server_stdio,
+                 :interactive_status_line,
                  obs,
-                 version: "0.150.1",
+                 version: "2.1.251",
                  now: @evaluation_time
                )
+
+      assert snapshot.capacity_state == :degraded
+      assert snapshot.support_tier == :conservative_partial
+      assert [five_hour, seven_day] = snapshot.windows
+      assert five_hour.used_percent == 25.5
+      assert seven_day.used_percent == 40.0
     end
   end
 

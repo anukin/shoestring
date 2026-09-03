@@ -130,8 +130,10 @@ end
 #### Normalization Semantics:
 * **Security & Secret Scanning:** All observations are checked for quoted/unquoted
   credential keys (`token`, `api_key`, `access_token`, `refresh_token`, `password`, `secret`,
-  `cookie`, `authorization`, `account_id`, `session_id`, `thread_id`, `turn_id`), prompts,
+  `cookie`, `authorization`, `private_key`, `oauth_token`), prompts,
   transcripts, and user paths (`/Users/`, `/home/`) regardless of value shape.
+  Note: correlation identifiers like `session_id`, `account_id`, `thread_id`, and `turn_id` are explicitly 
+  allowed in live observations and are only rejected by the static fixture-hygiene scanner.
 * **Truthful Bounds Outcomes:** Benign size and depth limits return truthful `:payload_too_large`
   and `:payload_too_deep` errors rather than secret violations.
 * **Additive unknown fields:** Tolerated without error within documented bounds.
