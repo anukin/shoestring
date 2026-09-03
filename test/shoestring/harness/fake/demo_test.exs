@@ -21,7 +21,7 @@ defmodule Shoestring.Harness.Fake.DemoTest do
   alias Shoestring.Trajectory
   alias Shoestring.Trajectory.Task
   alias Shoestring.Test.Fixtures.FakeHelpers
-  alias Shoestring.Test.FixedClock
+  alias Shoestring.Test.{AlternateFixedIdentifier, FixedClock, FixedIdentifier}
 
   @moduledoc """
   End-to-end automated integration test for the single scripted 7-step goal demo
@@ -38,7 +38,7 @@ defmodule Shoestring.Harness.Fake.DemoTest do
   7. Verified terminal completion.
   """
 
-  @fixed_now ~U[2026-09-02 12:00:00.000000Z]
+  @fixed_now FixedClock.now()
   @snapshot_id_a "00000000-0000-4000-8000-000000000a01"
   @snapshot_id_b "00000000-0000-4000-8000-000000000a02"
   @dispatch_id_a "00000000-0000-4000-8000-000000000d01"
@@ -121,9 +121,10 @@ defmodule Shoestring.Harness.Fake.DemoTest do
     assert {:ok, run_a} =
              Runs.request(request_a, Fake.identity(),
                clock: FixedClock,
-               identifier: Shoestring.Harness.SystemIdentifier
+               identifier: FixedIdentifier
              )
 
+    assert run_a.id == FixedIdentifier.generate()
     assert run_a.status == "requested"
     assert run_a.goal_id == goal.id
     assert run_a.task_id == task.id
@@ -233,10 +234,12 @@ defmodule Shoestring.Harness.Fake.DemoTest do
              )
 
     assert {:ok, events_a} = Fake.stream(run_identity_a, opts_a)
+    # Exact event count verification from fixed scenario
+    assert length(events_a) == 3
     partial_work_events = Enum.reject(events_a, &(&1.kind == :error))
-    assert length(partial_work_events) >= 2
-    assert Enum.any?(partial_work_events, &(&1.kind == :lifecycle))
-    assert Enum.any?(partial_work_events, &(&1.kind == :output))
+    assert length(partial_work_events) == 2
+    assert Enum.count(partial_work_events, &(&1.kind == :lifecycle)) == 1
+    assert Enum.count(partial_work_events, &(&1.kind == :output)) == 1
 
     for evt <- partial_work_events do
       assert {:ok, _} =
@@ -268,6 +271,34 @@ defmodule Shoestring.Harness.Fake.DemoTest do
 
     # Strict assertion: no terminal/result event was emitted before refusal
     refute Enum.any?(events_a, &(&1.kind == :result))
+
+    # Derive sensitive values from ACTUAL Adapter A runtime evidence
+    adapter_a_session_id = run_identity_a.provider_session_id
+
+    adapter_a_outputs =
+      events_a
+      |> Enum.filter(&(&1.kind == :output))
+      |> Enum.map(&Map.fetch!(&1.extensions, "shoestring.fake:text"))
+
+    adapter_a_errors =
+      events_a
+      |> Enum.filter(&(&1.kind == :error))
+      |> Enum.flat_map(fn evt ->
+        [evt.error.code, evt.error.message, to_string(evt.error.category)]
+      end)
+
+    adapter_a_source_ids =
+      events_a
+      |> Enum.map(& &1.source_event_id)
+      |> Enum.reject(&is_nil/1)
+
+    adapter_a_sensitive_terms =
+      adapter_a_outputs ++ adapter_a_errors ++ [adapter_a_session_id] ++ adapter_a_source_ids
+
+    assert length(adapter_a_outputs) == 1
+    assert "partial work" in adapter_a_outputs
+    assert "rate_limit_exceeded" in adapter_a_errors
+    assert adapter_a_session_id == "fake-session-quota"
 
     assert {:ok, _} =
              Trajectory.append(
@@ -345,6 +376,10 @@ defmodule Shoestring.Harness.Fake.DemoTest do
     # -------------------------------------------------------------------------
     # Step 4: Deterministic Checkpoint creation without model inference
     # -------------------------------------------------------------------------
+    # Record adapter call logs before checkpoint creation to prove no adapter calls happen
+    log_a_history_before_cp = RequestLog.all(log_a)
+    log_b_history_before_cp = RequestLog.all(log_b)
+
     assert {:ok, checkpoint} =
              Checkpoint.new(%{
                version: 1,
@@ -389,6 +424,14 @@ defmodule Shoestring.Harness.Fake.DemoTest do
     assert ck_record.next_action == "resume execution from checkpoint via adapter B"
     assert ck_record.provider_session_id == "fake-session-quota"
 
+    # Runtime proof: verify zero adapter or model calls occurred during checkpoint synthesis
+    assert RequestLog.all(log_a) == log_a_history_before_cp
+    assert RequestLog.all(log_b) == log_b_history_before_cp
+    assert RequestLog.starts(log_a) |> length() == 1
+    assert RequestLog.resumes(log_a) == []
+    assert RequestLog.starts(log_b) == []
+    assert RequestLog.resumes(log_b) == []
+
     # -------------------------------------------------------------------------
     # Step 5: Simulated application restart plus trajectory replay/projection reconstruction
     # -------------------------------------------------------------------------
@@ -409,7 +452,8 @@ defmodule Shoestring.Harness.Fake.DemoTest do
 
     # Replay trajectory events purely from canonical event history
     assert {:ok, replayed_events} = Trajectory.replay(goal.id)
-    assert length(replayed_events) >= 10
+    # Exact count of canonical events appended up to this point
+    assert length(replayed_events) == 17
     assert {:ok, pure_state} = Projector.replay_events(replayed_events)
     assert pure_state.runs[run_a.id].status == :suspended
     assert pure_state.leases[@grant_id_a].status == :checkpoint_required
@@ -423,7 +467,9 @@ defmodule Shoestring.Harness.Fake.DemoTest do
     # Confirm all derived records match the canonical trajectory state
     assert Repo.get!(RunRecord, run_a.id).status == "suspended"
     assert Repo.get!(ExecutionLeaseRecord, @grant_id_a).status == "checkpoint_required"
-    assert Repo.get!(CheckpointRecord, @checkpoint_id).stop_reason == "quota_refused"
+    rebuilt_checkpoint = Repo.get!(CheckpointRecord, @checkpoint_id)
+    assert rebuilt_checkpoint.id == @checkpoint_id
+    assert rebuilt_checkpoint.stop_reason == "quota_refused"
     assert Repo.get!(CapacitySnapshotRecord, @snapshot_id_a).capacity_state == "observed"
 
     # -------------------------------------------------------------------------
@@ -432,9 +478,10 @@ defmodule Shoestring.Harness.Fake.DemoTest do
     scenario_b = Scenario.handoff_target(snapshot_id: @snapshot_id_b, now: @fixed_now)
     opts_b = %{scenario: scenario_b, clock: FixedClock, request_log: log_b}
 
+    # Genuinely feed continuation from the CheckpointRecord reconstructed AFTER Projector.rebuild/2
     continuation_b = %{
-      checkpoint_id: checkpoint.checkpoint_id,
-      next_action: checkpoint.next_action,
+      checkpoint_id: rebuilt_checkpoint.id,
+      next_action: rebuilt_checkpoint.next_action,
       decision_refs: []
     }
 
@@ -447,9 +494,10 @@ defmodule Shoestring.Harness.Fake.DemoTest do
     assert {:ok, run_b} =
              Runs.request(request_b, Fake.identity(),
                clock: FixedClock,
-               identifier: Shoestring.Harness.SystemIdentifier
+               identifier: AlternateFixedIdentifier
              )
 
+    assert run_b.id == AlternateFixedIdentifier.generate()
     assert run_b.id != run_a.id
     assert run_b.status == "requested"
     assert run_b.dispatch_id == @dispatch_id_b
@@ -532,27 +580,53 @@ defmodule Shoestring.Harness.Fake.DemoTest do
     assert run_identity_b.provider_session_id == "fake-session-handoff-b"
     assert run_identity_b.provider_session_id != run_identity_a.provider_session_id
 
-    # Privacy assertion: verify no raw Adapter A transcript was passed to Adapter B
+    # Privacy verification: inspect the request ACTUALLY recorded by Adapter B's RequestLog
     assert [recorded_request_b] = RequestLog.resumes(log_b)
 
-    # The RunRequest struct contains no raw transcript or conversation fields
-    refute Map.has_key?(recorded_request_b, :raw_transcript)
-    refute Map.has_key?(recorded_request_b, :transcript)
-    refute Map.has_key?(recorded_request_b, :conversation)
-    refute Map.has_key?(recorded_request_b, :model_context)
+    serialized_b_inspect =
+      inspect(recorded_request_b, limit: :infinity, printable_limit: :infinity)
 
-    # Prompt contains only task instructions, not Adapter A's conversation
-    refute String.contains?(recorded_request_b.prompt, "partial work")
-    refute String.contains?(recorded_request_b.prompt, "rate_limit_exceeded")
+    serialized_b_map = Map.from_struct(recorded_request_b)
 
-    # Continuation only contains structured checkpoint references
+    # Strict assertion: NO Adapter A runtime evidence (emitted output, error, session id, source event id)
+    # was leaked into Adapter B's recorded request or prompt
+    for term <- adapter_a_sensitive_terms do
+      refute String.contains?(serialized_b_inspect, term),
+             "Adapter A runtime evidence #{inspect(term)} leaked into Adapter B request"
+
+      refute String.contains?(recorded_request_b.prompt, term),
+             "Adapter A runtime evidence #{inspect(term)} leaked into Adapter B prompt"
+    end
+
+    # Structural check: verify no raw transcript / context fields exist in the recorded request
+    forbidden_keys = [
+      :raw_transcript,
+      :transcript,
+      :conversation,
+      :raw_context,
+      :messages,
+      :model_context,
+      :model_conversation,
+      :prompt_messages
+    ]
+
+    for key <- forbidden_keys do
+      refute Map.has_key?(serialized_b_map, key), "Forbidden key #{key} present in request"
+
+      refute Map.has_key?(recorded_request_b.continuation, key),
+             "Forbidden key #{key} present in continuation"
+
+      refute Map.has_key?(recorded_request_b.extensions, to_string(key)),
+             "Forbidden key #{key} present in extensions"
+    end
+
+    # Positive assertions: ONLY structured checkpoint continuation data is transferred
     cont_b = recorded_request_b.continuation
     assert is_map(cont_b)
-    assert cont_b.checkpoint_id == @checkpoint_id
-    assert cont_b.next_action == "resume execution from checkpoint via adapter B"
-    refute Map.has_key?(cont_b, :raw_context)
-    refute Map.has_key?(cont_b, :raw_transcript)
-    refute Map.has_key?(cont_b, :model_conversation)
+    assert cont_b.checkpoint_id == rebuilt_checkpoint.id
+    assert cont_b.next_action == rebuilt_checkpoint.next_action
+    assert cont_b.decision_refs == []
+    assert Map.keys(cont_b) |> Enum.sort() == [:checkpoint_id, :decision_refs, :next_action]
 
     # -------------------------------------------------------------------------
     # Step 7: Verified terminal completion
@@ -587,7 +661,12 @@ defmodule Shoestring.Harness.Fake.DemoTest do
              )
 
     assert {:ok, events_b} = Fake.stream(run_identity_b, opts_b)
-    assert Enum.any?(events_b, &(&1.kind == :output))
+    # Exact event count verification for handoff_target scenario
+    assert length(events_b) == 3
+    assert Enum.count(events_b, &(&1.kind == :lifecycle)) == 1
+    assert Enum.count(events_b, &(&1.kind == :output)) == 1
+    assert Enum.count(events_b, &(&1.kind == :result)) == 1
+
     assert result_event_b = Enum.find(events_b, &(&1.kind == :result))
     assert result_event_b.result.status == "completed"
 
