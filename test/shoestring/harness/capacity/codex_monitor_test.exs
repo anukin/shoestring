@@ -671,7 +671,34 @@ defmodule Shoestring.Harness.Capacity.CodexMonitorTest do
       status_connecting_reconnect = CodexMonitor.get_status(monitor2)
       assert status_connecting_reconnect.backoff_attempt == 0
 
+      monitor3 =
+        start_supervised!(%{
+          id: :m3,
+          start:
+            {CodexMonitor, :start_link,
+             [
+               [
+                 name: false,
+                 version: "0.150.1",
+                 transport: Shoestring.Harness.Capacity.Codex.FakeTransport,
+                 transport_opts: [owner: self(), emit_connected: false],
+                 max_backoff_ms: 30_000,
+                 backoff_fn: fn _ -> -5 end
+               ]
+             ]}
+        })
+
+      status_connecting3 = CodexMonitor.get_status(monitor3)
+      send(monitor3, {:codex_transport_error, status_connecting3.transport_pid, :err})
+      _ = :sys.get_state(monitor3)
+      
+      assert Process.alive?(monitor3)
+      status3 = CodexMonitor.get_status(monitor3)
+      assert status3.backoff_attempt == 1
+      assert Process.read_timer(status3.reconnect_timer) in [0, false]
+
       monitor4 =
+
         start_supervised!(%{
           id: :m4,
           start:
