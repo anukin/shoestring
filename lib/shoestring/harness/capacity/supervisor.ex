@@ -23,6 +23,25 @@ defmodule Shoestring.Harness.Capacity.Supervisor do
   pre-first-response `unknown`). Booting with neither provider available is
   therefore healthy boot with honest unknown state, never a crash loop.
 
+  ## Child restart (`:transient`)
+
+  When this supervisor itself runs as a child (of `Shoestring.Supervisor` in
+  production, or of a test root in tests), it restarts `:transiently`: a
+  crash-looping monitor that exhausts `max_restarts/0` terminates this
+  supervisor with `{:shutdown, :reached_max_restart_intensity}`, and that
+  shutdown exit is *not* restarted by the parent. The outage therefore stops
+  at capacity supervision instead of hammer-restarting up the tree and
+  collapsing the root supervisor, the web/UI layer, the Repo, and the
+  healthy provider's host tree.
+
+  Once this supervisor gives up it stays down for the life of the VM — there
+  is deliberately no automatic recovery loop. A persistent crash loop signals
+  a poisoned/defective monitor, and silently re-arming it would re-create the
+  very restart storm this setting bounds. Capacity data is non-critical-path:
+  the observatory reads the durable ledger, so while supervision is down the
+  UI keeps serving honest last-known/stale/unknown state. Recovery is an
+  explicit operator action (restart the supervisor or redeploy).
+
   ## Configuration
 
   Per-provider entries under `config :shoestring, :capacity_monitors`:
@@ -45,6 +64,22 @@ defmodule Shoestring.Harness.Capacity.Supervisor do
 
   alias Shoestring.Harness.Capacity.ClaudeMonitor
   alias Shoestring.Harness.Capacity.CodexMonitor
+
+  @doc """
+  Child spec with `restart: :transient` so restart-intensity exhaustion
+  (`{:shutdown, :reached_max_restart_intensity}`) is never re-armed by the
+  parent supervisor. See the "Child restart" section in the moduledoc.
+  """
+  @spec child_spec(keyword()) :: Supervisor.child_spec()
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      type: :supervisor,
+      restart: :transient,
+      shutdown: :infinity
+    }
+  end
 
   @max_restarts 3
   @max_seconds 60

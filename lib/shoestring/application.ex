@@ -45,7 +45,14 @@ defmodule Shoestring.Application do
     # addressable. In the test environment both providers are disabled via
     # config, so it boots empty: no monitor auto-starts and no provider CLI
     # is ever invoked.
-    [Shoestring.Harness.Capacity.Supervisor]
+    #
+    # `:transient` (matching `Capacity.Supervisor.child_spec/1`): when a
+    # crash-looping monitor exhausts the capacity supervisor's restart
+    # intensity, it exits with `{:shutdown, _}`, which a `:transient` child
+    # does NOT restart. The outage stops there instead of storming the root
+    # supervisor (which would take down the Endpoint, Repo, and healthy
+    # provider with it).
+    [Supervisor.child_spec(Shoestring.Harness.Capacity.Supervisor, restart: :transient)]
   end
 
   defp dispatch_reconciler_children do
