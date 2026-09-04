@@ -111,12 +111,13 @@ defmodule Shoestring.Harness.ObservatoryLeaseReferenceTest do
     }
 
     merged = Map.merge(defaults, attrs)
-    {:ok, snapshot} = CapacitySnapshot.new(merged, now: @now)
+    validation_now = Map.get(merged, :observed_at) || @now
+    {:ok, snapshot} = CapacitySnapshot.new(merged, now: validation_now)
     snapshot
   end
 
-  describe "cross-goal lease lookup boundary" do
-    test "user run may safely reference an observatory-owned capacity snapshot in execution lease" do
+  describe "strict goal ownership boundary" do
+    test "user run CANNOT reference an observatory-owned capacity snapshot (strict same-goal ownership enforced)" do
       goal_a = insert_goal("Goal A")
       task_a = insert_task(goal_a, "Task A")
       run_a = insert_run(goal_a, task_a)
@@ -151,16 +152,14 @@ defmodule Shoestring.Harness.ObservatoryLeaseReferenceTest do
 
       assert {:ok, _} = Trajectory.append(goal_a.id, lease_event, trusted: [run_id: run_a.id])
 
-      # Projecting Goal A must succeed by resolving the observatory snapshot
-      assert {:ok, _position} = Projector.project(goal_a.id)
+      # Projecting Goal A must fail because observatory snapshot is not owned by Goal A
+      assert {:error,
+              {:harness_projection_failed, _seq, {:lease_dependency_not_found, ^grant_id},
+               _position}} =
+               Projector.project(goal_a.id)
 
-      # Verify projected lease record
-      lease_record = Repo.get(ExecutionLeaseRecord, grant_id)
-      assert lease_record != nil
-      assert lease_record.goal_id == goal_a.id
-      assert lease_record.run_id == run_a.id
-      assert lease_record.admitted_snapshot_id == observatory_snapshot.snapshot_id
-      assert lease_record.status == "proposed"
+      # Lease was not inserted
+      assert nil == Repo.get(ExecutionLeaseRecord, grant_id)
     end
 
     test "user run CANNOT reference a capacity snapshot owned by a different user goal" do
@@ -348,6 +347,104 @@ defmodule Shoestring.Harness.ObservatoryLeaseReferenceTest do
                Projector.project(goal_a.id)
 
       assert bad_artifact_id == artifact_b.id
+    end
+
+    test "observatory rebuild and arbitrary stream projection order remain deterministic and recoverable" do
+      # 1. Ingest historical observations into the observatory ledger
+      snap1 = make_snapshot(%{observed_at: @now})
+      assert {:ok, :persisted, _} = Observatory.ingest(snap1, now: @now)
+
+      snap2 =
+        make_snapshot(%{
+          observed_at: DateTime.add(@now, 60, :second),
+          windows: [
+            %{
+              kind: "primary",
+              state: :observed,
+              used_percent: 50.0,
+              reset_at: ~U[2026-08-30 14:00:00.000000Z]
+            }
+          ]
+        })
+
+      assert {:ok, :persisted, _} =
+               Observatory.ingest(snap2, now: DateTime.add(@now, 60, :second))
+
+      # 2. User Goal A has its own run, capacity snapshot, and lease
+      goal_a = insert_goal("Goal A")
+      task_a = insert_task(goal_a, "Task A")
+      run_a = insert_run(goal_a, task_a)
+
+      snap_a = make_snapshot()
+
+      snap_event_a = %{
+        "type" => "capacity.snapshot_observed",
+        "schema_version" => 2,
+        "actor" => "harness",
+        "occurred_at" => @now,
+        "idempotency_key" => "snap-a:#{snap_a.snapshot_id}",
+        "payload" => %{
+          "snapshot_id" => snap_a.snapshot_id,
+          "contract_version" => 2,
+          "capacity_state" => "observed",
+          "windows" => %{
+            "items" => [%{"kind" => "primary", "state" => "observed", "used_percent" => 15.0}]
+          },
+          "observed_at" => DateTime.to_iso8601(@now),
+          "expires_at" => DateTime.to_iso8601(DateTime.add(@now, 300, :second)),
+          "freshness" => %{"max_age_seconds" => 300},
+          "source" => %{
+            "adapter_id" => "fixture.capacity",
+            "provider_id" => "codex",
+            "invocation_mode" => "app_server",
+            "event" => "explicit_read"
+          },
+          "scope" => "account-1",
+          "confidence" => "high",
+          "support_tier" => "proactive",
+          "compatibility_state" => "compatible",
+          "extensions" => %{}
+        }
+      }
+
+      assert {:ok, _} = Trajectory.append(goal_a.id, snap_event_a, trusted: [run_id: run_a.id])
+
+      grant_id_a = Ecto.UUID.generate()
+
+      lease_event_a = %{
+        "type" => "lease.proposed",
+        "schema_version" => 1,
+        "actor" => "harness",
+        "occurred_at" => @now,
+        "idempotency_key" => "lease-prop:#{grant_id_a}",
+        "payload" => %{
+          "grant_id" => grant_id_a,
+          "run_id" => run_a.id,
+          "admitted_snapshot_id" => snap_a.snapshot_id,
+          "contract_version" => 1,
+          "reserves" => %{"response" => 10, "tool" => 5},
+          "response_budget" => 100,
+          "tool_budget" => 50,
+          "deadline" => DateTime.to_iso8601(~U[2026-08-30 12:30:00.000000Z]),
+          "checkpoint_cadence" => 30,
+          "renewal_state" => "eligible",
+          "extensions" => %{}
+        }
+      }
+
+      assert {:ok, _} = Trajectory.append(goal_a.id, lease_event_a, trusted: [run_id: run_a.id])
+      assert {:ok, _} = Projector.project(goal_a.id)
+
+      # 3. Rebuild Observatory projection under historical data:
+      # Must succeed cleanly without FK restrict errors
+      assert {:ok, _pos} = Observatory.rebuild()
+
+      # Verify observatory observations were completely reconstructed
+      assert length(Observatory.latest_observations()) > 0
+
+      # 4. Independent projection order: Project Goal A again, then Observatory, both succeed
+      assert {:ok, _} = Projector.project(goal_a.id)
+      assert {:ok, _} = Observatory.reconcile()
     end
   end
 end

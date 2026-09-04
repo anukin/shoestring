@@ -37,4 +37,11 @@ defmodule Shoestring.Harness.CapacityObservatory do
   defdelegate equivalent?(a, b, now), to: Shoestring.Harness.Observatory
   defdelegate record_to_snapshot(record), to: Shoestring.Harness.Observatory
   defdelegate record_to_snapshot(record, opts), to: Shoestring.Harness.Observatory
+
+  defdelegate rebuild(), to: Shoestring.Harness.Observatory
+  defdelegate rebuild(opts), to: Shoestring.Harness.Observatory
+  defdelegate reconcile(), to: Shoestring.Harness.Observatory
+  defdelegate reconcile(opts), to: Shoestring.Harness.Observatory
+  defdelegate event_idempotency_key(snapshot), to: Shoestring.Harness.Observatory
+  defdelegate event_idempotency_key(snapshot, opts), to: Shoestring.Harness.Observatory
 end

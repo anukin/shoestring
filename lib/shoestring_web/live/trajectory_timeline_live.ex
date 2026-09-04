@@ -135,20 +135,26 @@ defmodule ShoestringWeb.TrajectoryTimelineLive do
 
   @doc "Authorizes local mode or an explicit scope owner for a goal."
   @spec authorized_goal?(Goal.t(), nil | map() | term()) :: boolean()
-  def authorized_goal?(%Goal{}, nil), do: true
+  def authorized_goal?(%Goal{} = goal, nil) do
+    not Goal.observatory?(goal)
+  end
 
-  def authorized_goal?(%Goal{owner_id: goal_owner_id}, scope) when is_map(scope) do
-    case scope_owner_id(scope) do
-      owner_id when is_binary(owner_id) ->
-        with {:ok, scope_owner_id} <- Ecto.UUID.cast(owner_id),
-             {:ok, goal_owner_id} <- Ecto.UUID.cast(goal_owner_id) do
-          scope_owner_id == goal_owner_id
-        else
-          _error -> false
-        end
+  def authorized_goal?(%Goal{} = goal, scope) when is_map(scope) do
+    if Goal.observatory?(goal) do
+      false
+    else
+      case scope_owner_id(scope) do
+        owner_id when is_binary(owner_id) ->
+          with {:ok, scope_owner_id} <- Ecto.UUID.cast(owner_id),
+               {:ok, goal_owner_id} <- Ecto.UUID.cast(goal.owner_id) do
+            scope_owner_id == goal_owner_id
+          else
+            _error -> false
+          end
 
-      _missing_owner ->
-        false
+        _missing_owner ->
+          false
+      end
     end
   end
 
