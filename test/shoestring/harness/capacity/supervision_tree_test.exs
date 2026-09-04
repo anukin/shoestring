@@ -228,7 +228,7 @@ defmodule Shoestring.Harness.Capacity.SupervisionTreeTest do
 
       assert claude_spec.id == :claude_monitor
       assert codex_spec.id == :codex_monitor
-      assert claude_spec.id != codex_spec.id
+      refute claude_spec.id == codex_spec.id
       assert claude_spec.restart == :permanent
       assert codex_spec.restart == :permanent
     end

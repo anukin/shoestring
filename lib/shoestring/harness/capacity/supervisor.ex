@@ -15,24 +15,32 @@ defmodule Shoestring.Harness.Capacity.Supervisor do
 
   `max_restarts: 3, max_seconds: 60` (far less permissive than OTP's `3/5s`
   default): a monitor that crash-loops more than three times in a minute stops
-  being hammer-restarted and the failure escalates visibly instead. This is a
-  second layer of defence — the primary bound lives inside the monitors
-  themselves (Codex backs off reconnects with capped exponential backoff;
-  Claude degrades to last-known state), and neither monitor crashes when its
-  provider CLI is simply absent (Codex settles in `:incompatible`, Claude in
-  pre-first-response `unknown`). Booting with neither provider available is
-  therefore healthy boot with honest unknown state, never a crash loop.
+  being hammer-restarted and the failure escalates visibly instead:
+  `Shoestring.Harness.Capacity.SupervisionWatcher` (a younger sibling under the
+  same parent, so it survives the outage) emits a `Logger.error` stating that
+  capacity monitoring is disabled until an explicit operator restart or
+  redeploy, plus a
+  `:telemetry.execute([:shoestring, :capacity, :supervisor, :exhausted], ...)`
+  event. This is a second layer of defence — the primary bound lives inside
+  the monitors themselves (Codex backs off reconnects with capped exponential
+  backoff; Claude degrades to last-known state), and neither monitor crashes
+  when its provider CLI is simply absent (Codex settles in `:incompatible`,
+  Claude in pre-first-response `unknown`). Booting with neither provider
+  available is therefore healthy boot with honest unknown state, never a crash
+  loop.
 
   ## Child restart (`:transient`)
 
   When this supervisor itself runs as a child (of `Shoestring.Supervisor` in
   production, or of a test root in tests), it restarts `:transiently`: a
   crash-looping monitor that exhausts `max_restarts/0` terminates this
-  supervisor with `{:shutdown, :reached_max_restart_intensity}`, and that
-  shutdown exit is *not* restarted by the parent. The outage therefore stops
-  at capacity supervision instead of hammer-restarting up the tree and
-  collapsing the root supervisor, the web/UI layer, the Repo, and the
-  healthy provider's host tree.
+  supervisor with the bare exit reason `:shutdown` (OTP reports
+  `:reached_max_restart_intensity` only in its log report, never in the exit
+  term), and that shutdown exit is *not* restarted by the parent. A
+  `:transient` child is never re-armed on `:normal`, `:shutdown`, or
+  `{:shutdown, term}`, so the outage stops at capacity supervision instead of
+  hammer-restarting up the tree and collapsing the root supervisor, the web/UI
+  layer, the Repo, and the healthy provider's host tree.
 
   Once this supervisor gives up it stays down for the life of the VM — there
   is deliberately no automatic recovery loop. A persistent crash loop signals
@@ -67,7 +75,8 @@ defmodule Shoestring.Harness.Capacity.Supervisor do
 
   @doc """
   Child spec with `restart: :transient` so restart-intensity exhaustion
-  (`{:shutdown, :reached_max_restart_intensity}`) is never re-armed by the
+  (bare `:shutdown` exit; OTP's `:reached_max_restart_intensity` appears only
+  in its log report, never in the exit term) is never re-armed by the
   parent supervisor. See the "Child restart" section in the moduledoc.
   """
   @spec child_spec(keyword()) :: Supervisor.child_spec()

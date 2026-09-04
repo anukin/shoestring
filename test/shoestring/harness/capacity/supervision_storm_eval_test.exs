@@ -4,7 +4,9 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
 
   A monitor that crash-loops (killed on every start) exhausts the capacity
   supervisor's restart intensity (`max_restarts: 3 / max_seconds: 60`), which
-  terminates it with `{:shutdown, :reached_max_restart_intensity}`.
+  terminates it with the bare exit reason `:shutdown` (OTP reports
+  `:reached_max_restart_intensity` only in its log report, never in the exit
+  term).
 
   Before the fix the capacity supervisor was a `:permanent` child of the
   application root, so the root re-armed it; the rebooted supervisor died
@@ -12,8 +14,9 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
   `3 restarts / 5 seconds` intensity — collapsing the Endpoint, Repo, and
   the healthy provider with it.
 
-  The fix wires the capacity supervisor as `:transient`, so the
-  `{:shutdown, _}` exit is never restarted: the outage stops at capacity
+  The fix wires the capacity supervisor as `:transient`, so the `:shutdown`
+  exit is never restarted (`:transient` is not re-armed on `:normal`,
+  `:shutdown`, or `{:shutdown, term}`): the outage stops at capacity
   supervision while the root, its other children, and the healthy provider
   survive indefinitely, and the observatory keeps serving honest
   last-known/stale ledger state.
@@ -244,7 +247,7 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
     assert Process.alive?(endpoint_pid), "endpoint stand-in process did not survive"
 
     # The exhausted capacity child stays DOWN: transient never re-arms a
-    # {:shutdown, _} exit. (On the old :permanent wiring the root restarts
+    # `:shutdown` exit. (On the old :permanent wiring the root restarts
     # it, so this fails there.)
     assert root_child_pid(root, :cap_sup_under_test) in [nil, :undefined],
            "capacity supervisor was re-armed after intensity exhaustion (expected :transient stay-down)"

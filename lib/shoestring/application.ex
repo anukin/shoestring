@@ -48,11 +48,23 @@ defmodule Shoestring.Application do
     #
     # `:transient` (matching `Capacity.Supervisor.child_spec/1`): when a
     # crash-looping monitor exhausts the capacity supervisor's restart
-    # intensity, it exits with `{:shutdown, _}`, which a `:transient` child
-    # does NOT restart. The outage stops there instead of storming the root
-    # supervisor (which would take down the Endpoint, Repo, and healthy
-    # provider with it).
-    [Supervisor.child_spec(Shoestring.Harness.Capacity.Supervisor, restart: :transient)]
+    # intensity, it exits with the bare reason `:shutdown` (OTP reports
+    # `:reached_max_restart_intensity` only in its log report, never in the
+    # exit term), which a `:transient` child does NOT restart. The outage
+    # stops there instead of storming the root supervisor (which would take
+    # down the Endpoint, Repo, and healthy provider with it).
+    #
+    # ORDER IS LOAD-BEARING (DEF-01b): the exhaustion watcher MUST remain
+    # listed after the capacity supervisor. OTP terminates children in reverse
+    # start order, so a graceful application shutdown terminates the watcher
+    # BEFORE the capacity supervisor and the watcher never observes the
+    # graceful `:shutdown` exit (no false alarm on clean shutdowns or
+    # redeploys). On genuine intensity exhaustion only the capacity supervisor
+    # dies while the watcher survives and emits the observable signal.
+    [
+      Supervisor.child_spec(Shoestring.Harness.Capacity.Supervisor, restart: :transient),
+      Shoestring.Harness.Capacity.SupervisionWatcher
+    ]
   end
 
   defp dispatch_reconciler_children do
