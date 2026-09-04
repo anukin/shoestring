@@ -283,8 +283,11 @@ defmodule Shoestring.Harness.Observatory do
 
   The key hashes a semantic fingerprint quantized onto the same `0.0001` grid
   `equivalent?/3` uses for `used_percent`, with wall-clock `observed_at`
-  bucketed into freshness windows instead of hashed at full precision, so any
-  two snapshots `equivalent?/3` calls equal share one key.
+  bucketed into freshness windows instead of hashed at full precision, so
+  concurrent equivalent polls within the same freshness bucket and float grid
+  share one key. Snapshots that `equivalent?/3` calls equal but which straddle
+  a float rounding boundary, a freshness bucket edge, or differ in DateTime
+  representation may hash to different keys.
   """
   @spec event_idempotency_key(CapacitySnapshot.t(), keyword()) :: String.t()
   def event_idempotency_key(%CapacitySnapshot{} = snapshot, opts \\ []) do
