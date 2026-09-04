@@ -641,7 +641,7 @@ defmodule Shoestring.Harness.Capacity do
           "provider_error",
           now,
           freshness_seconds,
-          :headless_result_error,
+          source_event,
           opts,
           %{}
         )
