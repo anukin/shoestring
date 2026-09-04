@@ -33,12 +33,29 @@ defmodule ShoestringWeb.CapacityObservatoryLive do
   # | `:refused`       | `capacity_state == :refused`, no auth/block keywords              |
   # | `:disconnected`  | `capacity_state == :unknown` and reason mentions connectivity loss |
   # | `:unknown`       | `capacity_state == :unknown`, no disconnect keywords              |
-  # | `:stale`         | freshness is `:stale` (observed or degraded, past max age)        |
+  # | `:stale` (additive) | freshness is `:stale`; rendered as a separate marker  |
+  # |                            alongside the primary state, never instead of it  |
   # | `:partial`       | `:degraded` with a mix of observed and unknown windows            |
   # | `:degraded`      | `:degraded` otherwise (e.g. version drift, reduced confidence)    |
   #
   # Priority: eligibility first, then the refused family (auth before block),
-  # then the unknown family, then staleness, then the degraded family.
+  # then the unknown family, then the degraded family. Staleness is orthogonal:
+  # it never changes the primary state. A stale refusal or unknown keeps its
+  # primary state and additionally surfaces a staleness marker via `stale?/1`,
+  # so the operator can tell whether a block is current or hours old. A stale
+  # `:observed` summary is never presented as `:healthy` (it is not eligible);
+  # it demotes to `:degraded` plus the stale marker.
+  #
+  # NOTE: `auth_reason?/1`, `block_reason?/1`, and `disconnect_reason?/1` are an
+  # interim prose heuristic, not a contract: `CapacitySnapshot` carries only
+  # `capacity_state` plus a freeform `reason` and has no structured
+  # refusal-kind field. The producers that would populate such a field live in
+  # domain modules owned by other workstreams, so the heuristic stays until a
+  # structured refusal-kind field lands. Keep its tokens narrow: only tokens
+  # that genuinely indicate a hard block (rate limit / quota / 429 /
+  # exhausted) belong in `block_reason?/1`; anything that merely restates the
+  # refusal (e.g. "refused", "blocked") must stay out so generic refusals keep
+  # rendering as `:refused`.
   @doc "Derives the distinct presentational state for an observation summary."
   @spec presentational_state(map()) :: atom()
   def presentational_state(%{eligible?: true}), do: :healthy
@@ -57,15 +74,25 @@ defmodule ShoestringWeb.CapacityObservatoryLive do
     if disconnect_reason?(downcased_reason(summary)), do: :disconnected, else: :unknown
   end
 
-  def presentational_state(%{freshness_state: :stale}), do: :stale
-
   def presentational_state(%{capacity_state: :degraded, windows: windows})
       when is_list(windows) do
     if partial_windows?(windows), do: :partial, else: :degraded
   end
 
-  def presentational_state(%{capacity_state: :observed}), do: :healthy
+  def presentational_state(%{capacity_state: :observed} = summary) do
+    if stale?(summary), do: :degraded, else: :healthy
+  end
+
   def presentational_state(_summary), do: :unknown
+
+  @doc """
+  Returns true when the observation is past its configured max age
+  (`freshness_state == :stale`), independent of the primary presentational
+  state. The template renders this as a separate, independently visible
+  staleness marker alongside the primary state badge.
+  """
+  @spec stale?(map()) :: boolean()
+  def stale?(summary), do: Map.get(summary, :freshness_state) == :stale
 
   @doc """
   Visual presentation (label, dot, badge, icon) for a presentational state.
@@ -227,7 +254,8 @@ defmodule ShoestringWeb.CapacityObservatoryLive do
     )
   end
 
-  # Adds UI-boundary fields: redacted reasons, presentational state, CLI version.
+  # Adds UI-boundary fields: redacted reasons, presentational state, CLI version,
+  # and the additive staleness marker.
   defp enrich_summary(summary) do
     windows =
       Enum.map(summary.windows, fn window ->
@@ -241,6 +269,8 @@ defmodule ShoestringWeb.CapacityObservatoryLive do
     |> Map.put(:display_reason, redact_reason(summary.reason))
     |> Map.put(:presentational_state, state)
     |> Map.put(:presentation, status_presentation(state))
+    |> Map.put(:stale?, stale?(summary))
+    |> Map.put(:stale_presentation, status_presentation(:stale))
     |> Map.put(:cli_version, cli_version(summary))
   end
 
@@ -267,6 +297,10 @@ defmodule ShoestringWeb.CapacityObservatoryLive do
     ]) or Regex.match?(~r/\bauth\b/, reason)
   end
 
+  # Interim prose heuristic (see the note on `presentational_state/1`): only
+  # tokens that genuinely indicate a hard block belong here. "refus*"/"blocked"
+  # merely restate the refusal and must stay out so the generic `:refused`
+  # branch remains reachable.
   defp block_reason?(reason) do
     String.contains?(reason, [
       "rate limit",
@@ -275,8 +309,6 @@ defmodule ShoestringWeb.CapacityObservatoryLive do
       "quota",
       "hard block",
       "hard_block",
-      "blocked",
-      "refus",
       "exhaust",
       "too many requests",
       "limit reached",

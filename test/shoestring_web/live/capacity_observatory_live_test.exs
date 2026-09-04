@@ -82,6 +82,7 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
     assert html =~ "compatible"
     assert html =~ "Eligible for automatic admission"
     assert has_element?(view, "[data-status=\"healthy\"]")
+    assert has_element?(view, "[data-stale=\"false\"]")
     # No version reported by default
     assert html =~ "CLI version: not reported"
   end
@@ -119,7 +120,7 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
     assert html =~ "Partial observation"
   end
 
-  test "stale: degraded past the configured staleness boundary renders the stale state",
+  test "stale: degraded past the configured staleness boundary keeps its primary state plus a stale marker",
        %{conn: conn} do
     past = DateTime.add(DateTime.utc_now(), -600, :second)
 
@@ -132,9 +133,36 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
 
     {:ok, view, html} = live(conn, "/observatory")
 
-    assert has_element?(view, "[data-status=\"stale\"]")
+    # Primary state is preserved (both default windows observed -> degraded) ...
+    assert has_element?(view, "[data-status=\"degraded\"]")
+    assert html =~ "Degraded observation"
+    # ... and staleness is surfaced additively, not instead of the primary.
+    assert has_element?(view, "[data-stale=\"true\"]")
+    assert has_element?(view, "[data-stale-badge=\"true\"]")
     assert html =~ "Stale observation"
     assert html =~ "stale_observation"
+  end
+
+  test "stale refusal: a refusal that is also stale shows BOTH the refusal and the stale marker",
+       %{conn: conn} do
+    past = DateTime.add(DateTime.utc_now(), -600, :second)
+
+    ingest_fixture(
+      observed_at: past,
+      windows: [],
+      capacity_state: :refused,
+      confidence: :none,
+      reason: "provider refused"
+    )
+
+    {:ok, view, html} = live(conn, "/observatory")
+
+    assert has_element?(view, "[data-status=\"refused\"]")
+    assert html =~ "Refused by provider"
+    assert has_element?(view, "[data-stale=\"true\"]")
+    assert has_element?(view, "[data-stale-badge=\"true\"]")
+    assert html =~ "Stale observation"
+    refute has_element?(view, "[data-status=\"hard-block\"]")
   end
 
   test "version drift / incompatible -> degraded badge WITH a human-readable reason", %{
@@ -189,6 +217,22 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
     assert html =~ "authentication required"
     assert has_element?(view, "[data-status=\"auth-required\"]")
     assert html =~ "Authentication required"
+    refute has_element?(view, "[data-status=\"hard-block\"]")
+  end
+
+  test "generic refusal: refused without hard-block keywords renders refused, NOT hard-block",
+       %{conn: conn} do
+    ingest_fixture(
+      windows: [],
+      capacity_state: :refused,
+      confidence: :none,
+      reason: "provider refused"
+    )
+
+    {:ok, view, html} = live(conn, "/observatory")
+
+    assert html =~ "Refused by provider"
+    assert has_element?(view, "[data-status=\"refused\"]")
     refute has_element?(view, "[data-status=\"hard-block\"]")
   end
 
@@ -265,6 +309,83 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
     assert html =~ "[REDACTED]"
   end
 
+  test "AWS access key IDs never reach the rendered HTML", %{conn: conn} do
+    key_id = "AKIAIOSFODNN7EXAMPLE"
+
+    ingest_fixture(
+      scope: "scope-aws",
+      windows: [
+        %{kind: "five_hour", state: :unknown, reason: "probe saw key #{key_id} in output"}
+      ],
+      capacity_state: :refused,
+      confidence: :none,
+      reason: "refused after reporting key #{key_id}"
+    )
+
+    {:ok, _view, html} = live(conn, "/observatory")
+
+    refute html =~ key_id
+    assert html =~ "[REDACTED_API_KEY]"
+  end
+
+  test "GitHub-shaped tokens never reach the rendered HTML", %{conn: conn} do
+    classic = "ghp_abcdefghijklmnopqrstuvwx1234567890"
+    fine_grained = "github_pat_abcDEF1234567890_xyzTOKEN"
+
+    ingest_fixture(
+      scope: "scope-ghp",
+      windows: [],
+      capacity_state: :refused,
+      confidence: :none,
+      reason: "refused with token #{classic} present"
+    )
+
+    ingest_fixture(
+      scope: "scope-pat",
+      windows: [],
+      capacity_state: :refused,
+      confidence: :none,
+      reason: "refused with token #{fine_grained} present"
+    )
+
+    {:ok, _view, html} = live(conn, "/observatory")
+
+    refute html =~ classic
+    refute html =~ fine_grained
+    assert html =~ "[REDACTED_API_KEY]"
+  end
+
+  test "XML/tag-wrapped secret contents never reach the rendered HTML", %{conn: conn} do
+    ingest_fixture(
+      scope: "scope-xml",
+      windows: [],
+      capacity_state: :refused,
+      confidence: :none,
+      reason: "failure: <secret>hunter2-xml-value</secret> end"
+    )
+
+    {:ok, _view, html} = live(conn, "/observatory")
+
+    refute html =~ "hunter2-xml-value"
+    assert html =~ "[REDACTED]"
+  end
+
+  test "compound secret/key assignments never reach the rendered HTML", %{conn: conn} do
+    ingest_fixture(
+      scope: "scope-compound",
+      windows: [],
+      capacity_state: :refused,
+      confidence: :none,
+      reason: "config aws_secret_access_key=SUPERSECRET123 with custom_key=other-secret-456"
+    )
+
+    {:ok, _view, html} = live(conn, "/observatory")
+
+    refute html =~ "SUPERSECRET123"
+    refute html =~ "other-secret-456"
+    assert html =~ "[REDACTED]"
+  end
+
   describe "presentational_state/1" do
     defp summary(overrides) do
       Map.merge(
@@ -312,7 +433,7 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
              ) == :unknown
     end
 
-    test "stale outranks degraded detail" do
+    test "stale is additive: staleness never replaces the primary state" do
       assert CapacityObservatoryLive.presentational_state(
                summary(%{
                  capacity_state: :degraded,
@@ -323,7 +444,57 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
                    %{kind: "seven_day", state: :unknown}
                  ]
                })
-             ) == :stale
+             ) == :partial
+
+      assert CapacityObservatoryLive.stale?(
+               summary(%{freshness_state: :stale, reason: "stale_observation"})
+             )
+
+      refute CapacityObservatoryLive.stale?(summary(%{freshness_state: :fresh}))
+    end
+
+    test "stale refusals and unknowns keep their primary state plus the stale marker" do
+      refused_stale =
+        summary(%{
+          capacity_state: :refused,
+          freshness_state: :stale,
+          reason: "provider refused",
+          windows: []
+        })
+
+      assert CapacityObservatoryLive.presentational_state(refused_stale) == :refused
+      assert CapacityObservatoryLive.stale?(refused_stale)
+
+      unknown_stale =
+        summary(%{capacity_state: :unknown, freshness_state: :stale, reason: "no data yet"})
+
+      assert CapacityObservatoryLive.presentational_state(unknown_stale) == :unknown
+      assert CapacityObservatoryLive.stale?(unknown_stale)
+    end
+
+    test "stale observed summaries demote to degraded plus the stale marker, never healthy" do
+      stale_observed =
+        summary(%{
+          capacity_state: :observed,
+          freshness_state: :stale,
+          reason: "stale_observation",
+          windows: [%{kind: "five_hour", state: :observed}]
+        })
+
+      assert CapacityObservatoryLive.presentational_state(stale_observed) == :degraded
+      assert CapacityObservatoryLive.stale?(stale_observed)
+    end
+
+    test "generic refusal prose renders refused, not hard-block" do
+      base = %{capacity_state: :refused, freshness_state: :unknown, windows: []}
+
+      assert CapacityObservatoryLive.presentational_state(
+               summary(Map.put(base, :reason, "provider refused"))
+             ) == :refused
+
+      assert CapacityObservatoryLive.presentational_state(
+               summary(Map.put(base, :reason, "provider blocked the request"))
+             ) == :refused
     end
 
     test "degraded splits into partial and generic degraded" do

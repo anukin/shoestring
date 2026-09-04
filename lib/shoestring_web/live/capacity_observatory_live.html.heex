@@ -139,6 +139,7 @@
             <div
               class="flex items-start space-x-3"
               data-status={obs.presentation.status}
+              data-stale={to_string(obs.stale?)}
               id={"status-#{obs.provider_id}-#{obs.invocation_mode}-#{obs.scope}"}
             >
               <span class={[
@@ -155,6 +156,18 @@
                     <.icon name={obs.presentation.icon} class="w-3.5 h-3.5" />
                     {obs.presentation.label}
                   </span>
+                  <%= if obs.stale? do %>
+                    <span
+                      data-stale-badge="true"
+                      class={[
+                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium ml-1",
+                        obs.stale_presentation.badge_class
+                      ]}
+                    >
+                      <.icon name={obs.stale_presentation.icon} class="w-3.5 h-3.5" />
+                      {obs.stale_presentation.label}
+                    </span>
+                  <% end %>
                 </p>
                 <p class="mt-2 text-zinc-700">
                   {obs.presentation.detail}
