@@ -382,6 +382,79 @@ defmodule Shoestring.Harness.ObservatoryTest do
 
       assert length(records) == 1
     end
+
+    test "concurrent equivalent snapshots with distinct observed_at and sub-epsilon float drift persist exactly one event" do
+      # Anchor all polls inside a single freshness window so they share one
+      # observed_at bucket; each poll still carries a distinct timestamp and a
+      # distinct (but sub-epsilon) float reading.
+      window_start_unix = div(DateTime.to_unix(@t0), 300) * 300
+      base_unix = window_start_unix + 120
+      ingest_now = DateTime.from_unix!(base_unix + 9)
+
+      snapshots =
+        for i <- 0..9 do
+          make_snapshot(%{
+            snapshot_id: Ecto.UUID.generate(),
+            scope: "concurrent-drift-scope",
+            observed_at: DateTime.from_unix!(base_unix + i),
+            windows: [
+              %{
+                kind: "primary",
+                state: :observed,
+                used_percent: 25.0 + i * 0.000001,
+                reset_at: ~U[2026-08-30 13:00:00Z]
+              },
+              %{
+                kind: "secondary",
+                state: :observed,
+                used_percent: 40.0,
+                reset_at: ~U[2026-09-06 12:00:00Z]
+              }
+            ]
+          })
+        end
+
+      # Sanity: inputs really differ below the epsilon yet stay equivalent
+      first = hd(snapshots)
+      last = List.last(snapshots)
+      assert first.observed_at != last.observed_at
+      assert hd(first.windows).used_percent != hd(last.windows).used_percent
+      assert Observatory.equivalent?(first, last, ingest_now)
+
+      results =
+        Task.async_stream(
+          snapshots,
+          fn snap -> Observatory.ingest(snap, now: ingest_now) end,
+          max_concurrency: 10,
+          timeout: :infinity
+        )
+        |> Enum.to_list()
+
+      assert length(results) == 10
+
+      Enum.each(results, fn result ->
+        assert {:ok, {:ok, status, _snapshot}} = result
+        assert status in [:persisted, :deduplicated]
+      end)
+
+      goal_id = Observatory.observatory_goal_id()
+
+      events =
+        Repo.all(
+          from e in TrajectoryEvent,
+            where: e.goal_id == ^goal_id and e.payload["scope"] == "concurrent-drift-scope"
+        )
+
+      assert length(events) == 1
+
+      records =
+        Repo.all(
+          from s in CapacitySnapshotRecord,
+            where: s.goal_id == ^goal_id and s.scope == "concurrent-drift-scope"
+        )
+
+      assert length(records) == 1
+    end
   end
 
   describe "semantic deduplication" do
@@ -401,6 +474,39 @@ defmodule Shoestring.Harness.ObservatoryTest do
       assert deduplicated.observed_at == snapshot1.observed_at
 
       # Ledger did not grow!
+      assert 1 == Repo.aggregate(from(e in TrajectoryEvent, where: e.goal_id == ^goal_id), :count)
+    end
+
+    test "sub-epsilon float drift does not grow the ledger" do
+      snapshot1 = make_snapshot(%{observed_at: @t0})
+      assert {:ok, :persisted, _} = Observatory.ingest(snapshot1, now: @t0)
+
+      goal_id = Observatory.observatory_goal_id()
+      assert 1 == Repo.aggregate(from(e in TrajectoryEvent, where: e.goal_id == ^goal_id), :count)
+
+      # 0.00005 drift sits below the 0.0001 epsilon: semantically identical.
+      drifted =
+        make_snapshot(%{
+          observed_at: @t1,
+          windows: [
+            %{
+              kind: "primary",
+              state: :observed,
+              used_percent: 25.00005,
+              reset_at: ~U[2026-08-30 13:00:00Z]
+            },
+            %{
+              kind: "secondary",
+              state: :observed,
+              used_percent: 40.0,
+              reset_at: ~U[2026-09-06 12:00:00Z]
+            }
+          ]
+        })
+
+      assert {:ok, :deduplicated, deduplicated} = Observatory.ingest(drifted, now: @t1)
+      assert deduplicated.snapshot_id == snapshot1.snapshot_id
+
       assert 1 == Repo.aggregate(from(e in TrajectoryEvent, where: e.goal_id == ^goal_id), :count)
     end
 

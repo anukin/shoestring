@@ -40,7 +40,7 @@ alias Shoestring.Harness.Observatory
 3. Compares the incoming reading against the latest recorded observation for the target `{provider_id, invocation_mode, scope}`.
 4. **If equivalent**: Returns `{:ok, :deduplicated, existing_snapshot}`. No new event is appended, and the ledger does not grow. The original `observed_at` timestamp and snapshot identity are preserved.
 5. **If changed**:
-   - Appends a canonical `capacity.snapshot_observed` v2 event under `@observatory_goal_id` through `Shoestring.Trajectory.append/3` using a deterministic event idempotency key fingerprinting semantic fields.
+   - Appends a canonical `capacity.snapshot_observed` v2 event under `@observatory_goal_id` through `Shoestring.Trajectory.append/3` using a deterministic event idempotency key: a semantic fingerprint quantized onto the same `0.0001` grid `equivalent?/3` uses, with wall-clock `observed_at` bucketed into freshness windows instead of hashed at full precision, so concurrent equivalent polls share one atomic key.
    - Projects the event into `harness_capacity_snapshots` and `harness_capacity_windows` via `Shoestring.Harness.Projector.project/2`. If projection fails, returns a truthful `{:error, {:projection_failed, event, error}}` while maintaining ledger durability.
    - Returns `{:ok, :persisted, snapshot}`.
 
@@ -139,4 +139,4 @@ In `Shoestring.Harness.Projector`:
 ## Migration & Rollback Semantics
 
 - **Up**: `CreateCapacityObservatorySingleton` provisions the singleton goal idempotently after verifying no conflicting pre-existing goal occupies the reserved ID. If a conflicting row exists, the migration raises safely without modifying or locking the row. Protection triggers are installed specifically on the exact protected singleton identity. `AddCapacityObservatoryLookupIndex` adds the lookup and order index.
-- **Down**: If any ledger records (`trajectory_events` or `harness_capacity_snapshots`) exist for `@observatory_goal_id`, `down` refuses rollback with an explicit exception to prevent catastrophic partial data destruction. Rollback succeeds cleanly only when no ledger data is present.
+- **Down**: If any ledger records (`trajectory_events` or `harness_capacity_snapshots`) exist for `@observatory_goal_id`, `down` refuses rollback with an explicit exception to prevent catastrophic partial data destruction. Both `CreateCapacityObservatorySingleton.down` and the repair migration `down` enforce this guard. Rollback succeeds cleanly only when no ledger data is present.

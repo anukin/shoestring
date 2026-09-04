@@ -264,6 +264,16 @@ defmodule Shoestring.Harness.ObservatoryMigrationTest do
 
     assert String.contains?(message, "protected observatory goal cannot be deleted")
 
+    # The original singleton migration refuses destructive rollback as well when
+    # targeted directly: this fails if its guard is ever reverted to a silent delete.
+    assert_raise RuntimeError, ~r/refusing rollback to prevent data destruction/i, fn ->
+      Ecto.Migrator.run(repo, old_observatory_migration(), :down, all: true)
+    end
+
+    # The refused rollback left the singleton goal intact
+    assert {:ok, %{rows: [[^goal_id]]}} =
+             repo.query("SELECT id FROM goals WHERE id = ?", [goal_id])
+
     # Clean up the event to allow clean rollback
     assert {:ok, _} = repo.query("DELETE FROM trajectory_events WHERE id = ?", [event_id])
 

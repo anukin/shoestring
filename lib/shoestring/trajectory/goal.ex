@@ -96,7 +96,7 @@ defmodule Shoestring.Trajectory.Goal do
     end
   end
 
-  @doc "Scope for normal user goals that excludes the singleton observatory goal."
+  @doc "Scope for normal user goals that excludes only the genuine protected observatory singleton (matching id, owner, and status), so a pre-existing victim user row at the reserved id stays visible."
   @spec user_goals(Ecto.Queryable.t()) :: Ecto.Query.t()
   def user_goals(query \\ __MODULE__) do
     observatory_id = Shoestring.Harness.Observatory.observatory_goal_id()
@@ -109,7 +109,7 @@ defmodule Shoestring.Trajectory.Goal do
                g.status == ^observatory_status)
   end
 
-  @doc "Returns true if the goal is the protected observatory singleton."
+  @doc "Returns true for the protected observatory singleton: structs match on the reserved id with protected status and observatory (or unset) owner, while bare ids match on the reserved id alone."
   @spec observatory?(t() | Ecto.UUID.t() | nil) :: boolean()
   def observatory?(%__MODULE__{id: id, status: "protected"} = goal) do
     id == Shoestring.Harness.Observatory.observatory_goal_id() and

@@ -12,17 +12,24 @@ defmodule Shoestring.Harness.Observatory do
      (`@observatory_goal_id`) serves as the durable event stream for all
      provider capacity observations.
   2. **Bounded Deduplication**: High-frequency equivalent readings do not grow
-     the ledger. If usage, window reset, reason, provenance, support tier,
-     compatibility, refusal, or freshness state changes, the reading is persisted.
+     the ledger. A reading is persisted only when `equivalent?/3` reports a
+     difference: capacity state, confidence, support tier, compatibility state,
+     reason, provenance (adapter, provider, invocation mode, source event),
+     freshness policy (`max_age_seconds`), extensions, window `used_percent`
+     beyond a `0.0001` epsilon, window `reset_at`, unknown-window reason, or a
+     fresh/stale freshness-state transition at ingestion time.
   3. **Projection**: Ingested events are immediately projected into
      `harness_capacity_snapshots` and `harness_capacity_windows` under the
      observatory goal.
   4. **Query Surface**: Neutral queries expose latest observations per scope,
      freshness, age, diagnostic reasons, and fail-closed automation eligibility
      via `CapacitySnapshot.eligible?/2`.
-  5. **Cross-Goal Lease Reference**: User execution leases may safely reference
-     admitted capacity snapshots owned by this observatory stream, while strict
-     goal ownership is preserved for all other entities.
+  5. **Strict Same-Goal Lease Ownership**: User execution leases cannot reference
+     admitted capacity snapshots owned by this observatory stream (or any other
+     goal). The projector enforces `snapshot.goal_id == event.goal_id` and fails
+     cross-goal proposals with `{:lease_dependency_not_found, grant_id}`, keeping
+     observatory rebuilds independent of user-goal projection order. A decoupled
+     admission-snapshot reference is deferred to a later iteration.
   """
 
   import Ecto.Query
@@ -273,6 +280,11 @@ defmodule Shoestring.Harness.Observatory do
   @doc """
   Computes a stable event idempotency key for an observation.
   Ensures concurrent equivalent ingestion requests share the same atomic idempotency key.
+
+  The key hashes a semantic fingerprint quantized onto the same `0.0001` grid
+  `equivalent?/3` uses for `used_percent`, with wall-clock `observed_at`
+  bucketed into freshness windows instead of hashed at full precision, so any
+  two snapshots `equivalent?/3` calls equal share one key.
   """
   @spec event_idempotency_key(CapacitySnapshot.t(), keyword()) :: String.t()
   def event_idempotency_key(%CapacitySnapshot{} = snapshot, opts \\ []) do
@@ -298,8 +310,8 @@ defmodule Shoestring.Harness.Observatory do
         reset_at_str =
           if is_struct(reset_at, DateTime), do: DateTime.to_iso8601(reset_at), else: reset_at
 
-        {Map.get(w, :kind), Map.get(w, :state), Map.get(w, :used_percent), reset_at_str,
-         Map.get(w, :reason)}
+        {Map.get(w, :kind), Map.get(w, :state), quantize_percent(Map.get(w, :used_percent)),
+         reset_at_str, Map.get(w, :reason)}
       end)
 
     {
@@ -308,7 +320,7 @@ defmodule Shoestring.Harness.Observatory do
       snapshot.source.adapter_id,
       snapshot.source.event,
       snapshot.scope,
-      snapshot.observed_at && DateTime.to_iso8601(snapshot.observed_at),
+      observed_at_bucket(snapshot),
       snapshot.capacity_state,
       snapshot.confidence,
       snapshot.support_tier,
@@ -320,6 +332,25 @@ defmodule Shoestring.Harness.Observatory do
     }
     |> :erlang.term_to_binary()
   end
+
+  # Quantizes onto the same 0.0001 grid `equivalent?/3` compares `used_percent`
+  # with, so snapshots it calls equal hash identically.
+  defp quantize_percent(nil), do: nil
+  defp quantize_percent(value) when is_number(value), do: Float.round(value * 1.0, 4)
+
+  # Buckets wall-clock observation time into freshness windows instead of hashing
+  # full precision. Concurrent equivalent polls land in one bucket and share an
+  # idempotency key, while a freshness-policy rotation (observed_at displaced by
+  # more than max_age_seconds) lands in a new bucket and persists.
+  defp observed_at_bucket(%CapacitySnapshot{
+         observed_at: %DateTime{} = observed_at,
+         freshness: %{max_age_seconds: max_age}
+       })
+       when is_integer(max_age) and max_age > 0 do
+    div(DateTime.to_unix(observed_at), max_age)
+  end
+
+  defp observed_at_bucket(_snapshot), do: nil
 
   @doc """
   Deterministically rebuilds the observatory projection from historical trajectory events.
@@ -353,7 +384,9 @@ defmodule Shoestring.Harness.Observatory do
   - Capacity state, confidence, support tier, compatibility state, and reason match
   - Provenance (adapter_id, provider_id, invocation_mode, source event) matches
   - Freshness max_age_seconds matches
-  - Windows are identical (kind, state, used_percent, reset_at, unknown_reason)
+  - Windows match in count, kind, and state; observed windows compare
+    `used_percent` within a `0.0001` epsilon with exact `reset_at`, and unknown
+    windows compare `reason`
   - Freshness state at the evaluated time (`now`) has not transitioned (e.g. fresh -> stale)
   - Extensions match
   """

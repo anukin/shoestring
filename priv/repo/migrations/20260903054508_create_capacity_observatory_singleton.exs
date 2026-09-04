@@ -41,6 +41,22 @@ defmodule Shoestring.Repo.Migrations.CreateCapacityObservatorySingleton do
   end
 
   def down do
+    execute(fn ->
+      %{rows: [[event_count]]} =
+        repo().query!("SELECT COUNT(*) FROM trajectory_events WHERE goal_id = ?", [
+          @observatory_goal_id
+        ])
+
+      %{rows: [[snapshot_count]]} =
+        repo().query!("SELECT COUNT(*) FROM harness_capacity_snapshots WHERE goal_id = ?", [
+          @observatory_goal_id
+        ])
+
+      if event_count > 0 or snapshot_count > 0 do
+        raise "Cannot roll back capacity observatory singleton: ledger data exists (#{event_count} events, #{snapshot_count} snapshots) for observatory goal #{@observatory_goal_id}; refusing rollback to prevent data destruction"
+      end
+    end)
+
     execute "DROP TRIGGER IF EXISTS protect_observatory_goal_delete"
     execute "DROP TRIGGER IF EXISTS protect_observatory_goal_update"
     execute "DELETE FROM goals WHERE id = '#{@observatory_goal_id}'"
