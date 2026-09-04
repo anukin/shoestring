@@ -5,6 +5,7 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
   alias Shoestring.Harness.Observatory
   alias Shoestring.Harness.CapacitySnapshot
   alias Shoestring.Repo
+  alias ShoestringWeb.CapacityObservatoryLive
 
   setup do
     # Clear the capacity observer repo
@@ -54,10 +55,20 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
     snapshot
   end
 
+  test "empty: zero observations render an explicit empty state, not a blank grid", %{
+    conn: conn
+  } do
+    {:ok, view, html} = live(conn, "/observatory")
+
+    assert html =~ "No observations yet"
+    assert has_element?(view, "#observations-empty")
+    refute has_element?(view, "#observations-list > div")
+  end
+
   test "normal: both windows present, correct values + reset + provenance", %{conn: conn} do
     ingest_fixture(%{})
 
-    {:ok, _view, html} = live(conn, "/observatory")
+    {:ok, view, html} = live(conn, "/observatory")
 
     assert html =~ "Capacity Observatory"
     assert html =~ "fake_provider"
@@ -70,6 +81,17 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
     assert html =~ "proactive"
     assert html =~ "compatible"
     assert html =~ "Eligible for automatic admission"
+    assert has_element?(view, "[data-status=\"healthy\"]")
+    # No version reported by default
+    assert html =~ "CLI version: not reported"
+  end
+
+  test "cli version: discovered adapter version from extensions is rendered", %{conn: conn} do
+    ingest_fixture(%{extensions: %{"capacity:cli_version" => "2.1.7"}})
+
+    {:ok, _view, html} = live(conn, "/observatory")
+
+    assert html =~ "CLI version: 2.1.7"
   end
 
   test "partial: ONE window absent must render as partial/absent, and must NOT contain 0% for the missing window",
@@ -85,7 +107,7 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
       support_tier: :conservative_partial
     )
 
-    {:ok, _view, html} = live(conn, "/observatory")
+    {:ok, view, html} = live(conn, "/observatory")
 
     assert html =~ "Capacity Observatory"
     assert html =~ "Unknown / Absent"
@@ -93,28 +115,31 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
     refute html =~ ">0%<"
     refute html =~ ">0.0%<"
     assert html =~ "45.5%"
-    assert html =~ "Ineligible for automatic admission"
+    assert has_element?(view, "[data-status=\"partial\"]")
+    assert html =~ "Partial observation"
   end
 
-  test "stale: past the configured staleness boundary -> ineligible, and not presented as usable capacity",
+  test "stale: degraded past the configured staleness boundary renders the stale state",
        %{conn: conn} do
     past = DateTime.add(DateTime.utc_now(), -600, :second)
 
     ingest_fixture(
-      windows: [],
       observed_at: past,
-      capacity_state: :unknown,
-      confidence: :none,
-      reason: "stale"
+      capacity_state: :degraded,
+      confidence: :medium,
+      reason: "stale_observation: capacity probe overdue"
     )
 
-    {:ok, _view, html} = live(conn, "/observatory")
+    {:ok, view, html} = live(conn, "/observatory")
 
-    assert html =~ "stale"
-    assert html =~ "Ineligible for automatic admission"
+    assert has_element?(view, "[data-status=\"stale\"]")
+    assert html =~ "Stale observation"
+    assert html =~ "stale_observation"
   end
 
-  test "version drift / incompatible -> degraded WITH a human-readable reason", %{conn: conn} do
+  test "version drift / incompatible -> degraded badge WITH a human-readable reason", %{
+    conn: conn
+  } do
     ingest_fixture(
       compatibility_state: :degraded,
       support_tier: :reactive_only,
@@ -123,26 +148,82 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
       reason: "Version drift detected"
     )
 
-    {:ok, _view, html} = live(conn, "/observatory")
+    {:ok, view, html} = live(conn, "/observatory")
 
     assert html =~ "degraded"
     assert html =~ "Version drift detected"
-    assert html =~ "Ineligible for automatic admission"
+    # Assert on the specific presentational badge, not the raw capacity_state text
+    assert has_element?(view, "[data-status=\"degraded\"]")
+    assert html =~ "Degraded observation"
   end
 
-  test "hard block and authentication-required states", %{conn: conn} do
+  test "hard block: refused with rate-limit reason renders the hard-block state", %{conn: conn} do
     ingest_fixture(
       windows: [],
       capacity_state: :refused,
       confidence: :none,
-      reason: "authentication required"
+      reason: "rate limit reached: quota exhausted"
     )
 
-    {:ok, _view, html} = live(conn, "/observatory")
+    {:ok, view, html} = live(conn, "/observatory")
+
+    assert html =~ "refused"
+    assert html =~ "rate limit reached"
+    assert has_element?(view, "[data-status=\"hard-block\"]")
+    assert html =~ "Hard block"
+  end
+
+  test "authentication-required: refused with auth reason renders a distinct state", %{
+    conn: conn
+  } do
+    ingest_fixture(
+      windows: [],
+      capacity_state: :refused,
+      confidence: :none,
+      reason: "authentication required: provider login expired"
+    )
+
+    {:ok, view, html} = live(conn, "/observatory")
 
     assert html =~ "refused"
     assert html =~ "authentication required"
-    assert html =~ "Ineligible for automatic admission"
+    assert has_element?(view, "[data-status=\"auth-required\"]")
+    assert html =~ "Authentication required"
+    refute has_element?(view, "[data-status=\"hard-block\"]")
+  end
+
+  test "hard block, auth-required, and disconnected render as distinguishable states", %{
+    conn: conn
+  } do
+    ingest_fixture(
+      scope: "scope-block",
+      windows: [],
+      capacity_state: :refused,
+      confidence: :none,
+      reason: "rate limit reached: quota exhausted"
+    )
+
+    ingest_fixture(
+      scope: "scope-auth",
+      windows: [],
+      capacity_state: :refused,
+      confidence: :none,
+      reason: "authentication required: provider login expired"
+    )
+
+    ingest_fixture(
+      scope: "scope-disc",
+      capacity_state: :unknown,
+      confidence: :none,
+      windows: [],
+      reason: "disconnected: provider unreachable"
+    )
+
+    {:ok, view, _html} = live(conn, "/observatory")
+
+    assert has_element?(view, "[data-status=\"hard-block\"]")
+    assert has_element?(view, "[data-status=\"auth-required\"]")
+    assert has_element?(view, "[data-status=\"disconnected\"]")
   end
 
   test "unknown / disconnected -> honest unknown, never 0% and never available", %{conn: conn} do
@@ -150,30 +231,134 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
       capacity_state: :unknown,
       confidence: :none,
       windows: [],
-      reason: "disconnected"
+      reason: "disconnected: provider unreachable"
     )
 
-    {:ok, _view, html} = live(conn, "/observatory")
+    {:ok, view, html} = live(conn, "/observatory")
 
     assert html =~ "disconnected"
     assert html =~ "No windows recorded."
     refute html =~ ">0%<"
-    assert html =~ "Ineligible for automatic admission"
+    assert has_element?(view, "[data-status=\"disconnected\"]")
+    assert html =~ "Disconnected"
   end
 
-  test "a secret-bearing fixture -> auth/path fields never appear in the rendered HTML", %{
+  test "a secret-bearing reason is redacted at the UI boundary before rendering", %{
     conn: conn
   } do
     ingest_fixture(
-      windows: [],
+      windows: [
+        %{kind: "five_hour", state: :unknown, reason: "missing output at /Users/eve/.cache/dump"}
+      ],
       capacity_state: :refused,
       confidence: :none,
-      reason: "Failed due to auth: <secret>MY_SUPER_SECRET</secret>",
-      extensions: %{"claude:path" => "/secret/path"}
+      reason: "probe failed reading /Users/eve/.config/provider-cache"
     )
 
     {:ok, _view, html} = live(conn, "/observatory")
 
-    refute html =~ "/secret/path"
+    # The real rendered reason text must not leak the raw path ...
+    refute html =~ "/Users/eve"
+    refute html =~ "/Users/eve/.config/provider-cache"
+    refute html =~ "/Users/eve/.cache/dump"
+    # ... and the redaction marker is shown instead.
+    assert html =~ "[REDACTED]"
+  end
+
+  describe "presentational_state/1" do
+    defp summary(overrides) do
+      Map.merge(
+        %{
+          eligible?: false,
+          capacity_state: :degraded,
+          freshness_state: :fresh,
+          compatibility_state: :compatible,
+          reason: "Version drift detected",
+          windows: [%{kind: "five_hour", state: :observed}]
+        },
+        Map.new(overrides)
+      )
+    end
+
+    test "eligible summaries are healthy" do
+      assert CapacityObservatoryLive.presentational_state(summary(eligible?: true)) == :healthy
+    end
+
+    test "refused splits into auth-required, hard-block, and generic refused" do
+      base = %{capacity_state: :refused, freshness_state: :unknown, windows: []}
+
+      assert CapacityObservatoryLive.presentational_state(
+               summary(Map.put(base, :reason, "authentication required"))
+             ) == :auth_required
+
+      assert CapacityObservatoryLive.presentational_state(
+               summary(Map.put(base, :reason, "rate limit reached: quota exhausted"))
+             ) == :hard_block
+
+      assert CapacityObservatoryLive.presentational_state(
+               summary(Map.put(base, :reason, "provider said no"))
+             ) == :refused
+    end
+
+    test "unknown splits into disconnected and generic unknown" do
+      base = %{capacity_state: :unknown, freshness_state: :unknown, windows: []}
+
+      assert CapacityObservatoryLive.presentational_state(
+               summary(Map.put(base, :reason, "disconnected: unreachable"))
+             ) == :disconnected
+
+      assert CapacityObservatoryLive.presentational_state(
+               summary(Map.put(base, :reason, "no data yet"))
+             ) == :unknown
+    end
+
+    test "stale outranks degraded detail" do
+      assert CapacityObservatoryLive.presentational_state(
+               summary(%{
+                 capacity_state: :degraded,
+                 freshness_state: :stale,
+                 reason: "stale_observation",
+                 windows: [
+                   %{kind: "five_hour", state: :observed},
+                   %{kind: "seven_day", state: :unknown}
+                 ]
+               })
+             ) == :stale
+    end
+
+    test "degraded splits into partial and generic degraded" do
+      assert CapacityObservatoryLive.presentational_state(
+               summary(%{
+                 capacity_state: :degraded,
+                 reason: "missing_window: secondary",
+                 windows: [
+                   %{kind: "five_hour", state: :observed},
+                   %{kind: "seven_day", state: :unknown}
+                 ]
+               })
+             ) == :partial
+
+      assert CapacityObservatoryLive.presentational_state(
+               summary(%{capacity_state: :degraded, reason: "Version drift detected"})
+             ) == :degraded
+    end
+
+    test "every state maps to a distinct status tag" do
+      statuses =
+        [
+          :healthy,
+          :hard_block,
+          :auth_required,
+          :disconnected,
+          :partial,
+          :stale,
+          :degraded,
+          :refused,
+          :unknown
+        ]
+        |> Enum.map(&CapacityObservatoryLive.status_presentation(&1).status)
+
+      assert length(Enum.uniq(statuses)) == length(statuses)
+    end
   end
 end

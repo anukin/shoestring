@@ -7,11 +7,24 @@
       </div>
       <button
         phx-click="refresh"
+        id="observations-refresh"
         class="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700"
       >
         Refresh
       </button>
     </div>
+
+    <%= if @observations_empty? do %>
+      <div
+        id="observations-empty"
+        class="border border-dashed border-zinc-300 rounded-lg p-8 text-center bg-white"
+      >
+        <p class="text-lg font-medium text-zinc-900">No observations yet</p>
+        <p class="mt-1 text-sm text-zinc-500">
+          No provider capacity has been observed. Ingest a snapshot to populate this view.
+        </p>
+      </div>
+    <% end %>
 
     <div id="observations-list" phx-update="stream" class="grid gap-6 md:grid-cols-2">
       <div
@@ -34,6 +47,9 @@
               {obs.compatibility_state} / {obs.support_tier}
             </span>
             <p class="mt-1 text-zinc-500">Adapter: {obs.adapter_id}</p>
+            <p class="mt-1 text-zinc-500">
+              CLI version: {obs.cli_version || "not reported"}
+            </p>
           </div>
         </div>
 
@@ -73,7 +89,7 @@
                           Unknown / Absent
                         </span>
                         <span class="text-xs text-zinc-500 block mt-1">
-                          Reason: {window.reason || "Not reported"}
+                          Reason: {window.display_reason || "Not reported"}
                         </span>
                       <% end %>
                     </dd>
@@ -120,21 +136,36 @@
 
           <div class="border-t pt-4 bg-zinc-50 p-4 rounded mt-4">
             <h3 class="text-sm font-medium text-zinc-900 mb-2">Automation Eligibility</h3>
-            <div class="flex items-start space-x-3">
-              <%= if obs.eligible? do %>
-                <span class="mt-0.5 w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0"></span>
-                <p class="text-sm text-zinc-700">
-                  <strong>Eligible for automatic admission.</strong>
-                  The source is fresh, confident, and reports sufficient capacity without hard blocks or authentication requirements.
+            <div
+              class="flex items-start space-x-3"
+              data-status={obs.presentation.status}
+              id={"status-#{obs.provider_id}-#{obs.invocation_mode}-#{obs.scope}"}
+            >
+              <span class={[
+                "mt-0.5 w-2 h-2 rounded-full flex-shrink-0",
+                obs.presentation.dot_class
+              ]}>
+              </span>
+              <div class="text-sm">
+                <p>
+                  <span class={[
+                    "inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium",
+                    obs.presentation.badge_class
+                  ]}>
+                    <.icon name={obs.presentation.icon} class="w-3.5 h-3.5" />
+                    {obs.presentation.label}
+                  </span>
                 </p>
-              <% else %>
-                <span class="mt-0.5 w-2 h-2 rounded-full bg-red-500 flex-shrink-0"></span>
-                <p class="text-sm text-zinc-700">
-                  <strong>Ineligible for automatic admission.</strong>
-                  Reason: {obs.reason ||
-                    "Unknown state, missing windows, stale observation, incompatible tier, or explicit refusal."}
+                <p class="mt-2 text-zinc-700">
+                  {obs.presentation.detail}
+                  <%= if obs.presentational_state != :healthy do %>
+                    <span class="block mt-1">
+                      Reason: {obs.display_reason ||
+                        "Unknown state, missing windows, stale observation, incompatible tier, or explicit refusal."}
+                    </span>
+                  <% end %>
                 </p>
-              <% end %>
+              </div>
             </div>
           </div>
         </div>
