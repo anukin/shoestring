@@ -472,14 +472,15 @@ defmodule Shoestring.Harness.Capacity.DemoTest do
     assert CapacitySnapshot.freshness(wall_stale, DateTime.utc_now()) == :stale
     assert {:ok, :persisted, _} = Observatory.ingest(wall_stale)
 
-    # The UI shows the staleness distinctly after a refresh.
+    # Refresh so the newly persisted stale probe is rendered. The previous
+    # unscoped global staleness assertions lived here and were removed: they
+    # could not fail, because fixture-epoch rows are already stale by wall
+    # clock before step 4 begins. The scoped pair below is the discriminating
+    # UI coverage for this step.
     {:ok, stale_view, _} = live(conn, "/observatory")
 
-    stale_html =
+    _ =
       stale_view |> element("#observations-refresh") |> render_click()
-
-    assert stale_html =~ "Stale observation"
-    assert stale_view |> element("[data-stale-badge]") |> has_element?()
 
     # Discriminating scoped pair: the fresh probe card still has NO stale
     # marker while the stale probe card DOES. Neutralising the stale-probe
@@ -592,6 +593,9 @@ defmodule Shoestring.Harness.Capacity.DemoTest do
     refute has_element?(final_view, "#observations-empty")
     assert final_html =~ DateTime.to_iso8601(codex_observed_at)
     assert final_html =~ DateTime.to_iso8601(claude_observed_at)
+    # Corroborating, not discriminating: the badge rendering is covered by
+    # step 4's scoped pair. The restart preservation itself is pinned by the
+    # snapshot_id / observed_at assertions above plus the ISO timestamps here.
     assert final_html =~ "Stale observation"
   end
 end
