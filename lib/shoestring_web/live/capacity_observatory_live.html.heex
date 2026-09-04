@@ -1,0 +1,188 @@
+<Layouts.app flash={@flash}>
+  <div class="max-w-7xl mx-auto space-y-8 p-6">
+    <div class="flex justify-between items-center">
+      <div>
+        <h1 class="text-3xl font-bold text-zinc-900">Capacity Observatory</h1>
+        <p class="mt-2 text-zinc-600">Provider capacity tracking and admission eligibility.</p>
+      </div>
+      <button
+        phx-click="refresh"
+        id="observations-refresh"
+        class="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700"
+      >
+        Refresh
+      </button>
+    </div>
+
+    <%= if @observations_empty? do %>
+      <div
+        id="observations-empty"
+        class="border border-dashed border-zinc-300 rounded-lg p-8 text-center bg-white"
+      >
+        <p class="text-lg font-medium text-zinc-900">No observations yet</p>
+        <p class="mt-1 text-sm text-zinc-500">
+          No provider capacity has been observed. Ingest a snapshot to populate this view.
+        </p>
+      </div>
+    <% end %>
+
+    <div id="observations-list" phx-update="stream" class="grid gap-6 md:grid-cols-2">
+      <div
+        :for={{dom_id, obs} <- @streams.observations}
+        id={dom_id}
+        class="border border-zinc-200 rounded-lg p-6 space-y-4 bg-white shadow-sm"
+      >
+        <div class="flex justify-between items-start border-b pb-4">
+          <div>
+            <h2 class="text-xl font-bold capitalize text-zinc-900">
+              {obs.provider_id}
+              <span class="text-zinc-500 text-sm font-normal">({obs.invocation_mode})</span>
+            </h2>
+            <%= if obs.scope && obs.scope != "" do %>
+              <p class="text-sm text-zinc-600 mt-1">Scope: {obs.scope}</p>
+            <% end %>
+          </div>
+          <div class="text-right text-sm">
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-zinc-100 text-zinc-800">
+              {obs.compatibility_state} / {obs.support_tier}
+            </span>
+            <p class="mt-1 text-zinc-500">Adapter: {obs.adapter_id}</p>
+            <p class="mt-1 text-zinc-500">
+              CLI version: {obs.cli_version || "not reported"}
+            </p>
+          </div>
+        </div>
+
+        <div class="space-y-4">
+          <div>
+            <h3 class="text-sm font-medium text-zinc-900 uppercase tracking-wider">Windows</h3>
+            <%= if Enum.empty?(obs.windows) do %>
+              <p class="text-sm text-zinc-500 mt-2 italic">No windows recorded.</p>
+            <% else %>
+              <dl class="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <%= for window <- obs.windows do %>
+                  <div class="border border-zinc-100 rounded bg-zinc-50 p-3">
+                    <dt class="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+                      {window.kind}
+                    </dt>
+                    <dd class="mt-1">
+                      <%= if window.state == :observed do %>
+                        <span class="block text-lg font-semibold text-zinc-900">
+                          {if window.used_percent,
+                            do: "#{Float.round(window.used_percent, 2)}%",
+                            else: "Unknown %"}
+                        </span>
+                        <%= if window.reset_at do %>
+                          <span class="text-xs text-zinc-500 block mt-1">
+                            Resets at:
+                            <time datetime={DateTime.to_iso8601(window.reset_at)}>
+                              {DateTime.to_iso8601(window.reset_at)}
+                            </time>
+                          </span>
+                        <% else %>
+                          <span class="text-xs text-zinc-500 block mt-1 italic">
+                            No reset known
+                          </span>
+                        <% end %>
+                      <% else %>
+                        <span class="block text-lg font-semibold text-zinc-500 italic">
+                          Unknown / Absent
+                        </span>
+                        <span class="text-xs text-zinc-500 block mt-1">
+                          Reason: {window.display_reason || "Not reported"}
+                        </span>
+                      <% end %>
+                    </dd>
+                  </div>
+                <% end %>
+              </dl>
+            <% end %>
+          </div>
+
+          <div class="border-t pt-4">
+            <h3 class="text-sm font-medium text-zinc-900 uppercase tracking-wider mb-2">
+              Observation State
+            </h3>
+            <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+              <dt class="text-zinc-500">State</dt>
+              <dd class="font-medium capitalize text-zinc-900">{obs.capacity_state}</dd>
+
+              <dt class="text-zinc-500">Source</dt>
+              <dd class="text-zinc-900">{obs.event}</dd>
+
+              <dt class="text-zinc-500">Confidence</dt>
+              <dd class="text-zinc-900 capitalize">{obs.confidence}</dd>
+
+              <dt class="text-zinc-500">Freshness</dt>
+              <dd class="text-zinc-900">
+                <span class="capitalize">{obs.freshness_state}</span>
+                <%= if obs.age_seconds do %>
+                  <span class="text-zinc-500">({obs.age_seconds}s old)</span>
+                <% end %>
+              </dd>
+
+              <dt class="text-zinc-500">Observed At</dt>
+              <dd class="text-zinc-900">
+                <%= if obs.observed_at do %>
+                  <time datetime={DateTime.to_iso8601(obs.observed_at)}>
+                    {DateTime.to_iso8601(obs.observed_at)}
+                  </time>
+                <% else %>
+                  <span class="italic text-zinc-500">Unknown</span>
+                <% end %>
+              </dd>
+            </dl>
+          </div>
+
+          <div class="border-t pt-4 bg-zinc-50 p-4 rounded mt-4">
+            <h3 class="text-sm font-medium text-zinc-900 mb-2">Automation Eligibility</h3>
+            <div
+              class="flex items-start space-x-3"
+              data-status={obs.presentation.status}
+              data-stale={to_string(obs.stale?)}
+              id={"status-#{obs.provider_id}-#{obs.invocation_mode}-#{obs.scope}"}
+            >
+              <span class={[
+                "mt-0.5 w-2 h-2 rounded-full flex-shrink-0",
+                obs.presentation.dot_class
+              ]}>
+              </span>
+              <div class="text-sm">
+                <p>
+                  <span class={[
+                    "inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium",
+                    obs.presentation.badge_class
+                  ]}>
+                    <.icon name={obs.presentation.icon} class="w-3.5 h-3.5" />
+                    {obs.presentation.label}
+                  </span>
+                  <%= if obs.stale? do %>
+                    <span
+                      data-stale-badge="true"
+                      class={[
+                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium ml-1",
+                        obs.stale_presentation.badge_class
+                      ]}
+                    >
+                      <.icon name={obs.stale_presentation.icon} class="w-3.5 h-3.5" />
+                      {obs.stale_presentation.label}
+                    </span>
+                  <% end %>
+                </p>
+                <p class="mt-2 text-zinc-700">
+                  {obs.presentation.detail}
+                  <%= if obs.presentational_state != :healthy do %>
+                    <span class="block mt-1">
+                      Reason: {obs.display_reason ||
+                        "Unknown state, missing windows, stale observation, incompatible tier, or explicit refusal."}
+                    </span>
+                  <% end %>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</Layouts.app>

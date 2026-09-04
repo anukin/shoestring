@@ -26,6 +26,15 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   @maximum_freshness_seconds 86_400
 
+  # Canonical extensions key carrying the discovered CLI/adapter version.
+  #
+  # The version travels in `extensions` (rather than `source`, which carries
+  # only a static `adapter_id`) because `extensions` round-trips through the
+  # observatory ledger verbatim, while `source` is projected into fixed
+  # columns. Producers that discover a version (e.g. via CLI `--version`
+  # probes) should store it under this key so the observatory UI can render it.
+  @cli_version_extension_key "capacity:cli_version"
+
   @snapshot_keys [
     :version,
     :snapshot_id,
@@ -127,6 +136,29 @@ defmodule Shoestring.Harness.CapacitySnapshot do
 
   @spec maximum_freshness_seconds() :: pos_integer()
   def maximum_freshness_seconds, do: @maximum_freshness_seconds
+
+  @doc "The canonical extensions key carrying the discovered CLI/adapter version."
+  @spec cli_version_extension_key() :: String.t()
+  def cli_version_extension_key, do: @cli_version_extension_key
+
+  @doc """
+  Reads the discovered CLI/adapter version from the snapshot extensions.
+
+  Returns the version string stored under `"capacity:cli_version"`, or `nil`
+  when the producer did not report one. Never raises on malformed extensions.
+  """
+  @spec cli_version(t()) :: String.t() | nil
+  def cli_version(%__MODULE__{extensions: extensions}) when is_map(extensions) do
+    case Map.get(extensions, @cli_version_extension_key) do
+      version when is_binary(version) ->
+        if String.trim(version) == "", do: nil, else: version
+
+      _other ->
+        nil
+    end
+  end
+
+  def cli_version(%__MODULE__{}), do: nil
 
   @doc "Builds a snapshot, evaluating freshness against the injected clock."
   @spec new(map(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}

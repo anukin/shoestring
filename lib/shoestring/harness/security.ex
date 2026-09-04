@@ -22,13 +22,35 @@ defmodule Shoestring.Harness.Security do
     {:token_assignment, ~r/\btoken\s*[:=]/i}
   ]
 
+  # Additional secret shapes forbidden in capacity observations and redacted
+  # from diagnostics. Deliberately NOT part of @generic_secret_patterns (which
+  # also gates Contract.text, snapshot/window reasons, and stored-snapshot
+  # decoding): reasons carrying these shapes must still ingest and decode so
+  # the UI redaction boundary is what keeps them out of rendered HTML, and so
+  # legacy rows render redacted instead of failing to load.
+  @observation_secret_patterns [
+    {:aws_access_key_id, ~r/\b(?:AKIA|ASIA|AKIB)[0-9A-Z]{16}\b/},
+    {:github_token, ~r/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{8,}\b/},
+    {:github_pat_token, ~r/\bgithub_pat_[A-Za-z0-9_]{8,}\b/},
+    {:xml_wrapped_secret, ~r/<secret\b[^>]*>.*?<\s*\/\s*secret\s*>/is},
+    # Compound identifiers containing "secret" (e.g. "aws_secret_access_key=").
+    # The \b-anchored credential_marker above misses these because "_" is a
+    # word character, so there is no word boundary before "secret".
+    {:compound_secret_assignment, ~r/[A-Za-z0-9_.-]*secret[A-Za-z0-9_.-]*\s*[:=]/i},
+    # Compound "*-key" identifiers (e.g. "custom_key=", "deploy-key:").
+    # Requires a "_" or "-" separator before "key" so plain words ending in
+    # "key" (e.g. "monkey", "turkey") do not match.
+    {:compound_key_assignment, ~r/[A-Za-z0-9_.-]*[_-]key\s*[:=]/i}
+  ]
+
   # Filesystem path patterns specifically forbidden in capacity observations and test fixtures.
   @path_patterns [
     {:user_filesystem_path, ~r/\/Users\/[A-Za-z0-9_.-]+/},
     {:home_filesystem_path, ~r/\/home\/[A-Za-z0-9_.-]+/}
   ]
 
-  @capacity_observation_patterns @generic_secret_patterns ++ @path_patterns
+  @capacity_observation_patterns @generic_secret_patterns ++
+                                   @observation_secret_patterns ++ @path_patterns
 
   @json_key_regex ~r/"([A-Za-z0-9_.-]+)"\s*:/
 
@@ -336,8 +358,12 @@ defmodule Shoestring.Harness.Security do
   - Authorization Bearer tokens
   - Standalone Basic and Bearer tokens
   - sk-* tokens
+  - AWS access key IDs (AKIA/ASIA/AKIB + 16 uppercase alphanumerics)
+  - GitHub tokens (ghp_/gho_/ghu_/ghs_/ghr_/github_pat_ prefixes)
+  - XML/tag-wrapped secrets (`<secret>...</secret>` contents)
   - Bare token=... assignments
   - Credential assignments (api_key=, password=, secret=, etc.)
+  - Compound secret/key assignments (aws_secret_access_key=, custom_key:, etc.)
   - User filesystem paths (/Users/..., /home/...)
   """
   @spec redact(String.t()) :: String.t()
@@ -346,6 +372,13 @@ defmodule Shoestring.Harness.Security do
   def redact(text) when is_binary(text) do
     text
     |> String.replace(~r/\bsk-[A-Za-z0-9_-]{12,}/, "[REDACTED_API_KEY]")
+    # Redact AWS access key IDs
+    |> String.replace(~r/\b(?:AKIA|ASIA|AKIB)[0-9A-Z]{16}\b/, "[REDACTED_API_KEY]")
+    # Redact GitHub tokens (fine-grained PAT prefix first; no overlap, order is defensive)
+    |> String.replace(~r/\bgithub_pat_[A-Za-z0-9_]{8,}\b/, "[REDACTED_API_KEY]")
+    |> String.replace(~r/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{8,}\b/, "[REDACTED_API_KEY]")
+    # Redact XML/tag-wrapped secret contents, preserving the tags themselves
+    |> String.replace(~r/(<secret\b[^>]*>).*?(<\s*\/\s*secret\s*>)/is, "\\1[REDACTED]\\2")
     # Redact Authorization Basic header completely, removing base64 token
     |> String.replace(
       ~r/\b(authorization)\s*([:=])\s*Basic(?:\s+[A-Za-z0-9+\/=]+)?/i,
@@ -363,6 +396,18 @@ defmodule Shoestring.Harness.Security do
     # Redact bare token= assignments and other credential key assignments
     |> String.replace(
       ~r/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret|cookie)\s*([:=])[ \t]*(?:["'][^"'\r\n]*["']|[^\s,;]+)?/i,
+      "\\1\\2[REDACTED]"
+    )
+    # Redact compound "*-secret-*" assignments the word-boundary pass misses
+    # (e.g. aws_secret_access_key=...). Idempotent with the pass above.
+    |> String.replace(
+      ~r/([A-Za-z0-9_.-]*secret[A-Za-z0-9_.-]*)\s*([:=])[ \t]*(?:["'][^"'\r\n]*["']|[^\s,;]+)?/i,
+      "\\1\\2[REDACTED]"
+    )
+    # Redact compound "*-key" assignments (e.g. custom_key=..., deploy-key:...).
+    # Idempotent with the pass above.
+    |> String.replace(
+      ~r/([A-Za-z0-9_.-]*[_-]key)\s*([:=])[ \t]*(?:["'][^"'\r\n]*["']|[^\s,;]+)?/i,
       "\\1\\2[REDACTED]"
     )
     # Redact any other authorization assignments (not already Bearer, Basic, or REDACTED)
