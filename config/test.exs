@@ -16,6 +16,14 @@ config :shoestring, Oban,
 
 config :shoestring, dispatch_reconciler: false
 
+# Supervised capacity monitors must NOT auto-start in test and must never
+# shell out to a provider CLI there. Tests start monitors explicitly via
+# start_supervised!/1. The capacity supervisor still boots (empty) so the
+# application tree shape matches production.
+config :shoestring, :capacity_monitors,
+  claude: [enabled: false],
+  codex: [enabled: false]
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :shoestring, ShoestringWeb.Endpoint,

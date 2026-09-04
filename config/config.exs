@@ -26,6 +26,13 @@ config :shoestring,
   dispatch_clock: Shoestring.Harness.SystemClock,
   dispatch_reconciler: true
 
+# Independently supervised Claude and Codex capacity monitors. Each entry
+# supports `enabled:` plus any monitor start_link option passed through to the
+# provider monitor. Disabled (e.g. in test) by setting `enabled: false`.
+config :shoestring, :capacity_monitors,
+  claude: [enabled: true],
+  codex: [enabled: true]
+
 config :shoestring, Oban,
   engine: Oban.Engines.Lite,
   repo: Shoestring.Repo,

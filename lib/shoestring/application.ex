@@ -20,6 +20,7 @@ defmodule Shoestring.Application do
         {Oban, Application.fetch_env!(:shoestring, Oban)}
       ] ++
         dispatch_reconciler_children() ++
+        capacity_supervisor_children() ++
         [
           {DNSCluster, query: Application.get_env(:shoestring, :dns_cluster_query) || :ignore},
           ShoestringWeb.Endpoint
@@ -37,6 +38,14 @@ defmodule Shoestring.Application do
   def config_change(changed, _new, removed) do
     ShoestringWeb.Endpoint.config_change(changed, removed)
     :ok
+  end
+
+  defp capacity_supervisor_children do
+    # The capacity supervisor is always present so monitors stay independently
+    # addressable. In the test environment both providers are disabled via
+    # config, so it boots empty: no monitor auto-starts and no provider CLI
+    # is ever invoked.
+    [Shoestring.Harness.Capacity.Supervisor]
   end
 
   defp dispatch_reconciler_children do
