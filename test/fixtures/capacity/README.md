@@ -1,5 +1,8 @@
 # Tracked Capacity Test Fixtures
 
+> Authoritative lifecycle, regeneration, secret-review, and live-smoke policy:
+> `docs/capacity-fixtures.md`. This README is an inventory supplement.
+
 This directory contains sanitized, redacted provider capacity fixtures ported from
 the authoritative Gate 0A feasibility study (`plans/evidence/00a-capacity-feasibility/fixtures`).
 
@@ -54,9 +57,15 @@ Every committed fixture must adhere to strict redaction constraints:
 
 ## Regeneration and Capture Procedure
 
-When capturing new evidence or updating fixtures:
+When capturing new evidence or updating fixtures, follow
+`docs/capacity-fixtures.md` (regenerate → secret review → sync → scan).
+The short form:
 
-1. Run the safe provider probe tool using allowlist projections:
+1. Optional live pre-check (version only, never touches fixtures):
+   ```bash
+   mix shoestring.capacity.fixtures --live-smoke
+   ```
+2. Run the safe provider probe tool using allowlist projections:
    ```bash
    node tools/gate_0a/provider_probe.js codex
    node tools/gate_0a/provider_probe.js claude
