@@ -381,14 +381,15 @@ defmodule Shoestring.Harness.Capacity.DemoTest do
     codex_boundary = DateTime.add(codex_snap.observed_at, codex_max_age, :second)
     codex_late = DateTime.add(codex_boundary, 1, :second)
 
-    # Exactly at the boundary the Codex observation is still fresh and eligible...
-    Agent.update(codex_clock, fn _ -> codex_boundary end)
+    # Exactly at the boundary the Codex observation is still fresh and eligible.
+    # This is a pure-function boundary check on the step-2 snapshot evaluated
+    # at explicit datetimes: unlike the Claude half below, `CodexMonitor`
+    # exposes no clock-evaluated read (`last_observation/1` returns the stored
+    # snapshot verbatim), so there is no live monitor state advanced here.
     assert CapacitySnapshot.freshness(codex_snap, codex_boundary) == :fresh
     assert CapacitySnapshot.eligible?(codex_snap, codex_boundary)
 
-    # ...one second past it, the SAME struct is stale and ineligible. No sleeps:
-    # only the injected clock moved.
-    Agent.update(codex_clock, fn _ -> codex_late end)
+    # ...one second past it, the SAME struct is stale and ineligible.
     assert CapacitySnapshot.freshness(codex_snap, codex_late) == :stale
     refute CapacitySnapshot.eligible?(codex_snap, codex_late)
 
@@ -593,9 +594,12 @@ defmodule Shoestring.Harness.Capacity.DemoTest do
     refute has_element?(final_view, "#observations-empty")
     assert final_html =~ DateTime.to_iso8601(codex_observed_at)
     assert final_html =~ DateTime.to_iso8601(claude_observed_at)
-    # Corroborating, not discriminating: the badge rendering is covered by
-    # step 4's scoped pair. The restart preservation itself is pinned by the
-    # snapshot_id / observed_at assertions above plus the ISO timestamps here.
-    assert final_html =~ "Stale observation"
+
+    # The restarted Claude card itself carries the stale marker. Scoped to
+    # the card, so the other stale rows in the ledger (subscription-scope
+    # Codex, wall-clock probes) cannot satisfy it.
+    assert final_view
+           |> element("#obs-claude-interactive_status_line-subscription [data-stale-badge]")
+           |> has_element?()
   end
 end
