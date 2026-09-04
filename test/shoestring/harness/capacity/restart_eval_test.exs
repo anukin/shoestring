@@ -6,6 +6,15 @@ defmodule Shoestring.Harness.Capacity.RestartEvalTest do
   observation returns with its REAL age — not a refreshed-at-boot timestamp.
   The age is asserted genuinely old (hours), so any bug that re-stamps
   `observed_at` at boot (fresh age ~0) fails this test.
+
+  Determinism note: the rebooted monitor's pre-observation window is
+  controlled, not raced. The fake transport answers nothing until the test
+  arms its auto-responder, and the responder is synchronously disarmed again
+  (`FakeTransport.set_auto_respond/2` is a `GenServer.call`, so no frame can
+  slip through after it returns) before the rebooted monitor boots. Whatever
+  the rebooted monitor reports is therefore what it booted with — the
+  honest-empty-memory assertion below cannot lose a handshake race because no
+  handshake response can exist yet. No sleeps, no polling.
   """
   use Shoestring.DataCase, async: false
 
@@ -72,10 +81,11 @@ defmodule Shoestring.Harness.Capacity.RestartEvalTest do
     end
 
     {:ok, fake} =
-      start_supervised(
-        {FakeTransport,
-         [owner: self(), emit_connected: false, auto_respond: codex_auto_respond(normal_read)]}
-      )
+      start_supervised({FakeTransport, [owner: self(), emit_connected: false]})
+
+    # Arm the responder BEFORE the first monitor boots, so its handshake is
+    # served deterministically (the call returns only after the fake holds it).
+    :ok = FakeTransport.set_auto_respond(fake, codex_auto_respond(normal_read))
 
     monitor = start_monitor(fake, sink, :codex_restart_before)
     assert_receive {:ledger_ingested, %_{snapshot_id: snapshot_id}}, 5_000
@@ -97,6 +107,12 @@ defmodule Shoestring.Harness.Capacity.RestartEvalTest do
     ref = Process.monitor(monitor)
     Process.exit(monitor, :kill)
     assert_receive {:DOWN, ^ref, :process, ^monitor, :killed}
+
+    # Synchronously disarm the responder before the replacement boots. From
+    # this point no transport frame can reach the rebooted monitor, so its
+    # pre-observation window holds nothing in flight: the empty-memory
+    # assertion below observes boot state, never a race outcome.
+    :ok = FakeTransport.set_auto_respond(fake, nil)
 
     rebooted = start_monitor(fake, sink, :codex_restart_after)
     _ = :sys.get_state(rebooted)
