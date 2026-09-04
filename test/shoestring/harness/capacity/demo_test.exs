@@ -410,6 +410,68 @@ defmodule Shoestring.Harness.Capacity.DemoTest do
     assert CapacitySnapshot.freshness(stale_snap, claude_late) == :stale
     refute CapacitySnapshot.eligible?(stale_snap, claude_late)
 
+    # Wall-clock UI discrimination probe. The LiveView evaluates freshness
+    # against `DateTime.utc_now/0` (see `Observatory.observation_summary/2`
+    # default `now` and `CapacityObservatoryLive.load_observations/1`), not
+    # the injected Agent clocks above, so fixture-epoch rows are already
+    # stale by wall clock before this step begins. To make the UI half of
+    # this step genuinely discriminating, persist two observations from the
+    # SAME tracked fixture under distinct scopes, differing ONLY in
+    # wall-clock age: one genuinely fresh (`observed_at` ~= now), one
+    # genuinely stale (`observed_at` < now - max_age). Scoped selectors below
+    # then prove the UI distinguishes them. Scopes are probe-specific so the
+    # step-5 `subscription`-scope ledger assertions below are untouched.
+    wall_now = DateTime.utc_now()
+    fresh_scope = "wallclock_fresh_probe"
+    stale_scope = "wallclock_stale_probe"
+    probe_fixture = Fixtures.load_fixture!("codex/partial-missing-secondary.json")
+
+    assert {:ok, wall_fresh} =
+             Capacity.normalize(:codex, :app_server_stdio, probe_fixture,
+               version: "0.150.1",
+               now: wall_now,
+               captured_at: wall_now,
+               scope: fresh_scope
+             )
+
+    assert {:ok, :persisted, _} = Observatory.ingest(wall_fresh)
+
+    # Negative half: with only the fresh probe persisted, its card renders
+    # WITHOUT any stale marker.
+    {:ok, fresh_probe_view, _} = live(conn, "/observatory")
+
+    _ =
+      fresh_probe_view
+      |> element("#observations-refresh")
+      |> render_click()
+
+    fresh_card_html =
+      fresh_probe_view
+      |> element("#obs-codex-app_server_stdio-#{fresh_scope}")
+      |> render()
+
+    refute fresh_card_html =~ "Stale observation"
+
+    refute fresh_probe_view
+           |> element("#obs-codex-app_server_stdio-#{fresh_scope} [data-stale-badge]")
+           |> has_element?()
+
+    # Positive half (the transition): persisting the wall-clock-stale probe
+    # flips exactly one new card to stale.
+    stale_captured_at =
+      DateTime.add(wall_now, -(wall_fresh.freshness.max_age_seconds + 60), :second)
+
+    assert {:ok, wall_stale} =
+             Capacity.normalize(:codex, :app_server_stdio, probe_fixture,
+               version: "0.150.1",
+               now: wall_now,
+               captured_at: stale_captured_at,
+               scope: stale_scope
+             )
+
+    assert CapacitySnapshot.freshness(wall_stale, DateTime.utc_now()) == :stale
+    assert {:ok, :persisted, _} = Observatory.ingest(wall_stale)
+
     # The UI shows the staleness distinctly after a refresh.
     {:ok, stale_view, _} = live(conn, "/observatory")
 
@@ -418,6 +480,32 @@ defmodule Shoestring.Harness.Capacity.DemoTest do
 
     assert stale_html =~ "Stale observation"
     assert stale_view |> element("[data-stale-badge]") |> has_element?()
+
+    # Discriminating scoped pair: the fresh probe card still has NO stale
+    # marker while the stale probe card DOES. Neutralising the stale-probe
+    # ingest above makes the positive assertion fail; a UI that always (or
+    # never) renders the badge fails the negative (or positive) half.
+    fresh_card_after =
+      stale_view
+      |> element("#obs-codex-app_server_stdio-#{fresh_scope}")
+      |> render()
+
+    refute fresh_card_after =~ "Stale observation"
+
+    refute stale_view
+           |> element("#obs-codex-app_server_stdio-#{fresh_scope} [data-stale-badge]")
+           |> has_element?()
+
+    stale_card_html =
+      stale_view
+      |> element("#obs-codex-app_server_stdio-#{stale_scope}")
+      |> render()
+
+    assert stale_card_html =~ "Stale observation"
+
+    assert stale_view
+           |> element("#obs-codex-app_server_stdio-#{stale_scope} [data-stale-badge]")
+           |> has_element?()
 
     # -------------------------------------------------------------------------
     # Step 5: restart — persisted values keep their REAL age, not boot timestamps.
