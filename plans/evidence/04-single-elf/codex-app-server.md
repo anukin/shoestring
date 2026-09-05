@@ -187,8 +187,8 @@ rollout files at all. Therefore, `ephemeral: false` is functionally required for
 
 Consequences and operational constraints:
 1. **Rollout file persistence under user Codex state:** Codex writes rollout files
-   (`.json` session transcripts) directly into the user's local Codex state directory
-   (e.g. `~/.codex/sessions` or platform equivalent) on every Elf run.
+   (`.jsonl` session transcripts) directly into the user's local Codex state directory
+   (e.g. `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` or platform equivalent) on every Elf run.
 2. **Prompt credential hygiene requirement:** Task prompts flow verbatim into rollout
    files on disk outside Shoestring's trajectory store and outside `EventNormalizer`'s
    scrubbing. Any credential passed in a task prompt would be redacted from Shoestring's

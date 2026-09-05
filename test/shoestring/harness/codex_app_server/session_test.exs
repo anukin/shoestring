@@ -275,7 +275,6 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       assert {:ok, identity} =
                CodexAppServer.start(req, %{
                  transport: ScriptedTransport,
-                 thread_id: real_thread_id,
                  handshake_timeout_ms: 5_000
                })
 
