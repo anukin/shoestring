@@ -282,6 +282,16 @@ defmodule Shoestring.Trajectory.EventRegistry do
           evidence: :map
         }
       }
+    },
+    "elf.recovery_decided" => %{
+      1 => %{
+        required: [:run_id, :decision_id, :action],
+        optional: [:observation_id, :evidence_refs, :rationale, :outcome],
+        uuid_fields: [:run_id],
+        types: %{
+          evidence_refs: {:array, :string}
+        }
+      }
     }
   }
 
