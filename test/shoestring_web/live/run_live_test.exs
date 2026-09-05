@@ -32,7 +32,16 @@ defmodule ShoestringWeb.RunLiveTest do
         cd: repo_path
       )
 
+    prev_roots = Application.get_env(:shoestring, :manual_run_allowed_repo_roots)
+    Application.put_env(:shoestring, :manual_run_allowed_repo_roots, [tmp_root])
+
     on_exit(fn ->
+      if prev_roots do
+        Application.put_env(:shoestring, :manual_run_allowed_repo_roots, prev_roots)
+      else
+        Application.delete_env(:shoestring, :manual_run_allowed_repo_roots)
+      end
+
       File.rm_rf(tmp_root)
     end)
 
@@ -231,7 +240,7 @@ defmodule ShoestringWeb.RunLiveTest do
       assert ext["shoestring.manual:lease_seconds"] == 300
     end
 
-    test "worktree failure flash redacts home paths and secret tokens (B3)", %{
+    test "repository path outside allowed roots is rejected with clean error (B4)", %{
       conn: conn
     } do
       {:ok, view, _html} = live(conn, ~p"/runs/new")
@@ -241,7 +250,7 @@ defmodule ShoestringWeb.RunLiveTest do
           "repo_path" => "/Users/bob/nonexistent_repo_xyz",
           "base_revision" => "HEAD",
           "provider" => "fake",
-          "prompt" => "B3 flash redaction check",
+          "prompt" => "B4 outside path check",
           "timeout_seconds" => "60",
           "max_events" => "100",
           "lease_seconds" => "30",
@@ -254,19 +263,16 @@ defmodule ShoestringWeb.RunLiveTest do
         |> form("#manual-run-form", submit_payload)
         |> render_submit()
 
-      assert html =~ "Worktree allocation failed"
-      # Scope to the flash group: the form legitimately echoes the user's own
-      # typed path in its input value, but the flashed failure reason must be
-      # redacted.
+      assert html =~ "Repository path is not allowed"
       flash_html = flash_group_html(html)
       refute flash_html =~ "/Users/bob"
-      assert flash_html =~ "/Users/[REDACTED]"
     end
 
-    test "invalid base revision flash redacts secret-shaped token (B3)", %{
-      conn: conn,
-      repo_path: repo_path
-    } do
+    test "invalid base revision flash provides clean error without leaking secret tokens or inspected terms (B3)",
+         %{
+           conn: conn,
+           repo_path: repo_path
+         } do
       {:ok, view, _html} = live(conn, ~p"/runs/new")
 
       secret = "sk-ant-api03-abcdef1234567890abcdef123456"
@@ -276,7 +282,7 @@ defmodule ShoestringWeb.RunLiveTest do
           "repo_path" => repo_path,
           "base_revision" => secret,
           "provider" => "fake",
-          "prompt" => "B3 base revision redaction check",
+          "prompt" => "B3 base revision clean flash check",
           "timeout_seconds" => "60",
           "max_events" => "100",
           "lease_seconds" => "30",
@@ -290,11 +296,12 @@ defmodule ShoestringWeb.RunLiveTest do
         |> render_submit()
 
       assert html =~ "Worktree allocation failed"
-      # Scope to the flash group: the form echoes the typed revision in its
-      # input value, but the flashed failure reason must be redacted.
       flash_html = flash_group_html(html)
+      # B3(a): Clean user message, no raw inspected terms or secret tokens
       refute flash_html =~ secret
-      assert flash_html =~ "[REDACTED_API_KEY]"
+      refute flash_html =~ "{"
+      refute flash_html =~ ":invalid_base_revision"
+      assert flash_html =~ "invalid repository path or base revision"
     end
   end
 
@@ -585,6 +592,102 @@ defmodule ShoestringWeb.RunLiveTest do
 
       # - Terminal outcome preserved
       assert html2 =~ "run.completed"
+    end
+  end
+
+  describe "Regression tests for B1, B2, B4" do
+    test "B1 regression: creating multiple fixture repos does not reap earlier repos", %{
+      conn: conn
+    } do
+      # Set up an existing fixture repo with an older mtime in tmp
+      tmp = System.tmp_dir!()
+      unique = System.unique_integer([:positive])
+      reap_target = Path.join(tmp, "shoestring_fixture_repo_reap_target_#{unique}")
+      File.mkdir_p!(reap_target)
+      File.touch!(reap_target, System.os_time(:second) - 3600)
+
+      filler_dirs =
+        for i <- 1..5 do
+          dir = Path.join(tmp, "shoestring_fixture_repo_filler_#{unique}_#{i}")
+          File.mkdir_p!(dir)
+          File.touch!(dir, System.os_time(:second) - 1800 + i)
+          dir
+        end
+
+      on_exit(fn ->
+        File.rm_rf(reap_target)
+        Enum.each(filler_dirs, &File.rm_rf/1)
+      end)
+
+      {:ok, view, _html} = live(conn, ~p"/runs/new")
+
+      # Trigger fixture repo creation
+      view |> element("#btn-use-fixture") |> render_click()
+
+      # At 2288ca4, maybe_reap_fixture_repos deletes fixture dirs by mtime once >5 exist.
+      # Because reap_target had the oldest mtime, 2288ca4 rm_rf'd it.
+      # With the reaper deleted, reap_target remains intact.
+      assert File.dir?(reap_target)
+    end
+
+    test "B2 regression: handle_info does not crash on trajectory event when run is not found", %{
+      conn: conn
+    } do
+      missing_id = Ecto.UUID.generate()
+      {:ok, view, html} = live(conn, ~p"/runs/#{missing_id}")
+      assert html =~ "Run Not Found"
+
+      event = %Shoestring.Trajectory.TrajectoryEvent{
+        id: Ecto.UUID.generate(),
+        goal_id: Ecto.UUID.generate(),
+        run_id: missing_id,
+        sequence: 1,
+        schema_version: 1,
+        type: "harness.event_recorded",
+        actor: "elf",
+        occurred_at: DateTime.utc_now(),
+        idempotency_key: "evt-b2-test",
+        payload: %{}
+      }
+
+      send(view.pid, {:trajectory_event_committed, event})
+
+      # At 2288ca4, this crashes with KeyError on socket.assigns.goal.id.
+      # With B2 guarded, the LiveView remains alive and renders cleanly.
+      assert render(view) =~ "Run Not Found"
+    end
+
+    test "B4 regression: rejects repository path outside allowed roots", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/runs/new")
+
+      outside_dir =
+        Path.join(System.tmp_dir!(), "outside_repo_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(outside_dir)
+      {_, 0} = System.cmd("git", ["init", "-b", "main"], cd: outside_dir)
+      on_exit(fn -> File.rm_rf(outside_dir) end)
+
+      submit_payload = %{
+        "run" => %{
+          "repo_path" => outside_dir,
+          "base_revision" => "HEAD",
+          "provider" => "fake",
+          "prompt" => "B4 outside repo path check",
+          "timeout_seconds" => "60",
+          "max_events" => "100",
+          "lease_seconds" => "30",
+          "scenario" => "success"
+        }
+      }
+
+      html =
+        view
+        |> form("#manual-run-form", submit_payload)
+        |> render_submit()
+
+      # At 2288ca4, any git repo was accepted and worktree created inside it.
+      # With B4 fixed, outside paths are rejected with a clear error.
+      assert html =~ "Repository path is not allowed"
     end
   end
 

@@ -385,4 +385,59 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     # Bounded pane: raw 80KB+ artifact must not fully render.
     assert byte_size(rendered_html) < byte_size(big_content)
   end
+
+  test "B3 regression: redact_text catches Google API keys, Slack tokens, URL credentials, JWTs, PEMs, and quoted map keys" do
+    # Quoted key maps (previously bypassed because regex only matched unquoted keys without =>)
+    quoted_map = ~s(%{"api_key" => "secret_key_12345", "token" => "secret_token_abc"})
+    redacted_map = RunPresentation.redact_text(quoted_map)
+    refute redacted_map =~ "secret_key_12345"
+    refute redacted_map =~ "secret_token_abc"
+    assert redacted_map =~ "[REDACTED]"
+
+    # Google API key (AIza)
+    google_key = "AIzaSyD-1234567890abcdef1234567890abcde"
+    redacted_google = RunPresentation.redact_text("Key: #{google_key}")
+    refute redacted_google =~ google_key
+    assert redacted_google =~ "[REDACTED_API_KEY]"
+
+    # Slack token (xox[bpar]-)
+    slack_token = "xoxb-123456789012-abcdef123456-secret"
+    redacted_slack = RunPresentation.redact_text("Slack: #{slack_token}")
+    refute redacted_slack =~ slack_token
+    assert redacted_slack =~ "[REDACTED_API_KEY]"
+
+    # URL-embedded git credentials
+    git_url = "https://alice:supersecretpass@github.com/org/repo.git"
+    redacted_git = RunPresentation.redact_text("Clone from #{git_url}")
+    refute redacted_git =~ "supersecretpass"
+    assert redacted_git =~ "https://[REDACTED]@github.com"
+
+    # JWT
+    jwt =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsK88"
+
+    redacted_jwt = RunPresentation.redact_text("Auth: #{jwt}")
+    refute redacted_jwt =~ jwt
+    assert redacted_jwt =~ "[REDACTED_API_KEY]"
+
+    # Google API key with trailing hyphen
+    google_key_hyphen = "AIzaSyD-1234567890abcdef1234567890abcd-"
+    redacted_google_hyphen = RunPresentation.redact_text("Key: #{google_key_hyphen}")
+    refute redacted_google_hyphen =~ google_key_hyphen
+    assert redacted_google_hyphen =~ "[REDACTED_API_KEY]"
+
+    # Quoted map ending without string value preserves closing delimiter
+    map_with_brace = inspect(%{"password" => :supersecret})
+    redacted_brace = RunPresentation.redact_text(map_with_brace)
+    refute redacted_brace =~ "supersecret"
+    assert String.ends_with?(redacted_brace, "}")
+
+    # PEM block
+    pem =
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0Yxyz12345\n-----END RSA PRIVATE KEY-----"
+
+    redacted_pem = RunPresentation.redact_text("Key:\n#{pem}")
+    refute redacted_pem =~ "MIIEowIBAAKCAQEA0Yxyz12345"
+    assert redacted_pem =~ "[REDACTED_PRIVATE_KEY]"
+  end
 end

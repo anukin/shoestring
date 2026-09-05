@@ -20,6 +20,17 @@ defmodule ShoestringWeb.RunPresentation do
     # GitHub tokens
     {~r/\bgithub_pat_[A-Za-z0-9_]{8,}\b/, "[REDACTED_API_KEY]"},
     {~r/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{8,}\b/, "[REDACTED_API_KEY]"},
+    # Google API keys
+    {~r/\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/, "[REDACTED_API_KEY]"},
+    # Slack tokens
+    {~r/\bxox[bpar]-[0-9A-Za-z-]{8,}(?![0-9A-Za-z-])/, "[REDACTED_API_KEY]"},
+    # JWTs
+    {~r/\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_-])/,
+     "[REDACTED_API_KEY]"},
+    # PEM blocks
+    {~r/-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/, "[REDACTED_PRIVATE_KEY]"},
+    # URL-embedded credentials (e.g. https://user:pass@host/ from git stderr)
+    {~r|(https?://)[^/\s:@]+(?::[^/\s@]+)?@|, "\\1[REDACTED]@"},
     # Basic auth
     {~r/\b(authorization)\s*([:=])\s*Basic(?:\s+[A-Za-z0-9+\/=]+)?/i, "\\1: [REDACTED]"},
     {~r/\bBasic\s+[A-Za-z0-9+\/=]{8,}/i, "Basic [REDACTED]"},
@@ -27,14 +38,15 @@ defmodule ShoestringWeb.RunPresentation do
     {~r/\b(authorization)\s*([:=])\s*Bearer(?:\s+[A-Za-z0-9._~+\/-]+=*)?/i,
      "\\1: Bearer [REDACTED]"},
     {~r/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i, "Bearer [REDACTED]"},
-    # Credential assignments
-    {~r/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|cookie)\s*([:=])[ \t]*(?:["'][^"'\r\n]*["']|[^\s,;]+)?/i,
+    # Credential assignments (supports quoted keys and `=>`, as produced by
+    # `inspect/1` on string-keyed maps: `%{"api_key" => "..."}`)
+    {~r/["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret|cookie)["']?\s*(=>|[:=])[ \t]*(?:["'](?:\\.|[^"'\r\n])*["']|[^\s,;\]})]+)?/i,
      "\\1\\2[REDACTED]"},
-    {~r/([A-Za-z0-9_.-]*secret[A-Za-z0-9_.-]*)\s*([:=])[ \t]*(?:["'][^"'\r\n]*["']|[^\s,;]+)?/i,
+    {~r/["']?([A-Za-z0-9_.-]*secret[A-Za-z0-9_.-]*)["']?\s*(=>|[:=])[ \t]*(?:["'](?:\\.|[^"'\r\n])*["']|[^\s,;\]})]+)?/i,
      "\\1\\2[REDACTED]"},
-    {~r/([A-Za-z0-9_.-]*[_-]key)\s*([:=])[ \t]*(?:["'][^"'\r\n]*["']|[^\s,;]+)?/i,
+    {~r/["']?([A-Za-z0-9_.-]*[_-]key)["']?\s*(=>|[:=])[ \t]*(?:["'](?:\\.|[^"'\r\n])*["']|[^\s,;\]})]+)?/i,
      "\\1\\2[REDACTED]"},
-    {~r/\b(authorization)\s*([:=])[ \t]*(?!Bearer\b|Basic\b|\[REDACTED\])(?:["'][^"'\r\n]*["']|[^\s,;]+)/i,
+    {~r/\b["']?(authorization)["']?\s*(=>|[:=])[ \t]*(?!Bearer\b|Basic\b|\[REDACTED\])(?:["'](?:\\.|[^"'\r\n])*["']|[^\s,;\]})]+)/i,
      "\\1: [REDACTED]"},
     # User / home filesystem paths
     {~r/\/Users\/[A-Za-z0-9_.-]+/, "/Users/[REDACTED]"},

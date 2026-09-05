@@ -4,9 +4,9 @@ defmodule ShoestringWeb.RunNewLive do
   alias Shoestring.Elves
   alias Shoestring.Harness.RunRequest
   alias Shoestring.Repo
+  alias Shoestring.State
   alias Shoestring.Trajectory.{Goal, Task}
   alias Shoestring.Worktrees
-  alias ShoestringWeb.RunPresentation
   require Logger
 
   @timeout_min 5
@@ -15,7 +15,6 @@ defmodule ShoestringWeb.RunNewLive do
   @max_events_max 5000
   @lease_min 10
   @lease_max 300
-  @max_fixture_repos 5
 
   @default_params %{
     "repo_path" => "",
@@ -36,7 +35,25 @@ defmodule ShoestringWeb.RunNewLive do
      socket
      |> assign(:page_title, "New Manual Run")
      |> assign(:form, to_form(@default_params, as: :run))
+     |> assign(:allowed_roots, allowed_repo_roots())
      |> assign(:form_errors, %{})}
+  end
+
+  @doc """
+  Repository roots the manual-run form accepts, from the
+  `:manual_run_allowed_repo_roots` config. Defaults to the fixture root
+  and state root under the Shoestring state directory.
+  """
+  @spec allowed_repo_roots() :: [String.t()]
+  def allowed_repo_roots do
+    configured =
+      case Application.get_env(:shoestring, :manual_run_allowed_repo_roots) do
+        roots when is_list(roots) and roots != [] -> Enum.map(roots, &Path.expand/1)
+        _ -> [Path.expand(State.root())]
+      end
+
+    [Path.expand(fixture_root()) | configured]
+    |> Enum.uniq()
   end
 
   @impl true
@@ -88,6 +105,24 @@ defmodule ShoestringWeb.RunNewLive do
         path -> Path.expand(path)
       end
 
+    if repo_path_allowed?(repo_path) do
+      start_run_in_repo(run_params, socket, repo_path)
+    else
+      Logger.warning("Rejected manual run repo_path outside allowed roots")
+
+      {:noreply,
+       socket
+       |> assign(:allowed_roots, allowed_repo_roots())
+       |> put_flash(
+         :error,
+         "Repository path is not allowed. Choose a repository under an allowed root " <>
+           "(#{Enum.join(allowed_repo_roots(), ", ")})."
+       )
+       |> assign(:form, to_form(run_params, as: :run))}
+    end
+  end
+
+  defp start_run_in_repo(run_params, socket, repo_path) do
     run_id = Ecto.UUID.generate()
 
     base_rev =
@@ -104,7 +139,8 @@ defmodule ShoestringWeb.RunNewLive do
          socket
          |> put_flash(
            :error,
-           "Worktree allocation failed: #{RunPresentation.redact_text(inspect(reason))}"
+           "Worktree allocation failed: invalid repository path or base revision. " <>
+             "Check the repository exists and the revision is valid."
          )
          |> assign(:form, to_form(run_params, as: :run))}
     end
@@ -205,17 +241,17 @@ defmodule ShoestringWeb.RunNewLive do
          socket
          |> put_flash(
            :error,
-           "Failed to start run: #{RunPresentation.redact_text(inspect(reason))}"
+           "Failed to start run. Please retry; if the problem persists, check server logs."
          )
          |> assign(:form, to_form(run_params, as: :run))}
     end
   end
 
   defp create_temporary_fixture_repo do
-    maybe_reap_fixture_repos()
+    fixture_root = fixture_root()
+    File.mkdir_p!(fixture_root)
     unique = "#{System.pid()}_#{System.unique_integer([:positive, :monotonic])}"
-    fixture_dir = Path.join(System.tmp_dir!(), "shoestring_fixture_repo_#{unique}")
-    File.rm_rf(fixture_dir)
+    fixture_dir = Path.join(fixture_root, "shoestring_fixture_repo_#{unique}")
     File.mkdir_p!(fixture_dir)
 
     {_, 0} = System.cmd("git", ["init", "-b", "main"], cd: fixture_dir)
@@ -241,6 +277,23 @@ defmodule ShoestringWeb.RunNewLive do
     fixture_dir
   end
 
+  defp fixture_root do
+    Path.join(State.root(), "manual_fixtures")
+  end
+
+  defp repo_path_allowed?(expanded) do
+    Enum.any?(allowed_repo_roots(), fn root ->
+      root_expanded = Path.expand(root)
+
+      expanded == root_expanded or
+        if root_expanded == "/" do
+          String.starts_with?(expanded, "/")
+        else
+          String.starts_with?(expanded, root_expanded <> "/")
+        end
+    end)
+  end
+
   defp parse_scenario("success"), do: :success
   defp parse_scenario("failure"), do: :failure
   defp parse_scenario("quiet_exit"), do: :quiet_exit
@@ -254,40 +307,6 @@ defmodule ShoestringWeb.RunNewLive do
 
   defp clamp(num, min, max) when is_integer(num) do
     num |> max(min) |> min(max)
-  end
-
-  defp maybe_reap_fixture_repos do
-    tmp = System.tmp_dir!()
-
-    case File.ls(tmp) do
-      {:ok, entries} ->
-        fixture_dirs =
-          entries
-          |> Enum.filter(&String.starts_with?(&1, "shoestring_fixture_repo_"))
-          |> Enum.map(&Path.join(tmp, &1))
-          |> Enum.filter(&File.dir?/1)
-          |> Enum.sort_by(fn path ->
-            case File.stat(path, time: :posix) do
-              {:ok, %File.Stat{mtime: mtime}} -> mtime
-              _ -> 0
-            end
-          end)
-
-        excess = length(fixture_dirs) - @max_fixture_repos + 1
-
-        if excess > 0 do
-          fixture_dirs
-          |> Enum.take(excess)
-          |> Enum.each(&File.rm_rf/1)
-        end
-
-        :ok
-
-      _ ->
-        :ok
-    end
-  rescue
-    _ -> :ok
   end
 
   defp parse_integer(val, _default) when is_integer(val), do: val
