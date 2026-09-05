@@ -158,6 +158,7 @@ defmodule Shoestring.Elves.Orchestrator do
          {:ok, action} <- cast_action(attrs),
          {:ok, rationale} <- cast_rationale(attrs),
          {:ok, decision_id} <- cast_decision_id(attrs),
+         :ok <- validate_reconciliation(run, action, attrs, repo),
          :ok <- claim_for_replace(run, action, decision_id, opts) do
       clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
 
@@ -265,6 +266,7 @@ defmodule Shoestring.Elves.Orchestrator do
     repo = Keyword.get(opts, :repo, Repo)
 
     with {:ok, claim} <- fetch_replacement_claim(claim_id, repo),
+         :ok <- link_allowed?(claim, replacement_run_id, repo),
          %RunRecord{} = replacement <- repo.get(RunRecord, replacement_run_id),
          true <- replacement.goal_id == claim.goal_id do
       now =
@@ -306,19 +308,36 @@ defmodule Shoestring.Elves.Orchestrator do
     end
   end
 
+  defp link_allowed?(claim, replacement_run_id, repo) do
+    case linked_replacement_run_id(claim, repo) do
+      ^replacement_run_id ->
+        :ok
+
+      nil ->
+        if claim_reconciled?(claim, repo) do
+          {:error, :replacement_claim_already_reconciled}
+        else
+          :ok
+        end
+
+      _other_run_id ->
+        {:error, :replacement_claim_already_linked}
+    end
+  end
+
   @doc "Explicitly reconciles an abandoned or orphaned replacement claim.
 
-  The recorded decision may reference a linked replacement run; that explicit
-  reconciliation is what authorizes the next round when the linked run has no
-  terminal event.
+  An unlinked claim can be reconciled after a launch failure. A linked claim
+  can be reconciled only after its replacement run has been explicitly
+  cancelled or otherwise terminalized; reconciliation never terminates a
+  live replacement itself.
   "
   @spec reconcile_replacement_claim(Ecto.UUID.t(), keyword()) ::
           {:ok, TrajectoryEvent.t()} | {:error, term()}
   def reconcile_replacement_claim(claim_id, opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
-    with {:ok, claim} <- fetch_replacement_claim(claim_id, repo),
-         :ok <- reconciliation_allowed?(claim, repo) do
+    with {:ok, claim} <- fetch_replacement_claim(claim_id, repo) do
       attrs = %{
         action: "reconcile",
         decision_id: "replacement-reconcile:#{claim.id}",
@@ -332,6 +351,25 @@ defmodule Shoestring.Elves.Orchestrator do
       record_choice(claim.run_id, attrs, opts)
     end
   end
+
+  defp validate_reconciliation(run, "reconcile", attrs, repo) do
+    case {replacement_claim_id(attrs), outcome(attrs)} do
+      {claim_id, "reconciled"} when is_binary(claim_id) ->
+        with {:ok, claim} <- fetch_replacement_claim(claim_id, repo),
+             :ok <- claim_belongs_to_run(claim, run),
+             :ok <- reconciliation_allowed?(claim, repo) do
+          :ok
+        end
+
+      _other ->
+        :ok
+    end
+  end
+
+  defp validate_reconciliation(_run, _action, _attrs, _repo), do: :ok
+
+  defp claim_belongs_to_run(%TrajectoryEvent{run_id: run_id}, %RunRecord{id: run_id}), do: :ok
+  defp claim_belongs_to_run(_claim, _run), do: {:error, :replacement_claim_wrong_run}
 
   defp reconciliation_allowed?(claim, repo) do
     case linked_replacement_run_id(claim, repo) do
@@ -485,6 +523,18 @@ defmodule Shoestring.Elves.Orchestrator do
             event.type == "elf.recovery_decided" and
             fragment("(? ->> ?) = ?", event.payload, "action", "reconcile") and
             fragment("(? ->> ?) = ?", event.payload, "outcome", "reconciled")
+    )
+  end
+
+  defp claim_reconciled?(claim, repo) do
+    repo.exists?(
+      from event in TrajectoryEvent,
+        where:
+          event.goal_id == ^claim.goal_id and
+            event.type == "elf.recovery_decided" and
+            fragment("(? ->> ?) = ?", event.payload, "action", "reconcile") and
+            fragment("(? ->> ?) = ?", event.payload, "outcome", "reconciled") and
+            fragment("(? ->> ?) = ?", event.payload, "replacement_claim_id", ^claim.id)
     )
   end
 

@@ -460,6 +460,39 @@ defmodule Shoestring.Elves.OrchestratorTest do
              Orchestrator.request_replacement(run_id, decision_id: "round-2-after-reconcile")
   end
 
+  test "record_choice cannot reconcile an active linked replacement", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = start_quiet_run(sup, goal, task, :raw_reconcile_active_probe, [])
+
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+    assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
+    assert_allowed(Orchestrator.request_replacement(run_id, decision_id: "round-1"))
+
+    claim = ElvesHelpers.replacement_claim(goal.id, run_id)
+    replacement_id = start_quiet_run(sup, goal, task, :raw_reconcile_active_child, [])
+
+    on_exit(fn ->
+      ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, replacement_id))
+    end)
+
+    assert {:ok, _link} = Orchestrator.link_replacement_claim(claim.id, replacement_id)
+
+    assert {:error, :linked_replacement_active} =
+             Orchestrator.record_choice(run_id, %{
+               action: "reconcile",
+               decision_id: "raw-reconcile-round-1",
+               replacement_claim_id: claim.id,
+               rationale: "Operator reconciled the abandoned replacement claim.",
+               outcome: "reconciled"
+             })
+
+    assert {:error, :prior_replacement_active} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-2-after-raw-reconcile")
+  end
+
   test "a terminalized linked replacement can be reconciled before the next round", %{
     sup: sup,
     goal: goal,
@@ -611,6 +644,15 @@ defmodule Shoestring.Elves.OrchestratorTest do
     )
 
     assert ElvesHelpers.replacement_claim(goal.id, run_id).payload["attempt"] == 2
+
+    late_replacement_id = start_quiet_run(sup, goal, task, :late_replacement_child, [])
+
+    on_exit(fn ->
+      ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, late_replacement_id))
+    end)
+
+    assert {:error, :replacement_claim_already_reconciled} =
+             Orchestrator.link_replacement_claim(claim.id, late_replacement_id)
   end
 
   test "the default attempt is not a gate after explicit claim reconciliation", %{
