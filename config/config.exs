@@ -11,6 +11,7 @@ config :shoestring,
   ecto_repos: [Shoestring.Repo],
   generators: [timestamp_type: :utc_datetime_usec],
   state_dir: nil,
+  manual_run_allowed_repo_roots: nil,
   environment: config_env()
 
 config :shoestring, Shoestring.Repo,

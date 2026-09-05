@@ -285,7 +285,7 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     refute html =~ "rollout-"
   end
 
-  test "render gate: stdout/transcript evidence displays redacted, reasoning stays hidden (B4)",
+  test "render gate: stdout/stderr/prompt/transcript evidence displays redacted, reasoning stays hidden (B3)",
        %{
          conn: conn,
          goal: goal,
@@ -299,6 +299,14 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     # this pipeline is the UI redaction boundary that must keep evidence
     # visible (redacted) while stripping hidden reasoning.
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+    google_key = "AIzaSyD-1234567890abcdef1234567890abcde"
+    slack_token = "xoxb-123456789012-abcdef123456-secret"
+
+    jwt =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsK88"
+
+    git_url = "https://alice:supersecretpass@github.com/org/repo.git"
 
     live_event = %TrajectoryEvent{
       id: Ecto.UUID.generate(),
@@ -318,7 +326,9 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
         "occurred_at" => DateTime.to_iso8601(DateTime.utc_now()),
         "kind" => "command",
         "stdout" => "EVIDENCE_STDOUT_MARKER build ok in /Users/bob/proj",
-        "transcript" => "EVIDENCE_TRANSCRIPT_MARKER hello",
+        "stderr" => "EVIDENCE_STDERR_MARKER warning with #{google_key}",
+        "prompt" => "EVIDENCE_PROMPT_MARKER authenticate with #{slack_token}",
+        "transcript" => "EVIDENCE_TRANSCRIPT_MARKER hello with #{jwt} from #{git_url}",
         "reasoning" => "PRIVATE_EVIDENCE_REASONING_MUST_NOT_RENDER"
       }
     }
@@ -327,10 +337,21 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     rendered_html = render(view)
 
     # Evidence markers survive redaction (visible, not dropped).
-    assert rendered_html =~ "EVIDENCE_STDOUT_MARKER"
-    assert rendered_html =~ "EVIDENCE_TRANSCRIPT_MARKER"
+    for marker <- [
+          "EVIDENCE_STDOUT_MARKER",
+          "EVIDENCE_STDERR_MARKER",
+          "EVIDENCE_PROMPT_MARKER",
+          "EVIDENCE_TRANSCRIPT_MARKER"
+        ] do
+      assert rendered_html =~ marker
+    end
+
     # Secrets inside evidence are redacted, not leaked.
     refute rendered_html =~ "/Users/bob"
+    refute rendered_html =~ google_key
+    refute rendered_html =~ slack_token
+    refute rendered_html =~ jwt
+    refute rendered_html =~ "supersecretpass"
     # Hidden reasoning never renders.
     refute rendered_html =~ "PRIVATE_EVIDENCE_REASONING_MUST_NOT_RENDER"
   end
@@ -384,5 +405,126 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     refute rendered_html =~ "sk-ant-api03"
     # Bounded pane: raw 80KB+ artifact must not fully render.
     assert byte_size(rendered_html) < byte_size(big_content)
+  end
+
+  test "B3 regression: redact_text catches Google API keys, Slack tokens, URL credentials, JWTs, PEMs, and quoted map keys" do
+    # Quoted key maps (previously bypassed because regex only matched unquoted keys without =>)
+    quoted_map = ~s(%{"api_key" => "secret_key_12345", "token" => "secret_token_abc"})
+    redacted_map = RunPresentation.redact_text(quoted_map)
+    refute redacted_map =~ "secret_key_12345"
+    refute redacted_map =~ "secret_token_abc"
+    assert redacted_map =~ "[REDACTED]"
+
+    # Google API key (AIza)
+    google_key = "AIzaSyD-1234567890abcdef1234567890abcde"
+    redacted_google = RunPresentation.redact_text("prefix Key: #{google_key} suffix")
+    refute redacted_google =~ google_key
+    assert redacted_google =~ "[REDACTED_API_KEY]"
+    assert redacted_google =~ "prefix"
+    assert redacted_google =~ "suffix"
+
+    # Slack token (xox[bpar]-)
+    slack_token = "xoxb-123456789012-abcdef123456-secret"
+    redacted_slack = RunPresentation.redact_text("Slack: #{slack_token}")
+    refute redacted_slack =~ slack_token
+    assert redacted_slack =~ "[REDACTED_API_KEY]"
+
+    # URL-embedded git credentials
+    git_url = "https://alice:supersecretpass@github.com/org/repo.git"
+    redacted_git = RunPresentation.redact_text("Clone from #{git_url}")
+    refute redacted_git =~ "supersecretpass"
+    assert redacted_git =~ "https://[REDACTED]@github.com"
+
+    # JWT
+    jwt =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsK88"
+
+    redacted_jwt = RunPresentation.redact_text("Auth: #{jwt}")
+    refute redacted_jwt =~ jwt
+    assert redacted_jwt =~ "[REDACTED_API_KEY]"
+
+    # Google API key with trailing hyphen
+    google_key_hyphen = "AIzaSyD-1234567890abcdef1234567890abcd-"
+    redacted_google_hyphen = RunPresentation.redact_text("Key: #{google_key_hyphen}")
+    refute redacted_google_hyphen =~ google_key_hyphen
+    assert redacted_google_hyphen =~ "[REDACTED_API_KEY]"
+
+    # Quoted map ending without string value preserves closing delimiter
+    map_with_brace = inspect(%{"password" => :supersecret})
+    redacted_brace = RunPresentation.redact_text(map_with_brace)
+    refute redacted_brace =~ "supersecret"
+    assert String.ends_with?(redacted_brace, "}")
+
+    # PEM block
+    pem =
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0Yxyz12345\n-----END RSA PRIVATE KEY-----"
+
+    redacted_pem = RunPresentation.redact_text("before Key:\n#{pem}\nafter")
+    refute redacted_pem =~ "MIIEowIBAAKCAQEA0Yxyz12345"
+    assert redacted_pem =~ "[REDACTED_PRIVATE_KEY]"
+    assert redacted_pem =~ "before Key:"
+    assert redacted_pem =~ "after"
+  end
+
+  test "B1 regression: redact every git HTTPS credential form without touching clean URLs" do
+    credentials = [
+      "https://user:pass@github.com/x.git",
+      "https://ghp_SECRETTOKEN123:@github.com/x.git",
+      "https://:supersecretpass@github.com/x.git",
+      "https://tokenonly@github.com/x.git"
+    ]
+
+    for url <- credentials do
+      redacted = RunPresentation.redact_text("clone #{url} now")
+
+      refute redacted =~ url
+      assert redacted =~ "https://[REDACTED]@github.com/x.git"
+      assert redacted =~ "clone"
+      assert redacted =~ "now"
+    end
+
+    clean_url = "https://github.com/org/repo.git"
+    assert RunPresentation.redact_text(clean_url) == clean_url
+  end
+
+  test "B2 regression: quoted authorization redaction preserves delimiters and delimiter style" do
+    quoted = ~s(%{"authorization" => "secret_token"})
+    redacted_quoted = RunPresentation.redact_text(quoted)
+
+    refute redacted_quoted =~ "secret_token"
+    assert redacted_quoted == ~s(%{authorization=>[REDACTED]})
+    assert String.graphemes(redacted_quoted) |> Enum.count(&(&1 == "\"")) == 0
+
+    colon = ~s(authorization: "secret_token")
+    redacted_colon = RunPresentation.redact_text(colon)
+
+    refute redacted_colon =~ "secret_token"
+    assert redacted_colon == "authorization:[REDACTED]"
+    assert String.graphemes(redacted_colon) |> Enum.count(&(&1 == "\"")) == 0
+  end
+
+  test "credential assignment redaction handles quoted maps and colon forms for every key pattern" do
+    keys = [
+      "api_key",
+      "access_token",
+      "refresh_token",
+      "token",
+      "password",
+      "secret",
+      "cookie",
+      "client_secret",
+      "private_key",
+      "authorization"
+    ]
+
+    for key <- keys do
+      quoted = RunPresentation.redact_text("%{\"#{key}\" => \"secret_value\"}")
+      colon = RunPresentation.redact_text("#{key}: \"secret_value\"")
+
+      refute quoted =~ "secret_value"
+      refute colon =~ "secret_value"
+      assert quoted == "%{#{key}=>[REDACTED]}"
+      assert colon == "#{key}:[REDACTED]"
+    end
   end
 end

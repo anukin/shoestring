@@ -76,12 +76,7 @@ defmodule ShoestringWeb.RunShowLive do
       {:error, reason} ->
         Logger.warning("Failed to cancel run: #{inspect(reason)}")
 
-        {:noreply,
-         socket
-         |> put_flash(
-           :error,
-           "Failed to cancel run: #{RunPresentation.redact_text(inspect(reason))}"
-         )}
+        {:noreply, put_flash(socket, :error, "Failed to cancel run. Please retry.")}
     end
   end
 
@@ -110,12 +105,7 @@ defmodule ShoestringWeb.RunShowLive do
       {:error, reason} ->
         Logger.warning("Failed to request safe stop: #{inspect(reason)}")
 
-        {:noreply,
-         socket
-         |> put_flash(
-           :error,
-           "Failed to request safe stop: #{RunPresentation.redact_text(inspect(reason))}"
-         )}
+        {:noreply, put_flash(socket, :error, "Failed to request safe stop. Please retry.")}
     end
   end
 
@@ -126,22 +116,28 @@ defmodule ShoestringWeb.RunShowLive do
 
   @impl true
   def handle_info({:trajectory_event_committed, %TrajectoryEvent{} = event}, socket) do
-    if event.goal_id == socket.assigns.goal.id and
-         (event.run_id == socket.assigns.run.id or is_nil(event.run_id)) do
-      sanitized = RunPresentation.sanitize_event(event)
-      total = (socket.assigns[:events_total] || 0) + 1
-      showing = (socket.assigns[:events_showing] || 0) + 1
+    case {socket.assigns[:goal], socket.assigns[:run]} do
+      {%{id: goal_id}, %{id: run_id}}
+      when is_binary(goal_id) and is_binary(run_id) ->
+        if event.goal_id == goal_id and (event.run_id == run_id or is_nil(event.run_id)) do
+          sanitized = RunPresentation.sanitize_event(event)
+          total = (socket.assigns[:events_total] || 0) + 1
+          showing = (socket.assigns[:events_showing] || 0) + 1
 
-      socket =
-        socket
-        |> stream_insert(:events, sanitized)
-        |> assign(:events_total, total)
-        |> assign(:events_showing, showing)
-        |> maybe_refresh_on_event(event)
+          socket =
+            socket
+            |> stream_insert(:events, sanitized)
+            |> assign(:events_total, total)
+            |> assign(:events_showing, showing)
+            |> maybe_refresh_on_event(event)
 
-      {:noreply, socket}
-    else
-      {:noreply, socket}
+          {:noreply, socket}
+        else
+          {:noreply, socket}
+        end
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -149,21 +145,27 @@ defmodule ShoestringWeb.RunShowLive do
   def handle_info(_other, socket), do: {:noreply, socket}
 
   defp reload_run_state(socket) do
-    case Repo.get(RunRecord, socket.assigns.run.id) do
-      nil ->
-        socket
-        |> assign(:run_not_found?, true)
-        |> assign(:run_id, socket.assigns.run.id)
-        |> assign(:page_title, "Run Not Found")
+    case socket.assigns[:run] do
+      %{id: run_id} when is_binary(run_id) ->
+        case Repo.get(RunRecord, run_id) do
+          nil ->
+            socket
+            |> assign(:run_not_found?, true)
+            |> assign(:run_id, run_id)
+            |> assign(:page_title, "Run Not Found")
 
-      run ->
-        goal = Repo.get(Goal, run.goal_id)
+          run ->
+            goal = Repo.get(Goal, run.goal_id)
 
-        socket
-        |> assign(:run_not_found?, false)
-        |> assign(:run, run)
-        |> assign(:goal, goal)
-        |> load_run_details(run, goal)
+            socket
+            |> assign(:run_not_found?, false)
+            |> assign(:run, run)
+            |> assign(:goal, goal)
+            |> load_run_details(run, goal)
+        end
+
+      _ ->
+        assign(socket, :run_not_found?, true)
     end
   end
 
