@@ -30,7 +30,7 @@ defmodule ShoestringWeb.RunPresentation do
     # PEM blocks
     {~r/-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/, "[REDACTED_PRIVATE_KEY]"},
     # URL-embedded credentials (e.g. https://user:pass@host/ from git stderr)
-    {~r|(https?://)[^/\s:@]+(?::[^/\s@]+)?@|, "\\1[REDACTED]@"},
+    {~r|(https?://)[^/\s@]+@|, "\\1[REDACTED]@"},
     # Basic auth
     {~r/\b(authorization)\s*([:=])\s*Basic(?:\s+[A-Za-z0-9+\/=]+)?/i, "\\1: [REDACTED]"},
     {~r/\bBasic\s+[A-Za-z0-9+\/=]{8,}/i, "Basic [REDACTED]"},
@@ -46,8 +46,8 @@ defmodule ShoestringWeb.RunPresentation do
      "\\1\\2[REDACTED]"},
     {~r/["']?([A-Za-z0-9_.-]*[_-]key)["']?\s*(=>|[:=])[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+)/i,
      "\\1\\2[REDACTED]"},
-    {~r/\b["']?(authorization)["']?\s*(=>|[:=])[ \t]*(?!Bearer\b|Basic\b|\[REDACTED\])(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+)/i,
-     "\\1: [REDACTED]"},
+    {~r/["']?\b(authorization)["']?\s*(=>|[:=])[ \t]*(?!Bearer\b|Basic\b|\[REDACTED\])(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+)/i,
+     "\\1\\2[REDACTED]"},
     # User / home filesystem paths
     {~r/\/Users\/[A-Za-z0-9_.-]+/, "/Users/[REDACTED]"},
     {~r/\/home\/[A-Za-z0-9_.-]+/, "/home/[REDACTED]"},

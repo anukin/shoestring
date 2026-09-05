@@ -417,9 +417,11 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
 
     # Google API key (AIza)
     google_key = "AIzaSyD-1234567890abcdef1234567890abcde"
-    redacted_google = RunPresentation.redact_text("Key: #{google_key}")
+    redacted_google = RunPresentation.redact_text("prefix Key: #{google_key} suffix")
     refute redacted_google =~ google_key
     assert redacted_google =~ "[REDACTED_API_KEY]"
+    assert redacted_google =~ "prefix"
+    assert redacted_google =~ "suffix"
 
     # Slack token (xox[bpar]-)
     slack_token = "xoxb-123456789012-abcdef123456-secret"
@@ -457,8 +459,72 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     pem =
       "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0Yxyz12345\n-----END RSA PRIVATE KEY-----"
 
-    redacted_pem = RunPresentation.redact_text("Key:\n#{pem}")
+    redacted_pem = RunPresentation.redact_text("before Key:\n#{pem}\nafter")
     refute redacted_pem =~ "MIIEowIBAAKCAQEA0Yxyz12345"
     assert redacted_pem =~ "[REDACTED_PRIVATE_KEY]"
+    assert redacted_pem =~ "before Key:"
+    assert redacted_pem =~ "after"
+  end
+
+  test "B1 regression: redact every git HTTPS credential form without touching clean URLs" do
+    credentials = [
+      "https://user:pass@github.com/x.git",
+      "https://ghp_SECRETTOKEN123:@github.com/x.git",
+      "https://:supersecretpass@github.com/x.git",
+      "https://tokenonly@github.com/x.git"
+    ]
+
+    for url <- credentials do
+      redacted = RunPresentation.redact_text("clone #{url} now")
+
+      refute redacted =~ url
+      assert redacted =~ "https://[REDACTED]@github.com/x.git"
+      assert redacted =~ "clone"
+      assert redacted =~ "now"
+    end
+
+    clean_url = "https://github.com/org/repo.git"
+    assert RunPresentation.redact_text(clean_url) == clean_url
+  end
+
+  test "B2 regression: quoted authorization redaction preserves delimiters and delimiter style" do
+    quoted = ~s(%{"authorization" => "secret_token"})
+    redacted_quoted = RunPresentation.redact_text(quoted)
+
+    refute redacted_quoted =~ "secret_token"
+    assert redacted_quoted == ~s(%{authorization=>[REDACTED]})
+    assert String.graphemes(redacted_quoted) |> Enum.count(&(&1 == "\"")) == 0
+
+    colon = ~s(authorization: "secret_token")
+    redacted_colon = RunPresentation.redact_text(colon)
+
+    refute redacted_colon =~ "secret_token"
+    assert redacted_colon == "authorization:[REDACTED]"
+    assert String.graphemes(redacted_colon) |> Enum.count(&(&1 == "\"")) == 0
+  end
+
+  test "credential assignment redaction handles quoted maps and colon forms for every key pattern" do
+    keys = [
+      "api_key",
+      "access_token",
+      "refresh_token",
+      "token",
+      "password",
+      "secret",
+      "cookie",
+      "client_secret",
+      "private_key",
+      "authorization"
+    ]
+
+    for key <- keys do
+      quoted = RunPresentation.redact_text("%{\"#{key}\" => \"secret_value\"}")
+      colon = RunPresentation.redact_text("#{key}: \"secret_value\"")
+
+      refute quoted =~ "secret_value"
+      refute colon =~ "secret_value"
+      assert quoted == "%{#{key}=>[REDACTED]}"
+      assert colon == "#{key}:[REDACTED]"
+    end
   end
 end

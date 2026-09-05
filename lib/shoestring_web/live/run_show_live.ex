@@ -145,21 +145,27 @@ defmodule ShoestringWeb.RunShowLive do
   def handle_info(_other, socket), do: {:noreply, socket}
 
   defp reload_run_state(socket) do
-    case Repo.get(RunRecord, socket.assigns.run.id) do
-      nil ->
-        socket
-        |> assign(:run_not_found?, true)
-        |> assign(:run_id, socket.assigns.run.id)
-        |> assign(:page_title, "Run Not Found")
+    case socket.assigns[:run] do
+      %{id: run_id} when is_binary(run_id) ->
+        case Repo.get(RunRecord, run_id) do
+          nil ->
+            socket
+            |> assign(:run_not_found?, true)
+            |> assign(:run_id, run_id)
+            |> assign(:page_title, "Run Not Found")
 
-      run ->
-        goal = Repo.get(Goal, run.goal_id)
+          run ->
+            goal = Repo.get(Goal, run.goal_id)
 
-        socket
-        |> assign(:run_not_found?, false)
-        |> assign(:run, run)
-        |> assign(:goal, goal)
-        |> load_run_details(run, goal)
+            socket
+            |> assign(:run_not_found?, false)
+            |> assign(:run, run)
+            |> assign(:goal, goal)
+            |> load_run_details(run, goal)
+        end
+
+      _ ->
+        assign(socket, :run_not_found?, true)
     end
   end
 
