@@ -1,0 +1,79 @@
+{
+ "fixture_kind": "negatives",
+ "evidence_status": "live_observed",
+ "cli": "codex-cli 0.153.2",
+ "note": "Real request/response frames (IDs remapped, no secrets in these frames). Fresh threads have no rollout file yet so thread/resume fails cleanly; ephemeral threads reject turns/list; items/list is unimplemented; interrupting an unknown turn is a typed -32600 rejection with no side effects. Resume-after-restart therefore requires a persisted (post-turn) rollout.",
+ "cases": [
+  {
+   "case": "thread/resume fresh pre-turn thread",
+   "request_frame": {
+    "method": "thread/resume",
+    "id": 7,
+    "params": {
+     "threadId": "01950000-0000-7000-8000-000000000001"
+    }
+   },
+   "response_frame": {
+    "error": {
+     "code": -32600,
+     "message": "no rollout found for thread id 01950000-0000-7000-8000-000000000001"
+    },
+    "id": 7
+   }
+  },
+  {
+   "case": "thread/turns/list on ephemeral thread",
+   "request_frame": {
+    "method": "thread/turns/list",
+    "id": 9,
+    "params": {
+     "threadId": "01950000-0000-7000-8000-000000000001",
+     "limit": 5
+    }
+   },
+   "response_frame": {
+    "error": {
+     "code": -32600,
+     "message": "ephemeral threads do not support thread/turns/list"
+    },
+    "id": 9
+   }
+  },
+  {
+   "case": "thread/items/list",
+   "request_frame": {
+    "method": "thread/items/list",
+    "id": 10,
+    "params": {
+     "threadId": "01950000-0000-7000-8000-000000000001",
+     "limit": 5
+    }
+   },
+   "response_frame": {
+    "error": {
+     "code": -32601,
+     "message": "thread/items/list is not supported yet"
+    },
+    "id": 10
+   }
+  },
+  {
+   "case": "turn/interrupt with unknown turn id",
+   "request_frame": {
+    "method": "turn/interrupt",
+    "id": 8,
+    "params": {
+     "threadId": "01950000-0000-7000-8000-000000000001",
+     "turnId": "00000000-0000-4000-8000-000000000099"
+    }
+   },
+   "response_frame": {
+    "error": {
+     "code": -32600,
+     "message": "no active turn to interrupt"
+    },
+    "id": 8
+   }
+  }
+ ]
+}

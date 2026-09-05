@@ -1,0 +1,131 @@
+{
+ "fixture_kind": "thread_start",
+ "evidence_status": "live_observed",
+ "cli": "codex-cli 0.153.2",
+ "note": "thread/start with {ephemeral,cwd,approvalPolicy} honored; response thread.id == sessionId; cwd echoed; status idle. thread/started notification mirrors the thread object. IDs remapped THREAD-n; $HOME/$FIXTURE redacted.",
+ "request_params": {
+  "ephemeral": true,
+  "cwd": "$FIXTURE",
+  "approvalPolicy": "never"
+ },
+ "frames": [
+  {
+   "dir": "C2S",
+   "bytes": 120,
+   "msg": {
+    "method": "thread/start",
+    "id": 4,
+    "params": {
+     "ephemeral": true,
+     "cwd": "$FIXTURE",
+     "approvalPolicy": "never"
+    }
+   }
+  },
+  {
+   "dir": "S2C",
+   "bytes": 1076,
+   "msg": {
+    "id": 4,
+    "result": {
+     "thread": {
+      "id": "01950000-0000-7000-8000-000000000001",
+      "extra": null,
+      "sessionId": "01950000-0000-7000-8000-000000000001",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": true,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "model": "gpt-6-astra",
+      "reasoningEffort": "high",
+      "createdAt": 1788584108,
+      "updatedAt": 1788584108,
+      "recencyAt": 1788584108,
+      "status": {
+       "type": "idle"
+      },
+      "path": null,
+      "cwd": "$FIXTURE",
+      "cliVersion": "0.153.2",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "turns": []
+     },
+     "model": "gpt-6-astra",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "cwd": "$FIXTURE",
+     "runtimeWorkspaceRoots": [
+      "$FIXTURE"
+     ],
+     "instructionSources": [],
+     "approvalPolicy": "never",
+     "approvalsReviewer": "user",
+     "sandbox": {
+      "type": "readOnly",
+      "networkAccess": false
+     },
+     "activePermissionProfile": {
+      "id": ":read-only",
+      "extends": null
+     },
+     "reasoningEffort": "high",
+     "multiAgentMode": "explicitRequestOnly"
+    }
+   }
+  },
+  {
+   "dir": "S2C",
+   "bytes": 714,
+   "msg": {
+    "method": "thread/started",
+    "params": {
+     "thread": {
+      "id": "01950000-0000-7000-8000-000000000001",
+      "extra": null,
+      "sessionId": "01950000-0000-7000-8000-000000000001",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": true,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "legacy",
+      "modelProvider": "openai",
+      "model": "gpt-6-astra",
+      "reasoningEffort": "high",
+      "createdAt": 1788584108,
+      "updatedAt": 1788584108,
+      "recencyAt": 1788584108,
+      "status": {
+       "type": "idle"
+      },
+      "path": null,
+      "cwd": "$FIXTURE",
+      "cliVersion": "0.153.2",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "turns": []
+     }
+    },
+    "emittedAtMs": 1788584108109
+   }
+  }
+ ]
+}

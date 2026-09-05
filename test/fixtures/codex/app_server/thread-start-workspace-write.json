@@ -1,0 +1,55 @@
+{
+ "fixture_kind": "workspace_write_proof",
+ "evidence_status": "live_observed",
+ "cli": "codex-cli 0.153.2",
+ "note": "Exact accepted write-enabling shape: thread/start param \"sandbox\": \"workspace-write\" (string enum per schema SandboxMode). Server echoes sandbox.type=workspaceWrite. One turn created exactly one file (WRITE_PROOF.txt, single line elf-write-ok) in $FIXTURE-WRITE, verified on disk via git status (only untracked WRITE_PROOF.txt). Turn completed, error null. IDs remapped; $FIXTURE-WRITE redacted.",
+ "thread_start_request_params": {
+  "ephemeral": true,
+  "cwd": "$FIXTURE-WRITE",
+  "approvalPolicy": "never",
+  "sandbox": "workspace-write"
+ },
+ "thread_start_response_sandbox": {
+  "type": "workspaceWrite",
+  "writableRoots": [],
+  "networkAccess": false,
+  "excludeTmpdirEnvVar": false,
+  "excludeSlashTmp": false
+ },
+ "thread_start_response_approval": "never",
+ "file_change_completed_item": {
+  "type": "fileChange",
+  "id": "exec-01950000-0000-7000-8000-000000000007",
+  "changes": [
+   {
+    "path": "$FIXTURE-WRITE/WRITE_PROOF.txt",
+    "kind": {
+     "type": "add"
+    },
+    "diff": "elf-write-ok\n"
+   }
+  ],
+  "status": "completed"
+ },
+ "turn_completed": {
+  "id": "01950000-0000-7000-8000-000000000006",
+  "items": [
+   {
+    "type": "agentMessage",
+    "id": "msg_0000000000000000000000000000000000000000000000000000000000000008",
+    "text": "Created `WRITE_PROOF.txt` containing exactly `elf-write-ok`.",
+    "phase": "final_answer",
+    "memoryCitation": null,
+    "delivery": null,
+    "questions": null
+   }
+  ],
+  "itemsView": "summary",
+  "status": "completed",
+  "error": null,
+  "startedAt": 1788584772,
+  "completedAt": 1788584783,
+  "durationMs": 11080
+ },
+ "disk_proof": "WRITE_PROOF.txt present with single line elf-write-ok; repo otherwise untouched"
+}

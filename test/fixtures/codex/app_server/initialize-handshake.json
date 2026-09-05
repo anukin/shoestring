@@ -1,0 +1,37 @@
+{
+ "fixture_kind": "handshake",
+ "evidence_status": "live_observed",
+ "cli": "codex-cli 0.153.2",
+ "captured_at": "2026-09-04",
+ "note": "initialize result carries NO capabilities field; keys are exactly codexHome, platformFamily, platformOs, userAgent. Method discovery is static via generate-json-schema, not a runtime endpoint.",
+ "frames": [
+  {
+   "dir": "C2S",
+   "bytes": 111,
+   "msg": {
+    "method": "initialize",
+    "id": 1,
+    "params": {
+     "clientInfo": {
+      "name": "spike_probe",
+      "title": "spike",
+      "version": "0.1.0"
+     }
+    }
+   }
+  },
+  {
+   "dir": "S2C",
+   "bytes": 185,
+   "msg": {
+    "id": 1,
+    "result": {
+     "userAgent": "[REDACTED]",
+     "codexHome": "[REDACTED]",
+     "platformFamily": "unix",
+     "platformOs": "macos"
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,35 @@
+{
+ "fixture_kind": "sparse_update",
+ "evidence_status": "live_observed",
+ "cli": "codex-cli 0.153.2",
+ "note": "Full redacted account/rateLimits/updated frame as received mid-turn (before turn/completed). Percentages are point-in-time account state (same class of data as Gate 0A fixtures); IDs redacted. Merge rule still applies: absent fields must never clear last-known values.",
+ "frame": {
+  "method": "account/rateLimits/updated",
+  "params": {
+   "rateLimits": {
+    "limitId": "codex",
+    "limitName": null,
+    "primary": {
+     "usedPercent": 55,
+     "windowDurationMins": 300,
+     "resetsAt": 1788585939
+    },
+    "secondary": {
+     "usedPercent": 79,
+     "windowDurationMins": 10080,
+     "resetsAt": 1788753130
+    },
+    "credits": {
+     "hasCredits": false,
+     "unlimited": false,
+     "balance": "0"
+    },
+    "individualLimit": null,
+    "spendControlReached": null,
+    "planType": "plus",
+    "rateLimitReachedType": null
+   }
+  },
+  "emittedAtMs": 1788584188730
+ }
+}
