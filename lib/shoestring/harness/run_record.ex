@@ -74,6 +74,7 @@ defmodule Shoestring.Harness.RunRecord do
       "suspended",
       "completed",
       "failed",
+      "interrupted",
       "cancelling",
       "cancelled"
     ])
@@ -97,6 +98,7 @@ defmodule Shoestring.Harness.RunRecord do
       "suspended",
       "completed",
       "failed",
+      "interrupted",
       "cancelling",
       "cancelled"
     ])

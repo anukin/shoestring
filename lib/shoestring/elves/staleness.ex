@@ -334,7 +334,10 @@ defmodule Shoestring.Elves.Staleness do
   end
 
   defp final_response(events) do
-    if Enum.any?(events, &(&1.type in ["run.completed", "run.failed", "run.cancelled"])) do
+    if Enum.any?(
+         events,
+         &(&1.type in ["run.completed", "run.failed", "run.interrupted", "run.cancelled"])
+       ) do
       %{"state" => "terminal_recorded"}
     else
       result_seen? = Enum.any?(events, &result_event?/1)

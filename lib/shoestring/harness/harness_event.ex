@@ -159,7 +159,9 @@ defmodule Shoestring.Harness.HarnessEvent do
     with {:ok, status} <-
            value
            |> Contract.required(:status)
-           |> then(&Contract.enum(&1, :result_status, ["accepted", "completed", "failed"])),
+           |> then(
+             &Contract.enum(&1, :result_status, ["accepted", "completed", "failed", "interrupted"])
+           ),
          {:ok, artifact_id} <-
            value
            |> Contract.optional(:artifact_id)

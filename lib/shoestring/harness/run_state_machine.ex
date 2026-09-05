@@ -11,10 +11,11 @@ defmodule Shoestring.Harness.RunStateMachine do
     :suspended,
     :completed,
     :failed,
+    :interrupted,
     :cancelling,
     :cancelled
   ]
-  @terminal [:completed, :failed, :cancelled]
+  @terminal [:completed, :failed, :interrupted, :cancelled]
 
   @type state ::
           :requested
@@ -24,6 +25,7 @@ defmodule Shoestring.Harness.RunStateMachine do
           | :suspended
           | :completed
           | :failed
+          | :interrupted
           | :cancelling
           | :cancelled
 
@@ -36,6 +38,7 @@ defmodule Shoestring.Harness.RunStateMachine do
           | :resume
           | :complete
           | :fail
+          | :interrupt
           | :cancel
           | :cancelled
 
@@ -67,6 +70,10 @@ defmodule Shoestring.Harness.RunStateMachine do
   defp target(:running, :fail), do: {:ok, :failed}
   defp target(:starting, :fail), do: {:ok, :failed}
   defp target(:pausing, :fail), do: {:ok, :failed}
+  defp target(:starting, :interrupt), do: {:ok, :interrupted}
+  defp target(:running, :interrupt), do: {:ok, :interrupted}
+  defp target(:pausing, :interrupt), do: {:ok, :interrupted}
+  defp target(:suspended, :interrupt), do: {:ok, :interrupted}
   defp target(:running, :cancel), do: {:ok, :cancelling}
   defp target(:starting, :cancel), do: {:ok, :cancelling}
   defp target(:pausing, :cancel), do: {:ok, :cancelling}
@@ -74,6 +81,7 @@ defmodule Shoestring.Harness.RunStateMachine do
   defp target(:cancelling, :cancelled), do: {:ok, :cancelled}
   defp target(state, :complete) when state == :completed, do: {:ok, :completed}
   defp target(state, :fail) when state == :failed, do: {:ok, :failed}
+  defp target(state, :interrupt) when state == :interrupted, do: {:ok, :interrupted}
   defp target(state, :cancelled) when state == :cancelled, do: {:ok, :cancelled}
   defp target(_state, _event), do: :error
 

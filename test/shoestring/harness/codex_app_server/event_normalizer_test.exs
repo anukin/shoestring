@@ -70,7 +70,7 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizerTest do
                })
 
       assert turn_event.kind == :result
-      assert turn_event.result.status == "accepted"
+      assert turn_event.result.status == "interrupted"
       assert turn_event.extensions["codex-app-server:interrupted"] == true
       assert turn_event.extensions["codex-app-server:status"] == "interrupted"
 

@@ -11,6 +11,7 @@ defmodule Shoestring.Trajectory.ProjectorTransition do
     "run.suspended",
     "run.completed",
     "run.failed",
+    "run.interrupted",
     "run.cancelling",
     "run.cancelled",
     "lease.proposed",

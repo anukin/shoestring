@@ -399,7 +399,7 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       {:ok, events} = Session.stream_events(session)
       last_event = List.last(events)
       assert last_event.kind == :result
-      assert last_event.result.status == "accepted"
+      assert last_event.result.status == "interrupted"
       assert last_event.extensions["codex-app-server:interrupted"] == true
     end
 
