@@ -9,18 +9,17 @@ cancellation — making it better than exec for the Cancel and Lease-boundary
 evals?
 
 Short answer: **yes**. `turn/interrupt` is acknowledged in-band and the turn
-stops cleanly (`turn/completed` status `interrupted`), and the item stream
-gives typed start/completion boundaries for commands. Both VERIFIED live with
-exactly ONE bounded model turn. Descendant processes SURVIVE the interrupt, so
-the adapter must kill the process group itself. Verdict: **app-server --stdio
-for Work Package C**, with mitigations listed below.
-
-Spend note: quota is scarce (account secondary window was already 79% at probe
-time), so only one tiny live turn was run (prompt: run `sleep 45`, reply DONE;
-interrupted after ~4.5 s). Everything else is zero-model-cost stdio probing or
-static schema inspection. The single turn cost ~16.6k input tokens
-(6.4k cached) per the observed `thread/tokenUsage/updated` notification. No
-further live runs were made; anything not observed is marked UNVERIFIED.
+stops cleanly (`turn/completed` status `interrupted`), the write sandbox
+actually mutates files on disk, and the item stream gives typed
+start/completion boundaries for commands and file changes. Interrupt
+VERIFIED live with one bounded turn; write capability VERIFIED live with a
+second minimal turn (one file, nothing else). Everything else is
+zero-model-cost stdio probing or static schema inspection. The two turns cost
+~16.6k and ~16.9k input tokens respectively (mostly cached) per the observed
+`thread/tokenUsage/updated` notifications. Descendant processes SURVIVE the
+interrupt, so the adapter must kill the process group itself. Verdict:
+**app-server --stdio for Work Package C**, with mitigations listed below.
+No further live runs were made; anything not observed is marked UNVERIFIED.
 
 ## 1. How the surface was enumerated (no model spend)
 
@@ -45,33 +44,58 @@ further live runs were made; anything not observed is marked UNVERIFIED.
   `initialize` → `initialized` → `account/read` → `account/rateLimits/read`).
   No lib/ file was modified.
 
-## 2. Method / notification inventory (VERIFIED = observed live or in schema + live traffic)
+## 2. Method / notification inventory (label convention: VERIFIED = observed live AND backed by a committed frame in `test/fixtures/codex/app_server/`; schema-only = present in the generated JSON Schema but UNVERIFIED live; UNVERIFIED = neither. Every VERIFIED below names its fixture.)
 
 ### Start a bounded turn in a specified cwd — VERIFIED
 
 - `thread/start` (params: `cwd`, `ephemeral`, `approvalPolicy`,
-  `sandbox`, `model`, `modelProvider`, …). VERIFIED live: started with
-  `{cwd: $FIXTURE, ephemeral: true, approvalPolicy: "never",
-  sandbox: "workspace-write"}`; response echoes `cwd`, returns
+  `sandbox`, `model`, `modelProvider`, …). VERIFIED live: first probe sent
+  `{ephemeral, cwd: $FIXTURE, approvalPolicy: "never"}` with NO `sandbox`
+  param, and the server replied under an effective read-only profile
+  (`sandbox: {type: "readOnly", …}`,
+  `activePermissionProfile: {id: ":read-only"}`). So `thread-start.json`
+  proves READ-ONLY execution only. The write-enabling shape is
+  `"sandbox": "workspace-write"` (string enum per schema `SandboxMode`) —
+  VERIFIED live by the second run, whose request carried exactly that param
+  and whose response echoed `sandbox: {type: "workspaceWrite", …}`
+  (fixture `thread-start-workspace-write.json`). Both runs return
   `thread: {id, sessionId (= id), status: {type: "idle"}, …}` and a
-  `thread/started` notification mirrors it. Fixture `thread-start.json`.
+  `thread/started` notification mirrors it.
 - `turn/start` (params: `threadId`, `input: [{type:"text", text}]`,
   `approvalPolicy`, `cwd` override, `sandboxPolicy`, `effort`, …).
-  VERIFIED live: response `{turn: {id (UUIDv7), status: "inProgress",
-  items: [], itemsView: "notLoaded"}}`. The cwd binds the turn to the
+  VERIFIED live: response `{turn: {id, status: "inProgress",
+  items: [], itemsView: "notLoaded"}}` (committed `turn_start_response` in
+  fixture `turn-interrupt.json`; the UUIDv7 format is a schema-only note). The cwd binds the turn to the
   disposable fixture repo — the observed `commandExecution` item echoed
   `"cwd": "$FIXTURE"`.
-- Bounding levers (schema-VERIFIED, behavior UNVERIFIED): per-turn `effort`,
-  `sandboxPolicy` (`readOnly` | `workspaceWrite` + `writableRoots` |
-  `dangerFullAccess`), `approvalPolicy: "never"` (no interactive approvals
-  hang the supervised run), `outputSchema` to constrain the final message.
-  No lease/timeout field exists on the turn itself — wall-clock bounding stays
-  adapter-side.
+- Bounding levers (schema-only, behavior UNVERIFIED except where noted):
+  per-turn `effort`, `sandboxPolicy` (`readOnly` | `workspaceWrite` +
+  `writableRoots` | `dangerFullAccess`), `approvalPolicy: "never"` (no
+  interactive approvals hang the supervised run — VERIFIED live, echoed back
+  on both thread/start responses), `outputSchema` to constrain the final
+  message. No lease/timeout field exists on the turn itself — wall-clock
+  bounding stays adapter-side.
 
-### Running-turn event stream — VERIFIED (one live turn)
+### Write capability — VERIFIED live (second bounded turn, Work Package C argv contract)
+
+A follow-up review correctly noted the first probe ran read-only, so one more
+minimal turn proved mutation: thread started with the exact accepted shape
+`"sandbox": "workspace-write"` against a disposable `/tmp` fixture repo, and
+a single turn tasked with creating exactly one file (`WRITE_PROOF.txt`,
+single line `elf-write-ok`, nothing else) ran to `turn/completed` status
+`completed`, error null. On-disk verification (`git status` in the fixture
+repo) showed exactly one untracked file with exactly that line; nothing else
+was created or modified. Fixture `thread-start-workspace-write.json` commits
+the request params, the `workspaceWrite` sandbox echo, the completed
+`fileChange` item, and the `completed` turn frame. This is the params contract
+the Work Package C adapter depends on: `thread/start` takes the STRING
+`"workspace-write"`, not the `turn/start`-style `sandboxPolicy` object.
+
+### Running-turn event stream — VERIFIED (two live turns)
 
 Observed sequence for the interrupted `sleep 45` turn (fixture
-`turn-interrupt.json`):
+`turn-interrupt.json`, now also committing the full interrupt request,
+`turn/completed`, and `thread/status` + token-usage bracketing frames):
 
 `thread/status/changed (active)` → `turn/started (inProgress)` →
 `item/started (userMessage)` → `item/completed (userMessage)` →
@@ -79,20 +103,41 @@ Observed sequence for the interrupted `sleep 45` turn (fixture
 `account/rateLimits/updated` → `thread/status/changed (idle)` →
 `turn/completed (interrupted, error: null)`
 
-- Assistant output: `item/agentMessage/delta` (schema-VERIFIED;
+Observed sequence for the write-proof turn (fixture
+`thread-start-workspace-write.json`):
+
+`item/started+completed (userMessage)` →
+`item/started+completed (agentMessage, phase: commentary)` →
+`item/started+completed (fileChange, status: inProgress → completed,
+changes: [{path, kind: {type: "add"}, diff}])` →
+`item/started+completed (agentMessage, phase: final_answer)` →
+`turn/completed (completed, error: null, itemsView: summary)`
+
+- Assistant output: `item/agentMessage/delta` (schema-only;
   UNVERIFIED live — the turn was interrupted before any assistant text).
 - Tool/command start AND completion: `item/started` /
-  `item/completed` with typed `item.type` (VERIFIED live for `userMessage`
-  start+completion and `commandExecution` start). The command item carries
-  `command` (`/bin/zsh -lc 'sleep 45'`), `cwd`, `processId` (string,
-  `"43138"` — its mapping to an OS pid is UNVERIFIED), `status:
-  "inProgress"`, `exitCode`/`durationMs` (null until completion).
+  `item/completed` with typed `item.type` (VERIFIED live: `userMessage`
+  start+completion in both turns; `commandExecution` start in the interrupted
+  turn; `agentMessage` start+completion in commentary AND final_answer phases,
+  and `fileChange` start+completion with `changes[]` path/kind/diff in the
+  write turn). The command item carries `command`
+  (`/bin/zsh -lc 'sleep 45'`), `cwd`, `processId` (string, `"43138"` — its
+  mapping to an OS pid is UNVERIFIED), `status: "inProgress"`,
+  `exitCode`/`durationMs` (null until completion). EMPHASIS: the live
+  `item/completed` shape for a `commandExecution` item remains UNOBSERVED —
+  the only command item in flight was interrupted before completing, and no
+  `item/completed` was emitted for it. Work Package C must NOT assume its
+  fields (e.g. how `exitCode`/`aggregatedOutput` look on success, failure, or
+  interrupt); treat them as schema-only until a completion is captured.
 - Command output streaming: `item/commandExecution/outputDelta`
-  (schema-VERIFIED, UNVERIFIED live — no output produced before interrupt).
+  (schema-only, UNVERIFIED live — neither small turn produced output
+  deltas).
 - File changes: `item/fileChange/patchUpdated` + legacy
-  `item/fileChange/outputDelta` (schema-VERIFIED, UNVERIFIED live).
+  `item/fileChange/outputDelta` (schema-only, UNVERIFIED live as
+  notifications); the `fileChange` ITEM start+completion pair IS verified
+  live as above.
 - Errors: `turn.error: {message, codexErrorInfo, …}` on failure turns
-  (schema-VERIFIED, UNVERIFIED live — no failure was induced).
+  (schema-only, UNVERIFIED live — no failure was induced).
 - FINAL result: `turn/completed` with full `turn: {id, status,
   items, …}` (VERIFIED live; `status` ∈ `completed | interrupted |
   failed | inProgress` per schema). In this run `items: []` with
@@ -104,8 +149,11 @@ Observed sequence for the interrupted `sleep 45` turn (fixture
 - `thread.id == sessionId`, stable across the connection (VERIFIED).
 - `thread/list` (filter by `cwd`, pagination) and `thread/read`
   (VERIFIED live). `thread/list` frames are large (43 KB observed with real
-  history) and leak previews/paths/git URLs — the adapter must never persist
-  them raw (same redaction posture as `codex_monitor.ex`).
+  history) and leak previews/paths/git URLs — full values are WITHHELD for
+  privacy and the adapter must never persist them raw (same redaction posture
+  as `codex_monitor.ex`). Fixture `thread-read-shape.json` commits the
+  shape-only key/type frame plus the list envelope (entry count, frame bytes)
+  so text and artifacts agree; no real values are stored.
 - `thread/resume {threadId}` EXISTS (schema + live rejection shape VERIFIED)
   but fresh pre-turn threads have NO rollout file yet, so resume fails
   cleanly: `-32600 "no rollout found for thread id …"` (VERIFIED live for
@@ -116,7 +164,7 @@ Observed sequence for the interrupted `sleep 45` turn (fixture
 - Related: `thread/fork`, `thread/archive|unarchive|delete`,
   `thread/rollback` (DEPRECATED), `thread/revert {beforeTurnId}` for history
   truncation, `turn/steer {expectedTurnId, input}` for same-turn steering
-  (all schema-VERIFIED, UNVERIFIED live). `thread/turns/list` FAILS on
+  (all schema-only, UNVERIFIED live). `thread/turns/list` FAILS on
   ephemeral threads (`-32600`, VERIFIED); `thread/items/list` is
   `not supported yet` (`-32601`, VERIFIED). Consequence: for ephemeral
   threads the adapter CANNOT backfill history — it must buffer the live
@@ -129,8 +177,10 @@ Observed sequence for the interrupted `sleep 45` turn (fixture
   `status: "interrupted"`, `error: null`; thread status bracketed
   `active → idle`. The run stopped cleanly — no hang, no crash, connection
   reusable. VERIFIED with one bounded turn.
-- Negative path VERIFIED: interrupting a non-existent turn returns
-  `-32600 "no active turn to interrupt"` — typed, no side effects.
+- Negative path VERIFIED with a committed frame: interrupting a non-existent
+  turn returns `-32600 "no active turn to interrupt"` — typed, no side
+  effects (real request/response frames committed as the fourth case in
+  fixture `resume-negative.json`).
 - Post-completion repeat interrupt is UNVERIFIED live but rides the same code
   path (expect the same `-32600`), so adapter-level idempotency mapping is
   straightforward.
@@ -144,7 +194,7 @@ Observed sequence for the interrupted `sleep 45` turn (fixture
   these payloads — no adapter work needed for `probe()`.
 - Execution path is a DIFFERENT shape: turn failures carry
   `turn.error.codexErrorInfo` ∈ `usageLimitExceeded | rateLimitExceeded |
-  serverOverloaded | …` (schema-VERIFIED). The capacity classifier does NOT
+  serverOverloaded | …` (schema-only). The capacity classifier does NOT
   cover this shape — the adapter needs a small new mapping
   (`usageLimitExceeded|rateLimitExceeded → :quota_refused`). No refusal was
   induced live (UNVERIFIED end-to-end, deliberately — quota is scarce).
@@ -152,10 +202,11 @@ Observed sequence for the interrupted `sleep 45` turn (fixture
 ### 262144-byte line cap for execution payloads
 
 - Largest frame observed: 43 KB (`thread/list` with real history).
-  Execution frames in the tiny run: ≤ 1123 bytes. So the cap is safe for ALL
-  observed traffic, but execution-sized payloads (large `aggregatedOutput`,
-  big plan text, transcript catch-up) were NOT observed — safety for large
-  outputs is UNVERIFIED. This matters directly for the Log flood eval.
+  Execution frames across both small turns: ≤ 1123 bytes. So the cap is safe
+  for ALL observed traffic, but execution-sized payloads (large
+  `aggregatedOutput`, big plan text, transcript catch-up) were NOT observed
+  — safety for large outputs is UNVERIFIED. This matters directly for the Log
+  flood eval.
 - Transport behavior on exceed (existing code): flags `:oversized_frame` and
   DISCARDS the remainder of the line — silent data loss mid-run. The adapter
   must raise the cap substantially for execution use AND treat oversize as a
@@ -172,8 +223,9 @@ Observed sequence for the interrupted `sleep 45` turn (fixture
   killing only the group leader → child SURVIVED, reparented to ppid 1
   (same signature as the codex leak); `killpg` → no survivors. So the
   transport's `Port.close`/SIGTERM has identical semantics: the app-server
-  dies (VERIFIED: no `codex app-server` process remained after each probe),
-  but grandchildren outlive it.
+  dies (uncommitted shell observation, NOT labelled VERIFIED: no
+  `codex app-server` process remained after each probe), but grandchildren
+  outlive it.
 - Consequence for the Cancel eval: NEITHER `turn/interrupt` NOR transport
   close is sufficient. The adapter must own the process group (spawn the
   server in its own pgid / job object) and `killpg` on cancel/lease-expiry,
@@ -190,7 +242,8 @@ Observed sequence for the interrupted `sleep 45` turn (fixture
    ephemeral threads — `thread/items/list` unsupported); (b) map
    `turn/completed` statuses (`completed|interrupted|failed`) to `:result` /
    `:error` / `:cancelled` HarnessEvents. All primitives VERIFIED except
-   failure-turn shape (schema only).
+   failure-turn shape (schema-only) and `commandExecution` item completion
+   (UNVERIFIED live — interrupted before completing).
 3. **Resume** — NOT satisfiable as written: the suite does start→immediate
    resume, and fresh pre-turn threads have no rollout (`no rollout found`
    VERIFIED). Adapter must either omit `:resume` initially or scope it to
@@ -215,9 +268,10 @@ Observed sequence for the interrupted `sleep 45` turn (fixture
   cleanly (VERIFIED live). Exec offers no in-band cancel — only process kill,
   which per §3 leaks descendants anyway while also forfeiting typed state.
 - Decisive for Lease-boundary: typed item start/completion (command, cwd,
-  exit code), `thread/status` active/idle bracketing, per-turn token usage,
-  and mid-turn rate-limit telemetry (all VERIFIED live) give the adapter real
-  supervision hooks. Exec's JSON stream cannot bracket or steer mid-run.
+  file-change diffs), `thread/status` active/idle bracketing, per-turn token
+  usage, and mid-turn rate-limit telemetry (all VERIFIED live) give the
+  adapter real supervision hooks. Exec's JSON stream cannot bracket or steer
+  mid-run. (Command `exitCode` on completion is still UNVERIFIED live.)
 - Resume caveat (§2) is acceptable for one supervised Elf: within a lease the
   adapter holds the live connection; cross-restart resume is a
   post-turn-rollout path, deferrable.
@@ -228,8 +282,9 @@ Observed sequence for the interrupted `sleep 45` turn (fixture
   `process/*`, `remoteControl/*`). Mitigation: pin the tested CLI version in
   the adapter's compatibility gate (the `Capacity.Registry` pattern already
   supports this), tolerate unknown notifications, buffer events.
-- No instability observed: 3 connections, 1 live interrupted turn, zero
-  crashes/hangs; server exits cleanly on transport close.
+- No instability observed: 4 connections, 2 live turns (1 interrupted, 1
+  write completed), zero crashes/hangs. Transport-close cleanup (no lingering
+  server process) is an uncommitted shell observation, not a VERIFIED claim.
 - Required adapter mitigations (non-negotiable): own-process-group +
   `killpg` on cancel/expiry with reaping assertion; raised frame cap with
   oversize = fail-closed + cancel; live-event buffering; safe-subset
@@ -238,28 +293,39 @@ Observed sequence for the interrupted `sleep 45` turn (fixture
 
 ## 6. Fixtures (`test/fixtures/codex/app_server/`, all redacted)
 
-IDs remapped to THREAD-n/TURN-n/EXEC-n, `$HOME`/`$FIXTURE`/email redacted,
+IDs remapped to ID-n, `$HOME`/`$FIXTURE`/`$FIXTURE-WRITE`/email redacted,
 large payloads truncated and noted. Secret scan (home path, email, bearer,
 `sk-`, raw UUIDs) is clean.
 
 - `initialize-handshake.json` — handshake frames; no capabilities field.
-- `thread-start.json` — `thread/start` req/resp + `thread/started`.
-- `turn-interrupt.json` — the one live turn: `turn/start` resp,
-  interrupt ack, `interrupted` completion, event sequence, command item.
+- `thread-start.json` — `thread/start` req/resp + `thread/started`
+  (READ-ONLY profile: no `sandbox` param sent, server replied `readOnly`).
+- `thread-start-workspace-write.json` — the write proof: exact accepted
+  `"sandbox": "workspace-write"` param, `workspaceWrite` echo, completed
+  `fileChange` item, `completed` turn frame, disk proof.
+- `thread-read-shape.json` — shape-only `thread/read` + `thread/list`
+  envelope (values withheld for privacy).
+- `turn-interrupt.json` — the interrupted turn: `turn/start` resp, full
+  interrupt request frame, interrupt ack, full `interrupted` completion
+  frame, event sequence, command item, status/token-usage bracketing frames.
 - `method-inventory.json` — 99 base / 155 experimental client methods, 81
-  server notifications, core thread/turn lists.
-- `resume-negative.json` — `no rollout found`, ephemeral `turns/list`,
-  unsupported `items/list` rejections.
-- `rate-limits-mid-turn.json` — sparse update keys observed mid-turn.
-- `process-group.json` — descendant-survival experiment outcome.
+  server notifications, core thread/turn lists, truncated raw rejection frame.
+- `resume-negative.json` — REAL frames: `no rollout found`, ephemeral
+  `turns/list`, unsupported `items/list`, and bogus-id `turn/interrupt`
+  (`-32600 "no active turn to interrupt"`) rejections.
+- `rate-limits-mid-turn.json` — full redacted sparse-update frame from
+  mid-turn.
+- `process-group.json` — descendant-survival outcome + full experiment
+  transcript.
 
-Live run explicitly SKIPPED beyond the single interrupt turn: post-turn
-`thread/resume`, failure-turn `codexErrorInfo` end-to-end, and large-payload
-line-cap behavior are UNVERIFIED by choice (quota scarcity); all are marked
-above with the exact evidence gap and the fixture/schema basis for the
-interim conclusion. No production adapter written; `lib/` untouched.
+Live runs explicitly BOUNDED to two minimal turns (quota scarcity): post-turn
+`thread/resume`, failure-turn `codexErrorInfo` end-to-end,
+`commandExecution` `item/completed`, assistant-text deltas, and large-payload
+line-cap behavior are UNVERIFIED by choice; all are marked above with the
+exact evidence gap and the fixture/schema basis for the interim conclusion.
+No production adapter written; `lib/` untouched.
 
-## 7. Repro (zero-model, except the one noted live turn)
+## 7. Repro (zero-model, except the two noted live turns)
 
 ```sh
 codex app-server generate-json-schema --out /tmp/opencode/codex-schema
@@ -268,6 +334,9 @@ codex app-server generate-json-schema --experimental --out /tmp/opencode/codex-s
 # initialize → initialized → account/read → account/rateLimits/read →
 # thread/start (cwd=$FIXTURE) → thread/list|read →
 # turn/interrupt (bogus ids) → unknown method (runtime inventory)
-# Live turn (1×, ~16.6k input tokens): turn/start [`sleep 45`] →
+# Live turn 1 (~16.6k input tokens): turn/start [`sleep 45`] →
 # await item/started(commandExecution) → turn/interrupt → turn/completed
+# Live turn 2 (~16.9k input tokens, sandbox workspace-write):
+# turn/start [create WRITE_PROOF.txt with one line] → turn/completed →
+# verify on disk: exactly one new file with exactly that line
 ```

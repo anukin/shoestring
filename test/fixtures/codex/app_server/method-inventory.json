@@ -94,5 +94,14 @@
   "thread/timeline/list",
   "turn/settings/update"
  ],
- "full_runtime_methods_truncated_note": "full list omitted; runtime rejection enumerates 150+ variants including thread/queue/*, process/spawn|writeStdin|kill, remoteControl/*"
+ "full_runtime_methods_truncated_note": "full list omitted; runtime rejection enumerates 150+ variants including thread/queue/*, process/spawn|writeStdin|kill, remoteControl/*",
+ "runtime_rejection_frame": {
+  "id": 11,
+  "error": {
+   "code": -32600,
+   "message_head": "Invalid request: unknown variant `nope/notAMethod`, expected one of `initialize`, `server/diagnostics`, `thread/start`, `thread/resume`, `thread/fork`, `thread/archive`, `thread/delete`, `thread/unsubscribe`, `thread/increment_elicitation`, `thread/decrement_elicitation`, `thread/name/set`, `thread/",
+   "message_bytes": 3684,
+   "truncation_note": "message is the full accepted-variant enumeration; head only is committed, extracted method lists above are the evidence"
+  }
+ }
 }

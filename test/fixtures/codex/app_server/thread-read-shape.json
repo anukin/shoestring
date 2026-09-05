@@ -1,0 +1,48 @@
+{
+ "fixture_kind": "thread_shapes",
+ "evidence_status": "live_observed",
+ "cli": "codex-cli 0.153.2",
+ "note": "Shape-only frames: thread/read thread-object key/type shape for the spike thread, plus thread/list envelope shape with entry count. Full values WITHHELD for privacy (list entries leak previews, home paths, git URLs). Values below are type placeholders, not real data.",
+ "thread_read_thread_shape": {
+  "id": "<str>",
+  "extra": null,
+  "sessionId": "<str>",
+  "forkedFromId": null,
+  "parentThreadId": null,
+  "preview": "<str>",
+  "ephemeral": "<bool>",
+  "section": null,
+  "sectionEnteredAt": null,
+  "projectId": null,
+  "historyMode": "<str>",
+  "modelProvider": "<str>",
+  "model": "<str>",
+  "reasoningEffort": "<str>",
+  "createdAt": "<int>",
+  "updatedAt": "<int>",
+  "recencyAt": "<int>",
+  "status": {
+   "type": "<str>"
+  },
+  "path": null,
+  "cwd": "<str>",
+  "cliVersion": "<str>",
+  "source": "<str>",
+  "canAcceptDirectInput": "<bool>",
+  "threadSource": null,
+  "agentNickname": null,
+  "agentRole": null,
+  "gitInfo": null,
+  "name": null,
+  "turns": "<list len=0>"
+ },
+ "thread_list_envelope": {
+  "result_keys": [
+   "backwardsCursor",
+   "data",
+   "nextCursor"
+  ],
+  "entry_count": 5,
+  "list_frame_bytes": 37877
+ }
+}

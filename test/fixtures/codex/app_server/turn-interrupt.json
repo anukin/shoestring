@@ -2,7 +2,7 @@
  "fixture_kind": "turn_interrupt",
  "evidence_status": "live_observed",
  "cli": "codex-cli 0.153.2",
- "note": "One bounded live turn (prompt: run `sleep 45`, reply DONE). turn/interrupt on the live turn acked with {result:{}} and turn/completed arrived with status=interrupted, error=null. thread/status/changed bracketed active->idle. The sleep descendant SURVIVED (see cancellation-descendants note). No item/completed was emitted for the in-flight commandExecution item. IDs remapped; $FIXTURE redacted.",
+ "note": "One bounded live turn (prompt: run `sleep 45`, reply DONE). turn/interrupt on the live turn acked with {result:{}} and turn/completed arrived with status=interrupted, error=null. thread/status/changed bracketed active->idle. The sleep descendant SURVIVED (see cancellation-descendants note). No item/completed was emitted for the in-flight commandExecution item. IDs remapped; $FIXTURE redacted. Full interrupt request and turn/completed frames are committed here; the bogus-id negative case lives as real frames in resume-negative.json.",
  "turn_start_response": {
   "id": 3,
   "result": {
@@ -70,5 +70,73 @@
   "exitCode": null,
   "durationMs": null
  },
- "max_frame_bytes_observed": 1123
+ "max_frame_bytes_observed": 1123,
+ "interrupt_request_frame": {
+  "method": "turn/interrupt",
+  "id": 4,
+  "params": {
+   "threadId": "ID-6",
+   "turnId": "ID-7"
+  }
+ },
+ "turn_completed_frame": {
+  "id": "ID-7",
+  "items": [],
+  "itemsView": "notLoaded",
+  "status": "interrupted",
+  "error": null,
+  "startedAt": 1788584184,
+  "completedAt": 1788584188,
+  "durationMs": 4535
+ },
+ "bracketing_frames": [
+  {
+   "method": "thread/status/changed",
+   "params": {
+    "threadId": "ID-1",
+    "status": {
+     "type": "active",
+     "activeFlags": []
+    }
+   },
+   "emittedAtMs": 1788584184197
+  },
+  {
+   "method": "thread/tokenUsage/updated",
+   "params": {
+    "threadId": "ID-1",
+    "turnId": "ID-2",
+    "tokenUsage": {
+     "total": {
+      "totalTokens": 16678,
+      "inputTokens": 16649,
+      "cachedInputTokens": 6400,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 29,
+      "reasoningOutputTokens": 0
+     },
+     "last": {
+      "totalTokens": 16678,
+      "inputTokens": 16649,
+      "cachedInputTokens": 6400,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 29,
+      "reasoningOutputTokens": 0
+     },
+     "modelContextWindow": 258400
+    }
+   },
+   "emittedAtMs": 1788584188730
+  },
+  {
+   "method": "thread/status/changed",
+   "params": {
+    "threadId": "ID-1",
+    "status": {
+     "type": "idle"
+    }
+   },
+   "emittedAtMs": 1788584188731
+  }
+ ]
 }

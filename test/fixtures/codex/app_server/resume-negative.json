@@ -1,34 +1,78 @@
 {
- "fixture_kind": "resume_negatives",
+ "fixture_kind": "negatives",
  "evidence_status": "live_observed",
  "cli": "codex-cli 0.153.2",
- "note": "Fresh threads have no rollout file yet, so thread/resume fails cleanly with -32600 'no rollout found' (both ephemeral AND non-ephemeral pre-turn). thread/turns/list on ephemeral threads fails; thread/items/list is not supported yet (-32601). Resume-after-restart therefore requires a persisted (post-turn) rollout.",
+ "note": "Real request/response frames (IDs remapped, no secrets in these frames). Fresh threads have no rollout file yet so thread/resume fails cleanly; ephemeral threads reject turns/list; items/list is unimplemented; interrupting an unknown turn is a typed -32600 rejection with no side effects. Resume-after-restart therefore requires a persisted (post-turn) rollout.",
  "cases": [
   {
-   "request": "thread/resume {threadId: fresh pre-turn thread}",
-   "response": {
+   "case": "thread/resume fresh pre-turn thread",
+   "request_frame": {
+    "method": "thread/resume",
+    "id": 7,
+    "params": {
+     "threadId": "ID-1"
+    }
+   },
+   "response_frame": {
     "error": {
      "code": -32600,
-     "message": "no rollout found for thread id THREAD-n"
-    }
+     "message": "no rollout found for thread id ID-1"
+    },
+    "id": 7
    }
   },
   {
-   "request": "thread/turns/list {threadId: ephemeral thread}",
-   "response": {
+   "case": "thread/turns/list on ephemeral thread",
+   "request_frame": {
+    "method": "thread/turns/list",
+    "id": 9,
+    "params": {
+     "threadId": "ID-1",
+     "limit": 5
+    }
+   },
+   "response_frame": {
     "error": {
      "code": -32600,
      "message": "ephemeral threads do not support thread/turns/list"
-    }
+    },
+    "id": 9
    }
   },
   {
-   "request": "thread/items/list {threadId}",
-   "response": {
+   "case": "thread/items/list",
+   "request_frame": {
+    "method": "thread/items/list",
+    "id": 10,
+    "params": {
+     "threadId": "ID-1",
+     "limit": 5
+    }
+   },
+   "response_frame": {
     "error": {
      "code": -32601,
      "message": "thread/items/list is not supported yet"
+    },
+    "id": 10
+   }
+  },
+  {
+   "case": "turn/interrupt with unknown turn id",
+   "request_frame": {
+    "method": "turn/interrupt",
+    "id": 8,
+    "params": {
+     "threadId": "ID-1",
+     "turnId": "ID-2"
     }
+   },
+   "response_frame": {
+    "error": {
+     "code": -32600,
+     "message": "no active turn to interrupt"
+    },
+    "id": 8
    }
   }
  ]
