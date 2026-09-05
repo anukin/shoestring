@@ -220,7 +220,9 @@ Reference: `lib/shoestring/harness/adapter.ex` callbacks,
   capture provably cannot emit the tool-boundary frames that block WP D,
   so the capture must exercise tools — one file write plus one
   deterministic command, in the same shape as the Codex exec spike, in a
-  disposable `/tmp` git repo. The single command (needs the human's
+  disposable `/tmp` git repo. The `Use Bash to ...` phrasing mirrors
+  Gate 0A's own tools-mode prompt (`claude_statusline_probe.js:180`),
+  so the model never balks at file creation with only Bash offered. The single command (needs the human's
   explicit go-ahead; spends Claude quota — one short turn, `Bash` tool
   only, stderr retained this time, `< /dev/null` so no stdin prompt is
   ever read):
@@ -230,7 +232,7 @@ Reference: `lib/shoestring/harness/adapter.ex` callbacks,
   git -C "$FIXTURE_DIR" init && \
   (cd "$FIXTURE_DIR" && claude --print --output-format stream-json \
     --dangerously-skip-permissions --tools "Bash" \
-    "create a file hello.txt containing the word hello, then run: printf ok" \
+    "Use Bash to create a file hello.txt containing the word hello, then run: printf ok" \
     < /dev/null \
     > "$FIXTURE_DIR/claude-stream-capture.stdout.jsonl" \
     2> "$FIXTURE_DIR/claude-stream-capture.stderr.txt"; echo "exit=$?")
@@ -242,21 +244,20 @@ Reference: `lib/shoestring/harness/adapter.ex` callbacks,
     (PR #23) were version-sensitive; the Gate 0A failure is already
     pinned to 2.1.251 vs 2.1.261 here, and the capture must be pinned
     the same way.
-  - (b) **Permission flag:** `--dangerously-skip-permissions` is needed
-    because a non-interactive `--print` run that reaches a tool
+  - (b) **Permission flag — use `--dangerously-skip-permissions`
+    directly.** A non-interactive `--print` run that reaches a tool
     permission prompt has no human to answer it — the run would hang or
     deny, and a denied tool call answers nothing about boundary-event
-    shapes. Blast radius is confined to a disposable `mktemp -d` repo
-    under `/tmp` with `--tools "Bash"` only. Whether the narrower
-    `--permission-mode dontAsk` (which Gate 0A used, but only with a
-    tool-free prompt, so it never proved tool auto-approval) achieves
-    the same auto-approval **cannot be established from `--help`/schema
-    without a live call — UNVERIFIED, not guessed.** At capture time,
-    prefer attempting the narrower flag first; escalate to the bypass
-    only if the run denies or hangs. Honest cost note: a denied first
-    attempt still spends quota (the model turn happens before the tool
-    denial), so the human may prefer authorizing the bypass up front
-    rather than paying for two turns.
+    shapes. The narrower `--permission-mode dontAsk` is not a viable
+    first attempt: `dontAsk` means "don't prompt, DENY if not
+    pre-approved," so with tools enabled and no `--allowed-tools`
+    allowlist it would deny the tool call and burn a full model turn
+    producing nothing — the exact waste a narrower-first ordering was
+    meant to avoid. (It could only work paired with an explicit
+    allowlist, which is untested surface of its own.) The bypass stays
+    conspicuous in the record even though it is the right call here:
+    blast radius is confined to a disposable `mktemp -d` repo under
+    `/tmp` with `--tools "Bash"` only and a trivial prompt.
   - (c) **Labeled expectations:** this capture answers Q5 (tool
     boundary — EXPECTED, pending live frames), Q1 (envelope shape —
     EXPECTED), and Q2-partial (whether a session id is exposed in the
@@ -289,7 +290,15 @@ Reference: `lib/shoestring/harness/adapter.ex` callbacks,
   is from 2026-08-29 07:34:19 UTC with `seven_day.resets_at:
   1788033600` (= 2026-08-29 20:00 UTC) — that window rolled over a week
   ago (today is 2026-09-05) and says nothing about current refusal
-  risk. No current capacity reading is obtainable from our committed
-  monitors without a live provider call (snapshots live only in
-  `ClaudeMonitor` GenServer memory; no snapshot is persisted to the
-  repo), so current capacity is **UNKNOWN**.
+  risk. The capacity plumbing itself IS durable — `ClaudeMonitor`
+  ingests through a `:sink` defaulting to `Shoestring.Harness.Observatory`,
+  which appends to the trajectory and projects into the
+  `harness_capacity_snapshots` table via `CapacitySnapshotRecord`
+  (REPO-INSPECTION — `claude_monitor.ex`, `observatory.ex`,
+  `projector.ex`). But `ClaudeMonitor` is passive: it never polls or
+  invokes Claude, it only ingests `statusLine`-hook callbacks from an
+  interactive session through the receiver boundary
+  (`claude_status_line_receiver.ex`, adapter `claude_interactive_status_line`).
+  No such callback has been ingested since Gate 0A, so no current
+  snapshot exists in the repo or the local database — current capacity
+  is **UNKNOWN** and genuinely cannot be read without a live call.
