@@ -109,17 +109,43 @@ defmodule Shoestring.Harness.CodexAppServer.AdapterIsolationTest do
     test "an unexpected crash in an adapter session does not take down the monitor", %{
       monitor: monitor
     } do
-      # Spawn an unlinked process that crashes
-      {pid, ref} =
-        spawn_monitor(fn ->
-          raise "simulated adapter parser crash"
-        end)
+      {:ok, req} =
+        Shoestring.Harness.RunRequest.new(%{
+          version: 1,
+          goal_id: "00000000-0000-4000-8000-000000000001",
+          task_id: "00000000-0000-4000-8000-000000000002",
+          workspace_ref: "workspace/test",
+          prompt: "test isolation",
+          policy: %{mode: "supervised", network: false, write_access: true},
+          requested_capabilities: [],
+          dispatch_id: "00000000-0000-4000-8000-000000000003"
+        })
 
-      # Wait for crash notification
-      assert_receive {:DOWN, ^ref, :process, ^pid, {%RuntimeError{}, _}}
+      # Start an unlinked real Session process
+      {:ok, session_pid} =
+        Shoestring.Harness.CodexAppServer.Session.start_link(
+          run_request: req,
+          auto_handshake: false,
+          thread_id: "01950000-0000-7000-8000-000000000001"
+        )
+
+      Process.unlink(session_pid)
+      session_ref = Process.monitor(session_pid)
+
+      # Induce an abrupt crash in the real Session
+      Process.exit(session_pid, :kill)
+      assert_receive {:DOWN, ^session_ref, :process, ^session_pid, :killed}
 
       # ASSERTION: The capacity monitor continues running without interruption
       assert Process.alive?(monitor)
+
+      assert CodexMonitor.status(:isolated_test_monitor) in [
+               :connected,
+               :refused,
+               :incompatible_schema,
+               :disconnected,
+               :unavailable
+             ]
     end
   end
 end

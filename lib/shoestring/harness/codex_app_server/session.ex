@@ -23,6 +23,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
   @default_max_frame_size 10_485_760
   @default_request_timeout 15_000
+  @default_handshake_timeout_ms 15_000
 
   defstruct [
     :run_id,
@@ -43,7 +44,12 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     :status,
     :next_request_id,
     :pending_requests,
-    :terminal_result
+    :terminal_result,
+    :max_frame_size,
+    :handshake_timeout_ms,
+    :handshake_timer,
+    :auto_handshake,
+    :identity_waiters
   ]
 
   # --- Public API ---
@@ -51,6 +57,32 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   @doc "Starts a new session process."
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
+  end
+
+  @doc """
+  Blocks until the thread_id is known from the handshake and returns the RunIdentity,
+  or returns an error if handshake fails or times out.
+  """
+  @spec await_run_identity(GenServer.server(), timeout()) ::
+          {:ok, RunIdentity.t()} | {:error, Error.t()}
+  def await_run_identity(server, timeout \\ @default_request_timeout) do
+    GenServer.call(server, :await_run_identity, timeout)
+  catch
+    :exit, {:timeout, _} ->
+      {:error,
+       Error.new(
+         :transport,
+         "handshake_timeout",
+         "Handshake failed to establish identity within #{timeout}ms"
+       )}
+
+    :exit, reason ->
+      {:error,
+       Error.new(
+         :transport,
+         "session_crashed",
+         "Session process exited during handshake: #{inspect(reason)}"
+       )}
   end
 
   @doc "Returns the normalized RunIdentity for this session."
@@ -99,7 +131,9 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     owner = Keyword.get(opts, :owner) || self()
     transport_mod = Keyword.get(opts, :transport, StdioTransport)
     configured_transport_pid = Keyword.get(opts, :transport_pid)
-    _max_frame_size = Keyword.get(opts, :max_frame_size, @default_max_frame_size)
+    max_frame_size = Keyword.get(opts, :max_frame_size, @default_max_frame_size)
+    handshake_timeout_ms = Keyword.get(opts, :handshake_timeout_ms, @default_handshake_timeout_ms)
+    auto_handshake = Keyword.get(opts, :auto_handshake, true)
 
     state = %__MODULE__{
       run_id: run_id,
@@ -120,40 +154,87 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       status: :starting,
       next_request_id: 1,
       pending_requests: %{},
-      terminal_result: nil
+      terminal_result: nil,
+      max_frame_size: max_frame_size,
+      handshake_timeout_ms: handshake_timeout_ms,
+      handshake_timer: nil,
+      auto_handshake: auto_handshake,
+      identity_waiters: []
     }
 
-    if configured_transport_pid do
-      {:ok, state, {:continue, :init_transport}}
-    else
-      {:ok, state}
-    end
+    {:ok, state, {:continue, :init_transport}}
   end
 
   @impl GenServer
   def handle_continue(:init_transport, state) do
-    ref = Process.monitor(state.transport_pid)
-    os_pid = get_os_pid(state.transport_mod, state.transport_pid)
-    {:noreply, %{state | transport_ref: ref, transport_os_pid: os_pid}}
+    if state.transport_pid do
+      ref = Process.monitor(state.transport_pid)
+      os_pid = get_os_pid(state.transport_mod, state.transport_pid)
+      state = %{state | transport_ref: ref, transport_os_pid: os_pid}
+
+      if state.auto_handshake do
+        send(self(), {:codex_transport_connected, state.transport_pid})
+      end
+
+      {:noreply, state}
+    else
+      # Live path: spawn StdioTransport when :transport_pid is absent
+      transport_opts =
+        state.opts
+        |> Keyword.get(:transport_opts, [])
+        |> Keyword.merge(
+          owner: self(),
+          max_frame_size: state.max_frame_size
+        )
+        |> forward_opt(state.opts, :command)
+        |> forward_opt(state.opts, :executable)
+        |> forward_opt(state.opts, :args)
+
+      case state.transport_mod.start_link(transport_opts) do
+        {:ok, pid} ->
+          ref = Process.monitor(pid)
+          os_pid = get_os_pid(state.transport_mod, pid)
+          {:noreply, %{state | transport_pid: pid, transport_ref: ref, transport_os_pid: os_pid}}
+
+        {:error, reason} ->
+          Logger.error("CodexAppServer: failed to spawn transport: #{inspect(reason)}")
+          error = Error.new(:transport, "transport_spawn_failed", inspect(reason))
+          state = %{state | status: :failed, terminal_result: {:error, error}}
+          state = emit_synthetic_error(state, error)
+          state = reply_identity_waiters(state, {:error, error})
+          {:noreply, state}
+      end
+    end
   end
 
   # --- Calls ---
 
   @impl GenServer
-  def handle_call(:get_run_identity, _from, state) do
-    run_id = state.run_id
-    process_id = state.transport_os_pid && to_string(state.transport_os_pid)
-    session_id = state.thread_id
+  def handle_call(:await_run_identity, from, state) do
+    cond do
+      state.status == :failed ->
+        reply =
+          state.terminal_result ||
+            {:error, Error.new(:transport, "session_failed", "Session failed during handshake")}
 
-    case RunIdentity.new(%{
-           run_id: run_id,
-           harness_id: "codex_app_server_stdio",
-           process_id: process_id || "os-pid-#{System.unique_integer([:positive])}",
-           provider_session_id: session_id || "session-#{run_id}"
-         }) do
-      {:ok, identity} -> {:reply, {:ok, identity}, state}
-      {:error, changeset} -> {:reply, {:error, changeset}, state}
+        {:reply, reply, state}
+
+      state.status == :closed ->
+        {:reply,
+         {:error, Error.new(:transport, "session_closed", "Session closed during handshake")},
+         state}
+
+      state.thread_id != nil and
+          state.status in [:turn_in_progress, :stopping, :completed, :interrupted] ->
+        {:reply, build_run_identity(state), state}
+
+      true ->
+        {:noreply, %{state | identity_waiters: [from | state.identity_waiters]}}
     end
+  end
+
+  def handle_call(:get_run_identity, _from, state) do
+    {:reply, build_run_identity(state), state}
   end
 
   def handle_call(:stream_events, _from, state) do
@@ -164,7 +245,8 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     opts_map = if is_list(opts), do: Map.new(opts), else: opts
     boundary = Map.get(opts_map, :boundary) || Map.get(opts_map, "boundary")
 
-    if boundary in [:safe, :safe_boundary] or Map.get(opts_map, :safe) == true do
+    if boundary in [:safe, :safe_boundary, :item, "item", :lease, "lease"] or
+         Map.get(opts_map, :safe) == true do
       # Safe boundary stopping: wait for in-flight item.completed
       if state.in_flight_item != nil do
         # Let the in-flight item finish; mark stop_requested
@@ -210,9 +292,23 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
   @impl GenServer
   def handle_info({:codex_transport_connected, pid}, state) do
-    state = %{state | transport_pid: pid, transport_ref: Process.monitor(pid)}
-    os_pid = get_os_pid(state.transport_mod, pid)
-    state = %{state | transport_os_pid: os_pid}
+    ref = if state.transport_ref, do: state.transport_ref, else: Process.monitor(pid)
+    os_pid = state.transport_os_pid || get_os_pid(state.transport_mod, pid)
+
+    timer =
+      if state.handshake_timer do
+        state.handshake_timer
+      else
+        Process.send_after(self(), :handshake_timeout, state.handshake_timeout_ms)
+      end
+
+    state = %{
+      state
+      | transport_pid: pid,
+        transport_ref: ref,
+        transport_os_pid: os_pid,
+        handshake_timer: timer
+    }
 
     # Send initialize request
     state =
@@ -232,20 +328,48 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     {:noreply, state}
   end
 
-  def handle_info({:codex_transport_frame, _pid, line}, state) do
-    case Jason.decode(line) do
-      {:ok, frame} ->
-        state = handle_rpc_frame(frame, state)
-        {:noreply, state}
+  def handle_info(:handshake_timeout, state) do
+    if state.status == :turn_in_progress or
+         (state.thread_id != nil and state.opts[:resume]) do
+      {:noreply, %{state | handshake_timer: nil}}
+    else
+      Logger.error("CodexAppServer: handshake timed out after #{state.handshake_timeout_ms}ms")
 
-      {:error, reason} ->
-        Logger.warning("CodexAppServer received malformed frame: #{inspect(reason)}")
-        {:noreply, state}
+      error =
+        Error.new(
+          :transport,
+          "handshake_timeout",
+          "Handshake failed to complete within #{state.handshake_timeout_ms}ms"
+        )
+
+      state = %{state | status: :failed, terminal_result: {:error, error}, handshake_timer: nil}
+      state = emit_synthetic_error(state, error)
+      reap_descendants(state)
+      state = reply_identity_waiters(state, {:error, error})
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:codex_transport_frame, _pid, line}, state) do
+    if state.status in [:failed, :closed, :interrupted, :completed] do
+      # Terminal guard: ignore subsequent frames after terminal status (Nit 3)
+      {:noreply, state}
+    else
+      case Jason.decode(line) do
+        {:ok, frame} ->
+          state = handle_rpc_frame(frame, state)
+          {:noreply, state}
+
+        {:error, reason} ->
+          Logger.warning("CodexAppServer received malformed frame: #{inspect(reason)}")
+          {:noreply, state}
+      end
     end
   end
 
   def handle_info({:codex_transport_error, _pid, :oversized_frame}, state) do
     Logger.error("CodexAppServer: oversized frame detected at line cap; fail-closed.")
+    cancel_handshake_timer(state)
     # Fail-closed: interrupt turn, reap processes, emit error event
     state = do_interrupt(state)
     reap_descendants(state)
@@ -258,16 +382,23 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       )
 
     state = emit_synthetic_error(state, error)
+    state = reply_identity_waiters(state, {:error, error})
     {:noreply, %{state | status: :failed, terminal_result: {:error, error}}}
   end
 
   def handle_info({:codex_transport_closed, _pid, reason}, state) do
+    cancel_handshake_timer(state)
     reap_descendants(state)
+    error = Error.new(:transport, "transport_closed", inspect(reason))
+    state = reply_identity_waiters(state, {:error, error})
     {:noreply, %{state | status: :closed, terminal_result: reason}}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{transport_ref: ref} = state) do
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{transport_ref: ref} = state) do
+    cancel_handshake_timer(state)
     reap_descendants(state)
+    error = Error.new(:transport, "transport_down", inspect(reason))
+    state = reply_identity_waiters(state, {:error, error})
     {:noreply, %{state | transport_pid: nil, transport_ref: nil, status: :closed}}
   end
 
@@ -276,6 +407,37 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   end
 
   # --- RPC Protocol Logic ---
+
+  defp handle_rpc_frame(%{"id" => id, "error" => err}, state)
+       when not is_nil(id) and not is_nil(err) do
+    cancel_handshake_timer(state)
+
+    case Map.pop(state.pending_requests, id) do
+      {{tag, _params}, remaining} ->
+        Logger.error("CodexAppServer RPC error on #{inspect(tag)}: #{inspect(err)}")
+
+        error =
+          Error.new(
+            :transport,
+            "rpc_error",
+            "#{inspect(tag)} failed: #{err["message"] || inspect(err)}"
+          )
+
+        state = %{
+          state
+          | pending_requests: remaining,
+            status: :failed,
+            terminal_result: {:error, error}
+        }
+
+        state = emit_synthetic_error(state, error)
+        reap_descendants(state)
+        reply_identity_waiters(state, {:error, error})
+
+      {nil, _} ->
+        state
+    end
+  end
 
   defp handle_rpc_frame(%{"id" => id} = response, state) when not is_nil(id) do
     # Correlation of responses
@@ -287,12 +449,21 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         state = %{state | pending_requests: remaining}
         # Send initialized notification
         send_notification(state, "initialized", %{})
+
         # Send thread/start (or thread/resume if resuming)
         if state.opts[:resume] && state.thread_id do
           send_rpc(state, "thread/resume", %{"threadId" => state.thread_id}, :thread_resume)
         else
           cwd = (state.run_request && state.run_request.workspace_ref) || "/tmp"
 
+          # NOTE on ephemeral: false (Required for thread/resume):
+          # Codex only persists rollout files on disk (~/.codex/sessions) for non-ephemeral threads.
+          # Consequently, every Elf run writes a rollout file to local user storage.
+          # Because task prompts flow verbatim into rollouts outside Shoestring's trajectory store
+          # and normalizer scrubbing, prompts MUST stay credential-free.
+          # Furthermore, rollouts are vendor-written transcripts that may contain raw model reasoning
+          # or scratchpads, and currently accumulate without automated retention bounds
+          # (follow-up tracked for thread/archive or periodic cleanup).
           send_rpc(
             state,
             "thread/start",
@@ -340,13 +511,18 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
       {{:turn_start, _}, remaining} ->
         turn_id = get_in(response, ["result", "turn", "id"])
+        cancel_handshake_timer(state)
 
-        %{
+        state = %{
           state
           | pending_requests: remaining,
             current_turn_id: turn_id,
-            status: :turn_in_progress
+            status: :turn_in_progress,
+            handshake_timer: nil
         }
+
+        # Handshake and turn launch complete: reply to any awaiting callers
+        reply_identity_waiters(state, build_run_identity(state))
 
       {{:turn_interrupt, _}, remaining} ->
         # Interrupt acknowledged
@@ -413,7 +589,10 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     turn = get_in(frame, ["params", "turn"]) || %{}
     turn_status = turn["status"]
 
-    # Reaping backstop: interrupt or completion finished
+    # Single-turn session lifecycle cleanup (Nit 6):
+    # Once turn/completed arrives, this Elf execution turn is finished. Because this session
+    # oversees a single turn, we reap any background child processes and terminate the app-server
+    # transport OS process to ensure clean teardown without lingering resources.
     reap_descendants(state)
 
     status =
@@ -499,6 +678,11 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     end
   end
 
+  # Descendant process reaping (Nit 5):
+  # Assumes transport OS pid is group leader (pgid == os_pid). Command processIds
+  # reported in item/started frames inherit the app-server's pgid, so calling kill -pid
+  # for child is safe/harmless on both macOS and Linux, while transport-level killpg
+  # (-transport_os_pid) reaps the entire process tree.
   defp reap_descendants(state) do
     # 1. Kill tracked child command pids
     Enum.each(state.in_flight_commands, fn {pid_str, _item} ->
@@ -544,7 +728,41 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     _ -> :ok
   end
 
-  # --- RPC Helpers ---
+  # --- Helpers & RPC Management ---
+
+  defp build_run_identity(state) do
+    run_id = state.run_id
+    process_id = state.transport_os_pid && to_string(state.transport_os_pid)
+    session_id = state.thread_id
+
+    RunIdentity.new(%{
+      run_id: run_id,
+      harness_id: "codex_app_server_stdio",
+      process_id: process_id || "os-pid-#{System.unique_integer([:positive])}",
+      provider_session_id: session_id || "session-#{run_id}"
+    })
+  end
+
+  defp reply_identity_waiters(state, result) do
+    Enum.each(state.identity_waiters, fn from ->
+      GenServer.reply(from, result)
+    end)
+
+    %{state | identity_waiters: []}
+  end
+
+  defp cancel_handshake_timer(%{handshake_timer: ref}) when is_reference(ref) do
+    Process.cancel_timer(ref)
+  end
+
+  defp cancel_handshake_timer(_), do: :ok
+
+  defp forward_opt(opts, source_opts, key) do
+    case Keyword.fetch(source_opts, key) do
+      {:ok, val} -> Keyword.put_new(opts, key, val)
+      :error -> opts
+    end
+  end
 
   defp send_rpc(state, method, params, tag) do
     id = state.next_request_id

@@ -120,10 +120,26 @@ defmodule Shoestring.Harness.CodexAppServer do
     end
   end
 
+  @doc """
+  Sends an asynchronous input/message to the running execution.
+
+  Note: In WP-C, this adapter unconditionally returns `{:ok, :accepted}` without
+  in-turn mid-run steering.
+  """
   @impl Shoestring.Harness.Adapter
   @spec send(RunIdentity.t(), String.t(), map()) :: {:ok, :accepted} | {:error, Error.t()}
   def send(%RunIdentity{}, _message, _opts \\ %{}), do: {:ok, :accepted}
 
+  @doc """
+  Cancels a running session.
+
+  Options:
+    * `:boundary` - when set to `:safe`, `:item`, or `:lease`, cancellation defers
+      issuing `turn/interrupt` until the in-flight `commandExecution` item reaches
+      completion (`item.completed`), issuing the interrupt before any subsequent
+      item begins. By default (no boundary option or `%{}`), `cancel/2` interrupts
+      immediately.
+  """
   @impl Shoestring.Harness.Adapter
   @spec cancel(RunIdentity.t(), map()) :: {:ok, :cancelled} | {:error, Error.t()}
   def cancel(%RunIdentity{} = identity, opts \\ %{}) do
@@ -153,7 +169,7 @@ defmodule Shoestring.Harness.CodexAppServer do
         Session.status(session_pid)
 
       _ ->
-        {:ok, %{status: :completed}}
+        {:ok, %{status: :unknown}}
     end
   end
 
@@ -188,17 +204,28 @@ defmodule Shoestring.Harness.CodexAppServer do
   end
 
   defp start_session(%RunRequest{} = request, opts) do
+    handshake_timeout = Map.get(opts, :handshake_timeout_ms, 15_000)
+
     session_opts =
       opts
       |> Map.to_list()
       |> Keyword.put(:run_request, request)
       |> Keyword.put(:run_id, request.dispatch_id)
+      |> Keyword.put_new(:handshake_timeout_ms, handshake_timeout)
 
     case Session.start_link(session_opts) do
       {:ok, pid} ->
-        {:ok, run_identity} = Session.get_run_identity(pid)
-        store_session(run_identity.run_id, pid)
-        {:ok, run_identity}
+        case Session.await_run_identity(pid, handshake_timeout + 2_000) do
+          {:ok, run_identity} ->
+            store_session(run_identity.run_id, pid)
+            {:ok, run_identity}
+
+          {:error, %Error{} = err} ->
+            {:error, err}
+
+          {:error, reason} ->
+            {:error, Error.new(:transport, "handshake_failed", inspect(reason))}
+        end
 
       {:error, reason} ->
         {:error, Error.new(:transport, "session_start_failed", inspect(reason))}
@@ -206,6 +233,8 @@ defmodule Shoestring.Harness.CodexAppServer do
   end
 
   defp resume_session(%RunIdentity{} = prior, %RunRequest{} = request, opts) do
+    handshake_timeout = Map.get(opts, :handshake_timeout_ms, 15_000)
+
     session_opts =
       opts
       |> Map.to_list()
@@ -213,12 +242,21 @@ defmodule Shoestring.Harness.CodexAppServer do
       |> Keyword.put(:run_id, request.dispatch_id)
       |> Keyword.put(:thread_id, prior.provider_session_id)
       |> Keyword.put(:resume, true)
+      |> Keyword.put_new(:handshake_timeout_ms, handshake_timeout)
 
     case Session.start_link(session_opts) do
       {:ok, pid} ->
-        {:ok, run_identity} = Session.get_run_identity(pid)
-        store_session(run_identity.run_id, pid)
-        {:ok, run_identity}
+        case Session.await_run_identity(pid, handshake_timeout + 2_000) do
+          {:ok, run_identity} ->
+            store_session(run_identity.run_id, pid)
+            {:ok, run_identity}
+
+          {:error, %Error{} = err} ->
+            {:error, err}
+
+          {:error, reason} ->
+            {:error, Error.new(:transport, "session_resume_failed", inspect(reason))}
+        end
 
       {:error, reason} ->
         {:error, Error.new(:transport, "session_resume_failed", inspect(reason))}
