@@ -21,6 +21,7 @@ defmodule Shoestring.Application do
       ] ++
         dispatch_reconciler_children() ++
         capacity_supervisor_children() ++
+        elves_children() ++
         [
           {DNSCluster, query: Application.get_env(:shoestring, :dns_cluster_query) || :ignore},
           ShoestringWeb.Endpoint
@@ -73,5 +74,19 @@ defmodule Shoestring.Application do
     else
       []
     end
+  end
+
+  defp elves_children do
+    # The Elf supervisor is always present so runs stay independently
+    # addressable. It boots with zero children in every environment — an Elf
+    # (and therefore an OS process) only exists after an explicit
+    # `Shoestring.Elves` start call — so unlike the capacity monitors there is
+    # nothing to disable in test config. Tests that need isolation start their
+    # own unnamed supervisor and pass it as `supervisor:` instead of using the
+    # global one.
+    [
+      {Registry, keys: :unique, name: Shoestring.Elves.Registry},
+      Supervisor.child_spec(Shoestring.Elves.Supervisor, restart: :transient)
+    ]
   end
 end

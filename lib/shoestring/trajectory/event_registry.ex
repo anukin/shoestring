@@ -271,6 +271,17 @@ defmodule Shoestring.Trajectory.EventRegistry do
           extensions: :map
         }
       }
+    },
+    "elf.staleness_observed" => %{
+      1 => %{
+        required: [:run_id, :observation_id, :observed_at, :evidence],
+        optional: [:provider_session_id, :process_id],
+        uuid_fields: [:run_id],
+        types: %{
+          observed_at: :utc_datetime,
+          evidence: :map
+        }
+      }
     }
   }
 
