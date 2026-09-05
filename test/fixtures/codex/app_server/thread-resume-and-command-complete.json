@@ -1,0 +1,50 @@
+{
+  "fixture_kind": "post_turn_resume_and_command_completion",
+  "evidence_status": "live_observed",
+  "cli": "codex-cli 0.153.2",
+  "captured_at": "2026-09-04",
+  "note": "Post-turn resume verified live: after 1 turn completes on a non-ephemeral thread (ephemeral: false), thread/resume {threadId} succeeds both in-session and across process restart, returning the idle thread with its turns. In the same turn, item/completed for commandExecution was observed live with exitCode: 0, status: completed, aggregatedOutput: null, proving its completion frame shape. Synthetic UUIDv7 applied per convention.",
+  "command_execution_completed_item": {
+    "type": "commandExecution",
+    "id": "exec-01950000-0000-7000-8000-000000000005",
+    "pluginId": null,
+    "scriptPath": null,
+    "command": "/bin/zsh -lc 'printf hello_live > resume_proof.txt'",
+    "cwd": "$FIXTURE",
+    "processId": "29968",
+    "source": "unifiedExecStartup",
+    "status": "completed",
+    "commandActions": [
+      {
+        "type": "unknown",
+        "command": "printf hello_live > resume_proof.txt"
+      }
+    ],
+    "aggregatedOutput": null,
+    "exitCode": 0,
+    "durationMs": 0
+  },
+  "thread_resume_request": {
+    "method": "thread/resume",
+    "id": 2,
+    "params": {
+      "threadId": "01950000-0000-7000-8000-000000000001"
+    }
+  },
+  "thread_resume_response": {
+    "id": 2,
+    "result": {
+      "thread": {
+        "id": "01950000-0000-7000-8000-000000000001",
+        "sessionId": "01950000-0000-7000-8000-000000000001",
+        "status": {
+          "type": "idle"
+        },
+        "cwd": "$FIXTURE",
+        "ephemeral": false,
+        "preview": "Run shell command: printf hello_live > resume_proof.txt",
+        "cliVersion": "0.153.2"
+      }
+    }
+  }
+}

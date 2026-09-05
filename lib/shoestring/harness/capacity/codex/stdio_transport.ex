@@ -54,6 +54,13 @@ defmodule Shoestring.Harness.Capacity.Codex.StdioTransport do
     :exit, _ -> :ok
   end
 
+  @doc "Returns the OS process ID of the underlying port, or nil if unavailable."
+  def os_pid(pid) when is_pid(pid) do
+    GenServer.call(pid, :os_pid)
+  catch
+    :exit, _ -> nil
+  end
+
   # --- GenServer Callbacks ---
 
   @impl GenServer
@@ -132,6 +139,16 @@ defmodule Shoestring.Harness.Capacity.Codex.StdioTransport do
     send(state.owner, {:codex_transport_closed, self(), :normal})
     safe_close_port(state.port)
     {:stop, :normal, :ok, state}
+  end
+
+  def handle_call(:os_pid, _from, state) do
+    os_pid =
+      case Port.info(state.port, :os_pid) do
+        {:os_pid, pid} -> pid
+        _ -> nil
+      end
+
+    {:reply, os_pid, state}
   end
 
   @impl GenServer

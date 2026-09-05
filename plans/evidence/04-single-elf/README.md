@@ -41,3 +41,6 @@ To ensure consistent fixture structure across provider transport spikes (`codex 
 
 - `codex-exec-json.md`: Spike A writeup analyzing `codex exec --json` CLI invocation, event vocabulary, safe lease boundary semantics, and `Shoestring.Harness.ContractSuite` compatibility.
 - Associated execution fixtures are tracked under `test/fixtures/codex/execution/`.
+- `codex-app-server.md`: Spike B and Work Package C writeup analyzing `codex app-server --stdio` transport, event streaming, in-band cancellation, safe lease boundary, and post-turn resume.
+- Associated app-server fixtures are tracked under `test/fixtures/codex/app_server/`.
+
