@@ -81,9 +81,9 @@ defmodule Shoestring.Elves.Watchdog do
   def check_all(opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
     limit = Keyword.get(opts, :limit, @default_limit)
+    opts = Keyword.put(opts, :repo, repo)
 
     opts
-    |> Keyword.put(:repo, repo)
     |> run_ids(repo, limit)
     |> Enum.map(&check_run(&1, opts))
   end

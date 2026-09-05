@@ -541,7 +541,7 @@ defmodule Shoestring.Harness.Dispatches do
 
   defp claim_effect(dispatch, run, repo, now) do
     cond do
-      run.status in ["cancelling", "cancelled", "completed", "failed"] ->
+      run.status in ["cancelling", "cancelled", "completed", "failed", "interrupted"] ->
         cancel_unstarted_dispatch(dispatch, repo, now)
 
       run.status == "requested" and dispatch.status == "requested" ->

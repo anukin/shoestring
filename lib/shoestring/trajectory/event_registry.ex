@@ -297,9 +297,9 @@ defmodule Shoestring.Trajectory.EventRegistry do
     "elf.replacement_claimed" => %{
       1 => %{
         required: [:run_id, :decision_id],
-        optional: [:rationale],
+        optional: [:attempt, :rationale],
         uuid_fields: [:run_id],
-        types: %{}
+        types: %{attempt: :integer}
       }
     }
   }

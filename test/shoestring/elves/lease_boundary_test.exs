@@ -242,6 +242,15 @@ defmodule Shoestring.Elves.LeaseBoundaryTest do
     assert_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
   end
 
+  test "enforcing against a dead session returns an error instead of raising" do
+    pid = spawn(fn -> :ok end)
+    ref = Process.monitor(pid)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+
+    past = DateTime.add(DateTime.utc_now(), -1, :second)
+    assert {:error, :session_unavailable} = LeaseBoundary.enforce(pid, past)
+  end
+
   test "lease boundary modules carry no termination paths (pinning)" do
     for file <- [
           "lib/shoestring/elves/lease_boundary.ex",

@@ -83,12 +83,16 @@ defmodule Shoestring.Elves.LeaseWatcher do
       |> Keyword.merge(state.enforce_opts)
       |> Keyword.merge(call_opts)
       |> maybe_put_run_id(state.run_id)
+      |> maybe_put_clock(state.enforce_opts[:clock])
 
     LeaseBoundary.enforce(state.session, state.deadline, opts)
   end
 
   defp maybe_put_run_id(opts, nil), do: opts
   defp maybe_put_run_id(opts, run_id), do: Keyword.put(opts, :run_id, run_id)
+
+  defp maybe_put_clock(opts, nil), do: opts
+  defp maybe_put_clock(opts, clock), do: Keyword.put(opts, :clock, clock)
 
   defp schedule_next(state) do
     schedule(state.interval_ms)

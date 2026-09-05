@@ -52,13 +52,25 @@ defmodule Shoestring.Elves.LeaseBoundary do
     now = Keyword.get(opts, :now, DateTime.utc_now())
 
     if expired?(deadline, now) do
-      with {:ok, :stop_requested} <- Session.request_safe_stop(session) do
-        _ = maybe_observe(opts)
-        {:ok, :stop_requested}
+      case safe_stop(session) do
+        {:ok, :stop_requested} ->
+          _ = maybe_observe(opts)
+          {:ok, :stop_requested}
+
+        {:error, _reason} = error ->
+          error
       end
     else
       {:ok, :within_lease}
     end
+  end
+
+  # A lease enforcer must not crash on an already-dead session: :noproc
+  # becomes a plain error the watcher can log past and keep polling with.
+  defp safe_stop(session) do
+    Session.request_safe_stop(session)
+  catch
+    :exit, _reason -> {:error, :session_unavailable}
   end
 
   defp maybe_observe(opts) do

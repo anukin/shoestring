@@ -261,6 +261,47 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     refute Orchestrator.decision_id(run_id, "wait", "obs-1") ==
              Orchestrator.decision_id(run_id, "escalate", "obs-1")
+
+    # The full digest is kept: no truncation into birthday-bound territory.
+    assert Orchestrator.decision_id(run_id, "wait", "obs-1") |> String.length() == 64
+  end
+
+  test "nil observations do not collapse distinct decisions", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = start_quiet_run(sup, goal, task, :nil_obs_probe, [])
+
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    # Two genuinely different unobserved decisions for the same run and
+    # action must never share an idempotency key.
+    first = Orchestrator.decision_id(run_id, "wait", nil, "heartbeat-still-quiet")
+    second = Orchestrator.decision_id(run_id, "wait", nil, "awaiting-approval-resolution")
+    refute first == second
+
+    assert {:ok, first_event} =
+             Orchestrator.record_choice(run_id, %{
+               action: "wait",
+               decision_id: first,
+               rationale: "Heartbeat still quiet; keep supervising."
+             })
+
+    # The second decision persists as its own event — it is not swallowed
+    # as a duplicate of the first.
+    assert {:ok, second_event} =
+             Orchestrator.record_choice(run_id, %{
+               action: "wait",
+               decision_id: second,
+               rationale: "Awaiting approval resolution; keep supervising."
+             })
+
+    refute second_event.id == first_event.id
+
+    assert ElvesHelpers.count_events(goal.id, run_id, ["elf.recovery_decided"]) == 2
+
+    assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
   end
 
   test "concurrent replacement claims grant exactly one winner", %{
@@ -296,6 +337,75 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     assert {:ok, :allowed} =
              Orchestrator.request_replacement(run_id, decision_id: winner_id)
+  end
+
+  test "replacement rounds advance per attempt and chain across runs", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = start_quiet_run(sup, goal, task, :rounds_probe, [])
+
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
+
+    # Round 1: exactly one winner; a stale rival on the same attempt loses.
+    assert {:ok, :allowed} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-1-winner")
+
+    assert {:error, :replacement_already_claimed} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-1-stale-rival")
+
+    # Round 2 for the same prior run opens with the next attempt — the run
+    # is not permanently un-replaceable — while the stale rival stays out.
+    assert {:ok, :allowed} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-2-winner", attempt: 2)
+
+    assert {:error, :replacement_already_claimed} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-1-stale-rival")
+
+    assert {:ok, :allowed} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-2-winner", attempt: 2)
+
+    # Chains work too: when the round-1 replacement itself reaches a
+    # terminal state, replacing IT is a fresh first attempt, not a refusal.
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: Shoestring.Harness.Fake.Scenario.normal_completion(),
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               notify: self()
+             )
+
+    assert {:ok, replacement_id} =
+             ElvesHelpers.wait_until(fn ->
+               ElvesHelpers.run_id_for_dispatch(request.dispatch_id)
+             end)
+
+    on_exit(fn ->
+      ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, replacement_id))
+    end)
+
+    assert_receive {:elf_terminal, ^replacement_id, %{class: :completed}}, 10_000
+
+    assert {:ok, :allowed} =
+             Orchestrator.request_replacement(replacement_id, decision_id: "chain-winner")
+
+    # A recorded replace decision claims its own attempt round too.
+    assert {:ok, event} =
+             Orchestrator.record_choice(run_id, %{
+               action: "replace",
+               decision_id: "round-3-decision",
+               attempt: 3,
+               rationale: "Third round supersedes the lost rounds.",
+               outcome: "pending"
+             })
+
+    assert event.payload["action"] == "replace"
   end
 
   test "orchestrator carries no termination or replacement paths (pinning)" do
