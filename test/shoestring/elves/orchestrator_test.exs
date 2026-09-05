@@ -426,7 +426,7 @@ defmodule Shoestring.Elves.OrchestratorTest do
              )
   end
 
-  test "a linked non-terminal replacement can be explicitly reconciled", %{
+  test "a linked active replacement cannot be reconciled or replaced", %{
     sup: sup,
     goal: goal,
     task: task
@@ -453,8 +453,35 @@ defmodule Shoestring.Elves.OrchestratorTest do
     assert {:error, :prior_replacement_active} =
              Orchestrator.request_replacement(run_id, decision_id: "round-2-while-active")
 
-    assert {:ok, reconciled} = Orchestrator.reconcile_replacement_claim(claim.id)
-    assert reconciled.payload["replacement_claim_id"] == claim.id
+    assert {:error, :linked_replacement_active} =
+             Orchestrator.reconcile_replacement_claim(claim.id)
+
+    assert {:error, :prior_replacement_active} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-2-after-reconcile")
+  end
+
+  test "a terminalized linked replacement can be reconciled before the next round", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = start_quiet_run(sup, goal, task, :terminalized_replacement_probe, [])
+
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+    assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
+    assert_allowed(Orchestrator.request_replacement(run_id, decision_id: "round-1"))
+
+    claim = ElvesHelpers.replacement_claim(goal.id, run_id)
+    replacement_id = start_quiet_run(sup, goal, task, :terminalized_replacement_child, [])
+
+    on_exit(fn ->
+      ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, replacement_id))
+    end)
+
+    assert {:ok, _link} = Orchestrator.link_replacement_claim(claim.id, replacement_id)
+    assert {:ok, :cancelled} = Elves.cancel_run(replacement_id, kill_grace_ms: 200)
+    assert ElvesHelpers.terminal_event(goal.id, replacement_id) != nil
+    assert {:ok, _reconciled} = Orchestrator.reconcile_replacement_claim(claim.id)
 
     assert_allowed(
       Orchestrator.request_replacement(run_id, decision_id: "round-2-after-reconcile")

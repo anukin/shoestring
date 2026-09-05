@@ -317,7 +317,8 @@ defmodule Shoestring.Elves.Orchestrator do
   def reconcile_replacement_claim(claim_id, opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
-    with {:ok, claim} <- fetch_replacement_claim(claim_id, repo) do
+    with {:ok, claim} <- fetch_replacement_claim(claim_id, repo),
+         :ok <- reconciliation_allowed?(claim, repo) do
       attrs = %{
         action: "reconcile",
         decision_id: "replacement-reconcile:#{claim.id}",
@@ -330,6 +331,29 @@ defmodule Shoestring.Elves.Orchestrator do
 
       record_choice(claim.run_id, attrs, opts)
     end
+  end
+
+  defp reconciliation_allowed?(claim, repo) do
+    case linked_replacement_run_id(claim, repo) do
+      nil ->
+        :ok
+
+      linked_run_id ->
+        if terminal_event?(claim.goal_id, linked_run_id, repo) do
+          :ok
+        else
+          {:error, :linked_replacement_active}
+        end
+    end
+  end
+
+  defp terminal_event?(goal_id, run_id, repo) do
+    repo.exists?(
+      from event in TrajectoryEvent,
+        where:
+          event.goal_id == ^goal_id and event.run_id == ^run_id and
+            event.type in ["run.completed", "run.failed", "run.interrupted", "run.cancelled"]
+    )
   end
 
   defp guard_allows(run, repo) do
