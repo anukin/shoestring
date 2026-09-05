@@ -531,7 +531,9 @@ defmodule Shoestring.Harness.CodexAppServer do
     _ -> :ok
   end
 
-  defp lookup_session(run_id) do
+  @doc "Looks up a live session PID for the given run ID."
+  @spec lookup_session(term()) :: {:ok, pid()} | {:error, :not_found}
+  def lookup_session(run_id) do
     ensure_table()
 
     case :ets.lookup(@table, run_id) do

@@ -1,0 +1,227 @@
+<Layouts.app flash={@flash} current_scope={@current_scope}>
+  <div class="max-w-4xl mx-auto space-y-8 p-6">
+    <%!-- Banner: Clearly labeled as MANUAL EXECUTION --%>
+    <div
+      id="manual-execution-banner"
+      class="rounded-lg border border-amber-300 bg-amber-50 p-5 shadow-sm"
+    >
+      <div class="flex items-center gap-3">
+        <span class="inline-flex items-center justify-center p-2 rounded-md bg-amber-200 text-amber-900">
+          <.icon name="hero-wrench-screwdriver" class="w-5 h-5" />
+        </span>
+        <div>
+          <div class="flex items-center gap-2">
+            <h2 class="text-base font-bold text-amber-950 tracking-wide uppercase">
+              MANUAL EXECUTION
+            </h2>
+            <span
+              id="manual-mode-badge"
+              class="rounded bg-amber-200/80 px-2 py-0.5 text-xs font-semibold text-amber-900"
+            >
+              Not Cobbler Routing
+            </span>
+          </div>
+          <p class="text-xs text-amber-800 mt-0.5">
+            Direct manual run with explicit bounded leases. Automatic provider admission and Cobbler routing are not active.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h1 class="text-3xl font-bold text-zinc-900">Start Manual Run</h1>
+      <p class="mt-1 text-sm text-zinc-600">
+        Provision an isolated worktree and launch one bounded external harness run.
+      </p>
+    </div>
+
+    <.form
+      for={@form}
+      id="manual-run-form"
+      phx-change="validate"
+      phx-submit="start_run"
+      class="space-y-6"
+    >
+      <%!-- Section 1: Source & Workspace --%>
+      <div class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800">
+          1. Repository & Revision
+        </h3>
+
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="block text-sm font-medium text-zinc-700">Source Repository Path</label>
+            <button
+              type="button"
+              phx-click="use_fixture_repo"
+              id="btn-use-fixture"
+              class="text-xs text-indigo-600 hover:text-indigo-800 underline font-medium"
+            >
+              Initialize Temporary Fixture Repo
+            </button>
+          </div>
+          <.input
+            field={@form[:repo_path]}
+            id="run-repo-path"
+            type="text"
+            placeholder="/path/to/git/repo or 'fixture'"
+            required
+          />
+          <p class="text-xs text-zinc-500 mt-1">
+            Source repository remains unmodified; Shoestring creates an isolated Git worktree.
+          </p>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-zinc-700">Base Revision</label>
+          <.input
+            field={@form[:base_revision]}
+            id="run-base-revision"
+            type="text"
+            placeholder="HEAD"
+          />
+          <p class="text-xs text-zinc-500 mt-1">
+            Git branch, tag, or commit SHA to branch the worktree from.
+          </p>
+        </div>
+      </div>
+
+      <%!-- Section 2: Provider & Task --%>
+      <div class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800">
+          2. Provider & Task Prompt
+        </h3>
+
+        <div>
+          <label class="block text-sm font-medium text-zinc-700">Execution Provider</label>
+          <.input
+            field={@form[:provider]}
+            id="run-provider"
+            type="select"
+            options={[
+              {"Fake (Hermetic / Test Runner)", "fake"},
+              {"Codex (App Server Stdio)", "codex"}
+            ]}
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-zinc-700">Task Prompt</label>
+          <.input
+            field={@form[:prompt]}
+            id="run-prompt"
+            type="textarea"
+            rows="4"
+            placeholder="Describe the task for this run..."
+            required
+          />
+        </div>
+      </div>
+
+      <%!-- Section 3: Manual Bounded Lease & Bounds --%>
+      <div class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800">
+            3. Manual Bounded Leases (No Automatic Admission)
+          </h3>
+          <span class="text-xs font-medium text-zinc-500">Fail-closed safety limits</span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-zinc-700">
+              Execution Timeout (seconds)
+            </label>
+            <.input
+              field={@form[:timeout_seconds]}
+              id="run-timeout-seconds"
+              type="number"
+              min="5"
+              max="3600"
+            />
+            <p class="text-xs text-zinc-500 mt-1">Bounded process lease</p>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-zinc-700">Max Normalized Events</label>
+            <.input
+              field={@form[:max_events]}
+              id="run-max-events"
+              type="number"
+              min="10"
+              max="5000"
+            />
+            <p class="text-xs text-zinc-500 mt-1">Overflow cap before halt</p>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-zinc-700">
+              Checkpoint Lease (seconds)
+            </label>
+            <.input
+              field={@form[:lease_seconds]}
+              id="run-lease-seconds"
+              type="number"
+              min="10"
+              max="300"
+            />
+            <p class="text-xs text-zinc-500 mt-1">Safe boundary frequency</p>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Section 4: Advanced / Harness Options --%>
+      <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-6 space-y-4">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-700">
+          4. Test & Command Overrides (Optional)
+        </h3>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-zinc-700">Command Argv</label>
+            <.input
+              field={@form[:command]}
+              id="run-command"
+              type="text"
+              placeholder="e.g. sleep 30"
+            />
+            <p class="text-xs text-zinc-500 mt-1">
+              Command executed in process group.
+            </p>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-zinc-700">
+              Fake Scenario (Fake Provider)
+            </label>
+            <.input
+              field={@form[:scenario]}
+              id="run-scenario"
+              type="select"
+              options={[
+                {"Success (Natural Completion)", "success"},
+                {"Failure (Start Failure)", "failure"},
+                {"Quiet Exit", "quiet_exit"}
+              ]}
+            />
+          </div>
+        </div>
+      </div>
+
+      <%!-- Actions --%>
+      <div class="flex items-center justify-between pt-4">
+        <.link navigate={~p"/observatory"} class="text-sm text-zinc-600 hover:text-zinc-900">
+          ← View Capacity Observatory
+        </.link>
+
+        <button
+          type="submit"
+          id="btn-start-run"
+          class="rounded-lg bg-zinc-900 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900"
+        >
+          Start Manual Run
+        </button>
+      </div>
+    </.form>
+  </div>
+</Layouts.app>

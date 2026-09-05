@@ -1,0 +1,389 @@
+<Layouts.app flash={@flash} current_scope={@current_scope}>
+  <%= if @run_not_found? do %>
+    <div id="run-not-found" class="max-w-4xl mx-auto p-6">
+      <div class="rounded-lg border border-red-200 bg-red-50 p-6 text-center">
+        <h2 class="text-xl font-bold text-red-900">Run Not Found</h2>
+        <p class="mt-2 text-sm text-red-700">
+          The requested run ID (<code>{@run_id}</code>) does not exist.
+        </p>
+        <.link
+          navigate={~p"/runs/new"}
+          class="mt-4 inline-block rounded bg-zinc-900 px-4 py-2 text-sm font-semibold text-white"
+        >
+          Launch New Run
+        </.link>
+      </div>
+    </div>
+  <% else %>
+    <div class="max-w-6xl mx-auto space-y-8 p-6">
+      <%!-- Banner: Clearly labeled as MANUAL EXECUTION --%>
+      <div
+        id="manual-execution-banner"
+        class="rounded-lg border border-amber-300 bg-amber-50 p-5 shadow-sm"
+      >
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <span class="inline-flex items-center justify-center p-2 rounded-md bg-amber-200 text-amber-900">
+              <.icon name="hero-wrench-screwdriver" class="w-5 h-5" />
+            </span>
+            <div>
+              <div class="flex items-center gap-2">
+                <h2 class="text-base font-bold text-amber-950 tracking-wide uppercase">
+                  MANUAL EXECUTION
+                </h2>
+                <span
+                  id="manual-mode-badge"
+                  class="rounded bg-amber-200/80 px-2 py-0.5 text-xs font-semibold text-amber-900"
+                >
+                  Not Cobbler Routing
+                </span>
+              </div>
+              <p class="text-xs text-amber-800 mt-0.5">
+                Explicit manual execution flow. Cobbler automated admission, quota routing, and takeover are inactive.
+              </p>
+            </div>
+          </div>
+          <button
+            phx-click="refresh"
+            id="btn-refresh"
+            class="rounded-md bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs font-semibold px-3 py-1.5 border border-amber-300 shadow-sm"
+          >
+            Refresh View
+          </button>
+        </div>
+      </div>
+
+      <%!-- Run Header & Status --%>
+      <div
+        id="run-header"
+        class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-6"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-100 pb-4">
+          <div>
+            <div class="flex items-center gap-3">
+              <h1 class="text-2xl font-bold text-zinc-900">Run {String.slice(@run.id, 0, 8)}</h1>
+              <span
+                id="run-status-badge"
+                class={[
+                  "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider",
+                  @status == "completed" && "bg-emerald-100 text-emerald-800",
+                  @status in ["cancelled", "cancelling"] && "bg-amber-100 text-amber-800",
+                  @status == "failed" && "bg-red-100 text-red-800",
+                  @status in ["running", "starting"] && "bg-blue-100 text-blue-800",
+                  @status == "requested" && "bg-zinc-100 text-zinc-800"
+                ]}
+              >
+                {@status}
+              </span>
+            </div>
+            <p class="text-xs text-zinc-500 font-mono mt-1">ID: {@run.id}</p>
+          </div>
+
+          <%!-- Control buttons --%>
+          <div class="flex items-center gap-3">
+            <button
+              id="btn-request-stop"
+              phx-click="request_stop"
+              disabled={@status in ["completed", "failed", "cancelled"]}
+              class={[
+                "rounded-md px-3.5 py-2 text-xs font-semibold shadow-sm",
+                @status in ["completed", "failed", "cancelled"] &&
+                  "bg-zinc-100 text-zinc-400 cursor-not-allowed",
+                @status not in ["completed", "failed", "cancelled"] &&
+                  "bg-amber-600 text-white hover:bg-amber-700"
+              ]}
+              title="Requests safe stop after current turn/item completes"
+            >
+              Request Safe Stop
+            </button>
+
+            <button
+              id="btn-cancel-run"
+              phx-click="cancel_run"
+              disabled={@status in ["completed", "failed", "cancelled"]}
+              class={[
+                "rounded-md px-3.5 py-2 text-xs font-semibold shadow-sm",
+                @status in ["completed", "failed", "cancelled"] &&
+                  "bg-zinc-100 text-zinc-400 cursor-not-allowed",
+                @status not in ["completed", "failed", "cancelled"] &&
+                  "bg-rose-600 text-white hover:bg-rose-700"
+              ]}
+              title="Immediately terminates owned process group"
+            >
+              Cancel Run
+            </button>
+          </div>
+        </div>
+
+        <%!-- Metadata Grid --%>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+          <div>
+            <span class="block text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Provider
+            </span>
+            <span id="run-provider-name" class="font-semibold text-zinc-900 capitalize">
+              {@run.provider_id}
+            </span>
+          </div>
+
+          <div id="run-process-info">
+            <span class="block text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              OS Process
+            </span>
+            <div class="flex items-center gap-1.5 mt-0.5">
+              <%= if @elf_alive? do %>
+                <span class="size-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="font-medium text-emerald-800 text-xs">
+                  Active (PGID: {@pgid || "leader"})
+                </span>
+              <% else %>
+                <span class="size-2 rounded-full bg-zinc-400"></span>
+                <span class="font-medium text-zinc-600 text-xs">
+                  Exited ({if @pgid, do: "PGID: #{@pgid}", else: "Terminated"})
+                </span>
+              <% end %>
+            </div>
+          </div>
+
+          <div>
+            <span class="block text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Workspace Ref
+            </span>
+            <span class="font-mono text-xs text-zinc-700 truncate block">
+              {@run.workspace_ref}
+            </span>
+          </div>
+
+          <div>
+            <span class="block text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Started At
+            </span>
+            <time class="text-xs text-zinc-700 block mt-0.5">
+              {format_occurred_at(@run.inserted_at)}
+            </time>
+          </div>
+        </div>
+
+        <%!-- Prompt --%>
+        <div>
+          <span class="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
+            Task Prompt
+          </span>
+          <div class="rounded-md bg-zinc-50 p-3 text-sm text-zinc-800 border border-zinc-100 whitespace-pre-wrap font-sans">
+            {ShoestringWeb.RunPresentation.redact_text(@run.prompt)}
+          </div>
+        </div>
+      </div>
+
+      <%!-- Worktree and Capacity Grid --%>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <%!-- Worktree Info --%>
+        <div
+          id="worktree-info"
+          class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4"
+        >
+          <div class="flex items-center justify-between border-b border-zinc-100 pb-3">
+            <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
+              <.icon name="hero-folder" class="w-4 h-4 text-zinc-500" /> Isolated Worktree
+            </h3>
+            <%= if @worktree do %>
+              <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-100 text-zinc-800">
+                Status: {@worktree.status}
+              </span>
+            <% end %>
+          </div>
+
+          <%= if @worktree do %>
+            <div class="space-y-2 text-sm">
+              <div>
+                <span class="text-xs text-zinc-500">Branch:</span>
+                <span class="font-mono text-xs font-semibold text-zinc-900 ml-1">
+                  {@worktree.branch}
+                </span>
+              </div>
+              <div>
+                <span class="text-xs text-zinc-500">Base Commit:</span>
+                <span class="font-mono text-xs text-zinc-700 ml-1">
+                  {String.slice(@worktree.base_commit, 0, 10)}
+                </span>
+              </div>
+              <div>
+                <span class="text-xs text-zinc-500">Worktree Path:</span>
+                <span class="font-mono text-xs text-zinc-700 ml-1 block truncate">
+                  {ShoestringWeb.RunPresentation.redact_text(@worktree.path)}
+                </span>
+              </div>
+              <div>
+                <span class="text-xs text-zinc-500">Changed Files:</span>
+                <%= if Enum.empty?(@changed_files) do %>
+                  <span class="text-xs text-zinc-500 ml-1 italic">None</span>
+                <% else %>
+                  <ul class="mt-1 space-y-1">
+                    <%= for file <- @changed_files do %>
+                      <li class="text-xs font-mono text-zinc-800 bg-zinc-50 px-2 py-0.5 rounded border border-zinc-100">
+                        {ShoestringWeb.RunPresentation.redact_text(file)}
+                      </li>
+                    <% end %>
+                  </ul>
+                <% end %>
+              </div>
+            </div>
+          <% else %>
+            <p class="text-sm text-zinc-500 italic">
+              Worktree not available or not yet provisioned.
+            </p>
+          <% end %>
+        </div>
+
+        <%!-- Capacity Snapshot --%>
+        <div
+          id="capacity-snapshot"
+          class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4"
+        >
+          <div class="flex items-center justify-between border-b border-zinc-100 pb-3">
+            <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
+              <.icon name="hero-chart-bar" class="w-4 h-4 text-zinc-500" /> Capacity Snapshot
+            </h3>
+            <span class="text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+              Manual Override
+            </span>
+          </div>
+
+          <%= if @capacity do %>
+            <div class="space-y-3 text-sm">
+              <div class="flex justify-between items-center">
+                <span class="text-xs text-zinc-500">Capacity State:</span>
+                <span class="font-semibold text-zinc-900 capitalize">
+                  {Map.get(@capacity, :capacity_state, :unknown)}
+                </span>
+              </div>
+
+              <%= if Map.get(@capacity, :windows) && !Enum.empty?(Map.get(@capacity, :windows)) do %>
+                <div class="space-y-1">
+                  <span class="text-xs text-zinc-500 uppercase tracking-wider">Windows</span>
+                  <div class="grid grid-cols-2 gap-2">
+                    <%= for win <- Map.get(@capacity, :windows, []) do %>
+                      <div class="rounded bg-zinc-50 p-2 border border-zinc-100 text-xs">
+                        <span class="font-medium text-zinc-700">{win.kind}:</span>
+                        <span class="font-bold ml-1">
+                          {if win.used_percent,
+                            do: "#{Float.round(win.used_percent, 1)}%",
+                            else: "n/a"}
+                        </span>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <p class="text-xs text-zinc-500 italic pt-1">
+                Note: Manual run execution bypasses automated admission checks.
+              </p>
+            </div>
+          <% else %>
+            <p class="text-sm text-zinc-500 italic">
+              No capacity observation recorded for this provider.
+            </p>
+          <% end %>
+        </div>
+      </div>
+
+      <%!-- Verification Evidence & Final Diff --%>
+      <div
+        id="verification-evidence"
+        class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4"
+      >
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
+          <.icon name="hero-document-check" class="w-4 h-4 text-zinc-500" />
+          Verification Evidence & Worktree Diff
+        </h3>
+
+        <%= if @terminal_event do %>
+          <div class="rounded-md bg-zinc-50 p-4 border border-zinc-200 space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-semibold uppercase tracking-wider text-zinc-600">
+                Terminal Outcome:
+              </span>
+              <span class="font-mono text-xs font-bold text-zinc-900">
+                {@terminal_event.type}
+              </span>
+            </div>
+            <%= if @terminal_event.payload do %>
+              <pre class="text-xs font-mono text-zinc-700 overflow-auto whitespace-pre-wrap">{RunPresentation.format_payload(@terminal_event.payload)}</pre>
+            <% end %>
+          </div>
+        <% else %>
+          <p class="text-xs text-zinc-500 italic">
+            Run is currently active. Verification evidence is recorded upon terminal exit.
+          </p>
+        <% end %>
+
+        <div>
+          <span class="block text-xs font-medium text-zinc-600 uppercase tracking-wider mb-2">
+            Worktree Git Diff
+          </span>
+          <pre
+            id="worktree-diff"
+            class="rounded-md bg-zinc-950 p-4 text-xs font-mono text-zinc-200 overflow-auto max-h-80 whitespace-pre"
+          >{@worktree_diff}</pre>
+        </div>
+      </div>
+
+      <%!-- Logs --%>
+      <div
+        id="logs-section"
+        class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-3"
+      >
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
+          <.icon name="hero-command-line" class="w-4 h-4 text-zinc-500" /> Execution Logs
+        </h3>
+        <pre
+          id="run-logs"
+          class="rounded-md bg-zinc-950 p-4 text-xs font-mono text-zinc-200 overflow-auto max-h-72 whitespace-pre-wrap"
+        >{@logs}</pre>
+      </div>
+
+      <%!-- Normalized Events Stream --%>
+      <div class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
+            <.icon name="hero-queue-list" class="w-4 h-4 text-zinc-500" />
+            Normalized Trajectory Events (Live)
+          </h3>
+          <span class="text-xs text-zinc-500">Deterministic sequence order</span>
+        </div>
+
+        <div id="events-stream" phx-update="stream" class="space-y-3">
+          <div
+            id="events-empty"
+            class="hidden only:block rounded-lg border border-dashed border-zinc-300 p-6 text-center text-sm text-zinc-500"
+          >
+            No events recorded yet.
+          </div>
+
+          <div
+            :for={{dom_id, event} <- @streams.events}
+            id={dom_id}
+            data-sequence={event.sequence}
+            class="rounded-md border border-zinc-200 p-4 hover:border-zinc-300 transition-colors bg-white shadow-xs space-y-2"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-zinc-900 bg-zinc-100 px-1.5 py-0.5 rounded font-mono">
+                  #{event.sequence}
+                </span>
+                <span class="font-semibold text-zinc-800 font-mono">{event.type}</span>
+                <span class="text-zinc-500">by {event.actor}</span>
+              </div>
+              <time class="text-zinc-400 font-mono">{format_occurred_at(event.occurred_at)}</time>
+            </div>
+
+            <%= if event.payload && map_size(event.payload) > 0 do %>
+              <pre class="rounded bg-zinc-50 p-2.5 text-[11px] font-mono text-zinc-700 overflow-auto whitespace-pre-wrap border border-zinc-100 max-h-48">{RunPresentation.format_payload(event.payload)}</pre>
+            <% end %>
+          </div>
+        </div>
+      </div>
+    </div>
+  <% end %>
+</Layouts.app>
