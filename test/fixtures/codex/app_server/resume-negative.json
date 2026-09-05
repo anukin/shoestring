@@ -10,13 +10,13 @@
     "method": "thread/resume",
     "id": 7,
     "params": {
-     "threadId": "ID-1"
+     "threadId": "01950000-0000-7000-8000-000000000001"
     }
    },
    "response_frame": {
     "error": {
      "code": -32600,
-     "message": "no rollout found for thread id ID-1"
+     "message": "no rollout found for thread id 01950000-0000-7000-8000-000000000001"
     },
     "id": 7
    }
@@ -27,7 +27,7 @@
     "method": "thread/turns/list",
     "id": 9,
     "params": {
-     "threadId": "ID-1",
+     "threadId": "01950000-0000-7000-8000-000000000001",
      "limit": 5
     }
    },
@@ -45,7 +45,7 @@
     "method": "thread/items/list",
     "id": 10,
     "params": {
-     "threadId": "ID-1",
+     "threadId": "01950000-0000-7000-8000-000000000001",
      "limit": 5
     }
    },
@@ -63,8 +63,8 @@
     "method": "turn/interrupt",
     "id": 8,
     "params": {
-     "threadId": "ID-1",
-     "turnId": "ID-2"
+     "threadId": "01950000-0000-7000-8000-000000000001",
+     "turnId": "00000000-0000-4000-8000-000000000099"
     }
    },
    "response_frame": {

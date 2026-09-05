@@ -293,9 +293,16 @@ changes: [{path, kind: {type: "add"}, diff}])` →
 
 ## 6. Fixtures (`test/fixtures/codex/app_server/`, all redacted)
 
-IDs remapped to ID-n, `$HOME`/`$FIXTURE`/`$FIXTURE-WRITE`/email redacted,
-large payloads truncated and noted. Secret scan (home path, email, bearer,
-`sk-`, raw UUIDs) is clean.
+IDs follow the milestone fixture convention (`plans/evidence/04-single-elf/README.md`,
+arriving via PR #23): provider-emitted UUIDs are replaced with deterministic
+synthetic UUIDv7 values (`01950000-0000-7000-8000-000000000001`, `…0002`, …,
+incrementing low bits, consistent per logical thread/turn across all files).
+Non-UUID wire shapes keep their real shape with synthetic bodies
+(`exec-<uuidv7>` for tool-call items, `msg_<64 hex>` for agent-message items).
+The bogus turn id in the negative-interrupt case is kept verbatim as sent
+(`00000000-0000-4000-8000-000000000099` — probe input, already synthetic).
+`$HOME`/`$FIXTURE`/`$FIXTURE-WRITE`/email redacted, large payloads truncated
+and noted. Secret scan (home path, email, bearer, `sk-`, raw UUIDs) is clean.
 
 - `initialize-handshake.json` — handshake frames; no capabilities field.
 - `thread-start.json` — `thread/start` req/resp + `thread/started`

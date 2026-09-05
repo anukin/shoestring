@@ -19,7 +19,7 @@
  "thread_start_response_approval": "never",
  "file_change_completed_item": {
   "type": "fileChange",
-  "id": "ID-3",
+  "id": "exec-01950000-0000-7000-8000-000000000007",
   "changes": [
    {
     "path": "$FIXTURE-WRITE/WRITE_PROOF.txt",
@@ -32,11 +32,11 @@
   "status": "completed"
  },
  "turn_completed": {
-  "id": "ID-4",
+  "id": "01950000-0000-7000-8000-000000000006",
   "items": [
    {
     "type": "agentMessage",
-    "id": "ID-5",
+    "id": "msg_0000000000000000000000000000000000000000000000000000000000000008",
     "text": "Created `WRITE_PROOF.txt` containing exactly `elf-write-ok`.",
     "phase": "final_answer",
     "memoryCitation": null,

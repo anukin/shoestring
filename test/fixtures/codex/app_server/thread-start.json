@@ -29,9 +29,9 @@
     "id": 4,
     "result": {
      "thread": {
-      "id": "THREAD-1",
+      "id": "01950000-0000-7000-8000-000000000001",
       "extra": null,
-      "sessionId": "THREAD-1",
+      "sessionId": "01950000-0000-7000-8000-000000000001",
       "forkedFromId": null,
       "parentThreadId": null,
       "preview": "",
@@ -91,9 +91,9 @@
     "method": "thread/started",
     "params": {
      "thread": {
-      "id": "THREAD-1",
+      "id": "01950000-0000-7000-8000-000000000001",
       "extra": null,
-      "sessionId": "THREAD-1",
+      "sessionId": "01950000-0000-7000-8000-000000000001",
       "forkedFromId": null,
       "parentThreadId": null,
       "preview": "",
