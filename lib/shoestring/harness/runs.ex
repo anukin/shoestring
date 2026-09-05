@@ -42,7 +42,8 @@ defmodule Shoestring.Harness.Runs do
 
     with :ok <- compatible?(identity, request),
          :ok <- validate_goal_and_task(repo, request) do
-      run = %RunRecord{id: Identifier.generate(identifier)}
+      run_id = Keyword.get(opts, :run_id) || Identifier.generate(identifier)
+      run = %RunRecord{id: run_id}
       {:ok, RunRecord.intent_changeset(run, request, identity.adapter_id, now)}
     end
   end

@@ -50,7 +50,7 @@ defmodule Shoestring.Elves do
   @spec start_run(RunRequest.t(), Identity.t(), keyword()) ::
           {:ok, pid()} | {:ok, :already_running, pid()} | {:error, term()}
   def start_run(%RunRequest{} = request, %Identity{} = identity, opts \\ []) do
-    dispatch_opts = Keyword.take(opts, [:repo, :clock, :identifier, :writer_opts])
+    dispatch_opts = Keyword.take(opts, [:repo, :clock, :identifier, :writer_opts, :run_id])
 
     with {:ok, dispatch, _job} <- Dispatches.enqueue(request, identity, dispatch_opts) do
       start_elf(request, dispatch, opts)
@@ -121,6 +121,54 @@ defmodule Shoestring.Elves do
           cancel_without_elf(run, opts)
       end
     end
+  end
+
+  @doc """
+  Requests stopping at the next safe boundary (after in-flight item/command completion).
+  Delegates to the codex session's `request_safe_stop/1`.
+  """
+  @spec request_stop(Ecto.UUID.t(), keyword()) ::
+          {:ok, :stop_requested | :already_terminal} | {:error, term()}
+  def request_stop(run_id, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with {:ok, run} <- fetch_run(run_id, repo) do
+      if terminal_event(run, repo) != nil do
+        {:ok, :already_terminal}
+      else
+        session =
+          Keyword.get(opts, :session) ||
+            Keyword.get(opts, :session_pid) ||
+            resolve_session(run.id, opts)
+
+        case session do
+          nil ->
+            {:error, :session_not_found}
+
+          server ->
+            try do
+              Shoestring.Harness.CodexAppServer.Session.request_safe_stop(server)
+            catch
+              :exit, reason -> {:error, {:session_exit, reason}}
+            end
+        end
+      end
+    end
+  end
+
+  defp resolve_session(run_id, opts) do
+    case Keyword.get(opts, :session_resolver) do
+      resolver when is_function(resolver, 1) ->
+        resolver.(run_id)
+
+      _ ->
+        case Shoestring.Harness.CodexAppServer.lookup_session(run_id) do
+          {:ok, pid} when is_pid(pid) -> if Process.alive?(pid), do: pid, else: nil
+          _ -> nil
+        end
+    end
+  rescue
+    _ -> nil
   end
 
   @doc """
