@@ -285,7 +285,7 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     refute html =~ "rollout-"
   end
 
-  test "render gate: stdout/transcript evidence displays redacted, reasoning stays hidden (B4)",
+  test "render gate: stdout/stderr/prompt/transcript evidence displays redacted, reasoning stays hidden (B3)",
        %{
          conn: conn,
          goal: goal,
@@ -299,6 +299,14 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     # this pipeline is the UI redaction boundary that must keep evidence
     # visible (redacted) while stripping hidden reasoning.
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+    google_key = "AIzaSyD-1234567890abcdef1234567890abcde"
+    slack_token = "xoxb-123456789012-abcdef123456-secret"
+
+    jwt =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsK88"
+
+    git_url = "https://alice:supersecretpass@github.com/org/repo.git"
 
     live_event = %TrajectoryEvent{
       id: Ecto.UUID.generate(),
@@ -318,7 +326,9 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
         "occurred_at" => DateTime.to_iso8601(DateTime.utc_now()),
         "kind" => "command",
         "stdout" => "EVIDENCE_STDOUT_MARKER build ok in /Users/bob/proj",
-        "transcript" => "EVIDENCE_TRANSCRIPT_MARKER hello",
+        "stderr" => "EVIDENCE_STDERR_MARKER warning with #{google_key}",
+        "prompt" => "EVIDENCE_PROMPT_MARKER authenticate with #{slack_token}",
+        "transcript" => "EVIDENCE_TRANSCRIPT_MARKER hello with #{jwt} from #{git_url}",
         "reasoning" => "PRIVATE_EVIDENCE_REASONING_MUST_NOT_RENDER"
       }
     }
@@ -327,10 +337,21 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     rendered_html = render(view)
 
     # Evidence markers survive redaction (visible, not dropped).
-    assert rendered_html =~ "EVIDENCE_STDOUT_MARKER"
-    assert rendered_html =~ "EVIDENCE_TRANSCRIPT_MARKER"
+    for marker <- [
+          "EVIDENCE_STDOUT_MARKER",
+          "EVIDENCE_STDERR_MARKER",
+          "EVIDENCE_PROMPT_MARKER",
+          "EVIDENCE_TRANSCRIPT_MARKER"
+        ] do
+      assert rendered_html =~ marker
+    end
+
     # Secrets inside evidence are redacted, not leaked.
     refute rendered_html =~ "/Users/bob"
+    refute rendered_html =~ google_key
+    refute rendered_html =~ slack_token
+    refute rendered_html =~ jwt
+    refute rendered_html =~ "supersecretpass"
     # Hidden reasoning never renders.
     refute rendered_html =~ "PRIVATE_EVIDENCE_REASONING_MUST_NOT_RENDER"
   end

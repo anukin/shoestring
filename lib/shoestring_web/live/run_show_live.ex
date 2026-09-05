@@ -58,33 +58,9 @@ defmodule ShoestringWeb.RunShowLive do
 
   @impl true
   def handle_event("cancel_run", _params, socket) do
-    case socket.assigns[:run] do
-      %{id: run_id} when is_binary(run_id) ->
-        cancel_run(run_id, socket)
+    run = socket.assigns.run
 
-      _ ->
-        {:noreply, put_flash(socket, :error, "Run not found.")}
-    end
-  end
-
-  @impl true
-  def handle_event("request_stop", _params, socket) do
-    case socket.assigns[:run] do
-      %{id: run_id} when is_binary(run_id) ->
-        request_stop(run_id, socket)
-
-      _ ->
-        {:noreply, put_flash(socket, :error, "Run not found.")}
-    end
-  end
-
-  @impl true
-  def handle_event("refresh", _params, socket) do
-    {:noreply, reload_run_state(socket)}
-  end
-
-  defp cancel_run(run_id, socket) do
-    case Elves.cancel_run(run_id) do
+    case Elves.cancel_run(run.id) do
       {:ok, :cancelled} ->
         {:noreply,
          socket
@@ -104,8 +80,11 @@ defmodule ShoestringWeb.RunShowLive do
     end
   end
 
-  defp request_stop(run_id, socket) do
-    case Elves.request_stop(run_id) do
+  @impl true
+  def handle_event("request_stop", _params, socket) do
+    run = socket.assigns.run
+
+    case Elves.request_stop(run.id) do
       {:ok, :stop_requested} ->
         {:noreply,
          socket
@@ -128,6 +107,11 @@ defmodule ShoestringWeb.RunShowLive do
 
         {:noreply, put_flash(socket, :error, "Failed to request safe stop. Please retry.")}
     end
+  end
+
+  @impl true
+  def handle_event("refresh", _params, socket) do
+    {:noreply, reload_run_state(socket)}
   end
 
   @impl true
@@ -161,29 +145,21 @@ defmodule ShoestringWeb.RunShowLive do
   def handle_info(_other, socket), do: {:noreply, socket}
 
   defp reload_run_state(socket) do
-    case socket.assigns[:run] do
-      %{id: run_id} when is_binary(run_id) ->
-        case Repo.get(RunRecord, run_id) do
-          nil ->
-            socket
-            |> assign(:run_not_found?, true)
-            |> assign(:run_id, run_id)
-            |> assign(:page_title, "Run Not Found")
-
-          run ->
-            goal = Repo.get(Goal, run.goal_id)
-
-            socket
-            |> assign(:run_not_found?, false)
-            |> assign(:run, run)
-            |> assign(:goal, goal)
-            |> load_run_details(run, goal)
-        end
-
-      _ ->
+    case Repo.get(RunRecord, socket.assigns.run.id) do
+      nil ->
         socket
         |> assign(:run_not_found?, true)
+        |> assign(:run_id, socket.assigns.run.id)
         |> assign(:page_title, "Run Not Found")
+
+      run ->
+        goal = Repo.get(Goal, run.goal_id)
+
+        socket
+        |> assign(:run_not_found?, false)
+        |> assign(:run, run)
+        |> assign(:goal, goal)
+        |> load_run_details(run, goal)
     end
   end
 

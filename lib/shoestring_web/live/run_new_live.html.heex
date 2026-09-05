@@ -68,13 +68,7 @@
             required
           />
           <p class="text-xs text-zinc-500 mt-1">
-            Source repository files are never modified; Shoestring creates an isolated Git
-            worktree under its state root. Starting a run creates a branch
-            (<span class="font-mono">shoestring/run-&lt;id&gt;</span>) and worktree metadata
-            inside the selected repository. Only repositories under an allowed root are accepted.
-          </p>
-          <p id="allowed-roots" class="text-xs text-zinc-500 mt-1">
-            Allowed roots: {Enum.join(@allowed_roots, ", ")}
+            Source repository remains unmodified; Shoestring creates an isolated Git worktree.
           </p>
         </div>
 

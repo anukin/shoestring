@@ -665,6 +665,19 @@ defmodule ShoestringWeb.RunLiveTest do
 
       File.mkdir_p!(outside_dir)
       {_, 0} = System.cmd("git", ["init", "-b", "main"], cd: outside_dir)
+      {_, 0} = System.cmd("git", ["config", "user.name", "Shoestring Test"], cd: outside_dir)
+
+      {_, 0} =
+        System.cmd("git", ["config", "user.email", "test@shoestring.local"], cd: outside_dir)
+
+      File.write!(Path.join(outside_dir, "README.md"), "outside root\n")
+      {_, 0} = System.cmd("git", ["add", "README.md"], cd: outside_dir)
+
+      {_, 0} =
+        System.cmd("git", ["-c", "commit.gpgsign=false", "commit", "-m", "Initial commit"],
+          cd: outside_dir
+        )
+
       on_exit(fn -> File.rm_rf(outside_dir) end)
 
       submit_payload = %{
@@ -680,14 +693,25 @@ defmodule ShoestringWeb.RunLiveTest do
         }
       }
 
-      html =
+      result =
         view
         |> form("#manual-run-form", submit_payload)
         |> render_submit()
 
-      # At 2288ca4, any git repo was accepted and worktree created inside it.
-      # With B4 fixed, outside paths are rejected with a clear error.
-      assert html =~ "Repository path is not allowed"
+      # At 2288ca4, this valid outside repo was accepted and the LiveView
+      # redirected after creating a worktree. The fixed path fails before any
+      # worktree or run is created and returns the validation flash instead.
+      case result do
+        {:error, {:live_redirect, %{to: target}}} ->
+          run_id = String.replace(target, "/runs/", "")
+          _ = Shoestring.Elves.cancel_run(run_id)
+
+        _ ->
+          :ok
+      end
+
+      assert is_binary(result)
+      assert result =~ "Repository path is not allowed"
     end
   end
 

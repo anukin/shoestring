@@ -40,13 +40,13 @@ defmodule ShoestringWeb.RunPresentation do
     {~r/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i, "Bearer [REDACTED]"},
     # Credential assignments (supports quoted keys and `=>`, as produced by
     # `inspect/1` on string-keyed maps: `%{"api_key" => "..."}`)
-    {~r/["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret|cookie)["']?\s*(=>|[:=])[ \t]*(?:["'](?:\\.|[^"'\r\n])*["']|[^\s,;\]})]+)?/i,
+    {~r/["']?\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret|cookie)["']?\s*(=>|[:=])[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+)/i,
      "\\1\\2[REDACTED]"},
-    {~r/["']?([A-Za-z0-9_.-]*secret[A-Za-z0-9_.-]*)["']?\s*(=>|[:=])[ \t]*(?:["'](?:\\.|[^"'\r\n])*["']|[^\s,;\]})]+)?/i,
+    {~r/["']?([A-Za-z0-9_.-]*secret[A-Za-z0-9_.-]*)["']?\s*(=>|[:=])[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+)/i,
      "\\1\\2[REDACTED]"},
-    {~r/["']?([A-Za-z0-9_.-]*[_-]key)["']?\s*(=>|[:=])[ \t]*(?:["'](?:\\.|[^"'\r\n])*["']|[^\s,;\]})]+)?/i,
+    {~r/["']?([A-Za-z0-9_.-]*[_-]key)["']?\s*(=>|[:=])[ \t]*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+)/i,
      "\\1\\2[REDACTED]"},
-    {~r/\b["']?(authorization)["']?\s*(=>|[:=])[ \t]*(?!Bearer\b|Basic\b|\[REDACTED\])(?:["'](?:\\.|[^"'\r\n])*["']|[^\s,;\]})]+)/i,
+    {~r/\b["']?(authorization)["']?\s*(=>|[:=])[ \t]*(?!Bearer\b|Basic\b|\[REDACTED\])(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+)/i,
      "\\1: [REDACTED]"},
     # User / home filesystem paths
     {~r/\/Users\/[A-Za-z0-9_.-]+/, "/Users/[REDACTED]"},

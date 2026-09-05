@@ -35,25 +35,7 @@ defmodule ShoestringWeb.RunNewLive do
      socket
      |> assign(:page_title, "New Manual Run")
      |> assign(:form, to_form(@default_params, as: :run))
-     |> assign(:allowed_roots, allowed_repo_roots())
      |> assign(:form_errors, %{})}
-  end
-
-  @doc """
-  Repository roots the manual-run form accepts, from the
-  `:manual_run_allowed_repo_roots` config. Defaults to the fixture root
-  and state root under the Shoestring state directory.
-  """
-  @spec allowed_repo_roots() :: [String.t()]
-  def allowed_repo_roots do
-    configured =
-      case Application.get_env(:shoestring, :manual_run_allowed_repo_roots) do
-        roots when is_list(roots) and roots != [] -> Enum.map(roots, &Path.expand/1)
-        _ -> [Path.expand(State.root())]
-      end
-
-    [Path.expand(fixture_root()) | configured]
-    |> Enum.uniq()
   end
 
   @impl true
@@ -112,12 +94,7 @@ defmodule ShoestringWeb.RunNewLive do
 
       {:noreply,
        socket
-       |> assign(:allowed_roots, allowed_repo_roots())
-       |> put_flash(
-         :error,
-         "Repository path is not allowed. Choose a repository under an allowed root " <>
-           "(#{Enum.join(allowed_repo_roots(), ", ")})."
-       )
+       |> put_flash(:error, "Repository path is not allowed under the configured roots.")
        |> assign(:form, to_form(run_params, as: :run))}
     end
   end
@@ -281,17 +258,54 @@ defmodule ShoestringWeb.RunNewLive do
     Path.join(State.root(), "manual_fixtures")
   end
 
-  defp repo_path_allowed?(expanded) do
-    Enum.any?(allowed_repo_roots(), fn root ->
-      root_expanded = Path.expand(root)
+  defp repo_path_allowed?(path) do
+    canonical_path = canonical_path(path)
 
-      expanded == root_expanded or
-        if root_expanded == "/" do
-          String.starts_with?(expanded, "/")
+    Enum.any?(allowed_repo_roots(), fn root ->
+      canonical_path == root or
+        if root == "/" do
+          String.starts_with?(canonical_path, "/")
         else
-          String.starts_with?(expanded, root_expanded <> "/")
+          String.starts_with?(canonical_path, root <> "/")
         end
     end)
+  end
+
+  defp allowed_repo_roots do
+    configured_roots =
+      case Application.get_env(:shoestring, :manual_run_allowed_repo_roots) do
+        roots when is_list(roots) and roots != [] -> roots
+        _ -> [State.root()]
+      end
+
+    [fixture_root() | configured_roots]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&canonical_path/1)
+    |> Enum.uniq()
+  end
+
+  defp canonical_path(path) do
+    resolve_symlinks(Path.expand(path), MapSet.new())
+  end
+
+  defp resolve_symlinks(path, seen) do
+    cond do
+      MapSet.member?(seen, path) ->
+        path
+
+      Path.dirname(path) == path ->
+        path
+
+      true ->
+        seen = MapSet.put(seen, path)
+        parent = resolve_symlinks(Path.dirname(path), seen)
+        candidate = Path.join(parent, Path.basename(path))
+
+        case File.read_link(candidate) do
+          {:ok, target} -> resolve_symlinks(Path.expand(target, parent), seen)
+          {:error, _reason} -> candidate
+        end
+    end
   end
 
   defp parse_scenario("success"), do: :success
