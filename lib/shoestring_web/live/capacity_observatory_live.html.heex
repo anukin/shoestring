@@ -30,8 +30,18 @@
       <div
         :for={{dom_id, obs} <- @streams.observations}
         id={dom_id}
+        data-placeholder={to_string(Map.get(obs, :placeholder?, false))}
         class="border border-zinc-200 rounded-lg p-6 space-y-4 bg-white shadow-sm"
       >
+        <%= if Map.get(obs, :placeholder?, false) do %>
+          <p
+            data-placeholder-badge="true"
+            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium bg-zinc-100 text-zinc-800 text-sm"
+          >
+            <.icon name="hero-question-mark-circle" class="w-3.5 h-3.5" />
+            Not yet observed — placeholder, not a real observation.
+          </p>
+        <% end %>
         <div class="flex justify-between items-start border-b pb-4">
           <div>
             <h2 class="text-xl font-bold capitalize text-zinc-900">
