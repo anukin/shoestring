@@ -6,6 +6,16 @@ defmodule ShoestringWeb.RunNewLive do
   alias Shoestring.Repo
   alias Shoestring.Trajectory.{Goal, Task}
   alias Shoestring.Worktrees
+  alias ShoestringWeb.RunPresentation
+  require Logger
+
+  @timeout_min 5
+  @timeout_max 3600
+  @max_events_min 10
+  @max_events_max 5000
+  @lease_min 10
+  @lease_max 300
+  @max_fixture_repos 5
 
   @default_params %{
     "repo_path" => "",
@@ -15,7 +25,6 @@ defmodule ShoestringWeb.RunNewLive do
     "timeout_seconds" => 300,
     "max_events" => 1000,
     "lease_seconds" => 60,
-    "command" => "sleep 30",
     "scenario" => "success"
   }
 
@@ -89,9 +98,14 @@ defmodule ShoestringWeb.RunNewLive do
         launch_run(run_params, worktree, run_id, socket)
 
       {:error, reason} ->
+        Logger.warning("Worktree allocation failed: #{inspect(reason)}")
+
         {:noreply,
          socket
-         |> put_flash(:error, "Worktree allocation failed: #{inspect(reason)}")
+         |> put_flash(
+           :error,
+           "Worktree allocation failed: #{RunPresentation.redact_text(inspect(reason))}"
+         )
          |> assign(:form, to_form(run_params, as: :run))}
     end
   end
@@ -120,9 +134,14 @@ defmodule ShoestringWeb.RunNewLive do
       |> Ecto.Changeset.put_change(:goal_id, goal.id)
       |> Repo.insert!()
 
-    timeout_seconds = parse_integer(run_params["timeout_seconds"], 300)
-    max_events = parse_integer(run_params["max_events"], 1000)
-    lease_seconds = parse_integer(run_params["lease_seconds"], 60)
+    timeout_seconds =
+      parse_bounded_integer(run_params["timeout_seconds"], 300, @timeout_min, @timeout_max)
+
+    max_events =
+      parse_bounded_integer(run_params["max_events"], 1000, @max_events_min, @max_events_max)
+
+    lease_seconds =
+      parse_bounded_integer(run_params["lease_seconds"], 60, @lease_min, @lease_max)
 
     {:ok, request} =
       RunRequest.new(%{
@@ -150,30 +169,17 @@ defmodule ShoestringWeb.RunNewLive do
 
     provider = run_params["provider"] || "fake"
 
-    {identity, adapter, default_command, adapter_opts} =
+    {identity, adapter, command, adapter_opts} =
       case provider do
         "codex" ->
           {Shoestring.Harness.CodexAppServer.identity(), Shoestring.Harness.CodexAppServer,
            ["codex", "app-server", "--stdio"], %{}}
 
         _fake ->
-          scenario_name =
-            case run_params["scenario"] do
-              name when is_binary(name) and name != "" -> String.to_atom(name)
-              _ -> :success
-            end
+          scenario_name = parse_scenario(run_params["scenario"])
 
           {Shoestring.Harness.Fake.identity(), Shoestring.Harness.Fake, ["sleep", "30"],
            %{scenario: scenario_name}}
-      end
-
-    cmd_str = run_params["command"]
-
-    command =
-      if is_binary(cmd_str) and String.trim(cmd_str) != "" do
-        String.split(cmd_str, ~r/\s+/, trim: true)
-      else
-        default_command
       end
 
     elf_opts = [
@@ -193,14 +199,20 @@ defmodule ShoestringWeb.RunNewLive do
         {:noreply, push_navigate(socket, to: ~p"/runs/#{run_id}")}
 
       {:error, reason} ->
+        Logger.warning("Failed to start run: #{inspect(reason)}")
+
         {:noreply,
          socket
-         |> put_flash(:error, "Failed to start run: #{inspect(reason)}")
+         |> put_flash(
+           :error,
+           "Failed to start run: #{RunPresentation.redact_text(inspect(reason))}"
+         )
          |> assign(:form, to_form(run_params, as: :run))}
     end
   end
 
   defp create_temporary_fixture_repo do
+    maybe_reap_fixture_repos()
     unique = "#{System.pid()}_#{System.unique_integer([:positive, :monotonic])}"
     fixture_dir = Path.join(System.tmp_dir!(), "shoestring_fixture_repo_#{unique}")
     File.rm_rf(fixture_dir)
@@ -227,6 +239,55 @@ defmodule ShoestringWeb.RunNewLive do
       )
 
     fixture_dir
+  end
+
+  defp parse_scenario("success"), do: :success
+  defp parse_scenario("failure"), do: :failure
+  defp parse_scenario("quiet_exit"), do: :quiet_exit
+  defp parse_scenario(_), do: :success
+
+  defp parse_bounded_integer(val, default, min, max) do
+    val
+    |> parse_integer(default)
+    |> clamp(min, max)
+  end
+
+  defp clamp(num, min, max) when is_integer(num) do
+    num |> max(min) |> min(max)
+  end
+
+  defp maybe_reap_fixture_repos do
+    tmp = System.tmp_dir!()
+
+    case File.ls(tmp) do
+      {:ok, entries} ->
+        fixture_dirs =
+          entries
+          |> Enum.filter(&String.starts_with?(&1, "shoestring_fixture_repo_"))
+          |> Enum.map(&Path.join(tmp, &1))
+          |> Enum.filter(&File.dir?/1)
+          |> Enum.sort_by(fn path ->
+            case File.stat(path, time: :posix) do
+              {:ok, %File.Stat{mtime: mtime}} -> mtime
+              _ -> 0
+            end
+          end)
+
+        excess = length(fixture_dirs) - @max_fixture_repos + 1
+
+        if excess > 0 do
+          fixture_dirs
+          |> Enum.take(excess)
+          |> Enum.each(&File.rm_rf/1)
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
   end
 
   defp parse_integer(val, _default) when is_integer(val), do: val

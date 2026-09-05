@@ -60,6 +60,8 @@ defmodule ShoestringWeb.RunLiveTest do
       assert has_element?(view, "#run-max-events")
       assert has_element?(view, "#run-lease-seconds")
       assert has_element?(view, "#btn-start-run")
+      # B6: custom command capability removed from the UI entirely
+      refute has_element?(view, "#run-command")
     end
 
     test "validates required fields before submitting", %{conn: conn} do
@@ -116,7 +118,6 @@ defmodule ShoestringWeb.RunLiveTest do
           "timeout_seconds" => "60",
           "max_events" => "100",
           "lease_seconds" => "30",
-          "command" => "sleep 1",
           "scenario" => "success"
         }
       }
@@ -138,6 +139,162 @@ defmodule ShoestringWeb.RunLiveTest do
       assert {:ok, %Worktree{} = wt} = Worktrees.get(run_id)
       assert File.dir?(wt.path)
       assert wt.branch == "shoestring/run-#{run_id}"
+    end
+
+    test "ignores posted custom command (B6 capability removed, not restricted)", %{
+      conn: conn,
+      repo_path: repo_path
+    } do
+      {:ok, view, _html} = live(conn, ~p"/runs/new")
+
+      # Crafted POST bypassing the rendered form (which has no command input).
+      {:error, {:live_redirect, %{to: target_path}}} =
+        render_submit(view, :start_run, %{
+          "run" => %{
+            "repo_path" => repo_path,
+            "base_revision" => "HEAD",
+            "provider" => "fake",
+            "prompt" => "B6 command injection attempt",
+            "timeout_seconds" => "60",
+            "max_events" => "100",
+            "lease_seconds" => "30",
+            "command" => "touch /tmp/pwned_by_form",
+            "scenario" => "success"
+          }
+        })
+
+      assert target_path =~ ~r|^/runs/[0-9a-f-]+|
+      # The injected command must never execute as the app user.
+      refute File.exists?("/tmp/pwned_by_form")
+    end
+
+    test "unknown scenario string defaults safely without creating atoms (B1)", %{
+      conn: conn,
+      repo_path: repo_path
+    } do
+      evil =
+        "evil_scenario_#{System.unique_integer([:positive])}_#{:erlang.unique_integer([:positive])}"
+
+      assert_raise ArgumentError, fn -> String.to_existing_atom(evil) end
+
+      {:ok, view, _html} = live(conn, ~p"/runs/new")
+
+      # Crafted POST bypassing the rendered select (which only offers known scenarios).
+      {:error, {:live_redirect, %{to: target_path}}} =
+        render_submit(view, :start_run, %{
+          "run" => %{
+            "repo_path" => repo_path,
+            "base_revision" => "HEAD",
+            "provider" => "fake",
+            "prompt" => "B1 atom exhaustion attempt",
+            "timeout_seconds" => "60",
+            "max_events" => "100",
+            "lease_seconds" => "30",
+            "scenario" => evil
+          }
+        })
+
+      assert target_path =~ ~r|^/runs/[0-9a-f-]+|
+      # Unknown input must not intern a new atom.
+      assert_raise ArgumentError, fn -> String.to_existing_atom(evil) end
+    end
+
+    test "out-of-range and negative leases are clamped server-side (B2)", %{
+      conn: conn,
+      repo_path: repo_path
+    } do
+      {:ok, view, _html} = live(conn, ~p"/runs/new")
+
+      submit_payload = %{
+        "run" => %{
+          "repo_path" => repo_path,
+          "base_revision" => "HEAD",
+          "provider" => "fake",
+          "prompt" => "B2 clamp check",
+          "timeout_seconds" => "999999999",
+          "max_events" => "-5",
+          "lease_seconds" => "999999",
+          "scenario" => "success"
+        }
+      }
+
+      {:error, {:live_redirect, %{to: target_path}}} =
+        view
+        |> form("#manual-run-form", submit_payload)
+        |> render_submit()
+
+      run_id = String.replace(target_path, "/runs/", "")
+      run = Repo.get!(RunRecord, run_id)
+      ext = run.extensions || %{}
+      assert ext["shoestring.manual:timeout_seconds"] == 3600
+      assert ext["shoestring.manual:max_events"] == 10
+      assert ext["shoestring.manual:lease_seconds"] == 300
+    end
+
+    test "worktree failure flash redacts home paths and secret tokens (B3)", %{
+      conn: conn
+    } do
+      {:ok, view, _html} = live(conn, ~p"/runs/new")
+
+      submit_payload = %{
+        "run" => %{
+          "repo_path" => "/Users/bob/nonexistent_repo_xyz",
+          "base_revision" => "HEAD",
+          "provider" => "fake",
+          "prompt" => "B3 flash redaction check",
+          "timeout_seconds" => "60",
+          "max_events" => "100",
+          "lease_seconds" => "30",
+          "scenario" => "success"
+        }
+      }
+
+      html =
+        view
+        |> form("#manual-run-form", submit_payload)
+        |> render_submit()
+
+      assert html =~ "Worktree allocation failed"
+      # Scope to the flash group: the form legitimately echoes the user's own
+      # typed path in its input value, but the flashed failure reason must be
+      # redacted.
+      flash_html = flash_group_html(html)
+      refute flash_html =~ "/Users/bob"
+      assert flash_html =~ "/Users/[REDACTED]"
+    end
+
+    test "invalid base revision flash redacts secret-shaped token (B3)", %{
+      conn: conn,
+      repo_path: repo_path
+    } do
+      {:ok, view, _html} = live(conn, ~p"/runs/new")
+
+      secret = "sk-ant-api03-abcdef1234567890abcdef123456"
+
+      submit_payload = %{
+        "run" => %{
+          "repo_path" => repo_path,
+          "base_revision" => secret,
+          "provider" => "fake",
+          "prompt" => "B3 base revision redaction check",
+          "timeout_seconds" => "60",
+          "max_events" => "100",
+          "lease_seconds" => "30",
+          "scenario" => "success"
+        }
+      }
+
+      html =
+        view
+        |> form("#manual-run-form", submit_payload)
+        |> render_submit()
+
+      assert html =~ "Worktree allocation failed"
+      # Scope to the flash group: the form echoes the typed revision in its
+      # input value, but the flashed failure reason must be redacted.
+      flash_html = flash_group_html(html)
+      refute flash_html =~ secret
+      assert flash_html =~ "[REDACTED_API_KEY]"
     end
   end
 
@@ -312,6 +469,13 @@ defmodule ShoestringWeb.RunLiveTest do
       assert has_element?(view, "#run-not-found")
       assert html =~ "Run Not Found"
     end
+
+    test "malformed run id renders clean not-found instead of crashing", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/runs/abc")
+
+      assert has_element?(view, "#run-not-found")
+      assert html =~ "Run Not Found"
+    end
   end
 
   describe "Deterministic Eval: UI restart" do
@@ -422,5 +586,12 @@ defmodule ShoestringWeb.RunLiveTest do
       # - Terminal outcome preserved
       assert html2 =~ "run.completed"
     end
+  end
+
+  defp flash_group_html(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query_by_id("flash-group")
+    |> LazyHTML.to_html()
   end
 end

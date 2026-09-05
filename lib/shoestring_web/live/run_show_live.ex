@@ -9,39 +9,50 @@ defmodule ShoestringWeb.RunShowLive do
   alias Shoestring.Trajectory.{ArtifactStore, Goal, Task, TrajectoryEvent}
   alias Shoestring.Worktrees
   alias ShoestringWeb.RunPresentation
+  require Logger
 
   @impl true
   def mount(%{"run_id" => run_id}, _session, socket) do
     socket = assign_new(socket, :current_scope, fn -> nil end)
 
-    case Repo.get(RunRecord, run_id) do
-      nil ->
+    case Ecto.UUID.cast(run_id) do
+      {:ok, _uuid} ->
+        case Repo.get(RunRecord, run_id) do
+          nil ->
+            {:ok,
+             socket
+             |> assign(:page_title, "Run Not Found")
+             |> assign(:run_not_found?, true)
+             |> assign(:run_id, run_id)}
+
+          %RunRecord{} = run ->
+            goal = Repo.get(Goal, run.goal_id)
+            task = Repo.get(Task, run.task_id)
+
+            socket =
+              if connected?(socket) and goal do
+                Phoenix.PubSub.subscribe(Shoestring.PubSub, Trajectory.topic(goal.id))
+                socket
+              else
+                socket
+              end
+
+            {:ok,
+             socket
+             |> assign(:page_title, "Manual Run #{String.slice(run.id, 0, 8)}")
+             |> assign(:run_not_found?, false)
+             |> assign(:run, run)
+             |> assign(:goal, goal)
+             |> assign(:task, task)
+             |> load_run_details(run, goal)}
+        end
+
+      :error ->
         {:ok,
          socket
          |> assign(:page_title, "Run Not Found")
          |> assign(:run_not_found?, true)
          |> assign(:run_id, run_id)}
-
-      %RunRecord{} = run ->
-        goal = Repo.get(Goal, run.goal_id)
-        task = Repo.get(Task, run.task_id)
-
-        socket =
-          if connected?(socket) and goal do
-            Phoenix.PubSub.subscribe(Shoestring.PubSub, Trajectory.topic(goal.id))
-            socket
-          else
-            socket
-          end
-
-        {:ok,
-         socket
-         |> assign(:page_title, "Manual Run #{String.slice(run.id, 0, 8)}")
-         |> assign(:run_not_found?, false)
-         |> assign(:run, run)
-         |> assign(:goal, goal)
-         |> assign(:task, task)
-         |> load_run_details(run, goal)}
     end
   end
 
@@ -63,9 +74,14 @@ defmodule ShoestringWeb.RunShowLive do
          |> reload_run_state()}
 
       {:error, reason} ->
+        Logger.warning("Failed to cancel run: #{inspect(reason)}")
+
         {:noreply,
          socket
-         |> put_flash(:error, "Failed to cancel run: #{inspect(reason)}")}
+         |> put_flash(
+           :error,
+           "Failed to cancel run: #{RunPresentation.redact_text(inspect(reason))}"
+         )}
     end
   end
 
@@ -92,9 +108,14 @@ defmodule ShoestringWeb.RunShowLive do
          |> put_flash(:error, "No active session found to receive safe stop.")}
 
       {:error, reason} ->
+        Logger.warning("Failed to request safe stop: #{inspect(reason)}")
+
         {:noreply,
          socket
-         |> put_flash(:error, "Failed to request safe stop: #{inspect(reason)}")}
+         |> put_flash(
+           :error,
+           "Failed to request safe stop: #{RunPresentation.redact_text(inspect(reason))}"
+         )}
     end
   end
 
@@ -108,10 +129,14 @@ defmodule ShoestringWeb.RunShowLive do
     if event.goal_id == socket.assigns.goal.id and
          (event.run_id == socket.assigns.run.id or is_nil(event.run_id)) do
       sanitized = RunPresentation.sanitize_event(event)
+      total = (socket.assigns[:events_total] || 0) + 1
+      showing = (socket.assigns[:events_showing] || 0) + 1
 
       socket =
         socket
         |> stream_insert(:events, sanitized)
+        |> assign(:events_total, total)
+        |> assign(:events_showing, showing)
         |> maybe_refresh_on_event(event)
 
       {:noreply, socket}
@@ -124,13 +149,22 @@ defmodule ShoestringWeb.RunShowLive do
   def handle_info(_other, socket), do: {:noreply, socket}
 
   defp reload_run_state(socket) do
-    run = Repo.get!(RunRecord, socket.assigns.run.id)
-    goal = Repo.get(Goal, run.goal_id)
+    case Repo.get(RunRecord, socket.assigns.run.id) do
+      nil ->
+        socket
+        |> assign(:run_not_found?, true)
+        |> assign(:run_id, socket.assigns.run.id)
+        |> assign(:page_title, "Run Not Found")
 
-    socket
-    |> assign(:run, run)
-    |> assign(:goal, goal)
-    |> load_run_details(run, goal)
+      run ->
+        goal = Repo.get(Goal, run.goal_id)
+
+        socket
+        |> assign(:run_not_found?, false)
+        |> assign(:run, run)
+        |> assign(:goal, goal)
+        |> load_run_details(run, goal)
+    end
   end
 
   defp maybe_refresh_on_event(socket, %TrajectoryEvent{type: type})
@@ -170,6 +204,7 @@ defmodule ShoestringWeb.RunShowLive do
 
     sanitized_events = Enum.map(events, &RunPresentation.sanitize_event/1)
     terminal_event = find_terminal_event(events)
+    sanitized_terminal = terminal_event && RunPresentation.sanitize_event(terminal_event)
     status_label = determine_status(run, terminal_event)
     pgid = extract_pgid(events)
     elf_pid = Elves.whereis(run.id)
@@ -183,49 +218,57 @@ defmodule ShoestringWeb.RunShowLive do
         _ -> nil
       end
 
-    {worktree_diff, changed_files, worktree_status} =
+    {worktree_diff, diff_omitted, diff_truncated?} =
       if worktree do
         diff_text =
           case Worktrees.diff(worktree) do
             {:ok, %{diff: patch}} when is_binary(patch) and patch != "" ->
-              RunPresentation.redact_text(patch)
+              patch
 
             _ ->
               "No diff recorded."
           end
 
-        files =
-          case Worktrees.changed_files(worktree) do
-            {:ok, list} -> list
-            _ -> []
-          end
-
-        wt_status =
-          case Worktrees.status(worktree) do
-            {:ok, s} -> s
-            _ -> %{}
-          end
-
-        {diff_text, files, wt_status}
+        # Cap AFTER redaction so truncation can never bisect a raw secret.
+        RunPresentation.cap_text(diff_text)
       else
-        {"Worktree not available.", [], %{}}
+        RunPresentation.cap_text("Worktree not available.")
       end
 
-    logs = extract_logs(events, goal)
+    changed_files =
+      if worktree do
+        case Worktrees.changed_files(worktree) do
+          {:ok, list} -> list
+          _ -> []
+        end
+      else
+        []
+      end
+
+    {logs, logs_omitted, logs_truncated?} = extract_logs(events, goal)
     capacity = load_capacity_snapshot(run.provider_id)
+
+    {visible_events, events_total, events_showing, events_truncated?} =
+      RunPresentation.window_events(sanitized_events)
 
     socket
     |> assign(:status, status_label)
-    |> assign(:terminal_event, terminal_event)
+    |> assign(:terminal_event, sanitized_terminal)
     |> assign(:pgid, pgid)
     |> assign(:elf_alive?, alive?)
     |> assign(:worktree, worktree)
-    |> assign(:worktree_status, worktree_status)
     |> assign(:worktree_diff, worktree_diff)
+    |> assign(:worktree_diff_omitted, diff_omitted)
+    |> assign(:worktree_diff_truncated?, diff_truncated?)
     |> assign(:changed_files, changed_files)
     |> assign(:logs, logs)
+    |> assign(:logs_omitted, logs_omitted)
+    |> assign(:logs_truncated?, logs_truncated?)
     |> assign(:capacity, capacity)
-    |> stream(:events, sanitized_events, reset: true, dom_id: &event_dom_id/1)
+    |> assign(:events_total, events_total)
+    |> assign(:events_showing, events_showing)
+    |> assign(:events_truncated?, events_truncated?)
+    |> stream(:events, visible_events, reset: true, dom_id: &event_dom_id/1)
   end
 
   defp find_terminal_event(events) do
@@ -265,7 +308,15 @@ defmodule ShoestringWeb.RunShowLive do
       events
       |> Enum.reverse()
       |> Enum.find_value(nil, fn
-        %TrajectoryEvent{payload: %{"artifact_id" => artifact_id}} when is_binary(artifact_id) ->
+        %TrajectoryEvent{
+          type: "harness.event_recorded",
+          payload: %{
+            "kind" => "artifact",
+            "artifact_id" => artifact_id,
+            "source_event_id" => "elf-log:" <> _
+          }
+        }
+        when is_binary(artifact_id) ->
           artifact_id
 
         _ ->
@@ -275,26 +326,21 @@ defmodule ShoestringWeb.RunShowLive do
     if log_artifact_id && goal do
       case ArtifactStore.read(log_artifact_id) do
         {:ok, %{bytes: bytes}} ->
-          RunPresentation.redact_text(bytes)
+          # Cap AFTER redaction so truncation can never bisect a raw secret.
+          RunPresentation.cap_text(bytes)
 
         _ ->
-          "Log artifact #{log_artifact_id} could not be loaded."
+          RunPresentation.cap_text("Log artifact #{log_artifact_id} could not be loaded.")
       end
     else
-      "No log artifact recorded for this run."
+      RunPresentation.cap_text("No log artifact recorded for this run.")
     end
   end
 
   defp load_capacity_snapshot(provider_id) when is_binary(provider_id) do
     case CapacityObservatory.latest_observation(provider_id, "app_server_stdio", "account") do
-      {:ok, snapshot} ->
-        snapshot
-
-      _ ->
-        CapacityObservatory.latest_observations()
-        |> Enum.find(fn obs ->
-          to_string(Map.get(obs, :provider_id)) == provider_id
-        end)
+      {:ok, snapshot} -> snapshot
+      _ -> nil
     end
   rescue
     _ -> nil

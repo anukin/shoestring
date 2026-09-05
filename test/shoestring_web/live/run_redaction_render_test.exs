@@ -55,7 +55,22 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
              "[REDACTED_API_KEY]"
 
     assert RunPresentation.redact_text("AKIA1234567890ABCDEF") =~ "[REDACTED_API_KEY]"
+    assert RunPresentation.redact_text("ASIA1234567890ABCDEF") =~ "[REDACTED_API_KEY]"
+    assert RunPresentation.redact_text("AKIB1234567890ABCDEF") =~ "[REDACTED_API_KEY]"
     assert RunPresentation.redact_text("github_pat_1234567890abcdef") =~ "[REDACTED_API_KEY]"
+
+    assert RunPresentation.redact_text("gho_12345678901234567890123456789012") =~
+             "[REDACTED_API_KEY]"
+
+    assert RunPresentation.redact_text("ghu_12345678901234567890123456789012") =~
+             "[REDACTED_API_KEY]"
+
+    assert RunPresentation.redact_text("ghs_12345678901234567890123456789012") =~
+             "[REDACTED_API_KEY]"
+
+    assert RunPresentation.redact_text("ghr_12345678901234567890123456789012") =~
+             "[REDACTED_API_KEY]"
+
     assert RunPresentation.redact_text("Bearer some-token-value-xyz") =~ "Bearer [REDACTED]"
     assert RunPresentation.redact_text("Basic dXNlcm5hbWU6cGFzc3dvcmQ=") =~ "Basic [REDACTED]"
     assert RunPresentation.redact_text("password=my_secret_pass") =~ "password=[REDACTED]"
@@ -97,6 +112,65 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     assert sanitized["safe_field"] == "Normal text"
     assert sanitized["path"] == "/Users/[REDACTED]/data/file.json"
     assert sanitized["nested"]["nested_path"] == "/home/[REDACTED]/key.pem"
+  end
+
+  test "unit: evidence channels render redacted, not dropped (B4)", _ctx do
+    payload = %{
+      "stdout" => "build ok, token sk-ant-api03-abcdef1234567890abcdef123456 in /Users/bob/proj",
+      "stderr" => "warning in /home/developer/app",
+      "prompt" => "do the thing with ghp_123456789012345678901234567890123456",
+      "transcript" => "assistant said hello from /Users/alice/work",
+      "raw_output" => "result ok",
+      "reasoning" => "PRIVATE_REASONING_MUST_NOT_RENDER",
+      "raw_transcript" => "PRIVATE_RAW_TRANSCRIPT_MUST_NOT_RENDER"
+    }
+
+    sanitized = RunPresentation.sanitize_payload(payload)
+
+    # Evidence stays visible, with secrets redacted inside the text.
+    assert sanitized["stdout"] =~ "build ok"
+    refute sanitized["stdout"] =~ "sk-ant-api03"
+    assert sanitized["stdout"] =~ "[REDACTED_API_KEY]"
+    refute sanitized["stdout"] =~ "/Users/bob"
+    assert sanitized["stderr"] =~ "/home/[REDACTED]"
+    assert sanitized["prompt"] =~ "[REDACTED_API_KEY]"
+    assert sanitized["transcript"] =~ "/Users/[REDACTED]"
+    assert sanitized["raw_output"] == "result ok"
+
+    # Hidden reasoning stays stripped.
+    refute Map.has_key?(sanitized, "reasoning")
+    refute Map.has_key?(sanitized, "raw_transcript")
+  end
+
+  test "unit: pane cap applies after redaction with explicit notice (B5)", _ctx do
+    big = String.duplicate("x", 40_000) <> " sk-ant-api03-abcdef1234567890abcdef123456"
+    {visible, omitted, truncated?} = RunPresentation.cap_text(big)
+
+    assert truncated?
+    assert omitted > 0
+    assert byte_size(visible) <= RunPresentation.pane_byte_cap() + 100
+    assert visible =~ "truncated,"
+    assert visible =~ "bytes omitted"
+    refute visible =~ "sk-ant-api03"
+
+    {small, 0, false} = RunPresentation.cap_text("hello")
+    assert small == "hello"
+  end
+
+  test "unit: event window bounds DOM with showing X of Y (B5)", _ctx do
+    events = Enum.to_list(1..250)
+    {visible, total, showing, truncated?} = RunPresentation.window_events(events)
+
+    assert total == 250
+    assert showing == RunPresentation.max_rendered_events()
+    assert truncated?
+    assert length(visible) == RunPresentation.max_rendered_events()
+    # First-N/last-N order preserved.
+    assert hd(visible) == 1
+    assert List.last(visible) == 250
+
+    {all, 3, 3, false} = RunPresentation.window_events([1, 2, 3])
+    assert length(all) == 3
   end
 
   test "render gate: no vendor credentials, tokens, home paths, or reasoning are rendered in UI",
@@ -209,5 +283,106 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     # Verify no Codex rollout session files are ever mentioned or loaded
     refute rendered_html =~ "rollout-"
     refute html =~ "rollout-"
+  end
+
+  test "render gate: stdout/transcript evidence displays redacted, reasoning stays hidden (B4)",
+       %{
+         conn: conn,
+         goal: goal,
+         task: task,
+         run: run
+       } do
+    # Exercises the live-update render pipeline (handle_info ->
+    # sanitize_event -> stream_insert -> format_payload), which is the path
+    # where raw/legacy event payloads reach the template without passing
+    # replay validation. Persisted-append is fail-closed against secrets, so
+    # this pipeline is the UI redaction boundary that must keep evidence
+    # visible (redacted) while stripping hidden reasoning.
+    {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+    live_event = %TrajectoryEvent{
+      id: Ecto.UUID.generate(),
+      goal_id: goal.id,
+      task_id: task.id,
+      run_id: run.id,
+      sequence: 99,
+      schema_version: 1,
+      type: "harness.event_recorded",
+      actor: "elf",
+      occurred_at: DateTime.utc_now(),
+      idempotency_key: "evt-evidence-live-1",
+      payload: %{
+        "run_id" => run.id,
+        "source_event_id" => "evt-evidence-1",
+        "ordinal" => 1,
+        "occurred_at" => DateTime.to_iso8601(DateTime.utc_now()),
+        "kind" => "command",
+        "stdout" => "EVIDENCE_STDOUT_MARKER build ok in /Users/bob/proj",
+        "transcript" => "EVIDENCE_TRANSCRIPT_MARKER hello",
+        "reasoning" => "PRIVATE_EVIDENCE_REASONING_MUST_NOT_RENDER"
+      }
+    }
+
+    send(view.pid, {:trajectory_event_committed, live_event})
+    rendered_html = render(view)
+
+    # Evidence markers survive redaction (visible, not dropped).
+    assert rendered_html =~ "EVIDENCE_STDOUT_MARKER"
+    assert rendered_html =~ "EVIDENCE_TRANSCRIPT_MARKER"
+    # Secrets inside evidence are redacted, not leaked.
+    refute rendered_html =~ "/Users/bob"
+    # Hidden reasoning never renders.
+    refute rendered_html =~ "PRIVATE_EVIDENCE_REASONING_MUST_NOT_RENDER"
+  end
+
+  test "render gate: oversized log artifact is capped with explicit notice (B5)",
+       %{
+         conn: conn,
+         goal: goal,
+         task: task,
+         run: run
+       } do
+    big_content =
+      String.duplicate("LOG_LINE_MARKER abcdefghij\n", 3000) <>
+        " secret sk-ant-api03-abcdef1234567890abcdef123456 tail"
+
+    {:ok, artifact} =
+      ArtifactStore.put(
+        goal.id,
+        big_content,
+        %{media_type: "text/plain", redacted: true},
+        task_id: task.id
+      )
+
+    log_event_attrs = %{
+      "type" => "harness.event_recorded",
+      "schema_version" => 1,
+      "actor" => "elf",
+      "occurred_at" => DateTime.utc_now(),
+      "idempotency_key" => "elf-log:#{run.id}",
+      "payload" => %{
+        "run_id" => run.id,
+        "source_event_id" => "elf-log:#{run.id}",
+        "ordinal" => 2,
+        "occurred_at" => DateTime.to_iso8601(DateTime.utc_now()),
+        "kind" => "artifact",
+        "artifact_id" => artifact.id
+      }
+    }
+
+    assert {:ok, _} =
+             Trajectory.append(goal.id, log_event_attrs,
+               trusted: [task_id: task.id, run_id: run.id]
+             )
+
+    {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+    rendered_html = render(view)
+
+    assert has_element?(view, "#run-logs-truncated")
+    assert rendered_html =~ "bytes omitted"
+    # Cap applied after redaction: raw secret never appears, even truncated.
+    refute rendered_html =~ "sk-ant-api03"
+    # Bounded pane: raw 80KB+ artifact must not fully render.
+    assert byte_size(rendered_html) < byte_size(big_content)
   end
 end

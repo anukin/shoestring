@@ -170,41 +170,29 @@
         </div>
       </div>
 
-      <%!-- Section 4: Advanced / Harness Options --%>
+      <%!-- Section 4: Test Scenario Override --%>
       <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-6 space-y-4">
         <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-700">
-          4. Test & Command Overrides (Optional)
+          4. Test Scenario (Optional)
         </h3>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium text-zinc-700">Command Argv</label>
-            <.input
-              field={@form[:command]}
-              id="run-command"
-              type="text"
-              placeholder="e.g. sleep 30"
-            />
-            <p class="text-xs text-zinc-500 mt-1">
-              Command executed in process group.
-            </p>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-zinc-700">
-              Fake Scenario (Fake Provider)
-            </label>
-            <.input
-              field={@form[:scenario]}
-              id="run-scenario"
-              type="select"
-              options={[
-                {"Success (Natural Completion)", "success"},
-                {"Failure (Start Failure)", "failure"},
-                {"Quiet Exit", "quiet_exit"}
-              ]}
-            />
-          </div>
+        <div>
+          <label class="block text-sm font-medium text-zinc-700">
+            Fake Scenario (Fake Provider)
+          </label>
+          <.input
+            field={@form[:scenario]}
+            id="run-scenario"
+            type="select"
+            options={[
+              {"Success (Natural Completion)", "success"},
+              {"Failure (Start Failure)", "failure"},
+              {"Quiet Exit", "quiet_exit"}
+            ]}
+          />
+          <p class="text-xs text-zinc-500 mt-1">
+            Preset harness behavior for hermetic runs.
+          </p>
         </div>
       </div>
 

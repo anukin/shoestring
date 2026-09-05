@@ -322,6 +322,11 @@
           <span class="block text-xs font-medium text-zinc-600 uppercase tracking-wider mb-2">
             Worktree Git Diff
           </span>
+          <%= if @worktree_diff_truncated? do %>
+            <p id="worktree-diff-truncated" class="text-xs text-amber-700 mb-1">
+              Diff truncated, {@worktree_diff_omitted} bytes omitted for bounded rendering.
+            </p>
+          <% end %>
           <pre
             id="worktree-diff"
             class="rounded-md bg-zinc-950 p-4 text-xs font-mono text-zinc-200 overflow-auto max-h-80 whitespace-pre"
@@ -337,6 +342,11 @@
         <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
           <.icon name="hero-command-line" class="w-4 h-4 text-zinc-500" /> Execution Logs
         </h3>
+        <%= if @logs_truncated? do %>
+          <p id="run-logs-truncated" class="text-xs text-amber-700">
+            Logs truncated, {@logs_omitted} bytes omitted for bounded rendering.
+          </p>
+        <% end %>
         <pre
           id="run-logs"
           class="rounded-md bg-zinc-950 p-4 text-xs font-mono text-zinc-200 overflow-auto max-h-72 whitespace-pre-wrap"
@@ -352,6 +362,12 @@
           </h3>
           <span class="text-xs text-zinc-500">Deterministic sequence order</span>
         </div>
+
+        <%= if @events_truncated? do %>
+          <p id="events-window-notice" class="text-xs text-amber-700">
+            Showing {@events_showing} of {@events_total} events (first/last window) for bounded rendering.
+          </p>
+        <% end %>
 
         <div id="events-stream" phx-update="stream" class="space-y-3">
           <div
