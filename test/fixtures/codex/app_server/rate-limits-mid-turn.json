@@ -1,0 +1,17 @@
+{
+ "fixture_kind": "sparse_update",
+ "evidence_status": "live_observed",
+ "cli": "codex-cli 0.153.2",
+ "note": "Sparse account/rateLimits/updated arrived mid-turn (before turn/completed). Keys present: full rateLimits object in this sample. Values redacted to shapes only; merge rule (never clear absent fields) still applies per Gate 0A sparse evidence.",
+ "notification_keys": [
+  "credits",
+  "individualLimit",
+  "limitId",
+  "limitName",
+  "planType",
+  "primary",
+  "rateLimitReachedType",
+  "secondary",
+  "spendControlReached"
+ ]
+}

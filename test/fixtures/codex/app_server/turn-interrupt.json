@@ -1,0 +1,74 @@
+{
+ "fixture_kind": "turn_interrupt",
+ "evidence_status": "live_observed",
+ "cli": "codex-cli 0.153.2",
+ "note": "One bounded live turn (prompt: run `sleep 45`, reply DONE). turn/interrupt on the live turn acked with {result:{}} and turn/completed arrived with status=interrupted, error=null. thread/status/changed bracketed active->idle. The sleep descendant SURVIVED (see cancellation-descendants note). No item/completed was emitted for the in-flight commandExecution item. IDs remapped; $FIXTURE redacted.",
+ "turn_start_response": {
+  "id": 3,
+  "result": {
+   "turn": {
+    "id": "TURN-1",
+    "items": [],
+    "itemsView": "notLoaded",
+    "status": "inProgress",
+    "error": null,
+    "startedAt": null,
+    "completedAt": null,
+    "durationMs": null
+   }
+  }
+ },
+ "interrupt_request": {
+  "method": "turn/interrupt",
+  "params": {
+   "threadId": "THREAD-n",
+   "turnId": "TURN-n"
+  }
+ },
+ "interrupt_response": {
+  "result": {}
+ },
+ "turn_completed_status": "interrupted",
+ "event_sequence": [
+  "remoteControl/status/changed",
+  "thread/started",
+  "mcpServer/startupStatus/updated",
+  "mcpServer/startupStatus/updated",
+  "mcpServer/startupStatus/updated",
+  "thread/status/changed",
+  "turn/started",
+  "mcpServer/startupStatus/updated",
+  "mcpServer/startupStatus/updated",
+  "mcpServer/startupStatus/updated",
+  "mcpServer/startupStatus/updated",
+  "mcpServer/startupStatus/updated",
+  "item/started",
+  "item/completed",
+  "item/started",
+  "thread/tokenUsage/updated",
+  "account/rateLimits/updated",
+  "thread/status/changed",
+  "turn/completed"
+ ],
+ "command_item_started": {
+  "type": "commandExecution",
+  "id": "EXEC-1",
+  "pluginId": null,
+  "scriptPath": null,
+  "command": "/bin/zsh -lc 'sleep 45'",
+  "cwd": "$FIXTURE",
+  "processId": "43138",
+  "source": "unifiedExecStartup",
+  "status": "inProgress",
+  "commandActions": [
+   {
+    "type": "unknown",
+    "command": "sleep 45"
+   }
+  ],
+  "aggregatedOutput": null,
+  "exitCode": null,
+  "durationMs": null
+ },
+ "max_frame_bytes_observed": 1123
+}

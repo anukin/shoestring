@@ -1,0 +1,8 @@
+{
+ "fixture_kind": "process_group",
+ "evidence_status": "live_observed",
+ "note": "macOS (no setsid(1); used python preexec_fn=os.setsid). Case A (kill leader only): child survived, reparented to ppid 1 \u2014 reproduces the live sleep-45 leak after turn/interrupt. Case B (killpg): no survivors. No secrets involved.",
+ "case_a_kill_leader_only": "child SURVIVED, ppid=1",
+ "case_b_killpg": "no survivors",
+ "live_codex_case": "after live turn/interrupt, `sleep 45` survived as pid 99208 ppid=1 pgid=99208; sandbox wrapper pid gone"
+}

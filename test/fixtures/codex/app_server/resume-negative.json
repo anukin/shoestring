@@ -1,0 +1,35 @@
+{
+ "fixture_kind": "resume_negatives",
+ "evidence_status": "live_observed",
+ "cli": "codex-cli 0.153.2",
+ "note": "Fresh threads have no rollout file yet, so thread/resume fails cleanly with -32600 'no rollout found' (both ephemeral AND non-ephemeral pre-turn). thread/turns/list on ephemeral threads fails; thread/items/list is not supported yet (-32601). Resume-after-restart therefore requires a persisted (post-turn) rollout.",
+ "cases": [
+  {
+   "request": "thread/resume {threadId: fresh pre-turn thread}",
+   "response": {
+    "error": {
+     "code": -32600,
+     "message": "no rollout found for thread id THREAD-n"
+    }
+   }
+  },
+  {
+   "request": "thread/turns/list {threadId: ephemeral thread}",
+   "response": {
+    "error": {
+     "code": -32600,
+     "message": "ephemeral threads do not support thread/turns/list"
+    }
+   }
+  },
+  {
+   "request": "thread/items/list {threadId}",
+   "response": {
+    "error": {
+     "code": -32601,
+     "message": "thread/items/list is not supported yet"
+    }
+   }
+  }
+ ]
+}
