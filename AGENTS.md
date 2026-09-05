@@ -2,34 +2,47 @@ This is a web application written using the Phoenix web framework.
 
 ## Project guidelines
 
-- Never add `Co-authored-by` trailers for Omnigent, Codex, Claude, any LLM,
-  agent, subagent, orchestrator, or automation.
-- Do not add automated authorship, contributor, or attribution trailers in
-  commits or pull-request descriptions.
-- Add a human `Co-authored-by` trailer only when the user explicitly names the
-  human and requests it.
-- Inspect commit messages before committing and remove any automated trailer;
-  the configured Git author remains the sole author.
-
-- Use `mix precommit` alias when you are done with all changes and fix any pending issues
-- Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
+- Use `mix precommit` when you are done with all changes and fix any pending issues
+- Use the already included `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`
 - Elf runs require `python3` on `PATH` (the process-group launcher; see
   `Shoestring.Elves.PortRunner`). Keep tests hermetic: use
   `Shoestring.Harness.Fake` and trivial local commands, never a provider CLI
   or the network.
 
-### Commit attribution
+## Delegated agent contract
 
-- **Never add `Co-authored-by` trailers for Omnigent, Codex, Claude, an LLM,
-  an agent, a sub-agent, an orchestrator, or any other automation.** This rule
-  applies to every worker and every commit in this repository.
-- Do not add any automated authorship, contributor, or attribution trailer to a
-  commit message or PR description.
-- Add a human `Co-authored-by` trailer only when the user explicitly names that
-  human co-author and explicitly requests the trailer.
-- Before committing, inspect the final commit message and remove any automated
-  co-author trailer inserted by a tool or default template. The configured Git
-  author remains the sole author unless the user explicitly directs otherwise.
+The standing rules for delegated work — worktree isolation, foreground-only
+commands, gate honesty, regression tests that must fail on the pre-fix commit,
+evidence labels, fixture redaction, secrets, commit attribution, and PR /
+review conduct — live in one global file, shared by every repository:
+
+    ~/.config/agents/AGENTS.md
+
+**Every task brief assumes it.** A brief states only the task, the worktree,
+the acceptance contract, and whatever deviates from it. Its absence from a
+brief is not permission to break it. Read it before you start.
+
+Repository-specific additions to that contract:
+
+- The gate is `mix precommit`. Quote the exact command and the exact counts.
+- Tests must be hermetic — `Shoestring.Harness.Fake` and trivial local
+  commands. Never a provider CLI, never the network.
+- A live provider run requires explicit authorization in the brief, naming the
+  run budget.
+- Evidence documents live under `plans/evidence/<iteration>/`; follow the
+  fixture identifier convention recorded in that directory's `README.md`.
+
+### Locked decisions (iteration 4 — supervised Elves)
+
+- The user's source checkout is never modified. Worktrees live outside it.
+- No timer, lease expiry, quiet heartbeat, or missing final response may by
+  itself interrupt, replace, or duplicate an Elf that may still be doing useful
+  work. Staleness is **evidence**, not a trigger.
+- Explicit cancellation must terminate the whole owned process group; the Elf
+  owns the process group and reaps it.
+- Normalized events must be buffered live — no provider backfill exists.
+- Raw provider output is diagnostic evidence, never canonical domain state.
+- Oversized output fails the run; it is never silently truncated.
 
 ### Phoenix v1.8 guidelines
 
