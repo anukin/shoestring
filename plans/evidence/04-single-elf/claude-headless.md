@@ -32,19 +32,22 @@ This probe spent **zero tokens**. No invocation reached the model.
 ## Label convention
 
 Per milestone convention: **VERIFIED** = live-observed with a committed
-frame. Anything from `--help` output, install metadata, or bundled types
-is **SCHEMA-ONLY**. Anything unknown is **UNVERIFIED**. No help-text claim
-below is labeled VERIFIED.
+frame — the word is expensive and is reserved for provider-behavior
+claims backed by a committed live frame. Static reading of this
+repository (directory listings, committed code, committed fixtures) is
+labeled **REPO-INSPECTION**. Anything from `--help` output, install
+metadata, or bundled types is **SCHEMA-ONLY**. Anything unknown is
+**UNVERIFIED**. No help-text claim below is labeled VERIFIED.
 
 ## Ground-truth inventory (what exists today)
 
 - `plans/evidence/00a-capacity-feasibility/fixtures/claude/` contains
   **only** capacity/status-line fixtures (`auth-preflight-live.json`,
   `status-line-*-live.json`, `refusal-unverified.json`, replay/parser
-  cases). There is **not one execution/event fixture**. (VERIFIED —
+  cases). There is **not one execution/event fixture**. (REPO-INSPECTION —
   directory listing.)
 - Gate 0A's exact stream-json invocation is recovered from
-  `tools/gate_0a/provider_probe.js:250-264` (VERIFIED — committed code):
+  `tools/gate_0a/provider_probe.js:250-264` (REPO-INSPECTION — committed code):
 
   ```text
   claude --print --no-session-persistence --permission-mode dontAsk \
@@ -52,7 +55,8 @@ below is labeled VERIFIED.
   ```
 
   Outcome recorded in the committed fixture
-  `test/fixtures/capacity/claude/auth-preflight-live.json` (VERIFIED):
+  `test/fixtures/capacity/claude/auth-preflight-live.json` (REPO-INSPECTION —
+  fixture contents):
   `outcome: process_error, exit_status: 1, message_type_counts: {}`,
   `elapsed_ms: 1056`. The sibling `json`-mode probe with the same prompt
   completed (`exit_status: 0`, one `result` message, `elapsed_ms: 2415`).
@@ -85,7 +89,7 @@ Against it, three SCHEMA-ONLY observations on 2.1.261:
    `--verbose` produces the identical error. The flag combination is
    accepted; nothing demands `--verbose`.
 
-And one VERIFIED fact: Gate 0A's failing invocation was well-formed —
+And one REPO-INSPECTION fact: Gate 0A's failing invocation was well-formed —
 same arg shape as the sibling `json` probe that succeeded, with a real
 prompt, and it failed fast (1056 ms) at runtime. That is not the shape
 of the missing-input validation error above.
@@ -199,38 +203,93 @@ Reference: `lib/shoestring/harness/adapter.ex` callbacks,
 | 6 secret-free | Mappable (Codex scrubber pattern reusable; redact per `04-single-elf/README.md`). |
 | 7 terminal idempotency | Mappable for kill-based cancel. |
 
-## Verdict: WP D needs exactly one live capture — it cannot proceed hermetically, and Claude headless is not proven unusable
+## Verdict: WP D needs a tool-exercising live capture — it cannot proceed hermetically, and Claude headless is not proven unusable
 
 - **Cannot proceed hermetically:** writing the normalizer now would be
   guesswork over an unobserved event vocabulary — the exact failure
   mode this milestone has already paid for twice. Areas 2 and 5 are
   hard-blocked on real frames.
-- **Not proven unusable:** `json` headless mode works live (VERIFIED),
+- **Not proven unusable:** `json` headless mode completed live under Gate 0A
+  (VERIFIED by Gate 0A — committed frame in `auth-preflight-live.json`:
+  `exit_status: 0`, one `result` message),
   `stream-json` parses as a valid `-p` combination on 2.1.261
   (SCHEMA-ONLY + validation probes), and Gate 0A's failure is pinned
   to an older version with its stderr evidence discarded. The
   `unsupported` classification may be stale.
-- **Exactly one live capture required.** The single command (needs the
-  human's explicit go-ahead; spends Claude quota — one minimal turn,
-  tools disabled to bound cost, stderr retained this time, prompt kept
-  trivial):
+- **One tool-exercising live capture required.** A tools-disabled
+  capture provably cannot emit the tool-boundary frames that block WP D,
+  so the capture must exercise tools — one file write plus one
+  deterministic command, in the same shape as the Codex exec spike, in a
+  disposable `/tmp` git repo. The single command (needs the human's
+  explicit go-ahead; spends Claude quota — one short turn, `Bash` tool
+  only, stderr retained this time, `< /dev/null` so no stdin prompt is
+  ever read):
 
   ```text
-  claude --print --no-session-persistence --permission-mode dontAsk \
-    --tools "" --output-format stream-json "Reply with exactly OK." \
-    > /tmp/claude-stream-capture.stdout.jsonl \
-    2> /tmp/claude-stream-capture.stderr.txt; echo "exit=$?"
+  FIXTURE_DIR="$(mktemp -d /tmp/shoestring-claude-probe-XXXXXX)" && \
+  git -C "$FIXTURE_DIR" init && \
+  (cd "$FIXTURE_DIR" && claude --print --output-format stream-json \
+    --dangerously-skip-permissions --tools "Bash" \
+    "create a file hello.txt containing the word hello, then run: printf ok" \
+    < /dev/null \
+    > "$FIXTURE_DIR/claude-stream-capture.stdout.jsonl" \
+    2> "$FIXTURE_DIR/claude-stream-capture.stderr.txt"; echo "exit=$?")
   ```
 
-  Expected cost: one short model turn (small output; input dominated by
-  the fixed system prompt). Side note: 7-day usage was 94% at the last
-  observation — a refusal-shaped failure is possible, which would
-  itself be first-of-kind evidence for question 6.
-- On approval and capture, redact before commit per
-  `plans/evidence/04-single-elf/README.md` (format-valid but SYNTHETIC
-  UUIDv7 session/run ids with version/variant nibbles preserved, zero
-  secrets, zero real machine paths, reasoning blocks stripped, < 50 KB)
-  and commit as `test/fixtures/claude/execution/stream-json-*.jsonl`.
-  Only then can WP D be dispatched. A `--verbose` variant is a possible
-  *follow-up*, not a substitute — it would change framing comparability
-  with the Gate 0A invocation.
+  Amendments and expectations (all part of the authorized plan):
+  - (a) **Version pinning:** record `claude --version` at capture time
+    into the evidence doc. Both hard findings on the exec spike
+    (PR #23) were version-sensitive; the Gate 0A failure is already
+    pinned to 2.1.251 vs 2.1.261 here, and the capture must be pinned
+    the same way.
+  - (b) **Permission flag:** `--dangerously-skip-permissions` is needed
+    because a non-interactive `--print` run that reaches a tool
+    permission prompt has no human to answer it — the run would hang or
+    deny, and a denied tool call answers nothing about boundary-event
+    shapes. Blast radius is confined to a disposable `mktemp -d` repo
+    under `/tmp` with `--tools "Bash"` only. Whether the narrower
+    `--permission-mode dontAsk` (which Gate 0A used, but only with a
+    tool-free prompt, so it never proved tool auto-approval) achieves
+    the same auto-approval **cannot be established from `--help`/schema
+    without a live call — UNVERIFIED, not guessed.** At capture time,
+    prefer attempting the narrower flag first; escalate to the bypass
+    only if the run denies or hangs. Honest cost note: a denied first
+    attempt still spends quota (the model turn happens before the tool
+    denial), so the human may prefer authorizing the bypass up front
+    rather than paying for two turns.
+  - (c) **Labeled expectations:** this capture answers Q5 (tool
+    boundary — EXPECTED, pending live frames), Q1 (envelope shape —
+    EXPECTED), and Q2-partial (whether a session id is exposed in the
+    stream — EXPECTED). It does **not** prove resume: verifying
+    `--resume`/`--continue` DEFINITIONALLY requires a SECOND invocation
+    against the persisted session, which is out of scope for this
+    single capture and needs its own authorization.
+  - (d) **Redaction plan (before capture, not after):** the resulting
+    fixture must follow `plans/evidence/04-single-elf/README.md` —
+    format-valid but SYNTHETIC identifiers with version/variant nibbles
+    preserved, no home-directory paths, no machine metadata, < 50 KB.
+    Claude `stream-json` may carry assistant reasoning content, which
+    the milestone forbids persisting: at redaction time, drop every
+    frame whose type/name suggests reasoning, thinking, or scratchpad
+    use, and record the dropped type names in the evidence doc. The raw
+    capture under `/tmp` is never committed; only the redacted fixture
+    lands at `test/fixtures/claude/execution/stream-json-*.jsonl`. Only
+    then can WP D be dispatched. A `--verbose` variant is a possible
+    *follow-up*, not a substitute — it would change framing
+    comparability with the Gate 0A invocation.
+- **Session persistence is deliberately ON for this capture**
+  (`--no-session-persistence` dropped): persisting session state is what
+  leaves a session on disk for the later second-turn resume test, at
+  zero extra token cost. Consequence stated plainly: the capture WILL
+  persist a session transcript locally — the same class of
+  provider-side residue documented for Codex rollouts
+  (`ephemeral: false` in the app-server session). Prompts must stay
+  credential-free for the same reason.
+- **Capacity note (historical, not current):** the 94% seven-day figure
+  is from 2026-08-29 07:34:19 UTC with `seven_day.resets_at:
+  1788033600` (= 2026-08-29 20:00 UTC) — that window rolled over a week
+  ago (today is 2026-09-05) and says nothing about current refusal
+  risk. No current capacity reading is obtainable from our committed
+  monitors without a live provider call (snapshots live only in
+  `ClaudeMonitor` GenServer memory; no snapshot is persisted to the
+  repo), so current capacity is **UNKNOWN**.
