@@ -27,7 +27,7 @@ defmodule Shoestring.Elves.Orchestrator do
   alias Shoestring.Harness.RunRecord
   alias Shoestring.Repo
   alias Shoestring.Trajectory
-  alias Shoestring.Trajectory.{Redaction, TrajectoryEvent}
+  alias Shoestring.Trajectory.{Redaction, TrajectoryEvent, Writer, WriterSupervisor}
 
   @choices ~w(
     wait
@@ -63,12 +63,14 @@ defmodule Shoestring.Elves.Orchestrator do
   Two inputs need care. A nil `observation_id` means "no observation backs
   this decision", and string interpolation would collapse every such
   decision for a `(run, action)` pair onto one digest — silently dropping
-  genuine decisions as duplicates.  The nil case therefore digests an
-  explicit `"none"` marker AND requires a caller-supplied `discriminator`
-  (a rationale digest, a loop sequence number, anything stable across a
-  retry but distinct across genuinely different decisions). An unobserved
-  decision missing an explicit discriminator raises `ArgumentError` rather
-  than silently colliding. The digest is the full 64 hex characters:
+  genuine decisions as duplicates. The nil case therefore requires a
+  caller-supplied `discriminator` (a rationale digest, a loop sequence
+  number, anything stable across a retry but distinct across genuinely
+  different decisions). An unobserved decision missing an explicit
+  discriminator raises `ArgumentError` rather than silently colliding.
+  Every component is length-prefixed and nil has its own type tag, so
+  delimiters and literal sentinel strings cannot create an ambiguous input.
+  The digest is the full 64 hex characters:
   truncating it would throw away entropy for no benefit in a key no human
   ever reads.
   """
@@ -83,10 +85,14 @@ defmodule Shoestring.Elves.Orchestrator do
             "decision_id requires an explicit discriminator when observation_id is nil"
     end
 
-    observed = if unobserved?, do: "none", else: "#{observation_id}"
-    uniqueness = if undisambiguated?, do: "none", else: "#{discriminator}"
+    components = [
+      encode_component(run_id),
+      encode_component(action),
+      encode_component(if(unobserved?, do: nil, else: observation_id)),
+      encode_component(if(undisambiguated?, do: nil, else: discriminator))
+    ]
 
-    :crypto.hash(:sha256, "#{run_id}:#{action}:#{observed}:#{uniqueness}")
+    :crypto.hash(:sha256, IO.iodata_to_binary(components))
     |> Base.encode16(case: :lower)
   end
 
@@ -135,10 +141,9 @@ defmodule Shoestring.Elves.Orchestrator do
   (the primary observation), `:outcome` (what the requested action produced;
   `"pending"` unless stated).
 
-  Recording `action: "replace"` additionally claims the exclusive
-  replacement for `:attempt` (default 1, see `request_replacement/2`) and
-  fails with `:prior_run_active` while the prior run is still active — a
-  replace decision can never be recorded over a live run.
+  Recording `action: "replace"` additionally claims the exclusive next
+  replacement round and fails with `:prior_run_active` while the prior run
+  is still active — a replace decision can never be recorded over a live run.
 
   Recording never acts on the run: it is the audit trail the decision policy
   will later be judged against.
@@ -152,8 +157,7 @@ defmodule Shoestring.Elves.Orchestrator do
          {:ok, action} <- cast_action(attrs),
          {:ok, rationale} <- cast_rationale(attrs),
          {:ok, decision_id} <- cast_decision_id(attrs),
-         {:ok, attempt} <- cast_attempt(attrs),
-         :ok <- claim_for_replace(run, action, decision_id, attempt, opts) do
+         :ok <- claim_for_replace(run, action, decision_id, opts) do
       clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
 
       payload =
@@ -162,6 +166,7 @@ defmodule Shoestring.Elves.Orchestrator do
           "decision_id" => decision_id,
           "action" => action,
           "observation_id" => observation_id(attrs),
+          "replacement_claim_id" => replacement_claim_id(attrs),
           "evidence_refs" => evidence_refs_attr(attrs),
           "rationale" => Redaction.redact(rationale),
           "outcome" => outcome(attrs)
@@ -208,10 +213,10 @@ defmodule Shoestring.Elves.Orchestrator do
   Authorizes a replacement launch by recording one exclusive claim for the
   next durable replacement round.
 
-  Options: `:decision_id` (required, stable across the attempt's retries),
-  `:attempt` (positive integer, default 1, retained as a validated compatibility
-  hint), `:rationale`. The persisted round is always derived from prior durable
-  claims, never from the caller's hint.
+  Options: `:decision_id` (required, stable across retries), `:rationale`,
+  and the legacy `:attempt` option, which is ignored. The persisted round is
+  always derived from durable claims inside the trajectory writer; caller
+  assertions never gate or select a round.
 
   Returns `{:ok, :allowed}` when the guard passes and this caller won the
   claim for its round; `{:error, :prior_run_active}` while the prior run
@@ -226,10 +231,12 @@ defmodule Shoestring.Elves.Orchestrator do
   the winner.
 
   Exclusivity is per `(run, round)`, not per run forever: recovery is
-  iterative, so a later round opens after the previous round's replacement
-  has itself reached a terminal state. A stale rival cannot select a new
-  round by asserting a different attempt number; it observes the same
-  durable highest round as its rivals.
+  iterative, so a later round opens only after the previous round's
+  replacement has itself reached a terminal state or its claim has been
+  explicitly reconciled. A claim whose replacement is still active or has
+  not yet been linked returns `:prior_replacement_active`. The claim and its
+  replacement linkage are durable trajectory events, and the writer
+  serializes deriving the round and appending the claim.
 
   This function records the claim; it never launches anything itself.
   """
@@ -240,9 +247,66 @@ defmodule Shoestring.Elves.Orchestrator do
 
     with {:ok, run} <- fetch_run(run_id, repo),
          {:ok, true} <- guard_allows(run, repo),
-         {:ok, decision_id} <- cast_decision_id(opts),
-         {:ok, attempt} <- cast_attempt(opts) do
-      claim_replacement(run, decision_id, attempt, rationale_opt(opts), opts)
+         {:ok, decision_id} <- cast_decision_id(opts) do
+      claim_replacement(run, decision_id, rationale_opt(opts), opts)
+    end
+  end
+
+  @doc "Links a claimed replacement to the run it authorized."
+  @spec link_replacement_claim(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, TrajectoryEvent.t()} | {:error, term()}
+  def link_replacement_claim(claim_id, replacement_run_id, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with {:ok, claim} <- fetch_replacement_claim(claim_id, repo),
+         %RunRecord{} = replacement <- repo.get(RunRecord, replacement_run_id),
+         true <- replacement.goal_id == claim.goal_id do
+      now =
+        Shoestring.Harness.Clock.now(Keyword.get(opts, :clock, Shoestring.Harness.SystemClock))
+
+      Trajectory.append(
+        claim.goal_id,
+        %{
+          "type" => "elf.replacement_linked",
+          "schema_version" => 1,
+          "actor" => "orchestrator",
+          "occurred_at" => now,
+          "idempotency_key" => "elf-replacement-link:#{claim.id}:#{replacement.id}",
+          "payload" => %{
+            "run_id" => replacement.id,
+            "prior_run_id" => claim.run_id,
+            "claim_id" => claim.id,
+            "replacement_run_id" => replacement.id
+          }
+        },
+        trusted: [task_id: replacement.task_id, run_id: replacement.id]
+      )
+    else
+      nil -> {:error, :replacement_run_not_found}
+      false -> {:error, :replacement_run_wrong_goal}
+      error -> error
+    end
+  end
+
+  @doc "Explicitly reconciles an abandoned replacement claim."
+  @spec reconcile_replacement_claim(Ecto.UUID.t(), keyword()) ::
+          {:ok, TrajectoryEvent.t()} | {:error, term()}
+  def reconcile_replacement_claim(claim_id, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with {:ok, claim} <- fetch_replacement_claim(claim_id, repo) do
+      record_choice(
+        claim.run_id,
+        %{
+          action: "reconcile",
+          decision_id: "replacement-reconcile:#{claim.id}",
+          replacement_claim_id: claim.id,
+          rationale:
+            Keyword.get(opts, :rationale, "Operator reconciled the abandoned replacement claim."),
+          outcome: "reconciled"
+        },
+        opts
+      )
     end
   end
 
@@ -254,95 +318,44 @@ defmodule Shoestring.Elves.Orchestrator do
     end
   end
 
-  defp claim_replacement(run, decision_id, asserted_attempt, rationale, opts) do
-    repo = Keyword.get(opts, :repo, Repo)
-
-    existing_claims = existing_replacement_claims(run, repo)
-    round = derive_replacement_round(existing_claims, decision_id)
-
-    if stale_attempt?(existing_claims, decision_id, asserted_attempt, round) do
-      {:error, :replacement_already_claimed}
-    else
-      append_replacement_claim(run, decision_id, round, rationale, opts)
-    end
+  defp claim_replacement(run, decision_id, rationale, opts) do
+    append_replacement_claim(run, decision_id, rationale, opts)
   end
 
-  defp append_replacement_claim(run, decision_id, round, rationale, opts) do
+  defp append_replacement_claim(run, decision_id, rationale, opts) do
     clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
 
     payload =
       %{
         "run_id" => run.id,
         "decision_id" => decision_id,
-        "attempt" => round,
         "rationale" => rationale && Redaction.redact(rationale)
       }
       |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
-    append_attrs = %{
-      "type" => "elf.replacement_claimed",
-      "schema_version" => 1,
-      "actor" => "orchestrator",
-      "occurred_at" => Shoestring.Harness.Clock.now(clock),
-      "idempotency_key" => "elf-replacement:#{run.id}:#{round}",
-      "payload" => payload
-    }
+    with {:ok, pid} <-
+           WriterSupervisor.ensure_started(run.goal_id, Keyword.get(opts, :writer_opts, [])) do
+      case Writer.append_replacement_claim(
+             pid,
+             run,
+             payload,
+             Shoestring.Harness.Clock.now(clock),
+             Keyword.get(opts, :call_timeout, 15_000)
+           ) do
+        {:ok, %TrajectoryEvent{payload: %{"decision_id" => ^decision_id}}} ->
+          {:ok, :allowed}
 
-    # The writer serializes appends per goal and returns the winning event
-    # on an idempotency conflict, so comparing the winner's decision id is
-    # the race-safe verdict: same decision means our own retry, anything
-    # else means a rival claim won.
-    case Trajectory.append(run.goal_id, append_attrs,
-           trusted: [task_id: run.task_id, run_id: run.id]
-         ) do
-      {:ok, %TrajectoryEvent{payload: %{"decision_id" => ^decision_id}}} ->
-        {:ok, :allowed}
+        {:ok, %TrajectoryEvent{}} ->
+          {:error, :replacement_already_claimed}
 
-      {:ok, %TrajectoryEvent{}} ->
-        {:error, :replacement_already_claimed}
-
-      {:error, _reason} = error ->
-        error
+        {:error, _reason} = error ->
+          error
+      end
     end
   end
 
-  defp existing_replacement_claims(run, repo) do
-    repo.all(
-      from event in TrajectoryEvent,
-        where:
-          event.goal_id == ^run.goal_id and event.run_id == ^run.id and
-            event.type == "elf.replacement_claimed",
-        order_by: [asc: event.sequence]
-    )
-  end
-
-  defp derive_replacement_round(existing_claims, decision_id) do
-    case Enum.find(existing_claims, fn event -> event.payload["decision_id"] == decision_id end) do
-      %TrajectoryEvent{payload: %{"attempt" => claim_attempt}} when is_integer(claim_attempt) ->
-        claim_attempt
-
-      _not_found ->
-        highest_attempt =
-          existing_claims
-          |> Enum.map(fn event ->
-            case event.payload["attempt"] do
-              attempt when is_integer(attempt) -> attempt
-              _other -> 0
-            end
-          end)
-          |> Enum.max(fn -> 0 end)
-
-        highest_attempt + 1
-    end
-  end
-
-  defp stale_attempt?(existing_claims, decision_id, asserted_attempt, round) do
-    not Enum.any?(existing_claims, fn event -> event.payload["decision_id"] == decision_id end) and
-      asserted_attempt < round
-  end
-
-  defp claim_for_replace(run, "replace", decision_id, attempt, opts) do
-    opts = opts |> Keyword.put(:decision_id, decision_id) |> Keyword.put(:attempt, attempt)
+  defp claim_for_replace(run, "replace", decision_id, opts) do
+    opts = Keyword.put(opts, :decision_id, decision_id)
 
     case request_replacement(run.id, opts) do
       {:ok, :allowed} -> :ok
@@ -350,17 +363,7 @@ defmodule Shoestring.Elves.Orchestrator do
     end
   end
 
-  defp claim_for_replace(_run, _action, _decision_id, _attempt, _opts), do: :ok
-
-  defp cast_attempt(attrs) when is_list(attrs), do: attrs |> Map.new() |> cast_attempt()
-  defp cast_attempt(%{"attempt" => attempt}), do: cast_attempt_value(attempt)
-  defp cast_attempt(%{attempt: attempt}), do: cast_attempt_value(attempt)
-  defp cast_attempt(_attrs), do: {:ok, 1}
-
-  defp cast_attempt_value(attempt) when is_integer(attempt) and attempt >= 1, do: {:ok, attempt}
-
-  defp cast_attempt_value(attempt),
-    do: {:error, {:invalid_attempt, attempt, "replacement attempt must be a positive integer"}}
+  defp claim_for_replace(_run, _action, _decision_id, _opts), do: :ok
 
   defp rationale_opt(opts) do
     case Keyword.get(opts, :rationale) do
@@ -373,6 +376,14 @@ defmodule Shoestring.Elves.Orchestrator do
     case repo.get(RunRecord, run_id) do
       %RunRecord{} = run -> {:ok, run}
       nil -> {:error, :run_not_found}
+    end
+  end
+
+  defp fetch_replacement_claim(claim_id, repo) do
+    case repo.get(TrajectoryEvent, claim_id) do
+      %TrajectoryEvent{type: "elf.replacement_claimed"} = claim -> {:ok, claim}
+      %TrajectoryEvent{} -> {:error, :not_a_replacement_claim}
+      nil -> {:error, :replacement_claim_not_found}
     end
   end
 
@@ -508,6 +519,10 @@ defmodule Shoestring.Elves.Orchestrator do
   defp observation_id(%{observation_id: id}) when is_binary(id), do: id
   defp observation_id(_attrs), do: nil
 
+  defp replacement_claim_id(%{"replacement_claim_id" => id}) when is_binary(id), do: id
+  defp replacement_claim_id(%{replacement_claim_id: id}) when is_binary(id), do: id
+  defp replacement_claim_id(_attrs), do: nil
+
   defp evidence_refs_attr(%{"evidence_refs" => refs}) when is_list(refs) do
     refs |> Enum.filter(&is_binary/1) |> Enum.take(@max_evidence_refs)
   end
@@ -525,4 +540,10 @@ defmodule Shoestring.Elves.Orchestrator do
   defp blank?(nil), do: true
   defp blank?(str) when is_binary(str), do: String.trim(str) == ""
   defp blank?(_other), do: false
+
+  defp encode_component(nil), do: <<0>>
+
+  defp encode_component(value) when is_binary(value) do
+    <<1, byte_size(value)::unsigned-64, value::binary>>
+  end
 end

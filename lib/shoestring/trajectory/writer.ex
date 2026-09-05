@@ -44,6 +44,18 @@ defmodule Shoestring.Trajectory.Writer do
   end
 
   @doc false
+  @spec append_replacement_claim(
+          pid(),
+          Shoestring.Harness.RunRecord.t(),
+          map(),
+          DateTime.t(),
+          timeout()
+        ) :: {:ok, TrajectoryEvent.t()} | {:error, term()}
+  def append_replacement_claim(pid, run, payload, occurred_at, timeout \\ 15_000) do
+    GenServer.call(pid, {:append_replacement_claim, run, payload, occurred_at}, timeout)
+  end
+
+  @doc false
   def via(goal_id), do: {:via, Registry, {Shoestring.Trajectory.WriterRegistry, goal_id}}
 
   def child_spec(opts) do
@@ -88,6 +100,26 @@ defmodule Shoestring.Trajectory.Writer do
     handle_append(input, references, state)
   end
 
+  @impl true
+  def handle_call({:append_replacement_claim, run, payload, occurred_at}, _from, state) do
+    case replacement_round(run, payload["decision_id"], state) do
+      {:ok, round} ->
+        input = %AppendInput{
+          type: "elf.replacement_claimed",
+          schema_version: 1,
+          actor: "orchestrator",
+          occurred_at: occurred_at,
+          payload: Map.put(payload, "attempt", round),
+          idempotency_key: "elf-replacement:#{run.id}:#{round}"
+        }
+
+        handle_append(input, %TrustedEventReferences{task_id: run.task_id, run_id: run.id}, state)
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, arm_idle_timer(state)}
+    end
+  end
+
   defp handle_append(input, references, state) do
     reply =
       case validate_input(input) do
@@ -111,6 +143,75 @@ defmodule Shoestring.Trajectory.Writer do
 
   @impl true
   def handle_info({:idle_timeout, _stale_token}, state), do: {:noreply, state}
+
+  defp replacement_round(run, decision_id, state) do
+    claims =
+      state.repo.all(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^run.goal_id and event.run_id == ^run.id and
+              event.type == "elf.replacement_claimed",
+          order_by: [asc: event.sequence]
+      )
+
+    case Enum.find(claims, fn event -> event.payload["decision_id"] == decision_id end) do
+      %TrajectoryEvent{} = claim ->
+        {:ok, claim_attempt(claim)}
+
+      nil ->
+        case List.last(claims) do
+          nil ->
+            {:ok, 1}
+
+          claim ->
+            if replacement_claim_ready?(claim, state) do
+              {:ok, claim_attempt(claim) + 1}
+            else
+              {:error, :prior_replacement_active}
+            end
+        end
+    end
+  end
+
+  defp claim_attempt(%TrajectoryEvent{payload: %{"attempt" => attempt}})
+       when is_integer(attempt),
+       do: attempt
+
+  defp claim_attempt(_claim), do: 1
+
+  defp replacement_claim_ready?(claim, state) do
+    reconciled? =
+      state.repo.exists?(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^claim.goal_id and event.type == "elf.recovery_decided" and
+              fragment("(? ->> ?) = ?", event.payload, "action", "reconcile") and
+              fragment("(? ->> ?) = ?", event.payload, "outcome", "reconciled") and
+              fragment("(? ->> ?) = ?", event.payload, "replacement_claim_id", ^claim.id)
+      )
+
+    linked_run_id =
+      state.repo.one(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^claim.goal_id and event.type == "elf.replacement_linked" and
+              fragment("(? ->> ?) = ?", event.payload, "claim_id", ^claim.id),
+          order_by: [desc: event.sequence],
+          limit: 1,
+          select: fragment("? ->> ?", event.payload, "replacement_run_id")
+      )
+
+    terminal? =
+      is_binary(linked_run_id) and
+        state.repo.exists?(
+          from event in TrajectoryEvent,
+            where:
+              event.goal_id == ^claim.goal_id and event.run_id == ^linked_run_id and
+                event.type in ["run.completed", "run.failed", "run.interrupted", "run.cancelled"]
+        )
+
+    terminal? or (reconciled? and is_nil(linked_run_id))
+  end
 
   @impl true
   def terminate(_reason, %{idle_timer: nil}), do: :ok

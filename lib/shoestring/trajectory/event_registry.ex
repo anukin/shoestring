@@ -287,8 +287,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
     "elf.recovery_decided" => %{
       1 => %{
         required: [:run_id, :decision_id, :action],
-        optional: [:observation_id, :evidence_refs, :rationale, :outcome],
-        uuid_fields: [:run_id],
+        optional: [
+          :observation_id,
+          :replacement_claim_id,
+          :evidence_refs,
+          :rationale,
+          :outcome
+        ],
+        uuid_fields: [:run_id, :replacement_claim_id],
         types: %{
           evidence_refs: {:array, :string}
         }
@@ -300,6 +306,13 @@ defmodule Shoestring.Trajectory.EventRegistry do
         optional: [:attempt, :rationale],
         uuid_fields: [:run_id],
         types: %{attempt: :integer}
+      }
+    },
+    "elf.replacement_linked" => %{
+      1 => %{
+        required: [:run_id, :claim_id, :replacement_run_id],
+        optional: [:prior_run_id],
+        uuid_fields: [:run_id, :prior_run_id, :claim_id, :replacement_run_id]
       }
     }
   }
