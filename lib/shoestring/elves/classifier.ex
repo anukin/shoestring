@@ -7,13 +7,23 @@ defmodule Shoestring.Elves.Classifier do
     * `:completed` — normal exit: the adapter returned a completed result and
       the OS process exited zero (or had already been reaped after the
       verdict).
+    * `:interrupted` — the turn was deliberately stopped before completion
+      (lease non-renewal at the safe boundary, or an adapter-level stop):
+      the in-flight item completed, the turn was interrupted, and the work
+      completed so far is preserved in durable evidence. Never a failure.
     * `:failed` — the run ended but the task did not succeed. Carries a stable
       `error_code` naming the cause: `task_failed`, `quota_refused`,
       `authentication_failed`, `incompatible_protocol`, `signal_exit`,
       `log_overflow`, `launch_failed`, `supervisor_crash`.
     * `:cancelled` — an explicit cancellation terminated the owned process
       group. Cancellation always wins over any concurrent exit: if the Elf
-      asked for it, the run is cancelled, never "failed".
+      asked for it, the run is cancelled, never "failed" and never
+      "interrupted".
+
+  An interrupted turn is never `task_failed`: the normalizer reports the
+  interruption honestly as `result: %{status: "interrupted"}` (plus a
+  `codex-app-server:interrupted` extension), and this mapping keys on that
+  signal instead of inferring failure from a misleading status string.
 
   Inputs are adapter verdicts (`Shoestring.Harness.Error` categories and
   result statuses), raw OS exits, and Elf-side conditions (cancel requested,
@@ -23,6 +33,7 @@ defmodule Shoestring.Elves.Classifier do
 
   @type terminal ::
           %{class: :completed}
+          | %{class: :interrupted}
           | %{class: :failed, error_category: String.t(), error_code: String.t()}
           | %{class: :cancelled}
 
@@ -50,6 +61,13 @@ defmodule Shoestring.Elves.Classifier do
     # The adapter declared success; a ragged OS exit afterwards (or a group
     # that outlived the verdict and was reaped) does not rewrite success.
     %{class: :completed}
+  end
+
+  def classify({:result, "interrupted"}, _os_exit, false) do
+    # A deliberately stopped turn: the boundary was honored, the in-flight
+    # item completed, and the evidence is durable. This is never a failure,
+    # and `result_accepted`-style mislabeling must not return here.
+    %{class: :interrupted}
   end
 
   def classify({:result, status}, _os_exit, false) when is_binary(status) do
@@ -103,12 +121,14 @@ defmodule Shoestring.Elves.Classifier do
   @doc "Maps a terminal to the run lifecycle event type it must be reported with."
   @spec event_type(terminal()) :: String.t()
   def event_type(%{class: :completed}), do: "run.completed"
+  def event_type(%{class: :interrupted}), do: "run.interrupted"
   def event_type(%{class: :cancelled}), do: "run.cancelled"
   def event_type(%{class: :failed}), do: "run.failed"
 
   @doc "Payload for the terminal run event (only `run.failed` carries error fields)."
   @spec event_payload(Ecto.UUID.t(), terminal()) :: map()
   def event_payload(run_id, %{class: :completed}), do: %{"run_id" => run_id}
+  def event_payload(run_id, %{class: :interrupted}), do: %{"run_id" => run_id}
   def event_payload(run_id, %{class: :cancelled}), do: %{"run_id" => run_id}
 
   def event_payload(run_id, %{class: :failed} = terminal) do

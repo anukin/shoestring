@@ -93,10 +93,16 @@ defmodule Shoestring.Elves.OrchestratorTest do
     assert "synthesize_completion" in packet.choices
 
     # The orchestrator can request status: recorded with evidence refs,
-    # rationale, action, and outcome — and the run is untouched.
+    # rationale, action, and outcome — and the run is untouched. The
+    # decision id is derived from the observation it responds to, so a
+    # retry or restart deduplicates instead of duplicating.
+    decision_id =
+      Orchestrator.decision_id(run_id, "request_status", List.first(packet.evidence_refs))
+
     assert {:ok, event} =
              Orchestrator.record_choice(run_id, %{
                action: "request_status",
+               decision_id: decision_id,
                evidence_refs: packet.evidence_refs,
                rationale:
                  "Test command recorded as passed; asking the child for its final report.",
@@ -105,8 +111,31 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     assert event.type == "elf.recovery_decided"
     assert event.payload["action"] == "request_status"
+    assert event.payload["decision_id"] == decision_id
     assert event.payload["evidence_refs"] == packet.evidence_refs
     assert event.payload["outcome"] == "pending"
+
+    # Recording the same decision again deduplicates idempotently.
+    assert {:ok, retry_event} =
+             Orchestrator.record_choice(run_id, %{
+               action: "request_status",
+               decision_id: decision_id,
+               evidence_refs: packet.evidence_refs,
+               rationale:
+                 "Test command recorded as passed; asking the child for its final report.",
+               outcome: "pending"
+             })
+
+    assert retry_event.id == event.id
+
+    # A replace decision over the still-active run is refused, not recorded.
+    assert {:error, :prior_run_active} =
+             Orchestrator.record_choice(run_id, %{
+               action: "replace",
+               decision_id: Orchestrator.decision_id(run_id, "replace", "obs-replace"),
+               rationale: "Attempting replacement while the prior run is still active.",
+               outcome: "pending"
+             })
 
     # Nothing auto-killed or auto-replaced: Elf and group alive, no terminal,
     # replacement still refused.
@@ -114,7 +143,9 @@ defmodule Shoestring.Elves.OrchestratorTest do
     assert ElvesHelpers.group_members(ElvesHelpers.recorded_pgid(goal.id, run_id)) != []
     assert ElvesHelpers.terminal_event(goal.id, run_id) == nil
     assert {:ok, false} = Orchestrator.can_replace?(run_id)
-    assert {:error, :prior_run_active} = Orchestrator.request_replacement(run_id)
+
+    assert {:error, :prior_run_active} =
+             Orchestrator.request_replacement(run_id, decision_id: "dec-replace-live")
 
     assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
   end
@@ -142,6 +173,8 @@ defmodule Shoestring.Elves.OrchestratorTest do
     assert {:ok, event} =
              Orchestrator.record_choice(run_id, %{
                action: "wait",
+               decision_id:
+                 Orchestrator.decision_id(run_id, "wait", List.first(packet.evidence_refs)),
                evidence_refs: packet.evidence_refs,
                rationale: "Group alive with no verdict yet; keep supervising.",
                outcome: "pending"
@@ -168,12 +201,17 @@ defmodule Shoestring.Elves.OrchestratorTest do
     assert {:ok, _event} =
              Orchestrator.record_choice(run_id, %{
                action: "reconcile",
+               decision_id: Orchestrator.decision_id(run_id, "reconcile", nil),
                rationale: "Operator verified the orphan by hand; replacement may proceed.",
                outcome: "reconciled"
              })
 
     assert {:ok, true} = Orchestrator.can_replace?(run_id)
-    assert {:ok, :allowed} = Orchestrator.request_replacement(run_id)
+
+    assert {:ok, :allowed} =
+             Orchestrator.request_replacement(run_id,
+               decision_id: Orchestrator.decision_id(run_id, "replace", "claim-1")
+             )
 
     # A terminal state also opens the guard on its own.
     assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
@@ -190,15 +228,74 @@ defmodule Shoestring.Elves.OrchestratorTest do
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
     assert {:error, {:unknown_action, "nuke"}} =
-             Orchestrator.record_choice(run_id, %{action: "nuke", rationale: "x"})
+             Orchestrator.record_choice(run_id, %{
+               action: "nuke",
+               decision_id: "dec-1",
+               rationale: "x"
+             })
 
     assert {:error, {:missing_rationale, _}} =
-             Orchestrator.record_choice(run_id, %{action: "wait"})
+             Orchestrator.record_choice(run_id, %{action: "wait", decision_id: "dec-1"})
+
+    assert {:error, {:missing_decision_id, _}} =
+             Orchestrator.record_choice(run_id, %{action: "wait", rationale: "x"})
 
     assert {:error, :run_not_found} =
-             Orchestrator.record_choice(Ecto.UUID.generate(), %{action: "wait", rationale: "x"})
+             Orchestrator.record_choice(Ecto.UUID.generate(), %{
+               action: "wait",
+               decision_id: "dec-1",
+               rationale: "x"
+             })
 
     assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
+  end
+
+  test "decision ids are stable for identical inputs" do
+    run_id = Ecto.UUID.generate()
+
+    assert Orchestrator.decision_id(run_id, "wait", "obs-1") ==
+             Orchestrator.decision_id(run_id, "wait", "obs-1")
+
+    refute Orchestrator.decision_id(run_id, "wait", "obs-1") ==
+             Orchestrator.decision_id(run_id, "wait", "obs-2")
+
+    refute Orchestrator.decision_id(run_id, "wait", "obs-1") ==
+             Orchestrator.decision_id(run_id, "escalate", "obs-1")
+  end
+
+  test "concurrent replacement claims grant exactly one winner", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = start_quiet_run(sup, goal, task, :claim_race_probe, [])
+
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
+    assert {:ok, true} = Orchestrator.can_replace?(run_id)
+
+    # An Oban retry racing the orchestrator loop: ten distinct decisions
+    # claim at once, and exactly one may dispatch a replacement.
+    results =
+      1..10
+      |> Task.async_stream(
+        fn n ->
+          Orchestrator.request_replacement(run_id, decision_id: "race-decision-#{n}")
+        end,
+        max_concurrency: 10,
+        timeout: 30_000
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert Enum.count(results, &(&1 == {:ok, :allowed})) == 1
+    assert Enum.count(results, &(&1 == {:error, :replacement_already_claimed})) == 9
+
+    # The winner retrying with its own decision id stays allowed.
+    winner_id = ElvesHelpers.replacement_claim(goal.id, run_id).payload["decision_id"]
+
+    assert {:ok, :allowed} =
+             Orchestrator.request_replacement(run_id, decision_id: winner_id)
   end
 
   test "orchestrator carries no termination or replacement paths (pinning)" do

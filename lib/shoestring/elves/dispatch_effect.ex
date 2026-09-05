@@ -94,6 +94,7 @@ defmodule Shoestring.Elves.DispatchEffect do
   defp terminal_outcome(run, opts) do
     case Elves.terminal_of(run.id, opts) do
       {:ok, %{class: :completed}} -> :ok
+      {:ok, %{class: :interrupted}} -> :ok
       {:ok, %{class: :cancelled}} -> :ok
       {:ok, %{class: :failed, payload: payload}} -> {:error, {:elf_failed, payload}}
       {:ok, nil} -> {:error, :elf_terminal_unknown}

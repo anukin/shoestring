@@ -177,6 +177,43 @@ defmodule Shoestring.Elves.LeaseBoundaryTest do
                       "method" => "turn/interrupt",
                       "params" => %{"turnId" => ^turn_id}
                     }}
+
+    # Drive the provider's answer all the way through: the interrupted turn
+    # completes, and the session reports it honestly — interrupted, never a
+    # task failure — with the completed item evidence already buffered
+    # before teardown.
+    send(
+      session,
+      {:codex_transport_frame, transport,
+       Jason.encode!(%{
+         "method" => "turn/completed",
+         "params" => %{
+           "turn" => %{
+             "id" => turn_id,
+             "status" => "interrupted",
+             "durationMs" => 1500
+           }
+         }
+       })}
+    )
+
+    _ = :sys.get_state(session)
+    {:ok, status} = Session.status(session)
+    assert status.status == :interrupted
+
+    {:ok, events} = Session.stream_events(session)
+    command_events = Enum.filter(events, &(&1.kind == :command))
+    result_events = Enum.filter(events, &(&1.kind == :result))
+    assert length(command_events) >= 1
+    assert length(result_events) == 1
+
+    [result] = result_events
+    assert result.result.status == "interrupted"
+    assert result.extensions["codex-app-server:interrupted"] == true
+
+    # Evidence precedes the outcome: every item event was buffered before
+    # the turn result that ended the turn.
+    assert Enum.all?(command_events, &(&1.ordinal < result.ordinal))
   end
 
   test "watcher enforces once at the deadline and then stops" do

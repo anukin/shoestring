@@ -115,6 +115,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
     "run.pausing" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
     "run.suspended" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
     "run.completed" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
+    "run.interrupted" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
     "run.failed" => %{
       1 => %{
         required: [:run_id, :error_category, :error_code],
@@ -291,6 +292,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
         types: %{
           evidence_refs: {:array, :string}
         }
+      }
+    },
+    "elf.replacement_claimed" => %{
+      1 => %{
+        required: [:run_id, :decision_id],
+        optional: [:rationale],
+        uuid_fields: [:run_id],
+        types: %{}
       }
     }
   }

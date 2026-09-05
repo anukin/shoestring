@@ -170,6 +170,56 @@ defmodule Shoestring.Elves.DispatchEffectTest do
     assert ElvesHelpers.count_events(goal.id, run_id, ["run.running"]) == 1
   end
 
+  test "an interrupted turn completes the attempt honestly, never as a failure", %{
+    goal: goal,
+    task: task
+  } do
+    request = ElvesHelpers.run_request(goal, task)
+
+    interrupted =
+      Shoestring.Harness.Fake.Scenario.result_event("interrupted",
+        offset_ms: 100,
+        source_event_id: "turn-interrupted"
+      )
+      |> Map.put(:extensions, %{"codex-app-server:interrupted" => true})
+
+    scenario =
+      ElvesHelpers.custom_scenario(:interrupted_dispatch, [
+        %{
+          kind: :command,
+          offset_ms: 0,
+          source_event_id: "cmd-mix-test",
+          error: nil,
+          result: nil,
+          capacity_snapshot: nil,
+          extensions: %{"shoestring.fake:command" => "mix test"}
+        },
+        interrupted
+      ])
+
+    Application.put_env(:shoestring, :elf_dispatch_opts,
+      scenario: scenario,
+      command: ["sleep", "30"],
+      runner_opts: [kill_grace_ms: 200, reap_timeout_ms: 2_000]
+    )
+
+    assert {:ok, dispatch, job} =
+             Dispatches.enqueue(request, ElvesHelpers.fake_identity(),
+               clock: Shoestring.Test.FixedClock
+             )
+
+    # A deliberate stop ends the attempt cleanly: :ok, not an error, and
+    # the persisted terminal is interrupted rather than failed.
+    assert :ok = perform_job(DispatchWorker, job.args)
+
+    run_id = dispatch.run_id
+    assert ElvesHelpers.terminal_event(goal.id, run_id).type == "run.interrupted"
+    assert ElvesHelpers.count_events(goal.id, run_id, ["run.failed"]) == 0
+
+    assert %DispatchRecord{status: "effect_completed"} =
+             Repo.get(DispatchRecord, dispatch.dispatch_id)
+  end
+
   defp restore_env(key, nil), do: Application.delete_env(:shoestring, key)
   defp restore_env(key, value), do: Application.put_env(:shoestring, key, value)
 end

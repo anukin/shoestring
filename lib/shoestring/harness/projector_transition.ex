@@ -34,6 +34,7 @@ defmodule Shoestring.Harness.ProjectorTransition do
   def action("run.suspended"), do: {:run, :suspend}
   def action("run.completed"), do: {:run, :complete}
   def action("run.failed"), do: {:run, :fail}
+  def action("run.interrupted"), do: {:run, :interrupt}
   def action("run.cancelling"), do: {:run, :cancel}
   def action("run.cancelled"), do: {:run, :cancelled}
   def action("lease.proposed"), do: {:lease, :propose}

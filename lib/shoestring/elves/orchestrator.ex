@@ -52,6 +52,23 @@ defmodule Shoestring.Elves.Orchestrator do
   def choices, do: @choices
 
   @doc """
+  Derives a stable decision id from `(run_id, action, observation_id)`.
+
+  Pass the result as `:decision_id` when recording the choice it was
+  derived for: retries and application restarts that respond to the same
+  observation with the same action then share one idempotency key and
+  deduplicate instead of duplicating the decision.
+  """
+  @spec decision_id(Ecto.UUID.t(), String.t(), String.t() | nil) :: String.t()
+  def decision_id(run_id, action, observation_id) do
+    digest =
+      :crypto.hash(:sha256, "#{run_id}:#{action}:#{observation_id}")
+      |> Base.encode16(case: :lower)
+
+    binary_part(digest, 0, 16)
+  end
+
+  @doc """
   Builds the bounded evidence packet the orchestrator decides from.
 
   Reads the latest `elf.staleness_observed` packets plus the run's progress
@@ -87,12 +104,19 @@ defmodule Shoestring.Elves.Orchestrator do
   @doc """
   Records one recovery choice in the trajectory as `elf.recovery_decided`.
 
-  Required attributes: `:action` (one of `choices/0`), `:rationale`.
+  Required attributes: `:action` (one of `choices/0`), `:rationale`, and
+  `:decision_id` — a stable caller-owned idempotency key (see
+  `decision_id/3`). There is deliberately no generated default: a random
+  fallback would silently mint a fresh key on every retry and defeat
+  deduplication across restarts.
   Optional: `:evidence_refs` (observation ids consumed), `:observation_id`
   (the primary observation), `:outcome` (what the requested action produced;
-  may be recorded as `"pending"` and updated by a later choice), and
-  `:decision_id` (stable idempotency key across retries; generated when
-  absent).
+  `"pending"` unless stated).
+
+  Recording `action: "replace"` additionally claims the exclusive
+  replacement (see `request_replacement/2`) and fails with
+  `:prior_run_active` while the prior run is still active — a replace
+  decision can never be recorded over a live run.
 
   Recording never acts on the run: it is the audit trail the decision policy
   will later be judged against.
@@ -104,8 +128,9 @@ defmodule Shoestring.Elves.Orchestrator do
 
     with {:ok, run} <- fetch_run(run_id, repo),
          {:ok, action} <- cast_action(attrs),
-         {:ok, rationale} <- cast_rationale(attrs) do
-      decision_id = decision_id(attrs)
+         {:ok, rationale} <- cast_rationale(attrs),
+         {:ok, decision_id} <- cast_decision_id(attrs),
+         :ok <- claim_for_replace(run, action, decision_id, opts) do
       clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
 
       payload =
@@ -157,19 +182,92 @@ defmodule Shoestring.Elves.Orchestrator do
   end
 
   @doc """
-  Authorizes a replacement launch without launching anything itself.
+  Authorizes a replacement launch by recording one exclusive per-run claim.
 
-  Returns `{:ok, :allowed}` when the guard passes; otherwise
-  `{:error, :prior_run_active}`. The caller starts the new run, so a refused
-  request can never duplicate work.
+  Returns `{:ok, :allowed}` when the guard passes and this caller won the
+  claim; `{:error, :prior_run_active}` while the prior run is still active;
+  `{:error, :replacement_already_claimed}` when a different decision already
+  claimed the replacement for this run. Retrying with the same
+  `:decision_id` is idempotent and returns `:allowed` again, so a crash
+  between the claim and the launch cannot wedge the run, while two
+  concurrent claimants (an Oban retry racing the orchestrator loop) cannot
+  both dispatch duplicate work: the claim is a uniquely-keyed trajectory
+  event, and the trajectory writer serializes appends per goal, so exactly
+  one decision wins and the loser observes the winner.
+
+  This function records the claim; it never launches anything itself.
   """
   @spec request_replacement(Ecto.UUID.t(), keyword()) ::
           {:ok, :allowed} | {:error, term()}
   def request_replacement(run_id, opts \\ []) do
-    case can_replace?(run_id, opts) do
-      {:ok, true} -> {:ok, :allowed}
-      {:ok, false} -> {:error, :prior_run_active}
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with {:ok, run} <- fetch_run(run_id, repo),
+         {:ok, true} <- guard_allows(run, repo),
+         {:ok, decision_id} <- cast_decision_id(opts) do
+      claim_replacement(run, decision_id, rationale_opt(opts), opts)
+    end
+  end
+
+  defp guard_allows(run, repo) do
+    cond do
+      terminal_event(run, repo) != nil -> {:ok, true}
+      reconciled?(run, repo) -> {:ok, true}
+      true -> {:error, :prior_run_active}
+    end
+  end
+
+  defp claim_replacement(run, decision_id, rationale, opts) do
+    clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
+
+    payload =
+      %{
+        "run_id" => run.id,
+        "decision_id" => decision_id,
+        "rationale" => rationale && Redaction.redact(rationale)
+      }
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+    append_attrs = %{
+      "type" => "elf.replacement_claimed",
+      "schema_version" => 1,
+      "actor" => "orchestrator",
+      "occurred_at" => Shoestring.Harness.Clock.now(clock),
+      "idempotency_key" => "elf-replacement:#{run.id}",
+      "payload" => payload
+    }
+
+    # The writer serializes appends per goal and returns the winning event
+    # on an idempotency conflict, so comparing the winner's decision id is
+    # the race-safe verdict: same decision means our own retry, anything
+    # else means a rival claim won.
+    case Trajectory.append(run.goal_id, append_attrs,
+           trusted: [task_id: run.task_id, run_id: run.id]
+         ) do
+      {:ok, %TrajectoryEvent{payload: %{"decision_id" => ^decision_id}}} ->
+        {:ok, :allowed}
+
+      {:ok, %TrajectoryEvent{}} ->
+        {:error, :replacement_already_claimed}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp claim_for_replace(run, "replace", decision_id, opts) do
+    case request_replacement(run.id, Keyword.put(opts, :decision_id, decision_id)) do
+      {:ok, :allowed} -> :ok
       {:error, _reason} = error -> error
+    end
+  end
+
+  defp claim_for_replace(_run, _action, _decision_id, _opts), do: :ok
+
+  defp rationale_opt(opts) do
+    case Keyword.get(opts, :rationale) do
+      rationale when is_binary(rationale) -> rationale
+      _other -> nil
     end
   end
 
@@ -196,7 +294,7 @@ defmodule Shoestring.Elves.Orchestrator do
       from event in TrajectoryEvent,
         where:
           event.goal_id == ^run.goal_id and event.run_id == ^run.id and
-            event.type in ["run.completed", "run.failed", "run.cancelled"],
+            event.type in ["run.completed", "run.failed", "run.interrupted", "run.cancelled"],
         order_by: [desc: event.sequence],
         limit: 1
     )
@@ -206,6 +304,7 @@ defmodule Shoestring.Elves.Orchestrator do
     case terminal_event(run, repo) do
       %TrajectoryEvent{type: "run.completed"} -> "completed"
       %TrajectoryEvent{type: "run.failed"} -> "failed"
+      %TrajectoryEvent{type: "run.interrupted"} -> "interrupted"
       %TrajectoryEvent{type: "run.cancelled"} -> "cancelled"
       nil -> nil
     end
@@ -289,9 +388,18 @@ defmodule Shoestring.Elves.Orchestrator do
   defp cast_rationale(_attrs),
     do: {:error, {:missing_rationale, "recovery choice requires a rationale"}}
 
-  defp decision_id(%{"decision_id" => id}) when is_binary(id), do: id
-  defp decision_id(%{decision_id: id}) when is_binary(id), do: id
-  defp decision_id(_attrs), do: Ecto.UUID.generate()
+  defp cast_decision_id(attrs) when is_list(attrs) do
+    attrs |> Map.new() |> cast_decision_id()
+  end
+
+  defp cast_decision_id(%{"decision_id" => id}) when is_binary(id), do: {:ok, id}
+  defp cast_decision_id(%{decision_id: id}) when is_binary(id), do: {:ok, id}
+
+  defp cast_decision_id(_attrs),
+    do:
+      {:error,
+       {:missing_decision_id,
+        "recovery choice requires a stable decision_id (see decision_id/3); generated ids defeat cross-restart deduplication"}}
 
   defp observation_id(%{"observation_id" => id}) when is_binary(id), do: id
   defp observation_id(%{observation_id: id}) when is_binary(id), do: id

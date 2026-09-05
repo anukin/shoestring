@@ -534,9 +534,14 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   end
 
   defp handle_rpc_frame(%{"method" => method} = frame, state) do
-    # Server push notification
-    state = track_item_boundaries(method, frame, state)
-    normalize_and_buffer(frame, state)
+    # Server push notification. The frame is normalized and buffered BEFORE
+    # boundary tracking runs: `track_item_boundaries("turn/completed", ...)`
+    # reaps the owned process group, and durable evidence of what happened
+    # must already exist before any teardown. The completed item events and
+    # the turn outcome therefore always precede the reap, so a lease-boundary
+    # or explicit stop preserves the work instead of destroying it first.
+    state = normalize_and_buffer(frame, state)
+    track_item_boundaries(method, frame, state)
   end
 
   defp handle_rpc_frame(_other, state), do: state

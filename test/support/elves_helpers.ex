@@ -73,7 +73,20 @@ defmodule Shoestring.Test.ElvesHelpers do
       from event in TrajectoryEvent,
         where:
           event.goal_id == ^goal_id and event.run_id == ^run_id and
-            event.type in ["run.completed", "run.failed", "run.cancelled"],
+            event.type in ["run.completed", "run.failed", "run.interrupted", "run.cancelled"],
+        order_by: [desc: event.sequence],
+        limit: 1
+    )
+  end
+
+  @doc "Fetches the replacement claim event for a run, if any."
+  @spec replacement_claim(Ecto.UUID.t(), Ecto.UUID.t()) :: TrajectoryEvent.t() | nil
+  def replacement_claim(goal_id, run_id) do
+    Repo.one(
+      from event in TrajectoryEvent,
+        where:
+          event.goal_id == ^goal_id and event.run_id == ^run_id and
+            event.type == "elf.replacement_claimed",
         order_by: [desc: event.sequence],
         limit: 1
     )
