@@ -2,17 +2,8 @@ This is a web application written using the Phoenix web framework.
 
 ## Project guidelines
 
-- Never add `Co-authored-by` trailers for Omnigent, Codex, Claude, any LLM,
-  agent, subagent, orchestrator, or automation.
-- Do not add automated authorship, contributor, or attribution trailers in
-  commits or pull-request descriptions.
-- Add a human `Co-authored-by` trailer only when the user explicitly names the
-  human and requests it.
-- Inspect commit messages before committing and remove any automated trailer;
-  the configured Git author remains the sole author.
-
-- Use `mix precommit` alias when you are done with all changes and fix any pending issues
-- Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
+- Use `mix precommit` when you are done with all changes and fix any pending issues
+- Use the already included `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`
 - Elf runs require `python3` on `PATH` (the process-group launcher; see
   `Shoestring.Elves.PortRunner`). Keep tests hermetic: use
   `Shoestring.Harness.Fake` and trivial local commands, never a provider CLI
@@ -20,16 +11,136 @@ This is a web application written using the Phoenix web framework.
 
 ### Commit attribution
 
-- **Never add `Co-authored-by` trailers for Omnigent, Codex, Claude, an LLM,
-  an agent, a sub-agent, an orchestrator, or any other automation.** This rule
-  applies to every worker and every commit in this repository.
-- Do not add any automated authorship, contributor, or attribution trailer to a
-  commit message or PR description.
+- **Never** add `Co-authored-by`, or any authorship / contributor / attribution
+  trailer, for Omnigent, Codex, Claude, an LLM, an agent, a sub-agent, an
+  orchestrator, or any other automation — in commit messages or PR descriptions.
 - Add a human `Co-authored-by` trailer only when the user explicitly names that
-  human co-author and explicitly requests the trailer.
-- Before committing, inspect the final commit message and remove any automated
-  co-author trailer inserted by a tool or default template. The configured Git
-  author remains the sole author unless the user explicitly directs otherwise.
+  human and explicitly asks for it.
+- Inspect the final commit message before committing and strip any trailer a
+  tool or template inserted. The configured Git author is the sole author.
+
+## Delegated agent contract
+
+Standing rules for every sub-agent working in this repository.
+
+**These rules are assumed by every task brief.** A brief states only the task,
+the worktree, the acceptance contract, and whatever deviates from this file.
+Do not expect any of the following to be restated, and do not treat its absence
+from a brief as permission.
+
+### Workspace
+
+- Work **only** inside the worktree the brief names. Never modify the source
+  checkout, and never touch another agent's worktree — other agents run
+  concurrently and briefs list the paths you must stay out of.
+- Commit to the branch the brief names. Rebase only onto `origin/main`.
+- Open your own PR. **Never merge** — a human merges.
+- If `gh` is unauthenticated in your sandbox, push the branch anyway and say so
+  in your report; the orchestrator opens the PR.
+
+### Running commands
+
+- Run every command in the **foreground**. Never background a long command and
+  then wait on it — that is the single largest cause of lost agent work here.
+- Bound long commands with the runner's own timeout argument, not `&` + polling.
+- `codex exec` and similar CLIs **block forever on an open stdin**. Redirect
+  `< /dev/null` unless you intend to write to it.
+
+### Gates
+
+- `mix precommit` must pass before you push. Report the exact test count,
+  failure count, and excluded count, plus "0 compiler warnings".
+- The brief states the baseline at your base commit. Compare against it and
+  explain any drop.
+- A count you did not run yourself is not a result. Do not report a gate you
+  did not observe.
+
+### Tests
+
+- Every fix needs a regression test that **fails at the base commit for the
+  right behavioural reason** — a `NameError` or missing-module failure proves
+  nothing. Say how you verified this.
+- Never make a test pass by skipping, sleeping, retry-wrapping, widening an
+  assertion, or deleting coverage. If that seems to be the only option, stop
+  and report instead of committing it.
+- A single green run does not demonstrate a flake is fixed. Repeat it.
+- Assert **both directions** where a change filters data: that the bad value is
+  gone *and* that the required value still survives. A one-directional
+  assertion cannot distinguish "secret removed" from "evidence removed".
+
+### Changing existing code
+
+- Read the code you are fixing adversarially before changing it, including code
+  you wrote yourself earlier. In this repository, multiple fixes have shipped a
+  subtler bug than the one they repaired.
+- For every fix, state explicitly what it could break.
+- Bounding half a path is not bounding it. When you fix one call site, guard,
+  or limit, find its twin and fix that too.
+- Compensation / rollback logic must handle every case it can be reached from
+  (create *and* update, present *and* absent), and must not discard information
+  on failure.
+
+### Providers and cost
+
+- Tests are hermetic by default. **Any** invocation that reaches a provider
+  model requires explicit approval in the brief — help, `--version`, schema
+  inspection, and calls that fail argument validation do not.
+- Approved live runs use a disposable repository under `/tmp`, the smallest
+  mechanically verifiable task, and **retain stderr and the exit code**.
+  Discarding stderr converts a diagnosable failure into an unanswerable one.
+
+### Evidence and fixtures
+
+Label every capability claim in a document with one of:
+
+- `VERIFIED` — live-observed, with a committed frame in the repository backing it.
+- `SCHEMA-ONLY` — read from help output, a schema, or type definitions.
+- `REPO-INSPECTION` — read from this repository's own source.
+- `UNVERIFIED` — not established. Say so plainly; do not soften it.
+
+Fixtures record what actually happened. Redact secrets, home paths, and machine
+metadata, but **never alter captured bytes** to make them tidier. Replace
+provider-generated identifiers with synthetic values that stay **format-valid**
+(a UUID stays a well-formed UUID with version and variant nibbles preserved) so
+parsers still exercise real structure. Keep non-UUID wire shapes as they are.
+
+### Secrets and rendering
+
+- Never persist or render a vendor credential, hidden reasoning, or a raw
+  provider transcript.
+- Never send an inspected error term to the UI. Raw detail goes to the log; the
+  user gets a clean message.
+- Never call `String.to_atom/1` on user input.
+
+### Reviewing
+
+- A reviewer **reports; it never edits**. Judge the diff against the stated
+  acceptance contract only.
+- Verify claims against the code and committed frames rather than trusting the
+  implementer's summary — including test counts.
+- Give a clear verdict: `APPROVE`, `APPROVE-WITH-NITS`, or `REQUEST-CHANGES`,
+  with each blocker as `file:line` + why it is blocking.
+- Say when a test would also have passed against the broken code. A test that
+  does not fail on the old code is documentation, not a regression lock.
+
+### Reporting back
+
+Keep the report short and structured: what you changed and why, anything in the
+task you rejected and why, gate numbers you observed, fail-on-old-code
+evidence, and the PR URL or branch name. Uncertainty stated plainly is worth
+more than confident prose.
+
+### Locked decisions (iteration 4 — supervised Elves)
+
+- The user's source checkout is never modified. Worktrees live outside it.
+- No timer, lease expiry, quiet heartbeat, or missing final response may by
+  itself interrupt, replace, or duplicate an Elf that may still be doing useful
+  work. Staleness is **evidence**, not a trigger.
+- Explicit cancellation must terminate the whole owned process group; the Elf
+  owns the process group and reaps it.
+- Normalized events must be buffered live — no provider backfill exists.
+- Raw provider output is diagnostic evidence, never canonical domain state.
+- Oversized output fails the run; it is never silently truncated.
 
 ### Phoenix v1.8 guidelines
 
