@@ -19,7 +19,10 @@ zero-model-cost stdio probing or static schema inspection. The two turns cost
 `thread/tokenUsage/updated` notifications. Descendant processes SURVIVE the
 interrupt, so the adapter must kill the process group itself. Verdict:
 **app-server --stdio for Work Package C**, with mitigations listed below.
-No further live runs were made; anything not observed is marked UNVERIFIED.
+Update (Work Package C): Exactly one additional bounded live turn was executed under
+WP-C to verify post-turn resume across process restart and capture live
+`commandExecution` `item/completed` shape (fixture `thread-resume-and-command-complete.json`).
+Both are VERIFIED live. Total live runs across spike and WP-C: 3 turns (1 in WP-C).
 
 ## 1. How the surface was enumerated (no model spend)
 
@@ -123,12 +126,13 @@ changes: [{path, kind: {type: "add"}, diff}])` →
   write turn). The command item carries `command`
   (`/bin/zsh -lc 'sleep 45'`), `cwd`, `processId` (string, `"43138"` — its
   mapping to an OS pid is UNVERIFIED), `status: "inProgress"`,
-  `exitCode`/`durationMs` (null until completion). EMPHASIS: the live
-  `item/completed` shape for a `commandExecution` item remains UNOBSERVED —
-  the only command item in flight was interrupted before completing, and no
-  `item/completed` was emitted for it. Work Package C must NOT assume its
-  fields (e.g. how `exitCode`/`aggregatedOutput` look on success, failure, or
-  interrupt); treat them as schema-only until a completion is captured.
+  `exitCode`/`durationMs` (null until completion). In Work Package C, the live
+  `item/completed` shape for a `commandExecution` item was captured and is
+  VERIFIED live (fixture `thread-resume-and-command-complete.json`). Observed
+  fields: `command` (`"/bin/zsh -lc '...'"`), `cwd`, `processId` (`"29968"`),
+  `status: "completed"`, `exitCode: 0`, `durationMs: 0`, `aggregatedOutput: null`.
+  The event normalizer consumes this completion frame and maps it to a standard
+  HarnessEvent `:result`.
 - Command output streaming: `item/commandExecution/outputDelta`
   (schema-only, UNVERIFIED live — neither small turn produced output
   deltas).
@@ -155,12 +159,16 @@ changes: [{path, kind: {type: "add"}, diff}])` →
   shape-only key/type frame plus the list envelope (entry count, frame bytes)
   so text and artifacts agree; no real values are stored.
 - `thread/resume {threadId}` EXISTS (schema + live rejection shape VERIFIED)
-  but fresh pre-turn threads have NO rollout file yet, so resume fails
+  and fresh pre-turn threads have NO rollout file yet, so pre-turn resume fails
   cleanly: `-32600 "no rollout found for thread id …"` (VERIFIED live for
   both ephemeral AND non-ephemeral pre-turn threads; fixture
-  `resume-negative.json`). Resume-after-restart therefore requires a
-  persisted (post-first-turn) rollout; post-turn resume itself is UNVERIFIED
-  (would cost a model turn to set up — explicitly skipped).
+  `resume-negative.json`). In Work Package C, post-turn resume was tested live and
+  is VERIFIED live (fixture `thread-resume-and-command-complete.json`): calling
+  `thread/resume {threadId}` on a non-ephemeral thread after 1 turn completes
+  succeeds cleanly both in-session and across a full process restart on a fresh
+  `codex app-server --stdio` instance, returning the idle thread with its
+  rollout history loaded. Consequently, `:resume` capability is fully verified
+  and implemented.
 - Related: `thread/fork`, `thread/archive|unarchive|delete`,
   `thread/rollback` (DEPRECATED), `thread/revert {beforeTurnId}` for history
   truncation, `turn/steer {expectedTurnId, input}` for same-turn steering
@@ -237,17 +245,16 @@ changes: [{path, kind: {type: "add"}, diff}])` →
 1. **Identity** — SATISFIABLE. Fabricate from `discover_version` +
    `initialize` platform fields (`adapter_id: "codex_app_server_stdio"`,
    `provider: "codex"`, `invocation_mode: :process`).
-2. **Start/stream/completion/failure/cancellation** — SATISFIABLE with two
-   design constraints: (a) buffer the live `item/*` stream (no backfill on
+2. **Start/stream/completion/failure/cancellation** — SATISFIED. Two design
+   constraints enforced: (a) buffer the live `item/*` stream (no backfill on
    ephemeral threads — `thread/items/list` unsupported); (b) map
    `turn/completed` statuses (`completed|interrupted|failed`) to `:result` /
-   `:error` / `:cancelled` HarnessEvents. All primitives VERIFIED except
-   failure-turn shape (schema-only) and `commandExecution` item completion
-   (UNVERIFIED live — interrupted before completing).
-3. **Resume** — NOT satisfiable as written: the suite does start→immediate
-   resume, and fresh pre-turn threads have no rollout (`no rollout found`
-   VERIFIED). Adapter must either omit `:resume` initially or scope it to
-   persisted (post-turn) thread ids, which are UNVERIFIED live.
+   `:error` / `:cancelled` HarnessEvents. All primitives VERIFIED live (including
+   `commandExecution` item completion verified in WP-C).
+3. **Resume** — SATISFIED for Work Package C: post-turn resume verified live
+   across process restart with non-ephemeral threads (fixture
+   `thread-resume-and-command-complete.json`). The adapter declares `:resume`
+   capability and passes ContractSuite Area 3.
 4. **Quota refusal** — SATISFIABLE for `probe()` via the unchanged
    classifier; turn-time quota needs the new `codexErrorInfo` mapping above.
 5. **Missing capacity** — SATISFIABLE via existing `Capacity.normalize`
@@ -324,13 +331,19 @@ and noted. Secret scan (home path, email, bearer, `sk-`, raw UUIDs) is clean.
   mid-turn.
 - `process-group.json` — descendant-survival outcome + full experiment
   transcript.
+- `thread-resume-and-command-complete.json` — post-turn resume across process
+  restart on non-ephemeral threads, plus live `commandExecution` completed
+  frame shape (`exitCode: 0`, `status: "completed"`, `durationMs: 0`,
+  `aggregatedOutput: null`).
 
-Live runs explicitly BOUNDED to two minimal turns (quota scarcity): post-turn
-`thread/resume`, failure-turn `codexErrorInfo` end-to-end,
-`commandExecution` `item/completed`, assistant-text deltas, and large-payload
-line-cap behavior are UNVERIFIED by choice; all are marked above with the
-exact evidence gap and the fixture/schema basis for the interim conclusion.
-No production adapter written; `lib/` untouched.
+Live run accounting:
+- Spike B: Two minimal live turns (turn 1: interrupted sleep; turn 2: write proof).
+- Work Package C: Exactly ONE minimal live turn (run disposable command to verify
+  post-turn `thread/resume` and capture `commandExecution` `item/completed` shape).
+- Total live quota used across Spike B and WP-C: 3 bounded turns (1 in WP-C).
+- Both previously open WP-C questions (post-turn resume and command execution
+  completed shape) are VERIFIED live, leaving 0 unverified assumptions for
+  production adapter execution.
 
 ## 7. Repro (zero-model, except the two noted live turns)
 
