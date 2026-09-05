@@ -13,6 +13,10 @@ This is a web application written using the Phoenix web framework.
 
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
+- Elf runs require `python3` on `PATH` (the process-group launcher; see
+  `Shoestring.Elves.PortRunner`). Keep tests hermetic: use
+  `Shoestring.Harness.Fake` and trivial local commands, never a provider CLI
+  or the network.
 
 ### Commit attribution
 
