@@ -276,24 +276,39 @@ defmodule Shoestring.Elves do
     end
   end
 
+  # If the Elf vanishes between lookup and call, fall back to terminating
+  # the recorded group directly so cancellation still lands.
   defp cancel_via_elf(run, opts) do
     timeout = Keyword.get(opts, :timeout, 30_000)
 
     case Elf.cancel(whereis(run.id), timeout: timeout) do
       {:ok, :cancelled} -> {:ok, :cancelled}
       {:ok, :already_terminal} -> {:ok, :already_terminal}
-      {:error, reason} -> {:error, reason}
+      {:error, _reason} -> cancel_without_elf(run, opts)
     end
   catch
-    :exit, reason -> {:error, {:elf_cancel_failed, reason}}
+    :exit, _reason -> cancel_without_elf(run, opts)
   end
 
   defp cancel_without_elf(run, opts) do
     repo = Keyword.get(opts, :repo, Repo)
     clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
 
-    _ = terminate_recorded_group(run, repo, opts)
-    append_cancelled(run, clock, repo)
+    if terminal_event(run, repo) != nil do
+      {:ok, :already_terminal}
+    else
+      _ = terminate_recorded_group(run, repo, opts)
+
+      with {:ok, :cancelled} <- append_cancelled(run, clock) do
+        # Read back what actually won the terminal race: a concurrent natural
+        # terminal keeps its single-terminal guarantee via the shared
+        # idempotency key, and the return value reports it honestly.
+        case terminal_event(run, repo) do
+          %{class: :cancelled} -> {:ok, :cancelled}
+          _other -> {:ok, :already_terminal}
+        end
+      end
+    end
   end
 
   defp terminate_recorded_group(run, repo, opts) do
@@ -343,7 +358,7 @@ defmodule Shoestring.Elves do
     end
   end
 
-  defp append_cancelled(run, clock, _repo) do
+  defp append_cancelled(run, clock) do
     for type <- ["run.cancelling", "run.cancelled"] do
       prefix = if type == "run.cancelling", do: "elf-cancelling:", else: "elf-terminal:"
 

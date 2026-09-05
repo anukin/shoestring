@@ -71,6 +71,42 @@ defmodule Shoestring.Elves.ElfTest do
     assert String.starts_with?(event.payload["error_code"], "signal_exit_")
   end
 
+  test "missing python3 fails the launch with a diagnosable code, not an opaque default", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    request = ElvesHelpers.run_request(goal, task)
+    scenario = ElvesHelpers.custom_scenario(:no_python3, [])
+    previous_path = System.get_env("PATH")
+
+    try do
+      # Absolute command path so only the python3 lookup fails, exactly like a
+      # minimal host (elixir:alpine, debian-slim) without python3 installed.
+      System.put_env("PATH", "/nonexistent-wpb-fixture")
+
+      assert {:ok, _pid} =
+               Elves.start_run(request, ElvesHelpers.fake_identity(),
+                 supervisor: sup,
+                 scenario: scenario,
+                 command: ["/bin/sleep", "30"],
+                 runner_opts: @runner_opts,
+                 notify: self()
+               )
+
+      assert_receive {:elf_terminal, run_id, %{class: :failed}}, 10_000
+
+      event = ElvesHelpers.terminal_event(goal.id, run_id)
+      assert event.type == "run.failed"
+      assert event.payload["error_code"] == "setsid_unavailable"
+      assert ElvesHelpers.count_events(goal.id, run_id, ["run.running"]) == 0
+    after
+      if previous_path,
+        do: System.put_env("PATH", previous_path),
+        else: System.delete_env("PATH")
+    end
+  end
+
   test "mid-run kill retains partial history and classifies the exit", %{
     sup: sup,
     goal: goal,

@@ -25,12 +25,17 @@ defmodule Shoestring.Elves.PortRunner do
 
   ## Honest limitations (not terminal-grade control)
 
-    * Requires `python3` on `PATH` at spawn time. Without it, spawn fails
-      closed (`{:error, :setsid_unavailable}`) unless the caller explicitly
-      passes `allow_no_setsid: true`, in which case only the direct child is
+    * Requires `python3` on `PATH` at spawn time (also documented in
+      `README.md` and `AGENTS.md`). Without it, spawn fails closed
+      (`{:error, :setsid_unavailable}`, surfaced to the trajectory as
+      `error_code: "setsid_unavailable"`) unless the caller explicitly passes
+      `allow_no_setsid: true`, in which case only the direct child is
       signalled and descendants may survive — the return documents the
       degraded mode. Full PTY/process-group hardening is explicitly owned by
-      iteration 9; this module does not claim it.
+      iteration 9; this module does not claim it. The recommended replacement
+      is a ~20-line compiled C shim in `c_src/` (or `:erlexec`): the
+      interpreter costs roughly 30-50ms per spawn and the host `PYTHONPATH`
+      leaks into the launch environment.
     * `kill -0 -pgid` proves the group exists, not that every descendant is
       healthy; a group can linger while its useful work is done (see
       `Shoestring.Elves.Staleness` — that observation is evidence, never an
@@ -105,12 +110,23 @@ defmodule Shoestring.Elves.PortRunner do
   @doc """
   Spawns `argv` (a non-empty list of binaries, head = executable) under a new
   process group and returns the handle. Never builds a shell command string.
+
+  ## Options
+
+    * `:env` — explicit `[{binary, binary}]` environment overrides.
+    * `:cd` — working directory for the child (required for WP-A worktree
+      isolation and WP-C adapters, which must run inside the run's worktree).
+      Must be an existing directory; anything else fails closed with
+      `{:error, {:invalid_workdir, dir}}`.
+    * `:setsid` / `:allow_no_setsid` — process-group leadership control.
+    * `:max_output_bytes` — raw-output cap before fail-closed overflow.
   """
   @spec spawn([binary()], keyword()) :: {:ok, t()} | {:error, term()}
   def spawn(argv, opts \\ []) do
     with {:ok, executable, exec_args} <- validate_argv(argv),
          {:ok, {launch_exe, launch_args}} <- wrap_argv(executable, exec_args, opts),
-         {:ok, port} <- open_port(launch_exe, launch_args, opts) do
+         {:ok, cd_opt} <- validate_cd(opts),
+         {:ok, port} <- open_port(launch_exe, launch_args, opts, cd_opt) do
       case :erlang.port_info(port, :os_pid) do
         {:os_pid, os_pid} when is_integer(os_pid) and os_pid > 0 ->
           case verify_group_leader(os_pid) do
@@ -272,7 +288,24 @@ defmodule Shoestring.Elves.PortRunner do
     end
   end
 
-  defp open_port(executable, args, opts) do
+  defp validate_cd(opts) do
+    case Keyword.get(opts, :cd) do
+      nil ->
+        {:ok, []}
+
+      dir when is_binary(dir) ->
+        cond do
+          dir == "" or String.contains?(dir, <<0>>) -> {:error, {:invalid_workdir, dir}}
+          File.dir?(dir) -> {:ok, [{:cd, to_charlist(dir)}]}
+          true -> {:error, {:invalid_workdir, dir}}
+        end
+
+      other ->
+        {:error, {:invalid_workdir, other}}
+    end
+  end
+
+  defp open_port(executable, args, opts, cd_opt) do
     try do
       port =
         :erlang.open_port(
@@ -285,7 +318,7 @@ defmodule Shoestring.Elves.PortRunner do
             :stderr_to_stdout,
             {:args, Enum.map(args, &to_charlist/1)},
             {:env, port_env(Keyword.get(opts, :env, []))}
-          ]
+          ] ++ cd_opt
         )
 
       {:ok, port}
@@ -321,21 +354,52 @@ defmodule Shoestring.Elves.PortRunner do
     _error -> {:error, :group_leader_unverifiable}
   end
 
+  # Refuses the BEAM's own process group: signalling it would terminate the
+  # VM itself. The BEAM's pid and pgid may differ on Unix, so both are
+  # refused; the pgid is read once per VM lifetime and cached.
   defp validate_pgid(pgid) when is_integer(pgid) and pgid > 1 do
-    beam_pid =
-      case Integer.parse(to_string(:os.getpid())) do
-        {pid, _rest} -> pid
-        :error -> -1
-      end
-
-    if pgid == beam_pid do
-      {:error, :refuse_own_process_group}
-    else
-      :ok
+    cond do
+      pgid == beam_pgid() -> {:error, :refuse_own_process_group}
+      pgid == beam_os_pid() -> {:error, :refuse_own_process_group}
+      true -> :ok
     end
   end
 
   defp validate_pgid(_pgid), do: {:error, :invalid_pgid}
+
+  defp beam_os_pid do
+    case Integer.parse(to_string(:os.getpid())) do
+      {pid, _rest} -> pid
+      :error -> -1
+    end
+  end
+
+  defp beam_pgid do
+    case :persistent_term.get({__MODULE__, :beam_pgid}, :unknown) do
+      :unknown ->
+        pgid = read_beam_pgid()
+        :persistent_term.put({__MODULE__, :beam_pgid}, pgid)
+        pgid
+
+      cached ->
+        cached
+    end
+  end
+
+  defp read_beam_pgid do
+    case System.cmd("ps", ["-o", "pgid=", "-p", to_string(beam_os_pid())], stderr_to_stdout: true) do
+      {output, 0} ->
+        case Integer.parse(String.trim(output)) do
+          {pgid, _rest} when pgid > 0 -> pgid
+          _other -> nil
+        end
+
+      {_output, _status} ->
+        nil
+    end
+  rescue
+    _error -> nil
+  end
 
   defp await_exit(port, timeout_ms) do
     receive do

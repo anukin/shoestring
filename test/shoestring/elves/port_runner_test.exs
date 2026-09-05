@@ -87,4 +87,45 @@ defmodule Shoestring.Elves.PortRunnerTest do
     assert {:error, :invalid_pgid} = PortRunner.killpg_id(-5, "TERM")
     refute PortRunner.alive_id?(0)
   end
+
+  defp collect_until_exit(port, acc) do
+    receive do
+      {^port, {:data, bytes}} -> collect_until_exit(port, acc <> bytes)
+      {^port, {:exit_status, 0}} -> {:ok, acc}
+      {^port, {:exit_status, status}} -> {:error, {:exit_status, status}}
+    after
+      5_000 -> {:error, :no_exit}
+    end
+  end
+
+  test "cd runs the command inside the given directory" do
+    dir = Path.join(System.tmp_dir!(), "elf-cd-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    File.write!(Path.join(dir, "marker.txt"), "here-123")
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    # A relative argv entry only resolves inside `dir`, proving the child cwd.
+    cat = System.find_executable("cat")
+    assert is_binary(cat)
+
+    assert {:ok, runner} = PortRunner.spawn([cat, "marker.txt"], cd: dir)
+    on_exit(fn -> ElvesHelpers.cleanup_group(runner.pgid) end)
+
+    assert {:ok, "here-123"} = collect_until_exit(runner.port, "")
+    _ = PortRunner.close(runner)
+
+    assert {:error, {:invalid_workdir, _}} =
+             PortRunner.spawn([cat, "marker.txt"], cd: "/nonexistent-wpb-workdir")
+  end
+
+  test "missing python3 fails closed with a diagnosable reason" do
+    previous_path = System.get_env("PATH")
+
+    try do
+      System.put_env("PATH", "/nonexistent-wpb-fixture")
+      assert {:error, :setsid_unavailable} = PortRunner.spawn(["/bin/sleep", "30"])
+    after
+      if previous_path, do: System.put_env("PATH", previous_path), else: System.delete_env("PATH")
+    end
+  end
 end

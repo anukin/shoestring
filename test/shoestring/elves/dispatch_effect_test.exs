@@ -88,6 +88,54 @@ defmodule Shoestring.Elves.DispatchEffectTest do
     assert event.payload["error_code"] == "process_launch_failed"
   end
 
+  test "no timer cancels the run: a quiet run outlives any monitor interval", %{
+    goal: goal,
+    task: task
+  } do
+    request = ElvesHelpers.run_request(goal, task)
+
+    Application.put_env(
+      :shoestring,
+      :elf_dispatch_opts,
+      scenario: ElvesHelpers.custom_scenario(:quiet_dispatch, []),
+      command: ["sleep", "30"],
+      runner_opts: [kill_grace_ms: 200, reap_timeout_ms: 2_000]
+    )
+
+    assert {:ok, dispatch, job} =
+             Dispatches.enqueue(request, ElvesHelpers.fake_identity(),
+               clock: Shoestring.Test.FixedClock
+             )
+
+    run_id = dispatch.run_id
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    # The worker blocks in the effect while the Elf supervises the run, so
+    # drive it in a task — the mirror of the Elf-level quiet-but-working eval,
+    # one layer up where the removed synthetic timer used to live.
+    worker = Task.async(fn -> perform_job(DispatchWorker, job.args) end)
+
+    assert {:ok, _pgid} =
+             ElvesHelpers.wait_until(fn -> ElvesHelpers.recorded_pgid(goal.id, run_id) end)
+
+    # Past any plausible monitor interval: the run must be untouched — alive,
+    # unterminated, with no cancelling marker. Only an explicit request or
+    # worker shutdown may end it, never a local timer.
+    Process.sleep(1_000)
+
+    assert is_pid(Shoestring.Elves.whereis(run_id))
+    assert ElvesHelpers.group_members(ElvesHelpers.recorded_pgid(goal.id, run_id)) != []
+    assert ElvesHelpers.terminal_event(goal.id, run_id) == nil
+    assert ElvesHelpers.count_events(goal.id, run_id, ["run.cancelling"]) == 0
+    assert ElvesHelpers.count_events(goal.id, run_id, ["run.cancelled"]) == 0
+    assert Task.yield(worker, 0) == nil
+
+    # Explicit cancellation still works and releases the blocked worker.
+    assert {:ok, :cancelled} = Shoestring.Elves.cancel_run(run_id, kill_grace_ms: 200)
+    assert :ok = Task.await(worker, 10_000)
+    assert ElvesHelpers.terminal_event(goal.id, run_id).type == "run.cancelled"
+  end
+
   test "a retry after the attempt cannot duplicate the external effect", %{
     goal: goal,
     task: task

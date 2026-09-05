@@ -84,6 +84,17 @@ OTP 28, and SQLite 3.43. Other platforms may work, but are not currently a
 release claim. Node.js is not required by the application runtime; the checked
 in asset bundle and JavaScript gate are part of development verification.
 
+`python3` on `PATH` is required by the Elf process runner
+(`Shoestring.Elves.PortRunner`): each harness command is launched through a
+small `python3` wrapper that creates a new process group (`os.setsid()`),
+redirects stdin from `/dev/null`, and `exec`s the target argv, so
+cancellation can reliably terminate the whole owned group. Without it, Elf
+runs fail closed with `error_code: "setsid_unavailable"` in the durable
+`run.failed` event. Iteration 9 (or earlier hardening) is expected to replace
+the wrapper with a small compiled C shim in `c_src/` (or `:erlexec`): the
+interpreter costs roughly 30-50ms per spawn and the host `PYTHONPATH` leaks
+into the launch environment.
+
 Install Elixir and Erlang, then prepare dependencies, the state directory, and
 the SQLite database:
 

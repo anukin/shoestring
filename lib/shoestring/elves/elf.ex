@@ -47,6 +47,8 @@ defmodule Shoestring.Elves.Elf do
 
   import Ecto.Query
 
+  require Logger
+
   alias Shoestring.Elves.{Classifier, PortRunner}
   alias Shoestring.Harness.{Clock, HarnessEvent}
   alias Shoestring.Repo
@@ -440,9 +442,22 @@ defmodule Shoestring.Elves.Elf do
         abort_launch(state, Classifier.classify({:error, error}, :unknown, false), error.code)
 
       {:error, reason} ->
-        abort_launch(state, Classifier.launch_failed(), reason)
+        abort_launch(state, Classifier.launch_failed(launch_code(reason)), reason)
     end
   end
+
+  # Launch failures persist their concrete cause (`setsid_unavailable`,
+  # `executable_not_found`, ...) instead of an opaque default, so an operator
+  # on a minimal host can diagnose the run from the trajectory alone.
+  defp launch_code(:setsid_unavailable), do: "setsid_unavailable"
+  defp launch_code({:executable_not_found, _exe}), do: "executable_not_found"
+  defp launch_code({:port_open_failed, _reason}), do: "port_open_failed"
+  defp launch_code(:os_pid_unavailable), do: "os_pid_unavailable"
+  defp launch_code(:not_group_leader), do: "not_group_leader"
+  defp launch_code(:group_leader_unverifiable), do: "group_leader_unverifiable"
+  defp launch_code(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp launch_code(reason) when is_binary(reason), do: reason
+  defp launch_code(_reason), do: "process_launch_failed"
 
   defp abort_launch(state, terminal, _reason) do
     _ = terminate_owned_group(state)
@@ -594,9 +609,25 @@ defmodule Shoestring.Elves.Elf do
         {:ok, :persisted, state} -> after_ingest(state, event, key)
         {:ok, :duplicate, state} -> schedule_next(%{state | seen: MapSet.put(state.seen, key)})
         {:overflow, state} -> overflow_shutdown(state)
-        {:error, _reason, state} -> schedule_next(state)
+        {:error, reason, state} -> drop_with_warning(state, event, key, reason)
       end
     end
+  end
+
+  # The provider offers no backfill, so a dropped event is a permanent hole:
+  # never skip silently — log the identity and cause, then continue with the
+  # stream rather than failing a run that may still be doing useful work.
+  defp drop_with_warning(state, event, key, reason) do
+    Logger.warning("elf dropped harness event",
+      run_id: state.run_id,
+      dispatch_id: state.dispatch_id,
+      event_key: key,
+      event_kind: event.kind,
+      event_ordinal: event.ordinal,
+      reason: inspect(reason)
+    )
+
+    schedule_next(state)
   end
 
   defp after_ingest(state, event, key) do

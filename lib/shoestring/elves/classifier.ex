@@ -60,6 +60,12 @@ defmodule Shoestring.Elves.Classifier do
     error_to_terminal(error)
   end
 
+  # A clean OS exit with no adapter verdict completes for now. This is the
+  # conservative placeholder for the milestone's "completed, no final report"
+  # eval: synthesizing a completion report from durable evidence (commit +
+  # passing tests, but the final response omitted) is orchestrator semantic
+  # judgment and is deliberately deferred to the follow-up that owns
+  # orchestrator-facing recovery decisions. See `Shoestring.Elves.Staleness`.
   def classify(:no_verdict, {:exit_status, 0}, false) do
     %{class: :completed}
   end
