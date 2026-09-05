@@ -13,7 +13,7 @@ This spike evaluates the CLI invocation and JSON event stream emitted by `codex 
 
 ### Environment & Invocation
 - **Platform**: macOS (Darwin arm64)
-- **Codex CLI**: `codex-cli`
+- **Codex CLI**: `codex-cli 0.153.2`
 - **Fixture Repository**: `/tmp/iter4-spike-exec-repo` (clean Git repository with one initial commit)
 - **Working Command**:
   ```bash
@@ -22,7 +22,8 @@ This spike evaluates the CLI invocation and JSON event stream emitted by `codex 
 - **Exit Code**: `0`
 - **Standard Error**: `Reading additional input from stdin...` (single notification prior to closing EOF)
 - **Artifact Outcome**: `hello.txt` was created in the fixture workspace containing `hello`, and command output `ok` was captured.
-- **Redaction & Anonymization**: The fixture stream contains no home directory paths, usernames, or secrets. The provider session identifier (`thread_id: "01a06fec-0fef-74f3-bf09-56502a44de4f"`) was retained as captured to preserve the real provider UUIDv7 format produced by the Codex CLI.
+- **Provider Version & Schema Churn**: The verified installed version for this capture is **`codex-cli 0.153.2`**. Milestone Preflight mandates recording provider versions. Sibling spike research (`codex-app-server.md`) documented substantial CLI and schema churn between `0.150.1` (used during Gate 0A capacity feasibility) and `0.153.2` (including changes to flag parsing, error shapes, and expanding experimental schemas). Provider version pinning in runtime compatibility preflights is mandatory.
+- **Redaction & Anonymization**: The fixture stream contains no home directory paths, usernames, or secrets. Per the milestone fixture convention ruling recorded in `plans/evidence/04-single-elf/README.md`, the provider session identifier was sanitized from the real captured UUID to a stable format-valid synthetic UUIDv7 (`01950000-0000-7000-8000-000000000001`), preserving the version nibble (`7`) and variant nibble (`8`) for structural format validation without persisting a live provider session token.
 
 ---
 
@@ -69,7 +70,7 @@ The captured JSONL stream contains exactly 9 newline-delimited JSON objects emit
 
 | Sequence | Raw Event `type` | Raw Discriminator & Key Fields | Semantics & Payload | Normalized `Shoestring.Harness.HarnessEvent` Kind | Harness Event Fields & Details |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | `thread.started` | Top-level `type: "thread.started"`<br>`thread_id: "01a06fec-..."` | Provider session identity established. | `:lifecycle` | `provider_session_id: thread_id`<br>`extensions: %{"codex.exec:event" => "thread.started"}` |
+| 1 | `thread.started` | Top-level `type: "thread.started"`<br>`thread_id: "01950000-..."` | Provider session identity established. | `:lifecycle` | `provider_session_id: thread_id`<br>`extensions: %{"codex.exec:event" => "thread.started"}` |
 | 2 | `turn.started` | Top-level `type: "turn.started"` | Start of model reasoning & execution turn. | `:lifecycle` | `extensions: %{"codex.exec:event" => "turn.started"}` |
 | 3 | `item.completed` | `item.type: "agent_message"`<br>`item.id: "item_0"`<br>`item.text: "..."` | Agent emitted human-facing explanation / intent message before tool use. | `:output` | `extensions: %{"codex.exec:item_id" => "item_0", "codex.exec:item_type" => "agent_message", "text" => item.text}` |
 | 4 | `item.started` | `item.type: "command_execution"`<br>`item.id: "item_1"`<br>`item.command: "/bin/zsh -lc ..."`<br>`item.status: "in_progress"` | Execution of shell command initiated in workspace. | `:command` | `extensions: %{"codex.exec:item_id" => "item_1", "command" => item.command, "status" => "in_progress"}` |
@@ -87,17 +88,26 @@ A core requirement of Milestone 04 is the safe termination or quiescence of an E
 
 ### Evaluation of Candidate Boundaries
 1. **`item.completed` (Command Execution Boundary)**:
-   - **Recommendation**: **Unsafe.**
+   - **Recommendation**: **Unsafe (for exec)**.
    - **Analysis**: In the captured run, the model executed `item_1` (`printf 'hello' > hello.txt`), which completed, followed immediately by `item_2` (`printf ok`), and then final message `item_3`. An agent turn frequently consists of multiple interdependent steps (e.g., creating a module, running a test suite, rolling back on failure).
    - If the supervisor intercepts at `item.completed` and halts the process, the workspace is left in an intermediate, partial, and potentially corrupted state.
    - More crucially, `codex exec` does not offer an API to "pause between items". Halting at `item.completed` requires sending a hard signal (SIGTERM/SIGKILL) to the running CLI process while it is preparing its next action.
 2. **`turn.completed` (Turn Finalization Boundary)**:
-   - **Recommendation**: **Safe.**
+   - **Recommendation**: **Safe (for exec)**.
    - **Analysis**: `turn.completed` indicates that the agent has finished its complete sequence of actions for the given turn, all child shell processes have exited, final agent messages have been delivered, and token counts have been reported.
    - For a one-shot `codex exec` invocation, `turn.completed` is the natural terminal event immediately preceding process exit (`code 0`).
    - For multi-turn runs, `turn.completed` is the only point where the workspace is in a self-consistent state, ready for human or supervisor checkpointing.
 
-**Conclusion**: The only safe boundary for lease non-renewal or voluntary quiescence is **`turn.completed`**. If the lease expires prior to `turn.completed`, the supervisor must classify the condition as a deadline overrun and initiate structured cancellation.
+### Conclusion & Scope Qualification
+- **Transport Scope**: **For the `codex exec --json` transport only (one-shot CLI, no in-band pause/steer): the only safe boundary is `turn.completed`.**
+- **Non-applicability to App Server**: This conclusion does **NOT** apply to the `codex app-server --stdio` transport, where in-band `turn/interrupt` plus typed item boundaries permit stopping cleanly after an `item.completed` (see `plans/evidence/04-single-elf/codex-app-server.md`).
+- **Operative Lease Rule for Work Package C**:
+  Because Milestone 04 has selected `codex app-server --stdio` as the primary production adapter for Work Package C, the operative lease rule is:
+  1. Allow the in-flight command to reach its `item.completed` boundary.
+  2. Issue in-band `turn/interrupt` before the subsequent item begins.
+  3. Await clean `turn.completed` (with status `interrupted` and error `null`).
+  4. Enforce `killpg` + process reaping as the backstop safety net because descendant processes survive interruption on **both** transports.
+- **Architectural Warning**: A future Work Package C implementer must not read this document and build coarse turn-level lease non-renewal logic. Doing so would fail the milestone's critical evaluation scenario: *"Lease boundary: deadline during tool event -> stop requested after safe completion"*.
 
 ---
 
@@ -107,21 +117,21 @@ A core requirement of Milestone 04 is the safe termination or quiescence of an E
 - **Harness Mapping**: Normal completion maps to `Shoestring.Harness.HarnessEvent` with `kind: :result` and `result: %{status: "completed", artifact_id: nil}`.
 - **Distinguishing Failures**:
   - **Tool/Command Failure**: An individual command may fail (e.g., non-zero exit code in `item.completed`), but the turn itself may succeed if the model handles the error or reports it to the user.
-  - **Turn Failure**: In the event of an unrecoverable model or runtime error (such as a rate limit, context overflow, prompt rejection, or process crash), the stream behavior is **UNVERIFIED**. We expect either:
-    1. A non-zero CLI exit code with error text on `stderr`.
-    2. An event with `type: "error"` or `type: "turn.failed"`.
+  - **Turn Failure**: In the event of an unrecoverable model or runtime error (such as a rate limit, context overflow, prompt rejection, or process crash), the stream behavior under `codex exec` is **UNVERIFIED**. We expect either a non-zero CLI exit code with error text on `stderr`, or an event with `type: "error"` / `type: "turn.failed"`.
   - **Adapter Responsibility**: The adapter must verify both the stream terminal event and the OS process exit code. A non-zero exit code without a clean `turn.completed` must be normalized to `{:error, %Shoestring.Harness.Error{category: :task_failed, ...}}` or `:transport`.
+- **Cross-Reference to `app-server` Failure Taxonomy**: Sibling spike research (`codex-app-server.md`) verified that `codex app-server --stdio` reports structured execution failures via `turn.error.codexErrorInfo` with enumerated variants such as `usageLimitExceeded`, `rateLimitExceeded`, `serverOverloaded`, etc. Implementers must not port conjectural `exec` error strings onto `app-server`, but must instead map `codexErrorInfo` values appropriately (e.g., `usageLimitExceeded | rateLimitExceeded -> :quota_refused`).
 
 ---
 
 ## 6. File and Artifact Events
 
-- **Capture Finding**: `codex exec --json` emitted **zero file-modification or artifact events**.
+- **Capture Finding**: In this capture, `codex exec --json` emitted **zero file-modification or artifact events**.
 - **Mechanism**: The file `hello.txt` was created strictly by spawning `/bin/zsh -lc "printf 'hello' > hello.txt"` as a child shell under `command_execution`. Codex did not track or report workspace mutations as structured stream events.
+- **Generalization UNVERIFIED**: In this run, the model used shell redirection, so there was never an opportunity for a dedicated file-write tool event. Sibling app-server spike research identified schema-level `item/fileChange`, `patchUpdated`, and `outputDelta` event variants, meaning Codex may emit structured file events under other tool configurations.
 - **Implication for Milestone 04**:
   - Milestone 04 requires tracking file/artifact modifications.
-  - Because provider stream events cannot be relied upon for filesystem observability, the Elf runtime **must derive artifact changes from Git worktree state** (e.g., inspecting `git status --porcelain`, `git diff`, or commit trees before and after the execution turn).
-  - An event of kind `:artifact` will be produced synthetically by the Shoestring Elf lifecycle reconciler, not directly translated from the Codex JSON stream.
+  - When provider file events are absent, ambiguous, or untrusted, the Elf runtime **must derive artifact changes from Git worktree state** (e.g., inspecting `git status --porcelain`, `git diff`, or commit trees before and after the execution turn).
+  - An event of kind `:artifact` will be produced synthetically by the Shoestring Elf lifecycle reconciler as the resilient fallback, rather than solely relying on provider stream translations.
 
 ---
 
