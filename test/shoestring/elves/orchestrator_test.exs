@@ -209,7 +209,7 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     assert {:ok, true} = Orchestrator.can_replace?(run_id)
 
-    assert {:ok, :allowed} =
+    assert {:ok, :allowed, _claim_id} =
              Orchestrator.request_replacement(run_id,
                decision_id: Orchestrator.decision_id(run_id, "replace", "claim-1")
              )
@@ -365,7 +365,7 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     assert Enum.map(results, &elem(&1, 0)) |> Enum.sort() == Enum.to_list(1..10)
     outcomes = Enum.map(results, &elem(&1, 1))
-    assert Enum.count(outcomes, &(&1 == {:ok, :allowed})) == 1
+    assert Enum.count(outcomes, &match?({:ok, :allowed, _claim_id}, &1)) == 1
     assert Enum.count(outcomes, &(&1 == {:error, :prior_replacement_active})) == 9
 
     assert ElvesHelpers.replacement_claim(goal.id, run_id).payload["attempt"] == 1
@@ -373,7 +373,7 @@ defmodule Shoestring.Elves.OrchestratorTest do
     # The winner retrying with its own decision id stays allowed.
     winner_id = ElvesHelpers.replacement_claim(goal.id, run_id).payload["decision_id"]
 
-    assert {:ok, :allowed} =
+    assert {:ok, :allowed, _claim_id} =
              Orchestrator.request_replacement(run_id, decision_id: winner_id)
   end
 
@@ -388,7 +388,7 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
 
-    assert {:ok, :allowed} =
+    assert {:ok, :allowed, _claim_id} =
              Orchestrator.request_replacement(run_id, decision_id: "interleaved-winner")
 
     # Rival two queries only after rival one has committed its append. It
@@ -406,7 +406,9 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
     assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
-    assert {:ok, :allowed} = Orchestrator.request_replacement(run_id, decision_id: "round-1")
+
+    assert {:ok, :allowed, _claim_id} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-1")
 
     # A stale caller's large assertion is informational only; it cannot
     # bypass the durable active/unlinked claim.
@@ -426,9 +428,12 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
     assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
-    assert {:ok, :allowed} = Orchestrator.request_replacement(run_id, decision_id: "round-1")
+
+    assert {:ok, :allowed, claim_id} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-1")
 
     claim = ElvesHelpers.replacement_claim(goal.id, run_id)
+    assert claim.id == claim_id
     replacement_id = start_quiet_run(sup, goal, task, :active_replacement_child, [])
 
     on_exit(fn ->
@@ -440,8 +445,28 @@ defmodule Shoestring.Elves.OrchestratorTest do
     assert link.payload["claim_id"] == claim.id
     assert link.payload["prior_run_id"] == run_id
 
+    assert {:ok, same_link} = Orchestrator.link_replacement_claim(claim.id, replacement_id)
+    assert same_link.id == link.id
+
+    second_replacement_id = start_quiet_run(sup, goal, task, :second_replacement_child, [])
+
+    on_exit(fn ->
+      ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, second_replacement_id))
+    end)
+
+    assert {:error, :replacement_claim_already_linked} =
+             Orchestrator.link_replacement_claim(claim.id, second_replacement_id)
+
     assert {:error, :prior_replacement_active} =
              Orchestrator.request_replacement(run_id, decision_id: "round-2-while-active")
+
+    assert {:ok, reconciled} = Orchestrator.reconcile_replacement_claim(claim.id)
+    assert reconciled.payload["replacement_run_id"] == replacement_id
+
+    assert {:ok, :allowed, round_two_claim_id} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-2-after-reconcile")
+
+    refute round_two_claim_id == claim.id
   end
 
   test "omitted attempt claims the next round after the linked replacement terminalizes", %{
@@ -453,7 +478,9 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
     assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
-    assert {:ok, :allowed} = Orchestrator.request_replacement(run_id, decision_id: "round-1")
+
+    assert {:ok, :allowed, _claim_id} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-1")
 
     claim = ElvesHelpers.replacement_claim(goal.id, run_id)
     replacement_id = start_quiet_run(sup, goal, task, :default_round_child, [])
@@ -465,7 +492,7 @@ defmodule Shoestring.Elves.OrchestratorTest do
     assert {:ok, _link} = Orchestrator.link_replacement_claim(claim.id, replacement_id)
     assert {:ok, :cancelled} = Elves.cancel_run(replacement_id, kill_grace_ms: 200)
 
-    assert {:ok, :allowed} =
+    assert {:ok, :allowed, _claim_id} =
              Orchestrator.request_replacement(run_id, decision_id: "round-2-default")
 
     assert ElvesHelpers.replacement_claim(goal.id, run_id).payload["attempt"] == 2
@@ -480,7 +507,9 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
     assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
-    assert {:ok, :allowed} = Orchestrator.request_replacement(run_id, decision_id: "round-1")
+
+    assert {:ok, :allowed, _claim_id} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-1")
 
     claim = ElvesHelpers.replacement_claim(goal.id, run_id)
     replacement_id = start_quiet_run(sup, goal, task, :terminal_rivals_child, [])
@@ -508,7 +537,7 @@ defmodule Shoestring.Elves.OrchestratorTest do
       |> Enum.map(fn {:ok, result} -> result end)
 
     assert Enum.map(results, &elem(&1, 0)) |> Enum.sort() == Enum.to_list(1..10)
-    assert Enum.count(results, &(elem(&1, 1) == {:ok, :allowed})) == 1
+    assert Enum.count(results, &match?({:ok, :allowed, _claim_id}, elem(&1, 1))) == 1
     assert ElvesHelpers.replacement_claim(goal.id, run_id).payload["attempt"] == 2
   end
 
@@ -521,14 +550,16 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
     assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
-    assert {:ok, :allowed} = Orchestrator.request_replacement(run_id, decision_id: "round-1")
+
+    assert {:ok, :allowed, _claim_id} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-1")
 
     claim = ElvesHelpers.replacement_claim(goal.id, run_id)
     assert {:ok, event} = Orchestrator.reconcile_replacement_claim(claim.id)
     assert event.payload["replacement_claim_id"] == claim.id
     assert event.payload["outcome"] == "reconciled"
 
-    assert {:ok, :allowed} =
+    assert {:ok, :allowed, _claim_id} =
              Orchestrator.request_replacement(run_id, decision_id: "round-2-after-reconcile")
 
     assert ElvesHelpers.replacement_claim(goal.id, run_id).payload["attempt"] == 2
@@ -543,7 +574,9 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
     assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
-    assert {:ok, :allowed} = Orchestrator.request_replacement(run_id, decision_id: "round-1")
+
+    assert {:ok, :allowed, _claim_id} =
+             Orchestrator.request_replacement(run_id, decision_id: "round-1")
 
     claim = ElvesHelpers.replacement_claim(goal.id, run_id)
 
@@ -556,7 +589,7 @@ defmodule Shoestring.Elves.OrchestratorTest do
                outcome: "reconciled"
              })
 
-    assert {:ok, :allowed} =
+    assert {:ok, :allowed, _claim_id} =
              Orchestrator.request_replacement(run_id, decision_id: "round-2-default")
   end
 

@@ -138,8 +138,9 @@ defmodule Shoestring.Elves.Orchestrator do
   fallback would silently mint a fresh key on every retry and defeat
   deduplication across restarts.
   Optional: `:evidence_refs` (observation ids consumed), `:observation_id`
-  (the primary observation), `:outcome` (what the requested action produced;
-  `"pending"` unless stated).
+  (the primary observation), `:replacement_claim_id`, `:replacement_run_id`,
+  and `:outcome` (what the requested action produced; `"pending"` unless
+  stated).
 
   Recording `action: "replace"` additionally claims the exclusive next
   replacement round and fails with `:prior_run_active` while the prior run
@@ -167,6 +168,7 @@ defmodule Shoestring.Elves.Orchestrator do
           "action" => action,
           "observation_id" => observation_id(attrs),
           "replacement_claim_id" => replacement_claim_id(attrs),
+          "replacement_run_id" => replacement_run_id(attrs),
           "evidence_refs" => evidence_refs_attr(attrs),
           "rationale" => Redaction.redact(rationale),
           "outcome" => outcome(attrs)
@@ -218,8 +220,8 @@ defmodule Shoestring.Elves.Orchestrator do
   always derived from durable claims inside the trajectory writer; caller
   assertions never gate or select a round.
 
-  Returns `{:ok, :allowed}` when the guard passes and this caller won the
-  claim for its round; `{:error, :prior_run_active}` while the prior run
+  Returns `{:ok, :allowed, claim_id}` when the guard passes and this caller
+  won the claim for its round; `{:error, :prior_run_active}` while the prior run
   is still active; `{:error, :replacement_already_claimed}` when a
   different decision already claimed this round. Retrying with the same
   `:decision_id` is idempotent and returns `:allowed` again,
@@ -241,7 +243,7 @@ defmodule Shoestring.Elves.Orchestrator do
   This function records the claim; it never launches anything itself.
   """
   @spec request_replacement(Ecto.UUID.t(), keyword()) ::
-          {:ok, :allowed} | {:error, term()}
+          {:ok, :allowed, Ecto.UUID.t()} | {:error, term()}
   def request_replacement(run_id, opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
@@ -252,7 +254,11 @@ defmodule Shoestring.Elves.Orchestrator do
     end
   end
 
-  @doc "Links a claimed replacement to the run it authorized."
+  @doc "Links a claimed replacement to the run it authorized.
+
+  Linking is idempotent for the same replacement run. A different run cannot
+  link to an already-linked claim.
+  "
   @spec link_replacement_claim(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
           {:ok, TrajectoryEvent.t()} | {:error, term()}
   def link_replacement_claim(claim_id, replacement_run_id, opts \\ []) do
@@ -264,23 +270,35 @@ defmodule Shoestring.Elves.Orchestrator do
       now =
         Shoestring.Harness.Clock.now(Keyword.get(opts, :clock, Shoestring.Harness.SystemClock))
 
-      Trajectory.append(
-        claim.goal_id,
-        %{
-          "type" => "elf.replacement_linked",
-          "schema_version" => 1,
-          "actor" => "orchestrator",
-          "occurred_at" => now,
-          "idempotency_key" => "elf-replacement-link:#{claim.id}:#{replacement.id}",
-          "payload" => %{
-            "run_id" => replacement.id,
-            "prior_run_id" => claim.run_id,
-            "claim_id" => claim.id,
-            "replacement_run_id" => replacement.id
-          }
-        },
-        trusted: [task_id: replacement.task_id, run_id: replacement.id]
-      )
+      append_result =
+        Trajectory.append(
+          claim.goal_id,
+          %{
+            "type" => "elf.replacement_linked",
+            "schema_version" => 1,
+            "actor" => "orchestrator",
+            "occurred_at" => now,
+            "idempotency_key" => "elf-replacement-link:#{claim.id}",
+            "payload" => %{
+              "run_id" => replacement.id,
+              "prior_run_id" => claim.run_id,
+              "claim_id" => claim.id,
+              "replacement_run_id" => replacement.id
+            }
+          },
+          trusted: [task_id: replacement.task_id, run_id: replacement.id]
+        )
+
+      case append_result do
+        {:ok, %TrajectoryEvent{payload: %{"replacement_run_id" => ^replacement_run_id}} = event} ->
+          {:ok, event}
+
+        {:ok, %TrajectoryEvent{type: "elf.replacement_linked"}} ->
+          {:error, :replacement_claim_already_linked}
+
+        {:error, _reason} = error ->
+          error
+      end
     else
       nil -> {:error, :replacement_run_not_found}
       false -> {:error, :replacement_run_wrong_goal}
@@ -288,25 +306,29 @@ defmodule Shoestring.Elves.Orchestrator do
     end
   end
 
-  @doc "Explicitly reconciles an abandoned replacement claim."
+  @doc "Explicitly reconciles an abandoned or orphaned replacement claim.
+
+  The recorded decision may reference a linked replacement run; that explicit
+  reconciliation is what authorizes the next round when the linked run has no
+  terminal event.
+  "
   @spec reconcile_replacement_claim(Ecto.UUID.t(), keyword()) ::
           {:ok, TrajectoryEvent.t()} | {:error, term()}
   def reconcile_replacement_claim(claim_id, opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
     with {:ok, claim} <- fetch_replacement_claim(claim_id, repo) do
-      record_choice(
-        claim.run_id,
-        %{
-          action: "reconcile",
-          decision_id: "replacement-reconcile:#{claim.id}",
-          replacement_claim_id: claim.id,
-          rationale:
-            Keyword.get(opts, :rationale, "Operator reconciled the abandoned replacement claim."),
-          outcome: "reconciled"
-        },
-        opts
-      )
+      attrs = %{
+        action: "reconcile",
+        decision_id: "replacement-reconcile:#{claim.id}",
+        replacement_claim_id: claim.id,
+        replacement_run_id: linked_replacement_run_id(claim, repo),
+        rationale:
+          Keyword.get(opts, :rationale, "Operator reconciled the abandoned replacement claim."),
+        outcome: "reconciled"
+      }
+
+      record_choice(claim.run_id, attrs, opts)
     end
   end
 
@@ -342,8 +364,8 @@ defmodule Shoestring.Elves.Orchestrator do
              Shoestring.Harness.Clock.now(clock),
              Keyword.get(opts, :call_timeout, 15_000)
            ) do
-        {:ok, %TrajectoryEvent{payload: %{"decision_id" => ^decision_id}}} ->
-          {:ok, :allowed}
+        {:ok, %TrajectoryEvent{payload: %{"decision_id" => ^decision_id}} = claim} ->
+          {:ok, :allowed, claim.id}
 
         {:ok, %TrajectoryEvent{}} ->
           {:error, :replacement_already_claimed}
@@ -358,7 +380,7 @@ defmodule Shoestring.Elves.Orchestrator do
     opts = Keyword.put(opts, :decision_id, decision_id)
 
     case request_replacement(run.id, opts) do
-      {:ok, :allowed} -> :ok
+      {:ok, :allowed, _claim_id} -> :ok
       {:error, _reason} = error -> error
     end
   end
@@ -385,6 +407,18 @@ defmodule Shoestring.Elves.Orchestrator do
       %TrajectoryEvent{} -> {:error, :not_a_replacement_claim}
       nil -> {:error, :replacement_claim_not_found}
     end
+  end
+
+  defp linked_replacement_run_id(claim, repo) do
+    repo.one(
+      from event in TrajectoryEvent,
+        where:
+          event.goal_id == ^claim.goal_id and event.type == "elf.replacement_linked" and
+            fragment("(? ->> ?) = ?", event.payload, "claim_id", ^claim.id),
+        order_by: [desc: event.sequence],
+        limit: 1,
+        select: fragment("? ->> ?", event.payload, "replacement_run_id")
+    )
   end
 
   defp latest_observations(run, repo) do
@@ -522,6 +556,10 @@ defmodule Shoestring.Elves.Orchestrator do
   defp replacement_claim_id(%{"replacement_claim_id" => id}) when is_binary(id), do: id
   defp replacement_claim_id(%{replacement_claim_id: id}) when is_binary(id), do: id
   defp replacement_claim_id(_attrs), do: nil
+
+  defp replacement_run_id(%{"replacement_run_id" => id}) when is_binary(id), do: id
+  defp replacement_run_id(%{replacement_run_id: id}) when is_binary(id), do: id
+  defp replacement_run_id(_attrs), do: nil
 
   defp evidence_refs_attr(%{"evidence_refs" => refs}) when is_list(refs) do
     refs |> Enum.filter(&is_binary/1) |> Enum.take(@max_evidence_refs)

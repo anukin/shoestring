@@ -210,7 +210,7 @@ defmodule Shoestring.Trajectory.Writer do
                 event.type in ["run.completed", "run.failed", "run.interrupted", "run.cancelled"]
         )
 
-    terminal? or (reconciled? and is_nil(linked_run_id))
+    terminal? or reconciled?
   end
 
   @impl true

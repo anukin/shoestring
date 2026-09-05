@@ -290,11 +290,12 @@ defmodule Shoestring.Trajectory.EventRegistry do
         optional: [
           :observation_id,
           :replacement_claim_id,
+          :replacement_run_id,
           :evidence_refs,
           :rationale,
           :outcome
         ],
-        uuid_fields: [:run_id, :replacement_claim_id],
+        uuid_fields: [:run_id, :replacement_claim_id, :replacement_run_id],
         types: %{
           evidence_refs: {:array, :string}
         }
