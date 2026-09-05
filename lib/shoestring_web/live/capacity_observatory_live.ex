@@ -294,15 +294,19 @@ defmodule ShoestringWeb.CapacityObservatoryLive do
   # Enabled providers from app config. Mirrors the capacity supervisor's
   # resolution: an entry that is `false` or carries `enabled: false` means
   # "not configured" and yields no card; anything else present counts as
-  # configured (enabled defaults to true).
+  # configured (enabled defaults to true). Providers are deduplicated by key
+  # (first occurrence wins, as with `Keyword.get/3`) so a repeated config key
+  # can never produce duplicate cards or DOM ids.
   defp configured_providers do
     configured = Application.get_env(:shoestring, :capacity_monitors, [])
     configured = if is_list(configured), do: configured, else: []
 
-    for {provider, opts} <- configured,
-        provider_enabled?(opts) do
-      provider
-    end
+    configured
+    |> Keyword.keys()
+    |> Enum.uniq()
+    |> Enum.filter(fn provider ->
+      provider_enabled?(Keyword.get(configured, provider))
+    end)
   end
 
   defp provider_enabled?(false), do: false
@@ -314,10 +318,10 @@ defmodule ShoestringWeb.CapacityObservatoryLive do
   # template and `enrich_summary/1` work unchanged, but every field is honest
   # about never having observed anything:
   #
-  # * `capacity_state: :unknown` with a reason free of disconnect keywords, so
-  #   the existing classifier renders `:unknown` ("Unknown state", never
-  #   treated as available), never `:disconnected` (which would claim a failed
-  #   contact we never attempted) and never `:healthy`.
+  # * `capacity_state: :unknown` with a reason stating only that no observation
+  #   has been recorded, so the existing classifier renders `:unknown`
+  #   ("Unknown state", never treated as available), never `:disconnected`
+  #   (which would claim a failed contact) and never `:healthy`.
   # * `observed_at: nil`, `age_seconds: nil`, empty windows: the template's
   #   existing "Unknown" / "No windows recorded." fallbacks render as-is.
   # * `eligible?: false` and `snapshot: nil` (no struct to evaluate), so no
@@ -345,7 +349,7 @@ defmodule ShoestringWeb.CapacityObservatoryLive do
       support_tier: :unknown,
       reason:
         "Provider #{provider_id} is configured but no observation has been recorded yet. " <>
-          "No contact has been made; this card is a placeholder, not a real observation.",
+          "This card is a placeholder, not a real observation.",
       eligible?: false,
       snapshot: nil,
       placeholder?: true

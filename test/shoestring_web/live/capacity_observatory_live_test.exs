@@ -92,28 +92,37 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
     refute has_element?(view, "#observations-empty")
 
     for provider <- ["claude", "codex"] do
-      assert has_element?(view, "#obs-#{provider}-placeholder"),
+      card = "#obs-#{provider}-placeholder"
+
+      assert has_element?(view, card),
              "expected a placeholder card for configured-but-unobserved #{provider}"
 
       assert view
-             |> element("#obs-#{provider}-placeholder [data-placeholder-badge]")
+             |> element("#{card} [data-placeholder-badge]")
              |> has_element?()
 
-      card_html =
-        view |> element("#obs-#{provider}-placeholder") |> render()
+      assert has_element?(view, card, "Not yet observed")
+      assert has_element?(view, card, "placeholder, not a real observation")
+      assert has_element?(view, card, "Unknown state")
+      assert has_element?(view, card, "No windows recorded.")
+      assert has_element?(view, card, "CLI version: not reported")
 
-      assert card_html =~ "Not yet observed"
-      assert card_html =~ "placeholder, not a real observation"
-      assert card_html =~ "Unknown state"
-      assert card_html =~ "data-status=\"unknown\""
-      assert card_html =~ "No windows recorded."
+      assert view
+             |> element("#{card} [data-status=\"unknown\"]")
+             |> has_element?()
+
       # Honest unobserved state: no invented timestamp, no snapshot version.
-      refute card_html =~ "<time"
-      assert card_html =~ "CLI version: not reported"
+      refute view
+             |> element("#{card} time")
+             |> has_element?()
+
       # Per-card ineligibility, scoped so an empty page can never satisfy it
       # vacuously.
-      refute card_html =~ "Eligible for automatic admission"
-      refute card_html =~ "data-status=\"healthy\""
+      refute has_element?(view, card, "Eligible for automatic admission")
+
+      refute view
+             |> element("#{card} [data-status=\"healthy\"]")
+             |> has_element?()
     end
 
     if previous == nil do
@@ -149,9 +158,8 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
     # Empty config: the genuine empty state, with no placeholders.
     Application.put_env(:shoestring, :capacity_monitors, [])
 
-    {:ok, empty_view, empty_html} = live(conn, "/observatory")
-    assert has_element?(empty_view, "#observations-empty")
-    assert empty_html =~ "No observations yet"
+    {:ok, empty_view, _html} = live(conn, "/observatory")
+    assert has_element?(empty_view, "#observations-empty", "No observations yet")
     refute has_element?(empty_view, "#obs-claude-placeholder")
     refute has_element?(empty_view, "#obs-codex-placeholder")
 
@@ -162,9 +170,8 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
     end
   end
 
-  test "placeholder: a real observation replaces its placeholder with no duplicates", %{
-    conn: conn
-  } do
+  test "placeholder: a real observation replaces its placeholder on refresh, no duplicates",
+       %{conn: conn} do
     previous = Application.get_env(:shoestring, :capacity_monitors)
 
     on_exit(fn ->
@@ -180,6 +187,17 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
       codex: [enabled: true]
     )
 
+    real_card = "#obs-claude-interactive_status_line-placeholder_refresh_probe"
+
+    # Mount with both providers unobserved: one placeholder card each.
+    {:ok, view, _html} = live(conn, "/observatory")
+    assert has_element?(view, "#obs-claude-placeholder")
+    assert has_element?(view, "#obs-codex-placeholder")
+    refute has_element?(view, real_card)
+    refute has_element?(view, "#observations-empty")
+
+    # A real claude observation lands in the ledger (probe scope, so no other
+    # test's scope assertions are affected).
     ingest_fixture(%{
       source: %{
         adapter_id: "claude_adapter",
@@ -187,31 +205,78 @@ defmodule ShoestringWeb.CapacityObservatoryLiveTest do
         invocation_mode: "interactive_status_line",
         event: :status_line_input
       },
-      scope: "subscription"
+      scope: "placeholder_refresh_probe"
     })
 
-    count_before = Repo.aggregate(Shoestring.Harness.CapacitySnapshotRecord, :count)
-    {:ok, view, _html} = live(conn, "/observatory")
-    # Refresh rendering persists nothing either.
-    assert Repo.aggregate(Shoestring.Harness.CapacitySnapshotRecord, :count) == count_before
+    rows_ingested = Repo.aggregate(Shoestring.Harness.CapacitySnapshotRecord, :count)
+
+    # A real UI refresh picks it up: deterministic LiveView event, no sleeps.
+    view
+    |> element("#observations-refresh")
+    |> render_click()
+
+    # Refreshing persists nothing additional.
+    assert Repo.aggregate(Shoestring.Harness.CapacitySnapshotRecord, :count) == rows_ingested
 
     # The real claude card renders under its observation id ...
-    assert has_element?(view, "#obs-claude-interactive_status_line-subscription")
+    assert has_element?(view, real_card)
+    assert has_element?(view, real_card, "Eligible for automatic admission")
     # ... and its placeholder is gone: exactly one claude card, no duplicates.
     refute has_element?(view, "#obs-claude-placeholder")
-    # The still-unobserved provider keeps its placeholder.
+    # The still-unobserved provider keeps its placeholder, still ineligible.
     assert has_element?(view, "#obs-codex-placeholder")
+    refute has_element?(view, "#obs-codex-placeholder", "Eligible for automatic admission")
     refute has_element?(view, "#observations-empty")
 
-    real_html =
-      view |> element("#obs-claude-interactive_status_line-subscription") |> render()
+    if previous == nil do
+      Application.delete_env(:shoestring, :capacity_monitors)
+    else
+      Application.put_env(:shoestring, :capacity_monitors, previous)
+    end
+  end
 
-    assert real_html =~ "Eligible for automatic admission"
+  test "placeholder: repeated config keys yield a single card, first occurrence wins",
+       %{conn: conn} do
+    previous = Application.get_env(:shoestring, :capacity_monitors)
 
-    placeholder_html =
-      view |> element("#obs-codex-placeholder") |> render()
+    on_exit(fn ->
+      if previous == nil do
+        Application.delete_env(:shoestring, :capacity_monitors)
+      else
+        Application.put_env(:shoestring, :capacity_monitors, previous)
+      end
+    end)
 
-    refute placeholder_html =~ "Eligible for automatic admission"
+    # A repeated key must not produce duplicate cards or DOM ids.
+    Application.put_env(:shoestring, :capacity_monitors, [
+      {:claude, [enabled: true]},
+      {:claude, [enabled: true]},
+      {:codex, [enabled: true]}
+    ])
+
+    {:ok, view, _html} = live(conn, "/observatory")
+    assert has_element?(view, "#obs-claude-placeholder")
+    assert has_element?(view, "#obs-codex-placeholder")
+
+    claude_cards =
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query_by_id("obs-claude-placeholder")
+
+    assert Enum.count(claude_cards) == 1
+
+    # First occurrence wins, matching the supervisor's `Keyword.get/3`
+    # resolution: a leading disabled entry means no card at all.
+    Application.put_env(:shoestring, :capacity_monitors, [
+      {:claude, [enabled: false]},
+      {:claude, [enabled: true]},
+      {:codex, [enabled: true]}
+    ])
+
+    {:ok, disabled_view, _html} = live(conn, "/observatory")
+    refute has_element?(disabled_view, "#obs-claude-placeholder")
+    assert has_element?(disabled_view, "#obs-codex-placeholder")
 
     if previous == nil do
       Application.delete_env(:shoestring, :capacity_monitors)

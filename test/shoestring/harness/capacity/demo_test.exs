@@ -168,25 +168,38 @@ defmodule Shoestring.Harness.Capacity.DemoTest do
     refute has_element?(down_view, "#observations-empty")
 
     for provider <- ["claude", "codex"] do
-      assert has_element?(down_view, "#obs-#{provider}-placeholder"),
+      card = "#obs-#{provider}-placeholder"
+
+      assert has_element?(down_view, card),
              "expected a placeholder card for configured-but-unobserved #{provider}"
 
       assert down_view
-             |> element("#obs-#{provider}-placeholder [data-placeholder-badge]")
+             |> element("#{card} [data-placeholder-badge]")
              |> has_element?()
 
-      card_html =
-        down_view |> element("#obs-#{provider}-placeholder") |> render()
+      assert has_element?(down_view, card, "Not yet observed")
+      assert has_element?(down_view, card, "placeholder, not a real observation")
+      assert has_element?(down_view, card, "Unknown state")
+      assert has_element?(down_view, card, "No windows recorded.")
+      assert has_element?(down_view, card, "CLI version: not reported")
 
-      assert card_html =~ "Not yet observed"
-      assert card_html =~ "placeholder, not a real observation"
-      assert card_html =~ "Unknown state"
-      assert card_html =~ "data-status=\"unknown\""
-      assert card_html =~ "No windows recorded."
+      assert down_view
+             |> element("#{card} [data-status=\"unknown\"]")
+             |> has_element?()
+
+      # No invented timestamp: placeholders render the Unknown fallback, never
+      # a <time> element.
+      refute down_view
+             |> element("#{card} time")
+             |> has_element?()
+
       # F3: per-card ineligibility. Scoped to each card, so an empty page can
       # never satisfy it vacuously — a placeholder rendered as eligible fails.
-      refute card_html =~ "Eligible for automatic admission"
-      refute card_html =~ "data-status=\"healthy\""
+      refute has_element?(down_view, card, "Eligible for automatic admission")
+
+      refute down_view
+             |> element("#{card} [data-status=\"healthy\"]")
+             |> has_element?()
     end
 
     # Restore the stock test config before the next step: later steps carry
