@@ -140,12 +140,75 @@ defmodule Shoestring.Harness.Capacity.DemoTest do
     assert child_pid(down_sup, :claude_monitor) == down_claude
     assert child_pid(down_sup, :codex_monitor) == down_codex
 
-    # The UI renders the honest empty state: no cards, no fabricated liveness.
+    # The UI renders honest per-provider placeholder cards: one card each for
+    # the configured-but-never-observed `claude` and `codex` providers, with no
+    # fabricated liveness. The test env disables both monitors in app config,
+    # so this step enables them (modelling "installed but unreachable") and
+    # restores the stock config right after: later steps carry real ledger rows
+    # and must render those instead of placeholders.
+    previous_monitors = Application.get_env(:shoestring, :capacity_monitors)
+
+    on_exit(fn ->
+      if previous_monitors == nil do
+        Application.delete_env(:shoestring, :capacity_monitors)
+      else
+        Application.put_env(:shoestring, :capacity_monitors, previous_monitors)
+      end
+    end)
+
+    Application.put_env(:shoestring, :capacity_monitors,
+      claude: [enabled: true],
+      codex: [enabled: true]
+    )
+
     {:ok, down_view, down_html} = live(conn, "/observatory")
     assert down_html =~ "Capacity Observatory"
-    assert down_html =~ "No observations yet"
-    assert has_element?(down_view, "#observations-empty")
-    refute down_html =~ "Eligible for automatic admission"
+    # Placeholders ARE the content here: the genuine empty state is reserved
+    # for zero-providers-configured.
+    refute has_element?(down_view, "#observations-empty")
+
+    for provider <- ["claude", "codex"] do
+      card = "#obs-#{provider}-placeholder"
+
+      assert has_element?(down_view, card),
+             "expected a placeholder card for configured-but-unobserved #{provider}"
+
+      assert down_view
+             |> element("#{card} [data-placeholder-badge]")
+             |> has_element?()
+
+      assert has_element?(down_view, card, "Not yet observed")
+      assert has_element?(down_view, card, "placeholder, not a real observation")
+      assert has_element?(down_view, card, "Unknown state")
+      assert has_element?(down_view, card, "No windows recorded.")
+      assert has_element?(down_view, card, "CLI version: not reported")
+
+      assert down_view
+             |> element("#{card} [data-status=\"unknown\"]")
+             |> has_element?()
+
+      # No invented timestamp: placeholders render the Unknown fallback, never
+      # a <time> element.
+      refute down_view
+             |> element("#{card} time")
+             |> has_element?()
+
+      # F3: per-card ineligibility. Scoped to each card, so an empty page can
+      # never satisfy it vacuously — a placeholder rendered as eligible fails.
+      refute has_element?(down_view, card, "Eligible for automatic admission")
+
+      refute down_view
+             |> element("#{card} [data-status=\"healthy\"]")
+             |> has_element?()
+    end
+
+    # Restore the stock test config before the next step: later steps carry
+    # real ledger rows and must render those instead of placeholders.
+    if previous_monitors == nil do
+      Application.delete_env(:shoestring, :capacity_monitors)
+    else
+      Application.put_env(:shoestring, :capacity_monitors, previous_monitors)
+    end
 
     # Providers stay down for the rest of the demo (that supervisor keeps running
     # untouched); the demo moves on by starting the real observers under a second

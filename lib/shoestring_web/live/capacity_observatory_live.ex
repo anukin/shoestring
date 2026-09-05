@@ -240,9 +240,12 @@ defmodule ShoestringWeb.CapacityObservatoryLive do
 
   defp load_observations(socket) do
     # Fetch all latest observations
-    summaries =
+    observed =
       Observatory.latest_observations()
       |> Enum.map(&Observatory.observation_summary/1)
+
+    summaries =
+      (observed ++ placeholders(observed))
       |> Enum.map(&enrich_summary/1)
 
     socket
@@ -250,8 +253,107 @@ defmodule ShoestringWeb.CapacityObservatoryLive do
     |> assign(:observations_empty?, summaries == [])
     |> stream(:observations, summaries,
       reset: true,
-      dom_id: fn s -> "obs-#{s.provider_id}-#{s.invocation_mode}-#{s.scope}" end
+      dom_id: &observation_dom_id/1
     )
+  end
+
+  defp observation_dom_id(%{placeholder?: true, provider_id: provider_id}) do
+    "obs-#{provider_id}-placeholder"
+  end
+
+  defp observation_dom_id(s) do
+    "obs-#{s.provider_id}-#{s.invocation_mode}-#{s.scope}"
+  end
+
+  # UI-side placeholders for configured-but-never-observed providers.
+  #
+  # For every provider enabled under `config :shoestring, :capacity_monitors`
+  # with no ledger row yet, this builds a placeholder summary that renders
+  # through the same card template and the existing `:unknown` presentation.
+  # Nothing is persisted: the ledger keeps its "only things actually observed"
+  # invariant, and the placeholder structurally cannot satisfy an eligibility
+  # check (`eligible?: false`, `capacity_state: :unknown`, no snapshot struct).
+  #
+  # A provider that already has ANY ledger row (any mode/scope) gets no
+  # placeholder: "observed and then lost" keeps rendering its real last-known
+  # (possibly stale) card, which is exactly how the two states stay
+  # distinguishable. A provider disabled in config (`enabled: false` or absent)
+  # gets no card at all.
+  defp placeholders(observed_summaries) do
+    observed_providers =
+      observed_summaries
+      |> Enum.map(&to_string(Map.get(&1, :provider_id)))
+      |> MapSet.new()
+
+    configured_providers()
+    |> Enum.reject(&MapSet.member?(observed_providers, to_string(&1)))
+    |> Enum.sort()
+    |> Enum.map(&placeholder_summary/1)
+  end
+
+  # Enabled providers from app config. Mirrors the capacity supervisor's
+  # resolution: an entry that is `false` or carries `enabled: false` means
+  # "not configured" and yields no card; anything else present counts as
+  # configured (enabled defaults to true). Providers are deduplicated by key
+  # (first occurrence wins, as with `Keyword.get/3`) so a repeated config key
+  # can never produce duplicate cards or DOM ids.
+  defp configured_providers do
+    configured = Application.get_env(:shoestring, :capacity_monitors, [])
+    configured = if is_list(configured), do: configured, else: []
+
+    configured
+    |> Keyword.keys()
+    |> Enum.uniq()
+    |> Enum.filter(fn provider ->
+      provider_enabled?(Keyword.get(configured, provider))
+    end)
+  end
+
+  defp provider_enabled?(false), do: false
+  defp provider_enabled?(nil), do: false
+  defp provider_enabled?(opts) when is_list(opts), do: Keyword.get(opts, :enabled, true)
+  defp provider_enabled?(_opts), do: true
+
+  # A placeholder is shaped like an `observation_summary()` map so the card
+  # template and `enrich_summary/1` work unchanged, but every field is honest
+  # about never having observed anything:
+  #
+  # * `capacity_state: :unknown` with a reason stating only that no observation
+  #   has been recorded, so the existing classifier renders `:unknown`
+  #   ("Unknown state", never treated as available), never `:disconnected`
+  #   (which would claim a failed contact) and never `:healthy`.
+  # * `observed_at: nil`, `age_seconds: nil`, empty windows: the template's
+  #   existing "Unknown" / "No windows recorded." fallbacks render as-is.
+  # * `eligible?: false` and `snapshot: nil` (no struct to evaluate), so no
+  #   eligibility check anywhere can consume this card.
+  # * `placeholder?: true` drives the visible "Not yet observed" marker and
+  #   the `data-placeholder` hook the template renders.
+  defp placeholder_summary(provider) do
+    provider_id = to_string(provider)
+
+    %{
+      provider_id: provider_id,
+      invocation_mode: "unobserved",
+      adapter_id: "not yet observed",
+      event: :never_observed,
+      scope: "",
+      capacity_state: :unknown,
+      windows: [],
+      freshness_state: :unknown,
+      age_seconds: nil,
+      max_age_seconds: nil,
+      observed_at: nil,
+      expires_at: nil,
+      confidence: :none,
+      compatibility_state: :unknown,
+      support_tier: :unknown,
+      reason:
+        "Provider #{provider_id} is configured but no observation has been recorded yet. " <>
+          "This card is a placeholder, not a real observation.",
+      eligible?: false,
+      snapshot: nil,
+      placeholder?: true
+    }
   end
 
   # Adds UI-boundary fields: redacted reasons, presentational state, CLI version,
