@@ -51,6 +51,8 @@ plans/milestones/*
 plans/evidence/*
 !/plans/evidence/00a-capacity-feasibility/
 !/plans/evidence/00a-capacity-feasibility/**
+!/plans/evidence/04-single-elf/
+!/plans/evidence/04-single-elf/**
 
 # Editor, language-server, and OS metadata
 /.elixir_ls/

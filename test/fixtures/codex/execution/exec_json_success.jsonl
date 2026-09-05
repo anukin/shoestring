@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"01a06fec-0fef-74f3-bf09-56502a44de4f"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll create `hello.txt` with `hello`, then run `printf ok`.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"printf 'hello' > hello.txt\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"printf 'hello' > hello.txt\"","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'printf ok'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'printf ok'","aggregated_output":"ok","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Created `hello.txt` containing `hello`. Ran `printf ok`, which output `ok`."}}
+{"type":"turn.completed","usage":{"input_tokens":34710,"cached_input_tokens":29184,"cache_write_input_tokens":0,"output_tokens":128,"reasoning_output_tokens":0}}
