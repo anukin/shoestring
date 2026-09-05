@@ -201,7 +201,8 @@ defmodule Shoestring.Elves.OrchestratorTest do
     assert {:ok, _event} =
              Orchestrator.record_choice(run_id, %{
                action: "reconcile",
-               decision_id: Orchestrator.decision_id(run_id, "reconcile", nil),
+               decision_id:
+                 Orchestrator.decision_id(run_id, "reconcile", nil, "operator-reconciliation"),
                rationale: "Operator verified the orphan by hand; replacement may proceed.",
                outcome: "reconciled"
              })
@@ -304,6 +305,22 @@ defmodule Shoestring.Elves.OrchestratorTest do
     assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
   end
 
+  test "decision_id raises ArgumentError when unobserved and discriminator is missing" do
+    run_id = Ecto.UUID.generate()
+
+    assert_raise ArgumentError, fn ->
+      Orchestrator.decision_id(run_id, "wait")
+    end
+
+    assert_raise ArgumentError, fn ->
+      Orchestrator.decision_id(run_id, "reconcile", nil)
+    end
+
+    assert_raise ArgumentError, fn ->
+      Orchestrator.decision_id(run_id, "reconcile", nil, "")
+    end
+  end
+
   test "concurrent replacement claims grant exactly one winner", %{
     sup: sup,
     goal: goal,
@@ -318,25 +335,90 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
     # An Oban retry racing the orchestrator loop: ten distinct decisions
     # claim at once, and exactly one may dispatch a replacement.
-    results =
-      1..10
-      |> Task.async_stream(
-        fn n ->
-          Orchestrator.request_replacement(run_id, decision_id: "race-decision-#{n}")
-        end,
-        max_concurrency: 10,
-        timeout: 30_000
-      )
-      |> Enum.map(fn {:ok, result} -> result end)
+    tasks =
+      for n <- 1..10 do
+        Task.async(fn ->
+          receive do
+            :start ->
+              Orchestrator.request_replacement(run_id,
+                decision_id: "race-decision-#{n}",
+                attempt: n
+              )
+          end
+        end)
+      end
+
+    for task <- tasks, do: send(task.pid, :start)
+    results = Task.await_many(tasks, 30_000)
 
     assert Enum.count(results, &(&1 == {:ok, :allowed})) == 1
     assert Enum.count(results, &(&1 == {:error, :replacement_already_claimed})) == 9
+
+    assert ElvesHelpers.replacement_claim(goal.id, run_id).payload["attempt"] == 1
 
     # The winner retrying with its own decision id stays allowed.
     winner_id = ElvesHelpers.replacement_claim(goal.id, run_id).payload["decision_id"]
 
     assert {:ok, :allowed} =
              Orchestrator.request_replacement(run_id, decision_id: winner_id)
+  end
+
+  test "rivals asserting different attempts derive the same round and produce one winner", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = start_quiet_run(sup, goal, task, :rival_attempts_probe, [])
+
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
+
+    # Two rivals claiming at once with different asserted attempts
+    results =
+      [1, 2]
+      |> Task.async_stream(
+        fn attempt ->
+          Orchestrator.request_replacement(run_id,
+            decision_id: "rival-attempt-#{attempt}",
+            attempt: attempt
+          )
+        end,
+        max_concurrency: 2,
+        timeout: 30_000
+      )
+      |> Enum.map(fn {:ok, res} -> res end)
+
+    assert Enum.count(results, &(&1 == {:ok, :allowed})) == 1
+    assert Enum.count(results, &(&1 == {:error, :replacement_already_claimed})) == 1
+
+    assert ElvesHelpers.replacement_claim(goal.id, run_id).payload["attempt"] == 1
+
+    assert {:ok, :allowed} =
+             Orchestrator.request_replacement(run_id,
+               decision_id: "durable-next-round",
+               attempt: 99
+             )
+
+    assert ElvesHelpers.replacement_claim(goal.id, run_id).payload["attempt"] == 2
+
+    next_round_results =
+      [3, 4]
+      |> Task.async_stream(
+        fn attempt ->
+          Orchestrator.request_replacement(run_id,
+            decision_id: "post-claim-rival-#{attempt}",
+            attempt: attempt
+          )
+        end,
+        max_concurrency: 2,
+        timeout: 30_000
+      )
+      |> Enum.map(fn {:ok, res} -> res end)
+
+    assert Enum.count(next_round_results, &(&1 == {:ok, :allowed})) == 1
+    assert Enum.count(next_round_results, &(&1 == {:error, :replacement_already_claimed})) == 1
+    assert ElvesHelpers.replacement_claim(goal.id, run_id).payload["attempt"] == 3
   end
 
   test "replacement rounds advance per attempt and chain across runs", %{

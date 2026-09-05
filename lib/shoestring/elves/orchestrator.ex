@@ -63,18 +63,28 @@ defmodule Shoestring.Elves.Orchestrator do
   Two inputs need care. A nil `observation_id` means "no observation backs
   this decision", and string interpolation would collapse every such
   decision for a `(run, action)` pair onto one digest — silently dropping
-  genuine decisions as duplicates. The nil case therefore digests an
+  genuine decisions as duplicates.  The nil case therefore digests an
   explicit `"none"` marker AND requires a caller-supplied `discriminator`
   (a rationale digest, a loop sequence number, anything stable across a
-  retry but distinct across genuinely different decisions). The digest is
-  the full 64 hex characters: truncating it would throw away entropy for
-  no benefit in a key no human ever reads.
+  retry but distinct across genuinely different decisions). An unobserved
+  decision missing an explicit discriminator raises `ArgumentError` rather
+  than silently colliding. The digest is the full 64 hex characters:
+  truncating it would throw away entropy for no benefit in a key no human
+  ever reads.
   """
   @spec decision_id(Ecto.UUID.t(), String.t(), String.t() | nil, String.t() | nil) ::
           String.t()
   def decision_id(run_id, action, observation_id \\ nil, discriminator \\ nil) do
-    observed = observation_id || "none"
-    uniqueness = discriminator || "none"
+    unobserved? = blank?(observation_id)
+    undisambiguated? = blank?(discriminator)
+
+    if unobserved? and undisambiguated? do
+      raise ArgumentError,
+            "decision_id requires an explicit discriminator when observation_id is nil"
+    end
+
+    observed = if unobserved?, do: "none", else: "#{observation_id}"
+    uniqueness = if undisambiguated?, do: "none", else: "#{discriminator}"
 
     :crypto.hash(:sha256, "#{run_id}:#{action}:#{observed}:#{uniqueness}")
     |> Base.encode16(case: :lower)
@@ -118,7 +128,7 @@ defmodule Shoestring.Elves.Orchestrator do
 
   Required attributes: `:action` (one of `choices/0`), `:rationale`, and
   `:decision_id` — a stable caller-owned idempotency key (see
-  `decision_id/3`). There is deliberately no generated default: a random
+  `decision_id/4`). There is deliberately no generated default: a random
   fallback would silently mint a fresh key on every retry and defeat
   deduplication across restarts.
   Optional: `:evidence_refs` (observation ids consumed), `:observation_id`
@@ -195,29 +205,31 @@ defmodule Shoestring.Elves.Orchestrator do
   end
 
   @doc """
-  Authorizes a replacement launch by recording one exclusive per-attempt claim.
+  Authorizes a replacement launch by recording one exclusive claim for the
+  next durable replacement round.
 
   Options: `:decision_id` (required, stable across the attempt's retries),
-  `:attempt` (positive integer, default 1), `:rationale`.
+  `:attempt` (positive integer, default 1, retained as a validated compatibility
+  hint), `:rationale`. The persisted round is always derived from prior durable
+  claims, never from the caller's hint.
 
   Returns `{:ok, :allowed}` when the guard passes and this caller won the
-  claim for its attempt; `{:error, :prior_run_active}` while the prior run
+  claim for its round; `{:error, :prior_run_active}` while the prior run
   is still active; `{:error, :replacement_already_claimed}` when a
-  different decision already claimed this attempt. Retrying with the same
-  `:decision_id` (and attempt) is idempotent and returns `:allowed` again,
+  different decision already claimed this round. Retrying with the same
+  `:decision_id` is idempotent and returns `:allowed` again,
   so a crash between the claim and the launch cannot wedge the run, while
-  two concurrent claimants for the same attempt (an Oban retry racing the
+  two concurrent claimants for the same round (an Oban retry racing the
   orchestrator loop) cannot both dispatch duplicate work: the claim is a
   uniquely-keyed trajectory event, and the trajectory writer serializes
   appends per goal, so exactly one decision wins and the loser observes
   the winner.
 
-  Exclusivity is per `(run, attempt)`, not per run forever: recovery is
-  iterative, so a later round opens by passing the next `:attempt` — after
-  the previous round's replacement has itself reached a terminal state.
-  A stale rival still holding the old attempt number keeps hitting the
-  consumed key and is refused, while the new round races only against
-  itself.
+  Exclusivity is per `(run, round)`, not per run forever: recovery is
+  iterative, so a later round opens after the previous round's replacement
+  has itself reached a terminal state. A stale rival cannot select a new
+  round by asserting a different attempt number; it observes the same
+  durable highest round as its rivals.
 
   This function records the claim; it never launches anything itself.
   """
@@ -242,14 +254,27 @@ defmodule Shoestring.Elves.Orchestrator do
     end
   end
 
-  defp claim_replacement(run, decision_id, attempt, rationale, opts) do
+  defp claim_replacement(run, decision_id, asserted_attempt, rationale, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    existing_claims = existing_replacement_claims(run, repo)
+    round = derive_replacement_round(existing_claims, decision_id)
+
+    if stale_attempt?(existing_claims, decision_id, asserted_attempt, round) do
+      {:error, :replacement_already_claimed}
+    else
+      append_replacement_claim(run, decision_id, round, rationale, opts)
+    end
+  end
+
+  defp append_replacement_claim(run, decision_id, round, rationale, opts) do
     clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
 
     payload =
       %{
         "run_id" => run.id,
         "decision_id" => decision_id,
-        "attempt" => attempt,
+        "attempt" => round,
         "rationale" => rationale && Redaction.redact(rationale)
       }
       |> Map.reject(fn {_key, value} -> is_nil(value) end)
@@ -259,7 +284,7 @@ defmodule Shoestring.Elves.Orchestrator do
       "schema_version" => 1,
       "actor" => "orchestrator",
       "occurred_at" => Shoestring.Harness.Clock.now(clock),
-      "idempotency_key" => "elf-replacement:#{run.id}:#{attempt}",
+      "idempotency_key" => "elf-replacement:#{run.id}:#{round}",
       "payload" => payload
     }
 
@@ -279,6 +304,41 @@ defmodule Shoestring.Elves.Orchestrator do
       {:error, _reason} = error ->
         error
     end
+  end
+
+  defp existing_replacement_claims(run, repo) do
+    repo.all(
+      from event in TrajectoryEvent,
+        where:
+          event.goal_id == ^run.goal_id and event.run_id == ^run.id and
+            event.type == "elf.replacement_claimed",
+        order_by: [asc: event.sequence]
+    )
+  end
+
+  defp derive_replacement_round(existing_claims, decision_id) do
+    case Enum.find(existing_claims, fn event -> event.payload["decision_id"] == decision_id end) do
+      %TrajectoryEvent{payload: %{"attempt" => claim_attempt}} when is_integer(claim_attempt) ->
+        claim_attempt
+
+      _not_found ->
+        highest_attempt =
+          existing_claims
+          |> Enum.map(fn event ->
+            case event.payload["attempt"] do
+              attempt when is_integer(attempt) -> attempt
+              _other -> 0
+            end
+          end)
+          |> Enum.max(fn -> 0 end)
+
+        highest_attempt + 1
+    end
+  end
+
+  defp stale_attempt?(existing_claims, decision_id, asserted_attempt, round) do
+    not Enum.any?(existing_claims, fn event -> event.payload["decision_id"] == decision_id end) and
+      asserted_attempt < round
   end
 
   defp claim_for_replace(run, "replace", decision_id, attempt, opts) do
@@ -442,7 +502,7 @@ defmodule Shoestring.Elves.Orchestrator do
     do:
       {:error,
        {:missing_decision_id,
-        "recovery choice requires a stable decision_id (see decision_id/3); generated ids defeat cross-restart deduplication"}}
+        "recovery choice requires a stable decision_id (see decision_id/4); generated ids defeat cross-restart deduplication"}}
 
   defp observation_id(%{"observation_id" => id}) when is_binary(id), do: id
   defp observation_id(%{observation_id: id}) when is_binary(id), do: id
@@ -461,4 +521,8 @@ defmodule Shoestring.Elves.Orchestrator do
   defp outcome(%{"outcome" => outcome}) when is_binary(outcome), do: outcome
   defp outcome(%{outcome: outcome}) when is_binary(outcome), do: outcome
   defp outcome(_attrs), do: "pending"
+
+  defp blank?(nil), do: true
+  defp blank?(str) when is_binary(str), do: String.trim(str) == ""
+  defp blank?(_other), do: false
 end
