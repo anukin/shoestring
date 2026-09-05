@@ -432,7 +432,7 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
           kind: :result,
           process_id: base_process_id,
           provider_session_id: base_session_id,
-          result: %{status: "accepted", artifact_id: nil},
+          result: %{status: "interrupted", artifact_id: nil},
           extensions: %{
             "codex-app-server:turn_id" => turn_id,
             "status" => "interrupted",

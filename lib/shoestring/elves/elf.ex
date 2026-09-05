@@ -312,7 +312,7 @@ defmodule Shoestring.Elves.Elf do
       from event in TrajectoryEvent,
         where:
           event.goal_id == ^state.goal_id and event.run_id == ^state.run_id and
-            event.type in ["run.completed", "run.failed", "run.cancelled"]
+            event.type in ["run.completed", "run.failed", "run.interrupted", "run.cancelled"]
     )
   end
 
@@ -321,13 +321,16 @@ defmodule Shoestring.Elves.Elf do
       from event in TrajectoryEvent,
         where:
           event.goal_id == ^state.goal_id and event.run_id == ^state.run_id and
-            event.type in ["run.completed", "run.failed", "run.cancelled"],
+            event.type in ["run.completed", "run.failed", "run.interrupted", "run.cancelled"],
         order_by: [desc: event.sequence],
         limit: 1
 
     case state.repo.one(query) do
       %TrajectoryEvent{type: "run.completed"} ->
         %{class: :completed}
+
+      %TrajectoryEvent{type: "run.interrupted"} ->
+        %{class: :interrupted}
 
       %TrajectoryEvent{type: "run.cancelled"} ->
         %{class: :cancelled}

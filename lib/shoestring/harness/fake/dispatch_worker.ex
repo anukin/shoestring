@@ -62,7 +62,8 @@ defmodule Shoestring.Harness.Fake.DispatchWorker do
       nil ->
         :not_yet_dispatched
 
-      %RunRecord{status: status} when status in ["running", "completed", "failed", "cancelled"] ->
+      %RunRecord{status: status}
+      when status in ["running", "completed", "failed", "interrupted", "cancelled"] ->
         :already_dispatched
 
       %RunRecord{} ->
