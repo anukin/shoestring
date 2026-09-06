@@ -1,0 +1,99 @@
+[
+  {
+    "type": "run.requested",
+    "payload": {
+      "continuation": {},
+      "dispatch_id": "02da24d6-d366-4ff4-839b-85860ea15020",
+      "extensions": {
+        "shoestring.manual:base_revision": "7012722f65bc51d3ca83f66d2c14996d60ea95a8",
+        "shoestring.manual:lease_bounded": true,
+        "shoestring.manual:repo_path": "/tmp/iter4-live-demo-repo"
+      },
+      "policy": {
+        "mode": "supervised",
+        "network": false,
+        "write_access": true
+      },
+      "prompt": "You are working in the directory /tmp/iter4-live-demo-state/worktrees/run-02da24d6-d366-4ff4-839b-85860ea15020. Do exactly this: 1) Create a file named hello.txt directly inside that directory whose entire content is the two bytes `ok` (no trailing newline). 2) Run the shell command `printf ok` with the working directory set to that directory. 3) Reply with one short line confirming both steps. Do nothing else.",
+      "provider_id": "codex_app_server_stdio",
+      "request_version": 1,
+      "requested_capabilities": {
+        "items": [
+          "cancel"
+        ]
+      },
+      "run_id": "02da24d6-d366-4ff4-839b-85860ea15020",
+      "workspace_ref": "run-02da24d6-d366-4ff4-839b-85860ea15020"
+    },
+    "idempotency_key": "run-requested:02da24d6-d366-4ff4-839b-85860ea15020",
+    "occurred_at": "2026-09-06T04:44:50.907791Z",
+    "sequence": 1,
+    "actor": "harness"
+  },
+  {
+    "type": "dispatch.requested",
+    "payload": {
+      "dispatch_id": "02da24d6-d366-4ff4-839b-85860ea15020",
+      "request_version": 1,
+      "run_id": "02da24d6-d366-4ff4-839b-85860ea15020"
+    },
+    "idempotency_key": "dispatch-requested:02da24d6-d366-4ff4-839b-85860ea15020",
+    "occurred_at": "2026-09-06T04:44:50.919547Z",
+    "sequence": 2,
+    "actor": "harness"
+  },
+  {
+    "type": "run.starting",
+    "payload": {
+      "run_id": "02da24d6-d366-4ff4-839b-85860ea15020"
+    },
+    "idempotency_key": "elf-starting:02da24d6-d366-4ff4-839b-85860ea15020",
+    "occurred_at": "2026-09-06T04:44:50.926109Z",
+    "sequence": 3,
+    "actor": "elf"
+  },
+  {
+    "type": "run.running",
+    "payload": {
+      "process_id": "pgid:64000",
+      "provider_session_id": "01950000-0000-7000-8000-000000000001",
+      "run_id": "02da24d6-d366-4ff4-839b-85860ea15020"
+    },
+    "idempotency_key": "elf-running:02da24d6-d366-4ff4-839b-85860ea15020",
+    "occurred_at": "2026-09-06T04:44:51.094141Z",
+    "sequence": 4,
+    "actor": "elf"
+  },
+  {
+    "type": "dispatch.effect_failed",
+    "payload": {
+      "dispatch_id": "02da24d6-d366-4ff4-839b-85860ea15020",
+      "error_code": "effect_failed",
+      "run_id": "02da24d6-d366-4ff4-839b-85860ea15020"
+    },
+    "idempotency_key": "dispatch-effect-failed:02da24d6-d366-4ff4-839b-85860ea15020",
+    "occurred_at": "2026-09-06T04:44:51.532854Z",
+    "sequence": 5,
+    "actor": "harness"
+  },
+  {
+    "type": "run.cancelling",
+    "payload": {
+      "run_id": "02da24d6-d366-4ff4-839b-85860ea15020"
+    },
+    "idempotency_key": "elf-cancelling:02da24d6-d366-4ff4-839b-85860ea15020",
+    "occurred_at": "2026-09-06T04:48:50.983623Z",
+    "sequence": 6,
+    "actor": "elf"
+  },
+  {
+    "type": "run.cancelled",
+    "payload": {
+      "run_id": "02da24d6-d366-4ff4-839b-85860ea15020"
+    },
+    "idempotency_key": "elf-terminal:02da24d6-d366-4ff4-839b-85860ea15020",
+    "occurred_at": "2026-09-06T04:48:50.985321Z",
+    "sequence": 7,
+    "actor": "elf"
+  }
+]
