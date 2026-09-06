@@ -21,6 +21,11 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   - Terminal classification comes from the normalized `result` frame
     (`is_error` / `terminal_reason`); a nonzero exit or an exit without
     any `result` frame synthesizes an explicit transport error.
+  - Identity callers park until the first frame carrying `session_id`
+    sets the provider identity, so `start/2` never persists a nil
+    placeholder; every terminal path (spawn failure, transport loss,
+    child exit, cancellation, call timeout) releases parked callers,
+    with an error when no session id was ever observed.
 
   The parser never crashes the session: undecodable lines are counted and
   ignored, and normalization runs under `try/rescue`.
@@ -52,6 +57,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     :status,
     :terminal_result,
     :terminal_waiters,
+    :identity_waiters,
     :malformed_lines,
     :exit_status,
     :max_frame_size
@@ -65,17 +71,21 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   end
 
   @doc """
-  Returns the normalized RunIdentity for this session.
+  Blocks until the provider session id is known from the first
+  (`system/init`) frame and returns the normalized RunIdentity, or
+  returns an error if the session terminalizes first (spawn failure,
+  transport loss, child exit with no frames, cancellation) or the
+  timeout elapses.
 
-  Unlike the Codex handshake, the one-shot protocol has nothing to wait
-  for: `run_id` is known up front and `provider_session_id` arrives with
-  the first (`system/init`) frame. This call returns immediately with the
-  best identity known so far.
+  Unlike `get_run_identity/1` (which returns the best identity known so
+  far, possibly with a nil provider session), this is what `start/2`
+  uses, so a started run's persisted identity always carries the real
+  provider session id — never a placeholder nil.
   """
   @spec await_run_identity(GenServer.server(), timeout()) ::
           {:ok, Shoestring.Harness.RunIdentity.t()} | {:error, Error.t()}
   def await_run_identity(server, timeout \\ @default_request_timeout) do
-    GenServer.call(server, :get_run_identity, timeout)
+    GenServer.call(server, :await_run_identity, timeout)
   catch
     :exit, {:timeout, _} ->
       {:error,
@@ -169,6 +179,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
         status: :starting,
         terminal_result: nil,
         terminal_waiters: [],
+        identity_waiters: [],
         malformed_lines: 0,
         exit_status: nil,
         max_frame_size: max_frame_size
@@ -226,7 +237,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
           error = Error.new(:transport, "transport_spawn_failed", inspect(reason))
           state = %{state | status: :failed, terminal_result: {:error, error}}
           state = emit_synthetic_error(state, error)
-          {:noreply, reply_terminal_waiters(state)}
+          {:noreply, state |> reply_terminal_waiters() |> reply_identity_waiters()}
       end
     end
   end
@@ -236,6 +247,19 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   @impl GenServer
   def handle_call(:get_run_identity, _from, state) do
     {:reply, build_run_identity(state), state}
+  end
+
+  def handle_call(:await_run_identity, from, state) do
+    cond do
+      not is_nil(state.provider_session_id) ->
+        {:reply, build_run_identity(state), state}
+
+      terminal?(state) ->
+        {:reply, identity_terminal_result(state), state}
+
+      true ->
+        {:noreply, %{state | identity_waiters: [from | state.identity_waiters]}}
+    end
   end
 
   def handle_call(:stream_events, _from, state) do
@@ -315,7 +339,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
 
       state = %{state | status: :failed, terminal_result: {:error, error}}
       state = emit_synthetic_error(state, error)
-      {:noreply, reply_terminal_waiters(state)}
+      {:noreply, state |> reply_terminal_waiters() |> reply_identity_waiters()}
     end
   end
 
@@ -330,10 +354,10 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
 
     cond do
       state.status == :cancelled ->
-        {:noreply, reply_terminal_waiters(state)}
+        {:noreply, state |> reply_terminal_waiters() |> reply_identity_waiters()}
 
       terminal?(state) ->
-        {:noreply, reply_terminal_waiters(state)}
+        {:noreply, state |> reply_terminal_waiters() |> reply_identity_waiters()}
 
       exit_status == 0 ->
         # Exit 0 without a result frame: fail closed rather than
@@ -343,7 +367,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
 
         state = %{state | status: :failed, terminal_result: {:error, error}}
         state = emit_synthetic_error(state, error)
-        {:noreply, reply_terminal_waiters(state)}
+        {:noreply, state |> reply_terminal_waiters() |> reply_identity_waiters()}
 
       true ->
         error =
@@ -355,7 +379,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
 
         state = %{state | status: :failed, terminal_result: {:error, error}}
         state = emit_synthetic_error(state, error)
-        {:noreply, reply_terminal_waiters(state)}
+        {:noreply, state |> reply_terminal_waiters() |> reply_identity_waiters()}
     end
   end
 
@@ -374,7 +398,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
       }
 
       state = emit_synthetic_error(state, error)
-      {:noreply, reply_terminal_waiters(state)}
+      {:noreply, state |> reply_terminal_waiters() |> reply_identity_waiters()}
     end
   end
 
@@ -435,6 +459,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     cond do
       is_nil(state.provider_session_id) ->
         %{state | provider_session_id: sid}
+        |> reply_identity_waiters()
 
       state.provider_session_id != sid ->
         Logger.warning("ClaudeHeadless: session_id changed mid-run; keeping the first")
@@ -480,6 +505,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     if event.extensions["claude-headless:terminal"] == true do
       %{state | status: :completed, terminal_result: {:ok, :completed}}
       |> reply_terminal_waiters()
+      |> reply_identity_waiters()
     else
       state
     end
@@ -489,6 +515,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     if event.extensions["claude-headless:terminal"] == true do
       %{state | status: :failed, terminal_result: {:error, event.error}}
       |> reply_terminal_waiters()
+      |> reply_identity_waiters()
     else
       state
     end
@@ -512,6 +539,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
 
     %{state | status: :cancelled, terminal_result: {:ok, :cancelled}}
     |> reply_terminal_waiters()
+    |> reply_identity_waiters()
   end
 
   defp emit_synthetic_error(state, %Error{} = error) do
@@ -565,6 +593,43 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
       %{state | terminal_waiters: []}
     else
       state
+    end
+  end
+
+  # Releases parked identity waiters. Called when the provider session id
+  # is first observed (success) and on EVERY terminal transition (error
+  # when no session id was ever observed, so no caller can hang and no
+  # nil identity can leak into a persisted run). Safe to call when no
+  # waiters are parked.
+  defp reply_identity_waiters(%{identity_waiters: []} = state), do: state
+
+  defp reply_identity_waiters(state) do
+    result =
+      if not is_nil(state.provider_session_id) do
+        build_run_identity(state)
+      else
+        identity_terminal_result(state)
+      end
+
+    Enum.each(state.identity_waiters, fn from -> GenServer.reply(from, result) end)
+    %{state | identity_waiters: []}
+  end
+
+  # Identity result for a session that terminalized before any session id
+  # was observed: the terminal error when there is one, else a synthesized
+  # identity_unavailable error (e.g. cancelled before the first frame).
+  defp identity_terminal_result(state) do
+    case state.terminal_result do
+      {:error, %Error{} = err} ->
+        {:error, err}
+
+      _ ->
+        {:error,
+         Error.new(
+           :transport,
+           "identity_unavailable",
+           "Session ended before the provider session id was observed"
+         )}
     end
   end
 

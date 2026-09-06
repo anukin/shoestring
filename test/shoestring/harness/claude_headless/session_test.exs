@@ -16,79 +16,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.SessionTest do
 
   alias Shoestring.Harness.ClaudeHeadless.{Session, Transport}
   alias Shoestring.Harness.{RunIdentity, RunRequest}
+  alias Shoestring.Harness.ClaudeScriptedTransport, as: ScriptedTransport
 
   @fixture_dir "plans/evidence/04-single-elf/fixtures/claude"
-
-  defmodule ScriptedTransport do
-    use GenServer
-
-    def start_link(opts) do
-      GenServer.start_link(__MODULE__, opts)
-    end
-
-    def os_pid(_pid), do: 77_777
-
-    def terminate_group(pid, _opts \\ []) do
-      GenServer.call(pid, :terminate_group)
-    end
-
-    def emit(pid) do
-      GenServer.call(pid, :emit)
-    end
-
-    def replay_all(pid) do
-      GenServer.call(pid, :replay_all)
-    end
-
-    @impl GenServer
-    def init(opts) do
-      {:ok,
-       %{
-         owner: Keyword.get(opts, :owner),
-         lines: Keyword.get(opts, :lines, []),
-         exit_status: Keyword.get(opts, :exit_status, 0),
-         terminated: false
-       }}
-    end
-
-    @impl GenServer
-    def handle_call(:emit, _from, %{lines: [line | rest]} = state) do
-      if state.owner, do: send(state.owner, {:claude_transport_frame, self(), line})
-      {:reply, :ok, %{state | lines: rest}}
-    end
-
-    def handle_call(:emit, _from, state) do
-      if state.owner,
-        do:
-          send(state.owner, {:claude_transport_closed, self(), {:exit_status, state.exit_status}})
-
-      {:reply, :ok, state}
-    end
-
-    def handle_call(:replay_all, _from, state) do
-      if state.owner do
-        for line <- state.lines do
-          send(state.owner, {:claude_transport_frame, self(), line})
-        end
-
-        send(state.owner, {:claude_transport_closed, self(), {:exit_status, state.exit_status}})
-      end
-
-      {:reply, :ok, %{state | lines: []}}
-    end
-
-    def handle_call(:terminate_group, _from, state) do
-      if state.owner do
-        send(state.owner, {:claude_transport_closed, self(), {:exit_status, 143}})
-      end
-
-      {:reply, {:ok, :killed}, %{state | terminated: true, lines: []}}
-    end
-
-    def handle_call(:was_terminated, _from, state) do
-      {:reply, state.terminated, state}
-    end
-  end
 
   defp fixture_lines(name) do
     Path.join(@fixture_dir, name)
