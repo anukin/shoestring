@@ -85,17 +85,14 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
   # a sleep: on the happy path the `receive` returns as soon as `:DOWN`
   # arrives, and `:kill` is untrappable so the wait always terminates.
   defp stop_root_synchronously(root, timeout \\ 5_000) do
-    if is_pid(root) and Process.alive?(root) do
-      ref = Process.monitor(root)
-      Process.exit(root, :kill)
+    ref = Process.monitor(root)
+    Process.exit(root, :kill)
 
-      receive do
-        {:DOWN, ^ref, :process, ^root, _reason} -> :ok
-      after
-        timeout -> {:error, :root_shutdown_timeout}
-      end
-    else
-      :already_down
+    receive do
+      {:DOWN, ^ref, :process, ^root, _reason} -> :ok
+    after
+      timeout ->
+        raise "root supervisor #{inspect(root)} did not shut down within #{timeout} ms"
     end
   end
 
