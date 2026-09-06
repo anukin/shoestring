@@ -31,6 +31,13 @@ defmodule ShoestringWeb.RunPresentation do
     {~r/-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/, "[REDACTED_PRIVATE_KEY]"},
     # URL-embedded credentials (e.g. https://user:pass@host/ from git stderr)
     {~r|(https?://)[^/\s@]+@|, "\\1[REDACTED]@"},
+    # Bare hex tokens (32/40/64 chars: MD5, SHA-1, SHA-256). Catches raw
+    # provider keys with no adjacent key name to trigger assignment rules.
+    {~r/\b(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{40}|[0-9a-fA-F]{32})\b/, "[REDACTED_API_KEY]"},
+    # High-entropy base64 blobs (mixed classes, 32+ chars, optional padding).
+    # Catches opaque bearer material that matches no vendor prefix.
+    {~r/\b(?=[A-Za-z0-9+\/]*[0-9])(?=[A-Za-z0-9+\/]*[a-z])(?=[A-Za-z0-9+\/]*[A-Z])[A-Za-z0-9+\/]{32,}={0,2}(?![A-Za-z0-9+\/=])/,
+     "[REDACTED_API_KEY]"},
     # Basic auth
     {~r/\b(authorization)\s*([:=])\s*Basic(?:\s+[A-Za-z0-9+\/=]+)?/i, "\\1: [REDACTED]"},
     {~r/\bBasic\s+[A-Za-z0-9+\/=]{8,}/i, "Basic [REDACTED]"},
@@ -133,13 +140,15 @@ defmodule ShoestringWeb.RunPresentation do
 
   @doc """
   Formats an event payload into pretty-printed, redacted JSON for display.
+  The JSON is byte-capped (after redaction) so a single large payload cannot
+  flood the DOM.
   """
   @spec format_payload(map() | term()) :: String.t()
   def format_payload(payload) do
     sanitized = sanitize_payload(payload)
 
     case Jason.encode(sanitized, pretty: true) do
-      {:ok, json} -> json
+      {:ok, json} -> display_text(json)
       _ -> "{}"
     end
   end
@@ -220,6 +229,13 @@ defmodule ShoestringWeb.RunPresentation do
     |> String.downcase()
     |> String.split(~r/[^a-z0-9]+/, trim: true)
   end
+
+  @doc """
+  Redacts then byte-caps text for one-shot rendering (prompts, payloads).
+  Returns only the visible text; see `cap_text/2` for omission counts.
+  """
+  @spec display_text(String.t() | nil) :: String.t()
+  def display_text(text), do: text |> cap_text() |> elem(0)
 
   @doc """
   Redacts then byte-caps text for bounded pane rendering.

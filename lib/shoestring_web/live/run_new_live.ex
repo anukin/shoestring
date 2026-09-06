@@ -35,6 +35,7 @@ defmodule ShoestringWeb.RunNewLive do
      socket
      |> assign(:page_title, "New Manual Run")
      |> assign(:form, to_form(@default_params, as: :run))
+     |> assign(:allowed_roots, allowed_repo_roots())
      |> assign(:form_errors, %{})}
   end
 
@@ -94,7 +95,12 @@ defmodule ShoestringWeb.RunNewLive do
 
       {:noreply,
        socket
-       |> put_flash(:error, "Repository path is not allowed under the configured roots.")
+       |> assign(:allowed_roots, allowed_repo_roots())
+       |> put_flash(
+         :error,
+         "Repository path is not allowed. Choose a repository under an allowed root " <>
+           "(#{Enum.join(allowed_repo_roots(), ", ")})."
+       )
        |> assign(:form, to_form(run_params, as: :run))}
     end
   end

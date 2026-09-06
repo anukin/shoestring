@@ -626,8 +626,12 @@ defmodule ShoestringWeb.RunLiveTest do
 
       # At 2288ca4, maybe_reap_fixture_repos deletes fixture dirs by mtime once >5 exist.
       # Because reap_target had the oldest mtime, 2288ca4 rm_rf'd it.
-      # With the reaper deleted, reap_target remains intact.
+      # With the reaper deleted, all six fixture directories must survive.
       assert File.dir?(reap_target)
+
+      for dir <- filler_dirs do
+        assert File.dir?(dir)
+      end
     end
 
     test "B2 regression: handle_info does not crash on trajectory event when run is not found", %{
@@ -655,6 +659,23 @@ defmodule ShoestringWeb.RunLiveTest do
       # At 2288ca4, this crashes with KeyError on socket.assigns.goal.id.
       # With B2 guarded, the LiveView remains alive and renders cleanly.
       assert render(view) =~ "Run Not Found"
+    end
+
+    test "B2 regression: cancel_run, request_stop, and refresh do not crash when run is not found",
+         %{
+           conn: conn
+         } do
+      missing_id = Ecto.UUID.generate()
+      {:ok, view, html} = live(conn, ~p"/runs/#{missing_id}")
+      assert html =~ "Run Not Found"
+
+      # At 2288ca4, cancel_run/request_stop read socket.assigns.run directly
+      # and refresh calls reload_run_state on socket.assigns.run.id, so each
+      # raises KeyError on a not-found mount. Guarded handlers flash cleanly.
+      assert render_click(view, "cancel_run", %{}) =~ "Run Not Found"
+      assert render_click(view, "request_stop", %{}) =~ "Run Not Found"
+      assert render_click(view, "refresh", %{}) =~ "Run Not Found"
+      assert Process.alive?(view.pid)
     end
 
     test "B4 regression: rejects repository path outside allowed roots", %{conn: conn} do
@@ -712,6 +733,134 @@ defmodule ShoestringWeb.RunLiveTest do
 
       assert is_binary(result)
       assert result =~ "Repository path is not allowed"
+    end
+
+    test "B4 regression: traversal path (..) into an outside repo is refused with no git side effect",
+         %{
+           conn: conn,
+           tmp_root: tmp_root
+         } do
+      victim =
+        Path.join(
+          Path.dirname(tmp_root),
+          "shoestring_manual_run_victim_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(victim)
+      {_, 0} = System.cmd("git", ["init", "-b", "main"], cd: victim)
+      {_, 0} = System.cmd("git", ["config", "user.name", "Shoestring Test"], cd: victim)
+
+      {_, 0} =
+        System.cmd("git", ["config", "user.email", "test@shoestring.local"], cd: victim)
+
+      File.write!(Path.join(victim, "README.md"), "victim repo\n")
+      {_, 0} = System.cmd("git", ["add", "README.md"], cd: victim)
+
+      {_, 0} =
+        System.cmd("git", ["-c", "commit.gpgsign=false", "commit", "-m", "Initial commit"],
+          cd: victim
+        )
+
+      on_exit(fn -> File.rm_rf(victim) end)
+
+      branches_before = git_branches(victim)
+      worktrees_before = git_worktrees_entries(victim)
+
+      # tmp_root is the allowed root; stepping out with .. escapes it while
+      # still naming a valid git repo. At 2288ca4 Path.expand resolved the ..
+      # and the repo was accepted, so git worktree add wrote refs into victim.
+      traversal = Path.join(tmp_root, "../#{Path.basename(victim)}")
+      assert Path.expand(traversal) == victim
+
+      {:ok, view, _html} = live(conn, ~p"/runs/new")
+
+      html =
+        view
+        |> form("#manual-run-form", %{
+          "run" => %{
+            "repo_path" => traversal,
+            "base_revision" => "HEAD",
+            "provider" => "fake",
+            "prompt" => "B4 traversal check",
+            "timeout_seconds" => "60",
+            "max_events" => "100",
+            "lease_seconds" => "30",
+            "scenario" => "success"
+          }
+        })
+        |> render_submit()
+
+      assert html =~ "Repository path is not allowed"
+
+      # No git side effect: the victim checkout is byte-identical in refs and
+      # worktree metadata before and after the refused POST.
+      assert git_branches(victim) == branches_before
+      assert git_worktrees_entries(victim) == worktrees_before
+    end
+
+    test "B4 regression: symlink inside an allowed root pointing outside is refused", %{
+      conn: conn,
+      tmp_root: tmp_root
+    } do
+      outside =
+        Path.join(
+          Path.dirname(tmp_root),
+          "shoestring_manual_run_symlink_victim_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(outside)
+      {_, 0} = System.cmd("git", ["init", "-b", "main"], cd: outside)
+      File.write!(Path.join(outside, "README.md"), "outside\n")
+      {_, 0} = System.cmd("git", ["add", "README.md"], cd: outside)
+
+      {_, 0} =
+        System.cmd("git", ["-c", "commit.gpgsign=false", "commit", "-m", "init"], cd: outside)
+
+      link = Path.join(tmp_root, "link_to_outside")
+      File.rm_rf(link)
+      :ok = File.ln_s(outside, link)
+
+      on_exit(fn ->
+        File.rm_rf(link)
+        File.rm_rf(outside)
+      end)
+
+      branches_before = git_branches(outside)
+
+      {:ok, view, _html} = live(conn, ~p"/runs/new")
+
+      html =
+        view
+        |> form("#manual-run-form", %{
+          "run" => %{
+            "repo_path" => link,
+            "base_revision" => "HEAD",
+            "provider" => "fake",
+            "prompt" => "B4 symlink check",
+            "timeout_seconds" => "60",
+            "max_events" => "100",
+            "lease_seconds" => "30",
+            "scenario" => "success"
+          }
+        })
+        |> render_submit()
+
+      # A bare Path.expand prefix check would accept this link; canonical
+      # symlink resolution must refuse it.
+      assert html =~ "Repository path is not allowed"
+      assert git_branches(outside) == branches_before
+    end
+  end
+
+  defp git_branches(repo) do
+    {out, 0} = System.cmd("git", ["branch", "--list", "shoestring/run-*"], cd: repo)
+    out
+  end
+
+  defp git_worktrees_entries(repo) do
+    case File.ls(Path.join([repo, ".git", "worktrees"])) do
+      {:ok, entries} -> Enum.sort(entries)
+      {:error, _} -> []
     end
   end
 

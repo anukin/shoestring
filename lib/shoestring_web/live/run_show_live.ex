@@ -58,9 +58,33 @@ defmodule ShoestringWeb.RunShowLive do
 
   @impl true
   def handle_event("cancel_run", _params, socket) do
-    run = socket.assigns.run
+    case socket.assigns[:run] do
+      %{id: run_id} when is_binary(run_id) ->
+        cancel_run(run_id, socket)
 
-    case Elves.cancel_run(run.id) do
+      _ ->
+        {:noreply, put_flash(socket, :error, "Run not found.")}
+    end
+  end
+
+  @impl true
+  def handle_event("request_stop", _params, socket) do
+    case socket.assigns[:run] do
+      %{id: run_id} when is_binary(run_id) ->
+        request_stop(run_id, socket)
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Run not found.")}
+    end
+  end
+
+  @impl true
+  def handle_event("refresh", _params, socket) do
+    {:noreply, reload_run_state(socket)}
+  end
+
+  defp cancel_run(run_id, socket) do
+    case Elves.cancel_run(run_id) do
       {:ok, :cancelled} ->
         {:noreply,
          socket
@@ -80,11 +104,8 @@ defmodule ShoestringWeb.RunShowLive do
     end
   end
 
-  @impl true
-  def handle_event("request_stop", _params, socket) do
-    run = socket.assigns.run
-
-    case Elves.request_stop(run.id) do
+  defp request_stop(run_id, socket) do
+    case Elves.request_stop(run_id) do
       {:ok, :stop_requested} ->
         {:noreply,
          socket
@@ -110,11 +131,6 @@ defmodule ShoestringWeb.RunShowLive do
   end
 
   @impl true
-  def handle_event("refresh", _params, socket) do
-    {:noreply, reload_run_state(socket)}
-  end
-
-  @impl true
   def handle_info({:trajectory_event_committed, %TrajectoryEvent{} = event}, socket) do
     case {socket.assigns[:goal], socket.assigns[:run]} do
       {%{id: goal_id}, %{id: run_id}}
@@ -122,11 +138,12 @@ defmodule ShoestringWeb.RunShowLive do
         if event.goal_id == goal_id and (event.run_id == run_id or is_nil(event.run_id)) do
           sanitized = RunPresentation.sanitize_event(event)
           total = (socket.assigns[:events_total] || 0) + 1
-          showing = (socket.assigns[:events_showing] || 0) + 1
+          max = RunPresentation.max_rendered_events()
+          showing = min(total, max)
 
           socket =
             socket
-            |> stream_insert(:events, sanitized)
+            |> stream_insert(:events, sanitized, limit: -max)
             |> assign(:events_total, total)
             |> assign(:events_showing, showing)
             |> maybe_refresh_on_event(event)
@@ -165,7 +182,9 @@ defmodule ShoestringWeb.RunShowLive do
         end
 
       _ ->
-        assign(socket, :run_not_found?, true)
+        socket
+        |> assign(:run_not_found?, true)
+        |> assign(:page_title, "Run Not Found")
     end
   end
 
@@ -237,14 +256,17 @@ defmodule ShoestringWeb.RunShowLive do
         RunPresentation.cap_text("Worktree not available.")
       end
 
-    changed_files =
+    {changed_files, changed_files_total} =
       if worktree do
-        case Worktrees.changed_files(worktree) do
-          {:ok, list} -> list
-          _ -> []
-        end
+        files =
+          case Worktrees.changed_files(worktree) do
+            {:ok, list} -> list
+            _ -> []
+          end
+
+        {Enum.take(files, 100), length(files)}
       else
-        []
+        {[], 0}
       end
 
     {logs, logs_omitted, logs_truncated?} = extract_logs(events, goal)
@@ -263,6 +285,7 @@ defmodule ShoestringWeb.RunShowLive do
     |> assign(:worktree_diff_omitted, diff_omitted)
     |> assign(:worktree_diff_truncated?, diff_truncated?)
     |> assign(:changed_files, changed_files)
+    |> assign(:changed_files_total, changed_files_total)
     |> assign(:logs, logs)
     |> assign(:logs_omitted, logs_omitted)
     |> assign(:logs_truncated?, logs_truncated?)

@@ -519,12 +519,36 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
 
     for key <- keys do
       quoted = RunPresentation.redact_text("%{\"#{key}\" => \"secret_value\"}")
-      colon = RunPresentation.redact_text("#{key}: \"secret_value\"")
+      colon = RunPresentation.redact_text("#{key}: \"secret_value\"}")
 
       refute quoted =~ "secret_value"
       refute colon =~ "secret_value"
       assert quoted == "%{#{key}=>[REDACTED]}"
-      assert colon == "#{key}:[REDACTED]"
+      # The trailing } is structural, not secret: redaction preserves it,
+      # consistent with the => form asserted above.
+      assert colon == "#{key}:[REDACTED]}"
     end
+  end
+
+  test "B3 regression: bare long hex and opaque base64 blobs are redacted without a key name" do
+    hex64 = String.duplicate("a1", 32)
+    hex40 = String.duplicate("b2", 20)
+    hex32 = String.duplicate("c3", 16)
+
+    for hex <- [hex64, hex40, hex32] do
+      redacted = RunPresentation.redact_text("token #{hex} end")
+      refute redacted =~ hex
+      assert redacted =~ "[REDACTED_API_KEY]"
+      assert redacted =~ "token"
+    end
+
+    # Opaque high-entropy blob with no vendor prefix.
+    blob = "Ab3dEf9Gh1Jk2Lm4Np6Qr8St0UvWxYz01ABcDeFgH9"
+    redacted_blob = RunPresentation.redact_text("bearer material: #{blob} done")
+    refute redacted_blob =~ blob
+    assert redacted_blob =~ "[REDACTED_API_KEY]"
+
+    # Short hex (git short SHAs, counters) must NOT be redacted.
+    assert RunPresentation.redact_text("commit abc1234 ok") == "commit abc1234 ok"
   end
 end
