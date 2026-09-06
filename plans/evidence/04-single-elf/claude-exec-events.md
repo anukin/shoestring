@@ -1,7 +1,8 @@
 # Claude headless execution events — live capture (WP D feasibility)
 
 Date: 2026-09-06 UTC. CLI: `claude 2.1.261 (Claude Code)` (VERIFIED —
-`claude --version`, this machine). Branch `polly/iter4-spike-claude`.
+`claude_code_version: "2.1.261"` in both committed `init` frames).
+Branch `polly/iter4-spike-claude`.
 
 Parent doc: `plans/evidence/04-single-elf/claude-headless.md` (zero-token
 probe). That doc is not redesigned here; this file records what the
@@ -25,11 +26,12 @@ only redacted fixtures are committed here.
 ## Deviations from the vetted command (all forced by observed errors)
 
 1. `--tools "Bash"` → `--tools="Bash"`. `--tools <tools...>` is
-   **variadic** (VERIFIED — `claude -p --help`; attempt 1 live-observed):
-   the space-separated form swallows the positional prompt as a second
-   tools value, producing `Input must be provided…`. The `=` form binds
-   only `Bash` and leaves the prompt positional. Same flag, same value,
-   unambiguous binding — minimal repair, intent preserved.
+   variadic: the space-separated form swallows the positional prompt as
+   a second tools value, producing `Input must be provided…`
+   (VERIFIED — attempt 1 live-observed; committed fixture
+   `fixtures/claude/tools-gobble-input-error.stderr.txt`). The `=` form
+   binds only `Bash` and leaves the prompt positional. Same flag, same
+   value, unambiguous binding — minimal repair, intent preserved.
 2. Added `--verbose`. `--print` + `--output-format stream-json` without
    `--verbose` exits 1 (VERIFIED, attempt 2, reproduced twice). There is
    no non-verbose variant to compare against; the doc's framing
@@ -42,7 +44,17 @@ only redacted fixtures are committed here.
 
 ## Answers
 
-### (a) Does stream-json exit 0 on 2.1.261? — NO in every observed case (VERIFIED)
+### (a) Does stream-json exit 0 on 2.1.261? (PART-1 ANSWER SUPERSEDED — see correction; original retained below)
+
+**Correction (Part 2):** the "NO in every observed case" answer below
+was written before the successful capture and is now false. The
+accurate answer (VERIFIED): exit 1 when `--verbose` is missing (usage
+error, committed stderr fixture) or when credentials are absent (error
+`result` frame, committed fixtures); **exit 0 on a working
+authenticated capture** — operator-reported, corroborated by the
+committed 8-frame `stream-json-tool-exec.jsonl` ending in a
+`terminal_reason: "completed"` result frame, empty stderr, and
+`hello.txt` created.
 
 - Without `--verbose`: exit 1 with `Error: When using --print,
   --output-format=stream-json requires --verbose` on stderr and empty
@@ -62,8 +74,12 @@ only redacted fixtures are committed here.
   path, so the identical error with/without `--verbose` proved nothing
   about the `--print` combination. The `--verbose` coupling is real,
   just scoped to `--print` exactly as the error text says.
-- With `--verbose` and working auth: UNVERIFIED (no successful turn was
-  possible — see environment note below).
+- With `--verbose` and working auth: exit 0 (SUPERSEDES the
+  UNVERIFIED below — Part 2 operator capture: 8 frames,
+  `terminal_reason: "completed"`, `hello.txt` created).
+- (Original Part-1 bullet, retained: With `--verbose` and working auth:
+  UNVERIFIED — no successful turn was possible from this sandbox; see
+  environment note below.)
 - With `--verbose` and expired OAuth: exit 1 with an error `result`
   frame, empty stderr (VERIFIED — attempts 3 and 4).
 
@@ -88,13 +104,15 @@ advertised (VERIFIED — attempt 4 init). `permissionMode:
 "bypassPermissions"` confirms `--dangerously-skip-permissions` was
 honored (VERIFIED).
 
-Everything else — `user` frames, assistant tool-use content blocks,
-partial-message chunks, hook events, subagent frames — is UNVERIFIED
-(no such frame was ever emitted on this machine).
+Everything else — partial-message chunks, hook events, subagent
+frames — is UNVERIFIED (no such frame was ever emitted on this
+machine). (`user` frames and assistant tool-use content blocks were
+UNVERIFIED when this was written; Part 2 has since VERIFIED both —
+see (c revisited).)
 
-### (c) TOOL/COMMAND BOUNDARY frames — UNVERIFIED (the spike's load-bearing question is still open)
+### (c) TOOL/COMMAND BOUNDARY frames — UNVERIFIED in Part 1 (ANSWERED by Part 2 — see (c revisited); original retained below)
 
-No tool executed: the 401 arrived before any assistant turn, so no
+No tool executed in Part 1: the 401 arrived before any assistant turn, so no
 `tool_use` content block, no start/end pair, no correlation id, no
 completion status was observed. **On current evidence the lease
 safe-boundary rule cannot be honored for Claude at all** — there is
@@ -112,7 +130,7 @@ a run. Shape: UUIDv4 (`7d74c43c-…` real; version nibble `4`, variant
 record). Satisfies the `RunIdentity.provider_session_id` need
 (ContractSuite area 3) at the frame level.
 
-### (e) Final-result frame shape — VERIFIED for the error path only
+### (e) Final-result frame shape — VERIFIED for the error path below (success path VERIFIED in Part 2)
 
 Error-path `result` frame (committed, line 3): `is_error: true`,
 `subtype: "success"`, `terminal_reason: "api_error"`,
@@ -123,7 +141,7 @@ stats, `permission_denials: []`, `queued_turn_count: 0`.
 **Normalizer warning (VERIFIED quirk): `subtype` stays `"success"`
 while `is_error` is true — completion classification must key on
 `is_error`/`terminal_reason`, never on `subtype`.** The success-path
-result shape is UNVERIFIED.
+result shape was UNVERIFIED when this was written; Part 2 has since VERIFIED it (see Result frame, success path).
 
 ### Resume (step 3 of the brief — condition met, turn spent)
 
@@ -140,7 +158,7 @@ result frames, exit 1. Whether a resumed turn can *complete* is
 UNVERIFIED (auth blocked the model call, deterministically — see
 environment note).
 
-## Environment note (why no tool ran)
+## Environment note (why no tool ran in Part 1 — Part 2 ran operator-side under working auth)
 
 `ANTHROPIC_API_KEY` is unset in this environment and the cached OAuth
 session is expired (`apiKeySource: "none"` in init;
@@ -155,7 +173,9 @@ working credential and nothing else changed.
 Against `Shoestring.Harness.Adapter` / ContractSuite areas: area 3
 (resume binding) advances to **VERIFIED-mechanics / UNVERIFIED-completion**
 (session id in stream VERIFIED; `--resume` re-binds VERIFIED; completion
-UNVERIFIED). Area 2 stays **blocked** on tool-boundary frames (c).
+UNVERIFIED). Area 2 was **blocked** on tool-boundary frames (c) when
+this was written; Part 2 has since VERIFIED the boundary pair (see (c
+revisited)).
 Area 4 rule stands and extends: both `authentication_failed` (401) and
 any future generic error map to `unknown` + checkpoint — **never
 `:quota_refused`** (no refusal shape observed; unchanged). Area 6
@@ -173,7 +193,8 @@ any future generic error map to `unknown` + checkpoint — **never
   Rationale for deviating from the README's v7 baseline pattern: the
   README's v7 rule was written for Codex; Claude emits v4, and the
   standing contract forbids reshaping an id into something the real
-  protocol does not emit. `Ecto.UUID.cast/1` accepts both.
+  protocol does not emit. `Ecto.UUID.cast/1` accepts both. (Recorded as
+  baseline in `README.md` §1 — not a convention fork.)
 - `cwd` → `$WORKSPACE` (README placeholder rule).
 - Emptied machine-local inventory (arrays/objects replaced with `[]`/`{}`,
   key sets otherwise identical — verified programmatically raw-vs-redacted):
@@ -253,7 +274,7 @@ correlation is by id, not by adjacency.
   `message.id`/`request_id`; `num_turns: 3` (recorded verbatim).
 - Scope: Bash only. Any other tool's boundary shape is UNVERIFIED.
 
-### Quota status SUPPORTED (VERIFIED frame; classifier UNVERIFIED)
+### Quota status signalling observed (status frame VERIFIED; refusal shape and classifier UNVERIFIED)
 
 `rate_limit_event` frame carries `rate_limit_info: {status:
 "allowed", resetsAt, rateLimitType: "five_hour", overageStatus,
