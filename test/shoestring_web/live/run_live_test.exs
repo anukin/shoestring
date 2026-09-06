@@ -965,6 +965,31 @@ defmodule ShoestringWeb.RunLiveTest do
       assert refreshed.assigns[:run] == nil
       assert refreshed.assigns[:run_id] == run.id
     end
+
+    test "N1 regression: changed-files list is capped with explicit notice", %{
+      conn: conn,
+      run: run,
+      worktree: worktree
+    } do
+      # At b8588b7 the template renders every changed file with no limit.
+      for i <- 1..150 do
+        File.write!(Path.join(worktree.path, "bulk_changed_#{i}.txt"), "bulk content #{i}\n")
+      end
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      rendered = render(view)
+
+      assert has_element?(view, "#changed-files-truncated")
+      assert rendered =~ "Showing 100 of 150 changed files for bounded rendering."
+
+      items =
+        rendered
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#worktree-info li")
+        |> LazyHTML.to_tree()
+
+      assert length(items) == 100
+    end
   end
 
   defp flash_group_html(html) do

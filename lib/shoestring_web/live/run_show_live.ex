@@ -11,6 +11,8 @@ defmodule ShoestringWeb.RunShowLive do
   alias ShoestringWeb.RunPresentation
   require Logger
 
+  @max_changed_files 100
+
   @impl true
   def mount(%{"run_id" => run_id}, _session, socket) do
     socket = assign_new(socket, :current_scope, fn -> nil end)
@@ -287,7 +289,7 @@ defmodule ShoestringWeb.RunShowLive do
         RunPresentation.cap_text("Worktree not available.")
       end
 
-    changed_files =
+    changed_files_all =
       if worktree do
         case Worktrees.changed_files(worktree) do
           {:ok, list} -> list
@@ -295,6 +297,17 @@ defmodule ShoestringWeb.RunShowLive do
         end
       else
         []
+      end
+
+    # Cap the collection on the assign side so the full list never reaches
+    # the template or the browser DOM.
+    {changed_files, changed_files_total, changed_files_showing, changed_files_truncated?} =
+      if length(changed_files_all) > @max_changed_files do
+        {Enum.take(changed_files_all, @max_changed_files), length(changed_files_all),
+         @max_changed_files, true}
+      else
+        total = length(changed_files_all)
+        {changed_files_all, total, total, false}
       end
 
     {logs, logs_omitted, logs_truncated?} = extract_logs(events, goal)
@@ -316,6 +329,9 @@ defmodule ShoestringWeb.RunShowLive do
     |> assign(:worktree_diff_omitted, diff_omitted)
     |> assign(:worktree_diff_truncated?, diff_truncated?)
     |> assign(:changed_files, changed_files)
+    |> assign(:changed_files_total, changed_files_total)
+    |> assign(:changed_files_showing, changed_files_showing)
+    |> assign(:changed_files_truncated?, changed_files_truncated?)
     |> assign(:logs, logs)
     |> assign(:logs_omitted, logs_omitted)
     |> assign(:logs_truncated?, logs_truncated?)
