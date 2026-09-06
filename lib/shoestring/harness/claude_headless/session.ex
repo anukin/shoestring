@@ -140,6 +140,13 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   @spec cancel(GenServer.server(), keyword() | map()) :: {:ok, :cancelled} | {:error, Error.t()}
   def cancel(server, opts \\ %{}) do
     GenServer.call(server, {:cancel, opts}, @default_request_timeout)
+  catch
+    # The session died concurrently or crashed before the call landed.
+    # Cancelling an already-dead session is the racy path terminal-state
+    # idempotency exists for: report cancelled rather than crashing the
+    # caller, consistent with the adapter's miss path.
+    :exit, _reason ->
+      {:ok, :cancelled}
   end
 
   @doc "Returns the current state and status map."
@@ -454,7 +461,12 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     %{state | buffered_events: [event | state.buffered_events], event_ordinal: event.ordinal}
   end
 
-  defp track_session_id(state, _event, %{"claude-headless:session_id" => sid})
+  # Matches on the normalized event's top-level provider_session_id —
+  # which the normalizer populates on EVERY frame carrying a session_id —
+  # not just system frames. The waiter contract says "the first frame
+  # carrying session_id", and the code must do exactly that even if frame
+  # order ever changes.
+  defp track_session_id(state, %HarnessEvent{provider_session_id: sid}, _ext)
        when is_binary(sid) and sid != "" do
     cond do
       is_nil(state.provider_session_id) ->

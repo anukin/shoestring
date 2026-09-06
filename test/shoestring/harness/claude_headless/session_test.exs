@@ -273,4 +273,31 @@ defmodule Shoestring.Harness.ClaudeHeadless.SessionTest do
       assert {:error, %{code: "nonzero_exit"}} = summary.terminal_result
     end
   end
+
+  describe "identity seam (N1) and dead-session cancel (N2)" do
+    test "a non-system first frame carrying a session id still releases identity waiters" do
+      lines = fixture_lines("stream-json-tool-exec.jsonl")
+      # Fixture line 2 is a rate_limit_event: no system/init frame, but the
+      # session id sits top-level on the frame and therefore on the event.
+      {transport, session} = start_scripted_session([Enum.at(lines, 1)])
+
+      :ok = ScriptedTransport.emit(transport)
+      _ = :sys.get_state(session)
+
+      assert {:ok, identity} = Session.await_run_identity(session, 2_000)
+      assert identity.provider_session_id == "aaaaaaaa-0000-4000-a000-000000000002"
+    end
+
+    test "cancelling an already-dead session returns cancelled instead of raising" do
+      {_transport, session} =
+        start_scripted_session(fixture_lines("stream-json-tool-exec.jsonl"))
+
+      Process.unlink(session)
+      ref = Process.monitor(session)
+      Process.exit(session, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^session, :killed}
+
+      assert {:ok, :cancelled} = Session.cancel(session)
+    end
+  end
 end
