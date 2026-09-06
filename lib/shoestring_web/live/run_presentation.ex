@@ -145,6 +145,18 @@ defmodule ShoestringWeb.RunPresentation do
   end
 
   @doc """
+  Formats an event payload then byte-caps it for bounded stream rendering.
+
+  Returns `{visible_text, omitted_bytes, truncated?}`. The cap is applied
+  AFTER redaction so truncation can never bisect a raw secret.
+  """
+  @spec cap_payload(map() | term(), pos_integer()) ::
+          {String.t(), non_neg_integer(), boolean()}
+  def cap_payload(payload, cap \\ @pane_byte_cap) do
+    payload |> format_payload() |> cap_text(cap)
+  end
+
+  @doc """
   Returns true if the key name indicates provider reasoning, thoughts, or scratchpads.
   """
   @spec forbidden_key?(String.t()) :: boolean()

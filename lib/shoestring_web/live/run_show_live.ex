@@ -11,6 +11,8 @@ defmodule ShoestringWeb.RunShowLive do
   alias ShoestringWeb.RunPresentation
   require Logger
 
+  @max_changed_files 100
+
   @impl true
   def mount(%{"run_id" => run_id}, _session, socket) do
     socket = assign_new(socket, :current_scope, fn -> nil end)
@@ -41,6 +43,7 @@ defmodule ShoestringWeb.RunShowLive do
              socket
              |> assign(:page_title, "Manual Run #{String.slice(run.id, 0, 8)}")
              |> assign(:run_not_found?, false)
+             |> assign(:run_id, run.id)
              |> assign(:run, run)
              |> assign(:goal, goal)
              |> assign(:task, task)
@@ -58,54 +61,66 @@ defmodule ShoestringWeb.RunShowLive do
 
   @impl true
   def handle_event("cancel_run", _params, socket) do
-    run = socket.assigns.run
+    case socket.assigns[:run] do
+      %{id: run_id} when is_binary(run_id) ->
+        case Elves.cancel_run(run_id) do
+          {:ok, :cancelled} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Run cancellation requested.")
+             |> reload_run_state()}
 
-    case Elves.cancel_run(run.id) do
-      {:ok, :cancelled} ->
+          {:ok, :already_terminal} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Run is already terminal.")
+             |> reload_run_state()}
+
+          {:error, reason} ->
+            Logger.warning("Failed to cancel run: #{inspect(reason)}")
+
+            {:noreply, put_flash(socket, :error, "Failed to cancel run. Please retry.")}
+        end
+
+      _ ->
+        Logger.warning("Failed to cancel run: run assign unavailable")
+
         {:noreply,
-         socket
-         |> put_flash(:info, "Run cancellation requested.")
-         |> reload_run_state()}
-
-      {:ok, :already_terminal} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Run is already terminal.")
-         |> reload_run_state()}
-
-      {:error, reason} ->
-        Logger.warning("Failed to cancel run: #{inspect(reason)}")
-
-        {:noreply, put_flash(socket, :error, "Failed to cancel run. Please retry.")}
+         put_flash(socket, :error, "Run is no longer available. Please refresh the page.")}
     end
   end
 
   @impl true
   def handle_event("request_stop", _params, socket) do
-    run = socket.assigns.run
+    case socket.assigns[:run] do
+      %{id: run_id} when is_binary(run_id) ->
+        case Elves.request_stop(run_id) do
+          {:ok, :stop_requested} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Safe stop requested at next boundary.")
+             |> reload_run_state()}
 
-    case Elves.request_stop(run.id) do
-      {:ok, :stop_requested} ->
+          {:ok, :already_terminal} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Run is already terminal.")
+             |> reload_run_state()}
+
+          {:error, :session_not_found} ->
+            {:noreply, put_flash(socket, :error, "No active session found to receive safe stop.")}
+
+          {:error, reason} ->
+            Logger.warning("Failed to request safe stop: #{inspect(reason)}")
+
+            {:noreply, put_flash(socket, :error, "Failed to request safe stop. Please retry.")}
+        end
+
+      _ ->
+        Logger.warning("Failed to request safe stop: run assign unavailable")
+
         {:noreply,
-         socket
-         |> put_flash(:info, "Safe stop requested at next boundary.")
-         |> reload_run_state()}
-
-      {:ok, :already_terminal} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Run is already terminal.")
-         |> reload_run_state()}
-
-      {:error, :session_not_found} ->
-        {:noreply,
-         socket
-         |> put_flash(:error, "No active session found to receive safe stop.")}
-
-      {:error, reason} ->
-        Logger.warning("Failed to request safe stop: #{inspect(reason)}")
-
-        {:noreply, put_flash(socket, :error, "Failed to request safe stop. Please retry.")}
+         put_flash(socket, :error, "Run is no longer available. Please refresh the page.")}
     end
   end
 
@@ -122,13 +137,15 @@ defmodule ShoestringWeb.RunShowLive do
         if event.goal_id == goal_id and (event.run_id == run_id or is_nil(event.run_id)) do
           sanitized = RunPresentation.sanitize_event(event)
           total = (socket.assigns[:events_total] || 0) + 1
-          showing = (socket.assigns[:events_showing] || 0) + 1
+          showing = min(total, RunPresentation.max_rendered_events())
+          truncated? = showing < total
 
           socket =
             socket
-            |> stream_insert(:events, sanitized)
+            |> stream_insert(:events, sanitized, limit: -RunPresentation.max_rendered_events())
             |> assign(:events_total, total)
             |> assign(:events_showing, showing)
+            |> assign(:events_truncated?, truncated?)
             |> maybe_refresh_on_event(event)
 
           {:noreply, socket}
@@ -145,27 +162,51 @@ defmodule ShoestringWeb.RunShowLive do
   def handle_info(_other, socket), do: {:noreply, socket}
 
   defp reload_run_state(socket) do
-    case socket.assigns[:run] do
-      %{id: run_id} when is_binary(run_id) ->
-        case Repo.get(RunRecord, run_id) do
+    run_id =
+      case socket.assigns[:run] do
+        %{id: id} when is_binary(id) ->
+          id
+
+        _ ->
+          case socket.assigns[:run_id] do
+            id when is_binary(id) -> id
+            _ -> nil
+          end
+      end
+
+    case run_id && Ecto.UUID.cast(run_id) do
+      {:ok, uuid} ->
+        case Repo.get(RunRecord, uuid) do
           nil ->
             socket
             |> assign(:run_not_found?, true)
             |> assign(:run_id, run_id)
             |> assign(:page_title, "Run Not Found")
+            |> assign(:run, nil)
+            |> assign(:goal, nil)
+            |> assign(:task, nil)
 
-          run ->
+          %RunRecord{} = run ->
             goal = Repo.get(Goal, run.goal_id)
+            task = Repo.get(Task, run.task_id)
 
             socket
+            |> assign(:page_title, "Manual Run #{String.slice(run.id, 0, 8)}")
             |> assign(:run_not_found?, false)
+            |> assign(:run_id, run.id)
             |> assign(:run, run)
             |> assign(:goal, goal)
+            |> assign(:task, task)
             |> load_run_details(run, goal)
         end
 
       _ ->
-        assign(socket, :run_not_found?, true)
+        socket
+        |> assign(:run_not_found?, true)
+        |> assign(:page_title, "Run Not Found")
+        |> assign(:run, nil)
+        |> assign(:goal, nil)
+        |> assign(:task, nil)
     end
   end
 
@@ -208,6 +249,17 @@ defmodule ShoestringWeb.RunShowLive do
     terminal_event = find_terminal_event(events)
     sanitized_terminal = terminal_event && RunPresentation.sanitize_event(terminal_event)
     status_label = determine_status(run, terminal_event)
+
+    {terminal_payload, terminal_payload_omitted, terminal_payload_truncated?} =
+      case sanitized_terminal do
+        %{payload: payload} when not is_nil(payload) ->
+          # Cap AFTER redaction so truncation can never bisect a raw secret.
+          payload |> RunPresentation.format_payload() |> RunPresentation.cap_text()
+
+        _ ->
+          {"", 0, false}
+      end
+
     pgid = extract_pgid(events)
     elf_pid = Elves.whereis(run.id)
 
@@ -237,7 +289,7 @@ defmodule ShoestringWeb.RunShowLive do
         RunPresentation.cap_text("Worktree not available.")
       end
 
-    changed_files =
+    changed_files_all =
       if worktree do
         case Worktrees.changed_files(worktree) do
           {:ok, list} -> list
@@ -245,6 +297,17 @@ defmodule ShoestringWeb.RunShowLive do
         end
       else
         []
+      end
+
+    # Cap the collection on the assign side so the full list never reaches
+    # the template or the browser DOM.
+    {changed_files, changed_files_total, changed_files_showing, changed_files_truncated?} =
+      if length(changed_files_all) > @max_changed_files do
+        {Enum.take(changed_files_all, @max_changed_files), length(changed_files_all),
+         @max_changed_files, true}
+      else
+        total = length(changed_files_all)
+        {changed_files_all, total, total, false}
       end
 
     {logs, logs_omitted, logs_truncated?} = extract_logs(events, goal)
@@ -256,6 +319,9 @@ defmodule ShoestringWeb.RunShowLive do
     socket
     |> assign(:status, status_label)
     |> assign(:terminal_event, sanitized_terminal)
+    |> assign(:terminal_payload, terminal_payload)
+    |> assign(:terminal_payload_omitted, terminal_payload_omitted)
+    |> assign(:terminal_payload_truncated?, terminal_payload_truncated?)
     |> assign(:pgid, pgid)
     |> assign(:elf_alive?, alive?)
     |> assign(:worktree, worktree)
@@ -263,6 +329,9 @@ defmodule ShoestringWeb.RunShowLive do
     |> assign(:worktree_diff_omitted, diff_omitted)
     |> assign(:worktree_diff_truncated?, diff_truncated?)
     |> assign(:changed_files, changed_files)
+    |> assign(:changed_files_total, changed_files_total)
+    |> assign(:changed_files_showing, changed_files_showing)
+    |> assign(:changed_files_truncated?, changed_files_truncated?)
     |> assign(:logs, logs)
     |> assign(:logs_omitted, logs_omitted)
     |> assign(:logs_truncated?, logs_truncated?)

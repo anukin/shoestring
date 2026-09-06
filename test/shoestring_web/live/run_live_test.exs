@@ -8,6 +8,9 @@ defmodule ShoestringWeb.RunLiveTest do
   alias Shoestring.Repo
   alias Shoestring.Test.ElvesHelpers
   alias Shoestring.Trajectory
+  alias Shoestring.Trajectory.TrajectoryEvent
+  alias ShoestringWeb.RunShowLive
+  alias ShoestringWeb.RunPresentation
   alias Shoestring.Worktrees
   alias Shoestring.Worktrees.Worktree
 
@@ -483,6 +486,76 @@ defmodule ShoestringWeb.RunLiveTest do
       assert has_element?(view, "#run-not-found")
       assert html =~ "Run Not Found"
     end
+
+    test "cancel_run reports a clean flash when the run assign is unavailable" do
+      {:ok, socket} = RunShowLive.mount(%{"run_id" => Ecto.UUID.generate()}, %{}, empty_socket())
+
+      assert {:noreply, socket} = RunShowLive.handle_event("cancel_run", %{}, socket)
+
+      assert Phoenix.Flash.get(socket.assigns.flash, :error) ==
+               "Run is no longer available. Please refresh the page."
+    end
+
+    test "request_stop reports a clean flash when the run assign is unavailable" do
+      {:ok, socket} = RunShowLive.mount(%{"run_id" => Ecto.UUID.generate()}, %{}, empty_socket())
+
+      assert {:noreply, socket} = RunShowLive.handle_event("request_stop", %{}, socket)
+
+      assert Phoenix.Flash.get(socket.assigns.flash, :error) ==
+               "Run is no longer available. Please refresh the page."
+    end
+
+    test "live event stream stays bounded and reports the capped window", %{
+      conn: conn,
+      goal: goal,
+      run: run
+    } do
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      events =
+        for sequence <- 1..(RunPresentation.max_rendered_events() + 1) do
+          event = %TrajectoryEvent{
+            id: Ecto.UUID.generate(),
+            goal_id: goal.id,
+            run_id: run.id,
+            sequence: sequence,
+            schema_version: 1,
+            type: "harness.event_recorded",
+            actor: "elf",
+            occurred_at: DateTime.utc_now(),
+            idempotency_key: "evt-stream-bound-#{sequence}",
+            payload: %{
+              "run_id" => run.id,
+              "source_event_id" => "stream-bound-#{sequence}",
+              "ordinal" => sequence,
+              "kind" => "command"
+            }
+          }
+
+          send(view.pid, {:trajectory_event_committed, event})
+          _ = :sys.get_state(view.pid)
+          _ = render(view)
+          event
+        end
+
+      _ = :sys.get_state(view.pid)
+
+      document = LazyHTML.from_fragment(render(view))
+
+      rendered_events =
+        document
+        |> LazyHTML.query("#events-stream > div[data-sequence]")
+        |> LazyHTML.to_tree()
+
+      first_event = hd(events)
+      last_event = List.last(events)
+
+      assert length(rendered_events) == RunPresentation.max_rendered_events()
+      assert has_element?(view, "#events-window-notice")
+      assert render(view) =~ "Showing 200 of 201 events"
+      refute has_element?(view, "#run-event-#{first_event.id}")
+      assert has_element?(view, "#run-event-#{last_event.id}")
+    end
   end
 
   describe "Deterministic Eval: UI restart" do
@@ -715,10 +788,221 @@ defmodule ShoestringWeb.RunLiveTest do
     end
   end
 
+  describe "PR #35 fix round 1: terminal cap (B1) and not-found consistency (B2)" do
+    setup %{repo_path: repo_path} do
+      %{goal: goal, task: task} = ElvesHelpers.insert_goal_task()
+      run_id = Ecto.UUID.generate()
+
+      {:ok, worktree} = Worktrees.create(repo_path, run_id, "HEAD")
+
+      run =
+        %RunRecord{
+          id: run_id,
+          dispatch_id: run_id,
+          goal_id: goal.id,
+          task_id: task.id,
+          provider_id: "fake",
+          workspace_ref: worktree.workspace_ref,
+          request_version: 1,
+          prompt: "PR35 round1 regression run",
+          continuation: nil,
+          policy: %{"mode" => "manual_execution"},
+          requested_capabilities: %{items: ["cancel"]},
+          extensions: %{},
+          status: "running"
+        }
+        |> Repo.insert!()
+
+      {:ok, goal: goal, task: task, run: run, worktree: worktree}
+    end
+
+    test "B1 regression: oversized terminal payload is capped with explicit notice", %{
+      conn: conn,
+      goal: goal,
+      task: task,
+      run: run
+    } do
+      # At b16f652 run_show_live.html.heex renders
+      # RunPresentation.format_payload(@terminal_event.payload) with no cap.
+      big_error = String.duplicate("x", 40_000)
+
+      assert {:ok, _} =
+               Trajectory.append(
+                 goal.id,
+                 %{
+                   "type" => "run.failed",
+                   "schema_version" => 1,
+                   "actor" => "elf",
+                   "occurred_at" => DateTime.utc_now(),
+                   "idempotency_key" => "evt-terminal-cap-#{run.id}",
+                   "payload" => %{
+                     "run_id" => run.id,
+                     "error_category" => "terminal_cap_probe",
+                     "error_code" => big_error
+                   }
+                 },
+                 trusted: [task_id: task.id, run_id: run.id]
+               )
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      rendered = render(view)
+
+      assert has_element?(view, "#terminal-payload-truncated")
+      assert rendered =~ "Terminal payload truncated"
+      assert rendered =~ "bytes omitted"
+
+      payload_html =
+        rendered
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query_by_id("terminal-payload")
+        |> LazyHTML.to_html()
+
+      assert byte_size(payload_html) < byte_size(big_error)
+      # B4 fixed the event-stream leak this assertion used to work around:
+      # the whole page must not contain the full payload.
+      refute rendered =~ big_error
+      assert payload_html =~ "bytes omitted"
+    end
+
+    test "B4 regression: oversized per-event payload is capped with explicit notice", %{
+      conn: conn,
+      goal: goal,
+      task: task,
+      run: run
+    } do
+      # At 114cfdd the event stream renders
+      # RunPresentation.format_payload(event.payload) with no cap, so a large
+      # payload crosses the WebSocket unbounded into the browser DOM.
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      big_output = String.duplicate("x", 40_000)
+
+      stream_event = %TrajectoryEvent{
+        id: Ecto.UUID.generate(),
+        goal_id: goal.id,
+        task_id: task.id,
+        run_id: run.id,
+        sequence: 999,
+        schema_version: 1,
+        type: "harness.event_recorded",
+        actor: "elf",
+        occurred_at: DateTime.utc_now(),
+        idempotency_key: "evt-stream-cap-#{run.id}",
+        payload: %{
+          "run_id" => run.id,
+          "source_event_id" => "stream-cap-probe",
+          "ordinal" => 1,
+          "occurred_at" => DateTime.to_iso8601(DateTime.utc_now()),
+          "kind" => "command",
+          "result" => %{"output" => big_output}
+        }
+      }
+
+      send(view.pid, {:trajectory_event_committed, stream_event})
+      rendered = render(view)
+
+      assert has_element?(view, "#run-event-#{stream_event.id}")
+      assert has_element?(view, ".event-payload-truncated")
+      assert rendered =~ "Event payload truncated"
+      assert rendered =~ "bytes omitted"
+
+      event_html =
+        rendered
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query_by_id("run-event-#{stream_event.id}")
+        |> LazyHTML.to_html()
+
+      assert byte_size(event_html) < byte_size(big_output)
+      refute event_html =~ big_output
+      assert event_html =~ "bytes omitted"
+    end
+
+    test "B2a regression: refresh recovers via run_id when mounted before commit" do
+      # At b16f652 reload_run_state/1 checks only socket.assigns[:run],
+      # so a not-found mount can never recover via refresh.
+      missing_id = Ecto.UUID.generate()
+      {:ok, socket} = RunShowLive.mount(%{"run_id" => missing_id}, %{}, empty_socket())
+
+      assert socket.assigns[:run_not_found?]
+      assert socket.assigns[:run_id] == missing_id
+      assert socket.assigns[:run] == nil
+
+      %{goal: goal, task: task} = ElvesHelpers.insert_goal_task()
+
+      %RunRecord{
+        id: missing_id,
+        dispatch_id: missing_id,
+        goal_id: goal.id,
+        task_id: task.id,
+        provider_id: "fake",
+        workspace_ref: "workspace/#{missing_id}",
+        request_version: 1,
+        prompt: "late-committed run",
+        continuation: nil,
+        policy: %{"mode" => "manual_execution"},
+        requested_capabilities: %{items: ["cancel"]},
+        extensions: %{},
+        status: "running"
+      }
+      |> Repo.insert!()
+
+      assert {:noreply, refreshed} = RunShowLive.handle_event("refresh", %{}, socket)
+      refute refreshed.assigns[:run_not_found?]
+      assert refreshed.assigns[:run].id == missing_id
+      assert refreshed.assigns[:run_id] == missing_id
+    end
+
+    test "B2b regression: deleted run clears stale assign on refresh", %{run: run} do
+      # At b16f652 reload_run_state/1 leaves the stale :run struct in assigns
+      # while setting :run_not_found? => true.
+      {:ok, socket} = RunShowLive.mount(%{"run_id" => run.id}, %{}, empty_socket())
+      assert socket.assigns[:run].id == run.id
+
+      run |> Repo.reload!() |> Repo.delete!()
+
+      assert {:noreply, refreshed} = RunShowLive.handle_event("refresh", %{}, socket)
+      assert refreshed.assigns[:run_not_found?]
+      assert refreshed.assigns[:run] == nil
+      assert refreshed.assigns[:run_id] == run.id
+    end
+
+    test "N1 regression: changed-files list is capped with explicit notice", %{
+      conn: conn,
+      run: run,
+      worktree: worktree
+    } do
+      # At b8588b7 the template renders every changed file with no limit.
+      for i <- 1..150 do
+        File.write!(Path.join(worktree.path, "bulk_changed_#{i}.txt"), "bulk content #{i}\n")
+      end
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      rendered = render(view)
+
+      assert has_element?(view, "#changed-files-truncated")
+      assert rendered =~ "Showing 100 of 150 changed files for bounded rendering."
+
+      items =
+        rendered
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#worktree-info li")
+        |> LazyHTML.to_tree()
+
+      assert length(items) == 100
+    end
+  end
+
   defp flash_group_html(html) do
     html
     |> LazyHTML.from_fragment()
     |> LazyHTML.query_by_id("flash-group")
     |> LazyHTML.to_html()
+  end
+
+  defp empty_socket do
+    %Phoenix.LiveView.Socket{
+      assigns: %{__changed__: %{}, current_scope: nil, flash: %{}},
+      private: %{live_temp: %{}, lifecycle: %Phoenix.LiveView.Lifecycle{}}
+    }
   end
 end
