@@ -17,10 +17,13 @@ stash comparison was captured — NOT CAPTURED, not claimed. The Elf
 lifecycle itself exhibits two genuine live defects
 below; neither is written up as a success.
 
-Claim labels: `VERIFIED` = committed artifact in this PR from this run;
+Claim labels: `VERIFIED` = captured bytes committed in this PR from this
+run — never an operator-authored note (see §7 for the captured vs
+operator-authored fixture inventory);
 `REPO-INSPECTION` = code read without live execution;
-`OPERATOR-OBSERVED-NOT-CAPTURED` = operator saw it live but no artifact is
-committed in this PR; `UNVERIFIED` = stated as unknown; `NOT CAPTURED` =
+`OPERATOR-OBSERVED-NOT-CAPTURED` = operator saw it live but no captured
+bytes are committed in this PR (includes observations backed only by an
+operator-authored note); `UNVERIFIED` = stated as unknown; `NOT CAPTURED` =
 the comparison was not recorded in the committed artifacts.
 
 ## 1. GO/NO-GO check — GO (on the committed capacity probe; version/login/doctor observed-not-captured)
@@ -65,7 +68,8 @@ the comparison was not recorded in the committed artifacts.
   the worktrees root so the relative ref resolves to the Elf worktree.
   The run-2 rollout's `session_meta.cwd` equalled the Elf worktree path
   (OPERATOR-OBSERVED-NOT-CAPTURED — the full rollout file is NOT committed;
-  `rollout-run2-summary.json` holds integer counts only, no `cwd`).
+  the operator-authored note `rollout-run2-summary.json` holds integer counts
+  only, no `cwd`).
   Whether a relative thread cwd is robust in production is UNVERIFIED and
   flagged as a question, not a claim.
 - Prompt (credential-free by construction) instructed: create `hello.txt`
@@ -76,16 +80,19 @@ the comparison was not recorded in the committed artifacts.
 - Elf reported `%{class: :completed}` with **zero** `harness.event_recorded`
   events (VERIFIED, `capture-run1.jsonl`; trajectory was additionally lost,
   see §5).
-- A real provider thread **did** start: the committed structural summary of
-  rollout `…21-37-55…jsonl` records `task_started: 1`, `message: 2`,
-  `item_completed: 1`, then `turn_aborted: 1` (VERIFIED structurally,
-  `fixtures/demo/rollout-run1-summary.json` — counts only; the summary
-  records no roles or item-type detail).
+- A real provider thread **did** start (OPERATOR-OBSERVED-NOT-CAPTURED —
+  the full rollout `…21-37-55…jsonl` is NOT committed; the operator's
+  structural note `fixtures/demo/rollout-run1-summary.json` records
+  `task_started: 1`, `message: 2`, `item_completed: 1`, then
+  `turn_aborted: 1` — counts only, no roles or item-type detail — as the
+  operator's assertion about that uncommitted file, not as captured provider
+  evidence).
 - No `hello.txt` was created; `printf ok` never ran
   (OPERATOR-OBSERVED-NOT-CAPTURED — worktree contained only `README.md` +
-  `.git` afterwards; no worktree listing or diff is committed. The
-  zero-`commandExecution` counts in `rollout-run1-summary.json` are VERIFIED
-  and consistent with this, but do not by themselves prove file absence).
+  `.git` afterwards; no worktree listing or diff is committed. Consistent
+  with the zero-`commandExecution` counts in the operator's structural note
+  `rollout-run1-summary.json`, which is an operator assertion, not captured
+  evidence, and counts do not by themselves prove file absence).
 - Mechanism (REPO-INSPECTION + VERIFIED timing in `capture-run1.jsonl`): the owned command was
   the production placeholder `["codex", "app-server", "--stdio"]`, which
   exits 0 almost instantly on EOF stdin; `handle_os_exit` →
@@ -139,9 +146,10 @@ SQLite file (see §5), wait on the **session** turn, then cancel.
   No backfill exists by design, so they are unrecoverable.
 - The agent never acted: no `hello.txt`, empty worktree diff
   (OPERATOR-OBSERVED-NOT-CAPTURED — no worktree listing or diff is
-  committed); no command executions in the 13-line rollout
-  (VERIFIED, `rollout-run2-summary.json` `command_executions: []` with
-  `turn_aborted: 1` recorded; timing consistent with our transport dying,
+  committed); the operator's structural note `rollout-run2-summary.json`
+  records `command_executions: []` with `turn_aborted: 1`
+  (OPERATOR-OBSERVED-NOT-CAPTURED — operator-authored derived summary, not
+  captured provider evidence; timing consistent with our transport dying,
   §4 crash narrative).
 - After a 240 s watch, `Elves.cancel_run/2` returned `{:ok, :cancelled}` and
   the trajectory closed `run.cancelling → run.cancelled`
@@ -157,12 +165,14 @@ SQLite file (see §5), wait on the **session** turn, then cancel.
   **not demonstrated** (see §6 not-demonstrated list); the `cancelled`
   terminal state is recorded as the run's terminal state, **not** as a
   completion and **not** as proof that boundary cancellation works.
-- Process/session identity (`run.running` payload in
-  `trajectory-run2.json`, VERIFIED): owned pgid `pgid:<synthetic>` (real value in the
-  substitution map below), provider thread id `<synthetic v7>` — which matches
-  the `thread_id` field of the committed `rollout-run2-summary.json`
-  (VERIFIED cross-check of the two committed artifacts). That the same id is
-  also embedded in the uncommitted rollout *filename* is
+- Process/session identity (VERIFIED): owned pgid `pgid:<synthetic>` (real
+  value in the substitution map below) in the `run.running` payload of
+  `trajectory-run2.json`, provider thread id `<synthetic v7>` in the same
+  payload — which matches the `thread_id` in the Session crash-state dump in
+  `crash-session-run2.log` (VERIFIED cross-check of two genuinely captured
+  artifacts). The operator's structural note `rollout-run2-summary.json`
+  agrees on the same `thread_id` (operator alignment, not the backing). That
+  the same id is also embedded in the uncommitted rollout *filename* is
   OPERATOR-OBSERVED-NOT-CAPTURED (rollout files themselves are not committed).
 - `dispatch.effect_failed` (seq 5) is dev-path noise from the Oban
   `UnconfiguredEffect` (REPO-INSPECTION, `dispatch_worker.ex` +
@@ -190,8 +200,8 @@ SQLite file (see §5), wait on the **session** turn, then cancel.
 
 | # | Expectation | Outcome |
 |---|---|---|
-| 1 | Elf creates a file in the fixture repo | **FAILED** — no `hello.txt` either run (OPERATOR-OBSERVED-NOT-CAPTURED — no worktree listing committed; consistent with zero `commandExecution` counts in the committed rollout summaries) |
-| 2 | Elf runs one deterministic command (`printf ok`) | **FAILED** — never executed; run-2 rollout has zero `commandExecution` items (VERIFIED, `rollout-run2-summary.json` `command_executions: []`) |
+| 1 | Elf creates a file in the fixture repo | **FAILED** — no `hello.txt` either run (OPERATOR-OBSERVED-NOT-CAPTURED — no worktree listing committed; consistent with zero `commandExecution` counts in the operator's structural notes `rollout-run*-summary.json`) |
+| 2 | Elf runs one deterministic command (`printf ok`) | **FAILED** — never executed (OPERATOR-OBSERVED-NOT-CAPTURED — no command-execution record is committed; consistent with zero `commandExecution` counts in the operator's structural note `rollout-run2-summary.json`) |
 | 3 | Structured result returned | **FAILED** as run terminal; run 1's `completed` was false (§3); run 2's terminal is `cancelled` via the orphan-reaping path after the Elf had been dead ~235 s (§4), not via live-boundary cancellation (VERIFIED, `capture-run1.jsonl` + `trajectory-run2.json` + `capture-run2.jsonl`). Provider-side result events existed only in lost Session memory |
 | 4 | Resulting worktree diff inspected | **OPERATOR-OBSERVED-NOT-CAPTURED** — empty diff both runs per operator (`git status --porcelain` clean, only base-commit `README.md`); no worktree status/diff output is committed |
 | 5 | Capacity before and after | **VERIFIED** — 54%/91% before, unchanged after run 1 and after run 2 (`capacity-*.json`) |
@@ -202,6 +212,16 @@ SQLite file (see §5), wait on the **session** turn, then cancel.
 | − | Not demonstrated | Safe-boundary cancellation of a **live** Elf; provider-side thread cwd / thread location from a committed artifact; `session_meta.cwd` equality from a committed artifact; worktree file-absence/diff from a committed artifact; `diff-hash`/`index-hash`/`stash` source equality |
 
 ## 7. Redaction map (`fixtures/demo/`; README convention)
+
+Fixture kinds in `fixtures/demo/` — a reader must not have to infer which
+is which. **CAPTURED bytes** (recorded during the runs):
+`capture-run*.jsonl`, `crash-session-run2.log`, `trajectory-run2.json`,
+`capacity-*.json` (safe projections of the probe handshake, no raw probe
+output), `source-*.txt`. **OPERATOR-AUTHORED notes** (the operator's
+after-the-fact structural notes derived from files that are NOT committed):
+`session-buffer-run2.json`, `rollout-run*-summary.json` (counts derived
+from the uncommitted rollout `.jsonl` files). No VERIFIED label in this
+document is backed by an operator-authored file.
 
 1:1 substitution, nothing else altered. Real thread ids → synthetic UUIDv7
 (`…000001` run 2, `…000002` run 1); real turn ids → `…000003`;
