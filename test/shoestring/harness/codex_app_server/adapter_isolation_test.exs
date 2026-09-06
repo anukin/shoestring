@@ -1,10 +1,10 @@
 defmodule Shoestring.Harness.CodexAppServer.AdapterIsolationTest do
   use ExUnit.Case, async: false
 
-  alias Shoestring.Harness.CodexAppServer
-  alias Shoestring.Harness.CodexAppServer.EventNormalizer
   alias Shoestring.Harness.Capacity.CodexMonitor
   alias Shoestring.Harness.Capacity.Codex.FakeTransport
+  alias Shoestring.Harness.CodexAppServer.EventNormalizer
+  alias Shoestring.Harness.CodexAppServer.Session
 
   @eval_time ~U[2026-08-29 04:38:25Z]
 
@@ -43,109 +43,124 @@ defmodule Shoestring.Harness.CodexAppServer.AdapterIsolationTest do
         {FakeTransport, owner: self(), emit_connected: false, auto_respond: auto_respond}
       )
 
+    test_pid = self()
+
     monitor =
       start_supervised!(
         {CodexMonitor,
          name: :isolated_test_monitor,
          version: "0.150.1",
          transport_pid: fake_transport,
-         sink: fn snap -> {:ok, :persisted, snap} end,
+         sink: fn snap ->
+           send(test_pid, {:isolated_snapshot, snap})
+           {:ok, :persisted, snap}
+         end,
          clock: fn -> @eval_time end,
          base_backoff_ms: 50,
          max_backoff_ms: 100}
       )
 
     _ = :sys.get_state(monitor)
-    {:ok, monitor: monitor}
+    {:ok, monitor: monitor, fake_transport: fake_transport, normal_read: normal_read}
   end
 
   describe "adapter isolation" do
-    test "malformed frames in adapter parser do not crash or corrupt the capacity monitor", %{
-      monitor: monitor
+    test "malformed JSON frames are skipped by a live session without affecting the monitor", %{
+      monitor: monitor,
+      fake_transport: fake_transport,
+      normal_read: normal_read
     } do
-      valid_uuid = "00000000-0000-4000-8000-000000000001"
+      # Documents the production behaviour the reviewer observed: corrupted
+      # frames do NOT crash Session -- handle_info logs and keeps state. This
+      # is a property check on the log-and-skip path, not a fault injection.
+      {:ok, session_pid} = start_isolated_session()
+      session_ref = Process.monitor(session_pid)
 
-      # 1. Feed malformed JSON and corrupted payloads into EventNormalizer
-      assert {:skip, :unhandled_frame} =
-               EventNormalizer.normalize(%{"corrupted" => true}, valid_uuid, 1, %{})
+      send(session_pid, {:codex_transport_frame, self(), "{not valid json"})
+      send(session_pid, {:codex_transport_frame, self(), ""})
 
-      assert {:skip, :unhandled_method} =
-               EventNormalizer.normalize(
-                 %{"method" => "unknown/broken_method"},
-                 valid_uuid,
-                 1,
-                 %{}
-               )
+      # Call barrier: proves every prior frame was handled before asserting.
+      assert {:ok, %{status: :starting}} = Session.status(session_pid)
+      refute_received {:DOWN, ^session_ref, :process, ^session_pid, _}
 
-      assert {:skip, :unhandled_frame} =
-               EventNormalizer.normalize(nil, valid_uuid, 1, %{})
-
-      # 2. Feed frames with malformed internal structures
-      bad_item_frame = %{
-        "method" => "item/completed",
-        "params" => %{"item" => nil}
-      }
-
-      # Should not raise an unhandled crash that collapses anything
-      result = EventNormalizer.normalize(bad_item_frame, valid_uuid, 1, %{})
-      assert match?({:skip, _}, result) or match?({:error, _}, result)
-
-      # 3. Call adapter methods with invalid simulation flags
-      assert {:error, _} = CodexAppServer.probe(%{simulate: :quota_refused})
-
-      # 4. ASSERTION: CodexMonitor remains alive and completely unaffected
-      assert Process.alive?(monitor)
-      monitor_status = CodexMonitor.status(:isolated_test_monitor)
-
-      assert monitor_status in [
-               :connected,
-               :refused,
-               :incompatible_schema,
-               :disconnected,
-               :unavailable
-             ]
+      assert_monitor_emitting(monitor, fake_transport, normal_read)
     end
 
-    test "an unexpected crash in an adapter session does not take down the monitor", %{
-      monitor: monitor
-    } do
-      {:ok, req} =
-        Shoestring.Harness.RunRequest.new(%{
-          version: 1,
-          goal_id: "00000000-0000-4000-8000-000000000001",
-          task_id: "00000000-0000-4000-8000-000000000002",
-          workspace_ref: "workspace/test",
-          prompt: "test isolation",
-          policy: %{mode: "supervised", network: false, write_access: true},
-          requested_capabilities: [],
-          dispatch_id: "00000000-0000-4000-8000-000000000003"
-        })
-
-      # Start an unlinked real Session process
-      {:ok, session_pid} =
-        Shoestring.Harness.CodexAppServer.Session.start_link(
-          run_request: req,
-          auto_handshake: false,
-          thread_id: "01950000-0000-7000-8000-000000000001"
-        )
-
+    test "a structurally corrupted frame crashes one parser while the sibling monitor keeps emitting",
+         %{
+           monitor: monitor,
+           fake_transport: fake_transport,
+           normal_read: normal_read
+         } do
+      # Genuine fault injection through the parsing path: valid JSON whose
+      # params are structurally corrupted. EventNormalizer indexes params as a
+      # map, so this raises FunctionClauseError inside
+      # Session.handle_info({:codex_transport_frame, ...}) and the parser
+      # process itself dies -- no external kill of an idle process.
+      {:ok, session_pid} = start_isolated_session()
       Process.unlink(session_pid)
       session_ref = Process.monitor(session_pid)
 
-      # Induce an abrupt crash in the real Session
-      Process.exit(session_pid, :kill)
-      assert_receive {:DOWN, ^session_ref, :process, ^session_pid, :killed}
+      poison = Jason.encode!(%{"method" => "turn/started", "params" => "corrupted-not-a-map"})
+      send(session_pid, {:codex_transport_frame, self(), poison})
 
-      # ASSERTION: The capacity monitor continues running without interruption
+      assert_receive {:DOWN, ^session_ref, :process, ^session_pid, reason}, 5_000
+
+      # The parser died inside its own frame handler (Access.get on the
+      # corrupted params via EventNormalizer), not by external kill.
+      assert {:function_clause, stack} = reason,
+             "expected the parser to die in its frame handler, got: #{inspect(reason)}"
+
+      assert Enum.any?(stack, fn {mod, _, _, _} -> mod == EventNormalizer end)
+      assert Enum.any?(stack, fn {mod, _, _, _} -> mod == Session end)
+
+      # The sibling is BOTH still alive AND still emitting: a fresh snapshot
+      # arrives after the failure, not merely Process.alive?.
       assert Process.alive?(monitor)
-
-      assert CodexMonitor.status(:isolated_test_monitor) in [
-               :connected,
-               :refused,
-               :incompatible_schema,
-               :disconnected,
-               :unavailable
-             ]
+      assert_monitor_emitting(monitor, fake_transport, normal_read)
     end
+  end
+
+  defp start_isolated_session do
+    {:ok, req} =
+      Shoestring.Harness.RunRequest.new(%{
+        version: 1,
+        goal_id: "00000000-0000-4000-8000-000000000001",
+        task_id: "00000000-0000-4000-8000-000000000002",
+        workspace_ref: "workspace/test",
+        prompt: "test isolation",
+        policy: %{mode: "supervised", network: false, write_access: true},
+        requested_capabilities: [],
+        dispatch_id: "00000000-0000-4000-8000-000000000003"
+      })
+
+    {:ok, session_transport} =
+      start_supervised(
+        {FakeTransport, owner: self(), emit_connected: false},
+        id: :isolated_session_transport
+      )
+
+    Session.start_link(
+      run_request: req,
+      auto_handshake: false,
+      transport: FakeTransport,
+      transport_pid: session_transport,
+      thread_id: "01950000-0000-7000-8000-000000000001"
+    )
+  end
+
+  defp assert_monitor_emitting(monitor, fake_transport, normal_read) do
+    FakeTransport.push_notification(
+      fake_transport,
+      "account/rateLimits/updated",
+      put_in(normal_read, ["rateLimits", "primary", "usedPercent"], 21)
+    )
+
+    _ = :sys.get_state(monitor)
+    assert_receive {:isolated_snapshot, %{source: %{event: :update_notification}}}, 5_000
+
+    snapshot = CodexMonitor.last_observation(:isolated_test_monitor)
+    assert snapshot.windows != []
+    assert hd(snapshot.windows).used_percent == 21.0
   end
 end

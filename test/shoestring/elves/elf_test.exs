@@ -7,6 +7,7 @@ defmodule Shoestring.Elves.ElfTest do
   alias Shoestring.Elves.Elf
   alias Shoestring.Harness.Fake.Scenario
   alias Shoestring.Repo
+  alias Shoestring.Test.ElfWorktreeFixture
   alias Shoestring.Test.ElvesHelpers
   alias Shoestring.Trajectory.TrajectoryEvent
 
@@ -107,12 +108,83 @@ defmodule Shoestring.Elves.ElfTest do
     end
   end
 
+  test "source isolation: the Elf child edits only its real worktree", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = Ecto.UUID.generate()
+    fixture = ElfWorktreeFixture.create!(run_id)
+    on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+    source_before = ElfWorktreeFixture.source_snapshot(fixture.source_repo)
+    assert File.dir?(fixture.worktree.path)
+
+    assert {:ok, resolved} =
+             Shoestring.Worktrees.get(
+               Path.join(Shoestring.State.path(:worktrees), fixture.worktree.workspace_ref)
+             )
+
+    assert resolved.path == fixture.worktree.path
+    request = ElvesHelpers.run_request(goal, task, workspace_ref: fixture.worktree.workspace_ref)
+
+    child_script = """
+    from pathlib import Path
+    import time
+
+    if Path("fixture.txt").exists():
+        Path("elf-source-isolation.txt").write_text("written by the Elf child\\n")
+        time.sleep(1)
+    """
+
+    scenario =
+      ElvesHelpers.custom_scenario(:child_worktree_edit, [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.output_event("edited worktree", source_event_id: "evt-edit"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               run_id: run_id,
+               scenario: scenario,
+               command: ["python3", "-c", child_script],
+               runner_opts: @runner_opts,
+               event_interval_ms: 100,
+               notify: self()
+             )
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 10_000
+
+    assert File.read!(Path.join(fixture.worktree.path, "elf-source-isolation.txt")) ==
+             "written by the Elf child\n"
+
+    assert ElfWorktreeFixture.source_snapshot(fixture.source_repo) == source_before
+  end
+
   test "mid-run kill retains partial history and classifies the exit", %{
     sup: sup,
     goal: goal,
     task: task
   } do
-    request = ElvesHelpers.run_request(goal, task)
+    run_id = Ecto.UUID.generate()
+    fixture = ElfWorktreeFixture.create!(run_id)
+    on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+    source_before = ElfWorktreeFixture.source_snapshot(fixture.source_repo)
+    request = ElvesHelpers.run_request(goal, task, workspace_ref: fixture.worktree.workspace_ref)
+
+    child_script = """
+    from pathlib import Path
+    import time
+
+    if Path("fixture.txt").exists():
+        Path("elf-partial.txt").write_text("partial child work\\n")
+        time.sleep(30)
+    else:
+        time.sleep(30)
+    """
 
     scenario =
       ElvesHelpers.custom_scenario(:killed_mid_run, [
@@ -125,8 +197,9 @@ defmodule Shoestring.Elves.ElfTest do
     assert {:ok, _pid} =
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
+               run_id: run_id,
                scenario: scenario,
-               command: ["sleep", "30"],
+               command: ["python3", "-c", child_script],
                runner_opts: @runner_opts,
                event_interval_ms: 100,
                notify: self()
@@ -152,6 +225,14 @@ defmodule Shoestring.Elves.ElfTest do
     # Partial history survived the kill.
     assert ElvesHelpers.count_events(goal.id, run_id, ["harness.event_recorded"]) >= 2
     assert ElvesHelpers.count_events(goal.id, run_id, ["run.running"]) == 1
+
+    # The killed child changed a real worktree, and the failed run preserved it.
+    assert File.dir?(fixture.worktree.path)
+
+    assert File.read!(Path.join(fixture.worktree.path, "elf-partial.txt")) ==
+             "partial child work\n"
+
+    assert ElfWorktreeFixture.source_snapshot(fixture.source_repo) == source_before
 
     event = ElvesHelpers.terminal_event(goal.id, run_id)
     assert event.type == "run.failed"

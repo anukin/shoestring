@@ -3,6 +3,7 @@ defmodule Shoestring.Elves.OrchestratorTest do
 
   alias Shoestring.Elves
   alias Shoestring.Elves.{Orchestrator, Staleness}
+  alias Shoestring.Test.ElfWorktreeFixture
   alias Shoestring.Test.ElvesHelpers
 
   @runner_opts [kill_grace_ms: 200, reap_timeout_ms: 2_000]
@@ -25,28 +26,33 @@ defmodule Shoestring.Elves.OrchestratorTest do
     {:ok, sup: sup, goal: goal, task: task}
   end
 
-  defp command_spec(id, offset_ms) do
+  defp command_spec(id, offset_ms, command \\ "python3 -c assert 1 == 1") do
     %{
       kind: :command,
       offset_ms: offset_ms,
       source_event_id: id,
       error: nil,
-      result: nil,
+      result: %{status: "completed", artifact_id: nil},
       capacity_snapshot: nil,
-      extensions: %{"shoestring.fake:command" => "mix test"}
+      extensions: %{"shoestring.fake:command" => command}
     }
   end
 
-  defp start_quiet_run(sup, goal, task, name, events) do
-    request = ElvesHelpers.run_request(goal, task)
+  defp start_quiet_run(sup, goal, task, name, events, opts \\ []) do
+    request =
+      ElvesHelpers.run_request(goal, task,
+        workspace_ref: Keyword.get(opts, :workspace_ref, "workspace/elf")
+      )
+
     scenario = ElvesHelpers.custom_scenario(name, events)
 
     assert {:ok, _pid} =
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                scenario: scenario,
-               command: ["sleep", "30"],
-               runner_opts: @runner_opts
+               command: Keyword.get(opts, :command, ["sleep", "30"]),
+               runner_opts: Keyword.get(opts, :runner_opts, @runner_opts),
+               run_id: Keyword.get(opts, :run_id)
              )
 
     assert {:ok, run_id} =
@@ -86,18 +92,80 @@ defmodule Shoestring.Elves.OrchestratorTest do
     goal: goal,
     task: task
   } do
+    run_id = Ecto.UUID.generate()
+    fixture = ElfWorktreeFixture.create!(run_id)
+    on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+    source_before = ElfWorktreeFixture.source_snapshot(fixture.source_repo)
+
+    child_script = """
+    from pathlib import Path
+    import subprocess
+    import time
+
+    if Path("fixture.txt").exists():
+        Path("elf-commit.txt").write_text("committed by the Elf child\\n")
+        subprocess.run(["git", "add", "elf-commit.txt"], check=True)
+        subprocess.run([
+            "git", "-c", "user.name=Shoestring Eval", "-c",
+            "user.email=eval@shoestring.local", "commit", "-m", "Elf eval commit"
+        ], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(["python3", "-c", "assert 1 == 1"], check=True)
+
+    time.sleep(30)
+    """
+
     # The child did the work (recorded test command, passed) but never sent a
     # final assistant response: command events, no result, no terminal.
-    run_id = start_quiet_run(sup, goal, task, :no_final_report, [command_spec("cmd-test-1", 0)])
+    run_id =
+      start_quiet_run(
+        sup,
+        goal,
+        task,
+        :no_final_report,
+        [command_spec("cmd-test-1", 0)],
+        run_id: run_id,
+        workspace_ref: fixture.worktree.workspace_ref,
+        command: ["python3", "-c", child_script]
+      )
 
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    assert {:ok, _commit} =
+             ElvesHelpers.wait_until(fn ->
+               case Shoestring.Worktrees.current_commit(fixture.worktree) do
+                 {:ok, commit} when commit != fixture.base_commit -> commit
+                 _other -> nil
+               end
+             end)
+
+    assert {:ok, :persisted, _event} =
+             Staleness.collect(run_id, "completed_no_final_report")
 
     assert {:ok, packet} = Orchestrator.summarize(run_id)
     assert packet.run_id == run_id
     assert packet.terminal == nil
     assert packet.progress.completed_commands == ["cmd-test-1"]
     assert packet.progress.final_response_state == "missing"
-    assert length(packet.evidence_refs) == 1
+    assert packet.evidence["worktree"]["commit"] != fixture.base_commit
+    assert packet.evidence["completed_commands"] == ["cmd-test-1"]
+    assert packet.evidence["completed_tests"] == ["cmd-test-1"]
+
+    command_event =
+      Repo.one(
+        from event in Shoestring.Trajectory.TrajectoryEvent,
+          where:
+            event.goal_id == ^goal.id and event.run_id == ^run_id and
+              event.type == "harness.event_recorded",
+          order_by: [asc: event.sequence],
+          limit: 1
+      )
+
+    assert command_event.payload["extensions"]["shoestring.fake:command"] ==
+             "python3 -c assert 1 == 1"
+
+    assert command_event.payload["result"]["status"] == "completed"
+    assert ElfWorktreeFixture.source_snapshot(fixture.source_repo) == source_before
+    assert length(packet.evidence_refs) == 2
     assert "request_status" in packet.choices
     assert "synthesize_completion" in packet.choices
 
