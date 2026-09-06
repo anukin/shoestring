@@ -1,0 +1,21 @@
+{
+  "probe": "codex app-server --stdio initialize/account/rateLimits handshake; no thread, no turn, zero model quota",
+  "account": {
+    "type": "chatgpt"
+  },
+  "rateLimits": {
+    "primary": {
+      "usedPercent": 54,
+      "windowDurationMins": 300,
+      "resetsAt": 1788679610
+    },
+    "secondary": {
+      "usedPercent": 91,
+      "windowDurationMins": 10080,
+      "resetsAt": 1788753130
+    },
+    "planType": "plus",
+    "spendControlReached": false,
+    "rateLimitReachedType": null
+  }
+}

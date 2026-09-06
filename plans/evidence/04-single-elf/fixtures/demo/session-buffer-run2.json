@@ -1,0 +1,4 @@
+{
+  "absent": true,
+  "reason": "CodexAppServer.Session crashed on the first item/agentMessage/delta frame (~5s in) and took its in-memory live buffer with it; lookup_session missed afterwards. Five buffered events were never persisted (trajectory holds zero harness.event_recorded). See crash-session-run2.log."
+}

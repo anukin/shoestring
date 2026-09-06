@@ -1,0 +1,9 @@
+{"step":"goal_task_ready","goal_id":"7118edb2-9696-41dc-a373-6e37b61e79d9","task_id":"4442816c-a6dd-4493-84da-1d9999f5134a","run_id":"d6de61d5-c650-43ff-b2d1-18404c021472","demo_t":"2026-09-06T04:37:55.556761Z"}
+{"path":"/tmp/iter4-live-demo-state/worktrees/run-d6de61d5-c650-43ff-b2d1-18404c021472","step":"worktree_created","branch":"shoestring/run-d6de61d5-c650-43ff-b2d1-18404c021472","base_commit":"7012722f65bc51d3ca83f66d2c14996d60ea95a8","repo_path":"/tmp/iter4-live-demo-repo","workspace_ref":"run-d6de61d5-c650-43ff-b2d1-18404c021472","demo_t":"2026-09-06T04:37:55.675966Z"}
+{"cwd":"/tmp/iter4-live-demo-state/worktrees","step":"beam_cwd","demo_t":"2026-09-06T04:37:55.676360Z"}
+{"step":"request_built","adapter":"codex_app_server_stdio","provider":"codex","demo_t":"2026-09-06T04:37:55.680735Z"}
+{"step":"elf_started","elf_pid":"#PID<0.339.0>","demo_t":"2026-09-06T04:37:55.737916Z"}
+{"terminal":"%{class: :completed}","step":"elf_terminal","elapsed_ms":57,"demo_t":"2026-09-06T04:37:55.996012Z"}
+{"result":"{:terminal, %{class: :completed}}","step":"wait_result","demo_t":"2026-09-06T04:37:55.996438Z"}
+{"buffer":"%{session_alive: false, session_found: false}","step":"session_buffer","demo_t":"2026-09-06T04:37:55.997005Z"}
+{"count":5,"step":"trajectory","types":"[\"run.requested\", \"dispatch.requested\", \"run.starting\", \"run.running\", \"run.completed\"]","terminal_of":"{:ok, %{class: :completed}}","demo_t":"2026-09-06T04:37:55.999661Z"}

@@ -1,0 +1,12 @@
+{
+  "thread_id": "01950000-0000-7000-8000-000000000002",
+  "note": "structural summary only: no model text, no reasoning, no file contents committed",
+  "item_counts": {
+    "session_meta": 1,
+    "task_started": 1,
+    "message": 2,
+    "item_completed": 1,
+    "turn_aborted": 1
+  },
+  "command_executions": []
+}
