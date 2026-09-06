@@ -70,6 +70,32 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
     end
   end
 
+  # Deterministic teardown helper: the tree under `root` can touch the
+  # Repo (the healthy monitor's sink calls `Observatory.ingest/1`, which
+  # goes through `Observatory.ensure_provisioned/1` -> `Repo.get/2`), so
+  # it must be fully DOWN before the Ecto sandbox owner — released by the
+  # earlier-registered `on_exit` in `Shoestring.DataCase.setup_sandbox/1`
+  # — goes away. A fire-and-forget `Process.exit(root, :kill)` returns
+  # immediately and lets the sandbox owner win that race, producing
+  # `DBConnection` ownership errors ("owner exited while client still
+  # holds a connection"). Monitoring `root` and awaiting its `:DOWN`
+  # makes the ordering deterministic: this `on_exit` only returns once
+  # the tree is dead, so the sandbox `stop_owner` running after it can
+  # never race a live Repo client. The timeout is a bounded backstop, not
+  # a sleep: on the happy path the `receive` returns as soon as `:DOWN`
+  # arrives, and `:kill` is untrappable so the wait always terminates.
+  defp stop_root_synchronously(root, timeout \\ 5_000) do
+    ref = Process.monitor(root)
+    Process.exit(root, :kill)
+
+    receive do
+      {:DOWN, ^ref, :process, ^root, _reason} -> :ok
+    after
+      timeout ->
+        raise "root supervisor #{inspect(root)} did not shut down within #{timeout} ms"
+    end
+  end
+
   defp root_child_pid(root, id) do
     if is_pid(root) and Process.alive?(root) do
       try do
@@ -204,9 +230,7 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
     {:ok, root} = Supervisor.start_link(children, strategy: :one_for_one)
     Process.unlink(root)
 
-    on_exit(fn ->
-      if Process.alive?(root), do: Process.exit(root, :kill)
-    end)
+    on_exit(fn -> stop_root_synchronously(root) end)
 
     root_ref = Process.monitor(root)
 
