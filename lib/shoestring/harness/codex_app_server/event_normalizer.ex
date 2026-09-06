@@ -340,23 +340,39 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
          occurred_at,
          base_process_id,
          base_session_id
-       ) do
-    delta = params["delta"] || %{}
-    text = sanitize_string(delta["text"] || "")
+       )
+       when is_map(params) do
+    case extract_delta_text(params["delta"]) do
+      {:ok, text} ->
+        build_event(
+          run_id: run_id,
+          ordinal: ordinal,
+          source_event_id: "agent-delta-#{ordinal}",
+          occurred_at: occurred_at,
+          kind: :output,
+          process_id: base_process_id,
+          provider_session_id: base_session_id,
+          extensions: %{
+            "codex-app-server:method" => "item/agentMessage/delta",
+            "delta" => text
+          }
+        )
 
-    build_event(
-      run_id: run_id,
-      ordinal: ordinal,
-      source_event_id: "agent-delta-#{ordinal}",
-      occurred_at: occurred_at,
-      kind: :output,
-      process_id: base_process_id,
-      provider_session_id: base_session_id,
-      extensions: %{
-        "codex-app-server:method" => "item/agentMessage/delta",
-        "delta" => text
-      }
-    )
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp do_normalize(
+         "item/agentMessage/delta",
+         _params,
+         _run_id,
+         _ordinal,
+         _occurred_at,
+         _base_process_id,
+         _base_session_id
+       ) do
+    {:error, :unshaped_delta_frame}
   end
 
   defp do_normalize(
@@ -491,6 +507,32 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
   end
 
   # --- Quota and Error Mapping ---
+
+  # The provider streams `item/agentMessage/delta` with `delta` as a bare
+  # string in live turns (observed: `"delta": "I"`); other turns carry a map
+  # with a `"text"` key. Both shapes are accepted. `nil`/missing yields an
+  # empty delta; any other shape is an explicit error — never a raise, so a
+  # single unshaped frame can never take down the Session and lose the
+  # live-buffered events (no provider backfill exists).
+  defp extract_delta_text(nil), do: {:ok, ""}
+  defp extract_delta_text(delta) when is_binary(delta), do: {:ok, sanitize_string(delta)}
+
+  defp extract_delta_text(delta) when is_map(delta) do
+    {:ok, sanitize_string(delta["text"] || "")}
+  end
+
+  defp extract_delta_text(other), do: {:error, {:unshaped_delta, shape_of(other)}}
+
+  defp shape_of(term) do
+    cond do
+      is_list(term) -> :list
+      is_integer(term) -> :integer
+      is_float(term) -> :float
+      is_boolean(term) -> :boolean
+      is_atom(term) -> :atom
+      true -> :unknown
+    end
+  end
 
   @doc """
   Maps raw provider `turn.error` or server JSON-RPC error into a canonical `Shoestring.Harness.Error`.

@@ -303,10 +303,17 @@ defmodule Shoestring.Harness.CodexAppServer do
       frames
       |> Enum.with_index(1)
       |> Enum.reduce([], fn {frame, ord}, acc ->
-        case EventNormalizer.normalize(frame, run_id, ord, %{
-               process_id: proc_id,
-               provider_session_id: sess_id
-             }) do
+        normalized =
+          try do
+            EventNormalizer.normalize(frame, run_id, ord, %{
+              process_id: proc_id,
+              provider_session_id: sess_id
+            })
+          rescue
+            _ -> {:skip, :normalizer_raised}
+          end
+
+        case normalized do
           {:ok, event} -> [event | acc]
           _ -> acc
         end

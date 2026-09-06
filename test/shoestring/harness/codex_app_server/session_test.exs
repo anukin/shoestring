@@ -652,6 +652,126 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
     end
   end
 
+  describe "streaming delta shapes through the full Session path (live-demo regression)" do
+    @streaming_fixture Path.expand(
+                         "../../../../plans/evidence/04-single-elf/fixtures/codex/app-server-streaming-deltas.json",
+                         __DIR__
+                       )
+
+    test "bare-string and map deltas buffer live; malformed frames are logged, counted, and skipped" do
+      test_pid = self()
+      req = make_test_run_request()
+      thread_id = "01950000-0000-7000-8000-000000000001"
+
+      {:ok, transport} = start_supervised({FakeTestTransport, test_pid: test_pid})
+
+      session =
+        start_supervised!(
+          {Session,
+           run_request: req,
+           transport_pid: transport,
+           transport: FakeTestTransport,
+           auto_handshake: false,
+           thread_id: thread_id}
+        )
+
+      send_frame = fn frame ->
+        send(session, {:codex_transport_frame, transport, Jason.encode!(frame)})
+      end
+
+      # Pre-existing buffered state, mirroring the demo run's live-buffered
+      # events that died with the Session before the fix.
+      send_frame.(%{
+        "method" => "turn/started",
+        "params" => %{"turn" => %{"id" => "01950000-0000-7000-8000-000000000003"}}
+      })
+
+      send_frame.(%{
+        "method" => "item/started",
+        "params" => %{
+          "threadId" => thread_id,
+          "item" => %{
+            "type" => "agentMessage",
+            "id" => "msg_0000000000000000000000000000000000000000000000000000000000000001",
+            "phase" => "commentary"
+          }
+        }
+      })
+
+      _ = :sys.get_state(session)
+      {:ok, pre_events} = Session.stream_events(session)
+      assert length(pre_events) == 2
+
+      # The committed streaming fixture: bare-string delta, map delta,
+      # malformed integer delta, and a raising null-params turn shape.
+      fixture = @streaming_fixture |> File.read!() |> Jason.decode!()
+      assert length(fixture["frames"]) == 4
+
+      for frame <- fixture["frames"] do
+        send_frame.(frame)
+      end
+
+      _ = :sys.get_state(session)
+
+      # The session survived every frame — nothing took it down and no
+      # buffered event was lost.
+      assert Process.alive?(session)
+
+      {:ok, events} = Session.stream_events(session)
+      assert length(events) == 4
+
+      deltas =
+        events
+        |> Enum.filter(
+          &(&1.kind == :output and
+              &1.extensions["codex-app-server:method"] == "item/agentMessage/delta")
+        )
+        |> Enum.map(& &1.extensions["codex-app-server:delta"])
+
+      assert "I" in deltas
+      assert "hello" in deltas
+
+      # The pre-existing turn/started lifecycle event is intact, and the
+      # garbage turn frame never corrupted the turn tracking.
+      assert hd(events).kind == :lifecycle
+      {:ok, status} = Session.status(session)
+      assert status.status == :turn_in_progress
+      assert status.turn_id == "01950000-0000-7000-8000-000000000003"
+
+      # Both unparseable frames were counted: the integer delta (explicit
+      # error) and the raising turn shape (rescued backstop).
+      assert status.malformed_lines == 2
+      assert status.event_count == 4
+    end
+
+    test "non-JSON bytes and non-object frames are counted without killing the session" do
+      test_pid = self()
+      req = make_test_run_request()
+
+      {:ok, transport} = start_supervised({FakeTestTransport, test_pid: test_pid})
+
+      session =
+        start_supervised!(
+          {Session,
+           run_request: req,
+           transport_pid: transport,
+           transport: FakeTestTransport,
+           auto_handshake: false,
+           thread_id: "01950000-0000-7000-8000-000000000001"}
+        )
+
+      send(session, {:codex_transport_frame, transport, "this is not json"})
+      send(session, {:codex_transport_frame, transport, Jason.encode!([1, 2, 3])})
+      _ = :sys.get_state(session)
+
+      assert Process.alive?(session)
+      {:ok, status} = Session.status(session)
+      assert status.malformed_lines == 2
+      {:ok, events} = Session.stream_events(session)
+      assert events == []
+    end
+  end
+
   describe "adapter status and error behavior (Nit 4)" do
     test "adapter.status/2 returns status :unknown on missing/unknown session" do
       {:ok, unknown_id} =

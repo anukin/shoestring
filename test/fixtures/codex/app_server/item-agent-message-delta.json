@@ -1,0 +1,39 @@
+{
+  "fixture_kind": "streaming_delta_shapes",
+  "evidence_status": "live_observed",
+  "cli": "codex-cli 0.153.4",
+  "note": "The bare-string delta frame is the live shape from the 2026-09-06 single-Elf demo run 2, which crashed EventNormalizer.do_normalize (Access.get on a binary) and took the Session plus five live-buffered events with it. Identifiers are format-valid synthetics per plans/evidence/04-single-elf/README.md (UUIDv7 thread/turn, shape-preserving msg_ item id). The map-delta and malformed-delta frames are synthetic same-envelope variants. The full streaming sequence (driven through the Session path) lives in plans/evidence/04-single-elf/fixtures/codex/app-server-streaming-deltas.json.",
+  "thread_id": "01950000-0000-7000-8000-000000000001",
+  "turn_id": "01950000-0000-7000-8000-000000000003",
+  "item_id": "msg_0000000000000000000000000000000000000000000000000000000000000001",
+  "bare_string_delta_frame": {
+    "method": "item/agentMessage/delta",
+    "params": {
+      "threadId": "01950000-0000-7000-8000-000000000001",
+      "turnId": "01950000-0000-7000-8000-000000000003",
+      "itemId": "msg_0000000000000000000000000000000000000000000000000000000000000001",
+      "delta": "I"
+    },
+    "emittedAtMs": 1788669895021
+  },
+  "map_delta_frame": {
+    "method": "item/agentMessage/delta",
+    "params": {
+      "threadId": "01950000-0000-7000-8000-000000000001",
+      "turnId": "01950000-0000-7000-8000-000000000003",
+      "itemId": "msg_0000000000000000000000000000000000000000000000000000000000000001",
+      "delta": {"text": "hello"}
+    },
+    "emittedAtMs": 1788669895022
+  },
+  "malformed_delta_frame": {
+    "method": "item/agentMessage/delta",
+    "params": {
+      "threadId": "01950000-0000-7000-8000-000000000001",
+      "turnId": "01950000-0000-7000-8000-000000000003",
+      "itemId": "msg_0000000000000000000000000000000000000000000000000000000000000001",
+      "delta": 12345
+    },
+    "emittedAtMs": 1788669895023
+  }
+}

@@ -228,6 +228,70 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizerTest do
     end
   end
 
+  describe "streaming agentMessage delta shapes (live-demo regression)" do
+    test "accepts the live bare-string delta shape" do
+      fixture = load_fixture!("item-agent-message-delta.json")
+      frame = fixture["bare_string_delta_frame"]
+
+      assert {:ok, %HarnessEvent{} = event} =
+               EventNormalizer.normalize(frame, @run_id, 1, %{provider_session_id: @session_id})
+
+      assert event.kind == :output
+      assert event.extensions["codex-app-server:method"] == "item/agentMessage/delta"
+      assert event.extensions["codex-app-server:delta"] == "I"
+    end
+
+    test "accepts the map delta shape" do
+      fixture = load_fixture!("item-agent-message-delta.json")
+      frame = fixture["map_delta_frame"]
+
+      assert {:ok, %HarnessEvent{} = event} =
+               EventNormalizer.normalize(frame, @run_id, 1, %{provider_session_id: @session_id})
+
+      assert event.kind == :output
+      assert event.extensions["codex-app-server:delta"] == "hello"
+    end
+
+    test "a non-string non-map delta is an explicit error, never a raise" do
+      fixture = load_fixture!("item-agent-message-delta.json")
+      frame = fixture["malformed_delta_frame"]
+
+      assert {:error, {:unshaped_delta, :integer}} =
+               EventNormalizer.normalize(frame, @run_id, 1, %{provider_session_id: @session_id})
+    end
+
+    test "missing delta yields an empty delta event without raising" do
+      frame = %{"method" => "item/agentMessage/delta", "params" => %{}}
+
+      assert {:ok, %HarnessEvent{} = event} =
+               EventNormalizer.normalize(frame, @run_id, 1, %{provider_session_id: @session_id})
+
+      assert event.extensions["codex-app-server:delta"] == ""
+    end
+
+    test "non-map params are an explicit error, never a raise" do
+      frame = %{"method" => "item/agentMessage/delta", "params" => nil}
+
+      assert {:error, :unshaped_delta_frame} =
+               EventNormalizer.normalize(frame, @run_id, 1, %{provider_session_id: @session_id})
+    end
+
+    test "bare-string deltas are still secret-scrubbed" do
+      frame = %{
+        "method" => "item/agentMessage/delta",
+        "params" => %{"delta" => "see /Users/jane_doe/keys with Bearer eyJhbGciOiJIUz"}
+      }
+
+      assert {:ok, %HarnessEvent{} = event} =
+               EventNormalizer.normalize(frame, @run_id, 1, %{provider_session_id: @session_id})
+
+      delta = event.extensions["codex-app-server:delta"]
+      refute delta =~ "/Users/jane_doe"
+      assert delta =~ "$HOME"
+      assert delta =~ "[REDACTED_BEARER]"
+    end
+  end
+
   describe "graceful fallback for missing tool/command fields" do
     test "handles commandExecution item with null exitCode and aggregatedOutput" do
       item = %{

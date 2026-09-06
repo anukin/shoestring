@@ -41,6 +41,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     :stop_requested,
     :buffered_events,
     :event_ordinal,
+    :malformed_lines,
     :status,
     :next_request_id,
     :pending_requests,
@@ -151,6 +152,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       stop_requested: nil,
       buffered_events: [],
       event_ordinal: 0,
+      malformed_lines: 0,
       status: :starting,
       next_request_id: 1,
       pending_requests: %{},
@@ -282,7 +284,8 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       turn_id: state.current_turn_id,
       in_flight_item: state.in_flight_item,
       stop_requested: state.stop_requested,
-      event_count: length(state.buffered_events)
+      event_count: length(state.buffered_events),
+      malformed_lines: state.malformed_lines
     }
 
     {:reply, {:ok, summary}, state}
@@ -356,13 +359,36 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       {:noreply, state}
     else
       case Jason.decode(line) do
-        {:ok, frame} ->
-          state = handle_rpc_frame(frame, state)
+        {:ok, frame} when is_map(frame) ->
+          # Defensive: the provider offers no backfill, so a single
+          # unparseable frame must never take down the Session and lose the
+          # live-buffered events. Log and skip the frame, count it, keep
+          # the session alive — mirroring
+          # `Shoestring.Harness.ClaudeHeadless.Session.handle_frame/2`.
+          # The net covers normalization AND raw-frame boundary tracking
+          # together: a frame that fails to normalize is not cleanly
+          # interpretable, so its boundary half is skipped as well.
+          state =
+            try do
+              handle_rpc_frame(frame, state)
+            rescue
+              error ->
+                Logger.warning(
+                  "CodexAppServer frame handling raised: #{inspect(error)}; skipping frame"
+                )
+
+                %{state | malformed_lines: state.malformed_lines + 1}
+            end
+
           {:noreply, state}
+
+        {:ok, _non_map} ->
+          Logger.warning("CodexAppServer received non-object frame; skipping")
+          {:noreply, %{state | malformed_lines: state.malformed_lines + 1}}
 
         {:error, reason} ->
           Logger.warning("CodexAppServer received malformed frame: #{inspect(reason)}")
-          {:noreply, state}
+          {:noreply, %{state | malformed_lines: state.malformed_lines + 1}}
       end
     end
   end
@@ -416,11 +442,13 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       {{tag, _params}, remaining} ->
         Logger.error("CodexAppServer RPC error on #{inspect(tag)}: #{inspect(err)}")
 
+        message = if is_map(err), do: err["message"] || inspect(err), else: inspect(err)
+
         error =
           Error.new(
             :transport,
             "rpc_error",
-            "#{inspect(tag)} failed: #{err["message"] || inspect(err)}"
+            "#{inspect(tag)} failed: #{message}"
           )
 
         state = %{
@@ -634,8 +662,12 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         state
 
       {:error, reason} ->
+        # Unparseable but non-raising: still evidence of stream shape
+        # drift, so log it and count it alongside outright malformed
+        # frames. Raising shapes propagate to the handle_info backstop,
+        # which counts them there — exactly one count per frame either way.
         Logger.warning("CodexAppServer event normalization error: #{inspect(reason)}")
-        state
+        %{state | malformed_lines: state.malformed_lines + 1}
     end
   end
 

@@ -393,7 +393,20 @@ defmodule Shoestring.Elves.Elf do
           select: event.idempotency_key
       )
 
-    %{state | seen: MapSet.new(keys)}
+    # event_count is the classifier's observed-adapter-events input: it counts
+    # newly persisted ADAPTER events (after_ingest/3), one per
+    # "elf-event:<dispatch>:<source>" key. It must be restored alongside seen,
+    # or a resumed Elf that skips its re-streamed events reports a run that
+    # genuinely produced events as transport/no_adapter_events.
+    #
+    # This is deliberately NOT MapSet.size(seen): seen also holds the Elf's
+    # own log-artifact row ("elf-log:<dispatch>", same type, non-nil key),
+    # which after_ingest/3 never counted. Only the elf-event: prefix is the
+    # same population event_count counts.
+    prefix = "elf-event:#{state.dispatch_id}:"
+    count = Enum.count(keys, &String.starts_with?(&1, prefix))
+
+    %{state | seen: MapSet.new(keys), event_count: count}
   end
 
   # A retry after a crash re-streams from the start but must not duplicate
@@ -885,17 +898,32 @@ defmodule Shoestring.Elves.Elf do
         # The direct child is gone but stragglers linger: bounded reap, then
         # report what the OS exit says. This is termination of a run whose
         # primary already exited — not a timer kill of working processes.
+        # The observed adapter-event count travels with the classification:
+        # a clean exit with zero observed events is a launch that never
+        # began, never a completion.
         _ = terminate_owned_group(state)
 
         stop_with_terminal(
           state,
-          Classifier.classify(:no_verdict, state.os_exit, state.cancel_requested?)
+          Classifier.classify(
+            :no_verdict,
+            state.os_exit,
+            state.cancel_requested?,
+            state.event_count
+          )
         )
 
       true ->
+        # Same observed-events rule on the fully-reaped path: zero adapter
+        # events plus a clean exit fails as `transport/no_adapter_events`.
         stop_with_terminal(
           state,
-          Classifier.classify(:no_verdict, state.os_exit, state.cancel_requested?)
+          Classifier.classify(
+            :no_verdict,
+            state.os_exit,
+            state.cancel_requested?,
+            state.event_count
+          )
         )
     end
   end

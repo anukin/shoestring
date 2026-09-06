@@ -47,6 +47,15 @@ defmodule Shoestring.Elves.Classifier do
 
   `os_exit` is `{:exit_status, non_neg_integer()}`, `:no_exit` (process still
   owned/alive), or `:unknown`. `cancel_requested?` forces `:cancelled`.
+
+  The 4-arity variant additionally takes the count of observed adapter
+  events (`observed_adapter_events`): a clean OS exit with no adapter
+  verdict completes ONLY when at least one adapter event was observed.
+  With zero observed events the launch never demonstrably began, so the
+  run fails as `transport/no_adapter_events` instead of reporting a
+  success it never witnessed. The 3-arity variant cannot tell the two
+  cases apart and fails closed: without evidence of stream activity,
+  success is never claimed.
   """
   @spec classify(term(), term(), boolean()) :: terminal()
   def classify(_verdict, _os_exit, true) do
@@ -78,14 +87,21 @@ defmodule Shoestring.Elves.Classifier do
     error_to_terminal(error)
   end
 
-  # A clean OS exit with no adapter verdict completes for now. This is the
-  # conservative placeholder for the milestone's "completed, no final report"
-  # eval: synthesizing a completion report from durable evidence (commit +
-  # passing tests, but the final response omitted) is orchestrator semantic
-  # judgment and is deliberately deferred to the follow-up that owns
-  # orchestrator-facing recovery decisions. See `Shoestring.Elves.Staleness`.
+  # A clean OS exit with no adapter verdict is NOT a completion by itself:
+  # without a single observed adapter event the launch never demonstrably
+  # began, and reporting success would be a false durable claim (a run that
+  # did nothing reported successful). Fail closed as
+  # `transport/no_adapter_events`.
+  #
+  # The genuinely ambiguous case — events WERE streamed but no explicit
+  # verdict arrived — stays deferred: `classify/4` with a positive observed
+  # count completes, preserving the milestone's "completed, no final report"
+  # eval (synthesizing a completion report from durable evidence is
+  # orchestrator semantic judgment, deliberately deferred to the follow-up
+  # that owns orchestrator-facing recovery decisions).
+  # See `Shoestring.Elves.Staleness`.
   def classify(:no_verdict, {:exit_status, 0}, false) do
-    %{class: :completed}
+    %{class: :failed, error_category: "transport", error_code: "no_adapter_events"}
   end
 
   def classify(:no_verdict, {:exit_status, status}, false) when is_integer(status) do
@@ -98,6 +114,29 @@ defmodule Shoestring.Elves.Classifier do
 
   def classify(_verdict, _os_exit, false) do
     %{class: :failed, error_category: "transport", error_code: "unclassifiable_terminal"}
+  end
+
+  @doc """
+  Classifies a `:no_verdict` clean OS exit with knowledge of how many
+  adapter events were observed during the run.
+
+  A positive count means the run streamed evidence and then ended without
+  an explicit verdict — the genuinely ambiguous ending, still deferred to
+  orchestrator-facing recovery as `:completed`. Zero means the launch
+  never began observably — never `:completed`.
+  """
+  @spec classify(term(), term(), boolean(), non_neg_integer()) :: terminal()
+  def classify(:no_verdict, {:exit_status, 0}, false, observed_adapter_events)
+      when is_integer(observed_adapter_events) and observed_adapter_events > 0 do
+    %{class: :completed}
+  end
+
+  def classify(:no_verdict, {:exit_status, 0}, false, _observed_adapter_events) do
+    %{class: :failed, error_category: "transport", error_code: "no_adapter_events"}
+  end
+
+  def classify(verdict, os_exit, cancel_requested?, _observed_adapter_events) do
+    classify(verdict, os_exit, cancel_requested?)
   end
 
   @doc "Terminal for an Elf-side overflow: oversized output fails the run, never truncates silently."
