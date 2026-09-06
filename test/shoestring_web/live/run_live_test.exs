@@ -733,15 +733,9 @@ defmodule ShoestringWeb.RunLiveTest do
     test "B4 regression: rejects repository path outside allowed roots", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/runs/new")
 
-      unique = "#{Ecto.UUID.generate()}_#{System.unique_integer([:positive])}"
+      outside_dir =
+        Path.join(System.tmp_dir!(), "outside_repo_#{System.unique_integer([:positive])}")
 
-      outside_dir = Path.join(System.tmp_dir!(), "outside_repo_#{unique}")
-
-      # Self-cleaning fixture root: registered (and the name randomized)
-      # before any fallible step, so a raising setup still removes exactly
-      # this run's path, and a killed prior run's leftover can never be
-      # collided with.
-      on_exit(fn -> File.rm_rf(outside_dir) end)
       File.mkdir_p!(outside_dir)
       {_, 0} = System.cmd("git", ["init", "-b", "main"], cd: outside_dir)
       {_, 0} = System.cmd("git", ["config", "user.name", "Shoestring Test"], cd: outside_dir)
@@ -756,6 +750,8 @@ defmodule ShoestringWeb.RunLiveTest do
         System.cmd("git", ["-c", "commit.gpgsign=false", "commit", "-m", "Initial commit"],
           cd: outside_dir
         )
+
+      on_exit(fn -> File.rm_rf(outside_dir) end)
 
       submit_payload = %{
         "run" => %{
