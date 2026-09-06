@@ -68,6 +68,35 @@ defmodule Shoestring.Harness.ClaudeHeadless.TransportTest do
     assert {_out, 1} = System.cmd("kill", ["-0", "-#{os_pid}"], stderr_to_stdout: true)
   end
 
+  test "fast-exiting children never fail spawn (already-exited reconciliation)" do
+    # Regression tripwire for the full-suite flake: `false` exits in ~1ms,
+    # so under scheduling pressure the child is routinely dead before
+    # Port.info runs. Every spawn must still start cleanly and report its
+    # exit; each iteration is an independent sample of that window and any
+    # failure is loud. Unlinked starts: an abnormal init-stop returns
+    # {:error, _} instead of taking this process down.
+    false_bin = System.find_executable("false")
+    assert is_binary(false_bin)
+
+    pids =
+      for _ <- 1..25 do
+        assert {:ok, pid} =
+                 GenServer.start(Transport,
+                   owner: self(),
+                   command: false_bin,
+                   executable: false_bin,
+                   args: []
+                 )
+
+        assert_receive {:claude_transport_connected, ^pid}, 5_000
+        pid
+      end
+
+    for pid <- pids do
+      assert_receive {:claude_transport_closed, ^pid, {:exit_status, 1}}, 10_000
+    end
+  end
+
   test "missing executable fails closed" do
     # Unlinked start: a linked init-stop with an abnormal reason would
     # take the test process down with it.

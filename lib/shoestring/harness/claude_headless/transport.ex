@@ -141,13 +141,29 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
                  }}
 
               {:error, reason} ->
-                Port.close(port)
-                {:stop, reason}
+                # `ps` cannot see the pid. Re-read driver state to
+                # distinguish "fast child died during ps" (its
+                # exit_status is already queued or imminently so — proceed
+                # without touching the mailbox, preserving driver order)
+                # from "live child ps cannot verify" (fail closed).
+                case Port.info(port, :os_pid) do
+                  nil ->
+                    already_exited(port, owner, max_frame_size)
+
+                  _ ->
+                    safe_close_port(port)
+                    {:stop, reason}
+                end
             end
 
           _ ->
-            Port.close(port)
-            {:stop, :os_pid_unavailable}
+            # No OS pid: the child already exited before it could be
+            # observed (fast failure under scheduling pressure — VERIFIED
+            # intermittent). Its stdout (if any) and exit_status are
+            # already queued in order behind this point in the mailbox,
+            # so proceeding lets them drive closure deterministically
+            # instead of crashing the spawn.
+            already_exited(port, owner, max_frame_size)
         end
       rescue
         error -> {:stop, {:port_open_failed, error}}
@@ -229,7 +245,19 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
 
   def handle_info({:EXIT, port, reason}, %{port: port} = state) do
     unless state.closed do
-      send(state.owner, {:claude_transport_closed, self(), reason})
+      # The driver reports the child exit before tearing the port down,
+      # but under scheduling pressure this EXIT can be processed first
+      # while the exit_status is already queued behind it. Prefer the
+      # real exit code whenever it is already here — consumed and acted
+      # on inline, never re-queued (re-queueing would invert the order).
+      # Nothing is waited for: if no exit is queued, report the reason.
+      case take_queued_exit(port) do
+        {:exited, status} ->
+          send(state.owner, {:claude_transport_closed, self(), {:exit_status, status}})
+
+        :running ->
+          send(state.owner, {:claude_transport_closed, self(), reason})
+      end
     end
 
     {:stop, :normal, %{state | closed: true}}
@@ -254,6 +282,38 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
   end
 
   # --- Spawn helpers ---
+
+  # The child is already gone: start in a state with no owned group.
+  # Queued stdout lines and the exit_status still arrive in order and
+  # drive closure through the normal handle_info path. Termination
+  # against a nil pgid is a no-op (:already_exited), so kill-based
+  # cancel stays safe.
+  defp already_exited(port, owner, max_frame_size) do
+    send(owner, {:claude_transport_connected, self()})
+
+    {:ok,
+     %{
+       port: port,
+       owner: owner,
+       os_pid: nil,
+       max_frame_size: max_frame_size,
+       discarding_oversized: false,
+       closed: false
+     }}
+  end
+
+  # Non-blocking mailbox scan for an already-delivered exit_status from
+  # our own port. `after 0` never waits — it only observes a signal that
+  # has already arrived. The exit is consumed and returned for immediate
+  # inline handling; it is NEVER re-queued, because re-queueing would move
+  # it behind a concurrently queued port EXIT and invert driver order.
+  defp take_queued_exit(port) do
+    receive do
+      {^port, {:exit_status, status}} -> {:exited, status}
+    after
+      0 -> :running
+    end
+  end
 
   defp resolve_executable(opts, command) do
     case Keyword.get(opts, :executable) do
