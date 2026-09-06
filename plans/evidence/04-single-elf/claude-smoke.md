@@ -27,7 +27,7 @@ Prior sibling worker runs encountered HTTP 401 (`authentication_failed`) caused 
 Before consuming any model turn, local keychain reachability was verified:
 - `which claude` -> `/opt/homebrew/bin/claude` (OPERATOR-OBSERVED-NOT-CAPTURED).
 - `claude --version` -> `2.1.263 (Claude Code)` (OPERATOR-OBSERVED-NOT-CAPTURED).
-- `claude auth status` -> `loggedIn: true`, `authMethod: "claude.ai"`, `subscriptionType: "pro"` (OPERATOR-OBSERVED-NOT-CAPTURED).
+- `claude auth status` -> `loggedIn: true` (OPERATOR-OBSERVED-NOT-CAPTURED). Account tier and auth method are deliberately not recorded here: they are unnecessary for the finding and are minimal-disclosure material.
 - Keychain entry query: `security find-generic-password -s "Claude Code-credentials" -a "$USER"` -> exit 0 (OPERATOR-OBSERVED-NOT-CAPTURED).
 - Keychain password extraction: `security find-generic-password -w -s "Claude Code-credentials" -a "$USER" | wc -c` -> exit 0, 505 bytes returned cleanly without interactive prompt (OPERATOR-OBSERVED-NOT-CAPTURED).
 
@@ -50,7 +50,7 @@ Verdict: **GO** — macOS Keychain was directly accessible from the sandbox.
   - Exit code: `0` (OPERATOR-OBSERVED-NOT-CAPTURED, recorded from process exit).
   - Stderr size: `0` bytes (committed: `fixtures/claude/stream-json-smoke-live.stderr.txt`).
   - Stdout frames: `10` lines (committed: `fixtures/claude/stream-json-smoke-live.jsonl`).
-  - File created: `hello.txt` containing `hello\n` (VERIFIED by post-run inspection).
+  - File created: `hello.txt` containing `hello\n` (VERIFIED, `stream-json-smoke-live.jsonl` frames 3-6: the `Bash` `tool_use` command and its `tool_result` — backed by the committed artifact, not by operator memory).
   - Tool commands executed:
     1. `printf 'hello\n' > /tmp/claude-smoke-repo/hello.txt && cat /tmp/claude-smoke-repo/hello.txt` -> stdout `hello`.
     2. `printf ok` -> stdout `ok`.
@@ -73,13 +73,13 @@ However, the live path is **unwired and defective** across four architectural se
 
 3. **Integration with `Shoestring.Elves` is broken across both plausible iteration-5 wirings**:
    - **Wiring A: Wired like Codex today** (`adapter_opts: %{}` without `:live`, `command = ["claude", ...]`):
-     `ClaudeHeadless.live_or_transport?/1` returns `false`, entering `start_simulated/2`. No `Session` GenServer is started and the ETS lookup table is empty. When `Elf` calls `materialize_stream/1` (`elf.ex:591`), `ClaudeHeadless.stream/2` misses ETS lookup and falls back to `simulated_completion_events/2`, which emits 5 canned events ending in a simulated `result` with status `"completed"`. `Elf` consumes these, sets `state.adapter_verdict = {:result, "completed"}`, triggers `finish_after_stream/1` (`elf.ex:881`), kills `state.runner` (the real CLI command!), and commits `run.completed`. Result: a **FABRICATED completed verdict** at launch that terminates the real in-flight CLI group.
+     `ClaudeHeadless.live_or_transport?/1` returns `false`, entering `start_simulated/2`. No `Session` GenServer is started and the ETS lookup table is empty. When `Elf` calls `materialize_stream/1` (`elf.ex:591`), `ClaudeHeadless.stream/2` misses ETS lookup and falls back to `simulated_completion_events/2`, which emits 5 canned events ending in a simulated `result` with status `"completed"`. `Elf` consumes these, sets `state.adapter_verdict = {:result, "completed"}`, commits the terminal via `after_ingest/3` → `stop_with_terminal/2` (`elf.ex:681-693`; owned-group kill at `:687`, classify at `:689-692`), killing `state.runner` (the real CLI command!) and persisting `run.completed`. Note `elf.ex:881` is a *different* branch that is never reached on this path — a fix applied there would miss the actual commit site. Result: a **FABRICATED completed verdict** at launch that terminates the real in-flight CLI group.
    - **Wiring B: Wired live** (`adapter_opts: %{live: true}`, `command = ["sleep", "30"]`):
-     `ClaudeHeadless.start_session/2` starts `Session`, which blocks in `await_run_identity/2` (`session.ex:87`) until `init` arrives. Thus, at least one event (`init`, and possibly `rate_limit_event`) is guaranteed to be in `state.buffered_events`. When `Elf.launch_fresh/1` calls `materialize_stream/1`, it retrieves these 1–2 initial events and sets `event_count >= 1`. `Elf` consumes them (`verdict_of -> :none`), drains `pending_events`, and enters `finish_after_stream/1` (`elf.ex:889`):
+     `ClaudeHeadless.start_session/2` starts `Session`, which blocks in `await_run_identity/2` (`session.ex:87`) until `init` arrives. Thus, at least one event (`init`, and possibly `rate_limit_event`) is guaranteed to be in `state.buffered_events`. When `Elf.launch_fresh/1` calls `materialize_stream/1`, it retrieves these 1–2 initial events and sets `event_count >= 1`. **This retrieval depends on `Elf.state.run_id == request.dispatch_id`**: `ClaudeHeadless` stores the session under `request.dispatch_id` (`claude_headless.ex:230,238`) while `Elf` looks it up by `state.run_id` (`elf.ex:594-601`). That holds today only because the single production wiring uses one UUID for both (`run_new_live.ex:103,172,199`). If iteration 5 wires those ids independently, the ETS lookup misses and wiring B degenerates into wiring A's fabricated-verdict behaviour. `Elf` consumes them (`verdict_of -> :none`), drains `pending_events`, and enters `finish_after_stream/1` (`elf.ex:889`):
      ```elixir
      owned_group_alive?(state) and state.os_exit == :unknown -> {:noreply, state}
      ```
-     The Elf **PARKS** under quiet supervision. Termination comes only when the Elf's own unrelated command group (`sleep`) exits. When `sleep` exits 0, `handle_os_exit/2` invokes `Classifier.classify/4` (`classifier.ex:87-91`):
+     The Elf **PARKS** under quiet supervision. Termination comes only when the Elf's own unrelated command group (`sleep`) exits. When `sleep` exits 0, `handle_os_exit/2` (`elf.ex:844`) reaches `Classifier.classify/4` **via** `finish_after_stream/1` (`elf.ex:863-864` → `:921`). The clause is `classifier.ex:129-132`:
      ```elixir
      def classify(:no_verdict, {:exit_status, 0}, false, observed_adapter_events)
          when is_integer(observed_adapter_events) and observed_adapter_events > 0 do
