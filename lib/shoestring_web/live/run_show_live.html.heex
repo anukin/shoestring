@@ -404,7 +404,14 @@
             </div>
 
             <%= if event.payload && map_size(event.payload) > 0 do %>
-              <pre class="rounded bg-zinc-50 p-2.5 text-[11px] font-mono text-zinc-700 overflow-auto whitespace-pre-wrap border border-zinc-100 max-h-48">{RunPresentation.format_payload(event.payload)}</pre>
+              <% {capped_payload, payload_omitted, payload_truncated?} =
+                RunPresentation.cap_payload(event.payload) %>
+              <%= if payload_truncated? do %>
+                <p class="event-payload-truncated text-xs text-amber-700 mb-1">
+                  Event payload truncated, {payload_omitted} bytes omitted for bounded rendering.
+                </p>
+              <% end %>
+              <pre class="event-payload rounded bg-zinc-50 p-2.5 text-[11px] font-mono text-zinc-700 overflow-auto whitespace-pre-wrap border border-zinc-100 max-h-48">{capped_payload}</pre>
             <% end %>
           </div>
         </div>

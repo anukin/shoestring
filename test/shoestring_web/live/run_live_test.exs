@@ -858,10 +858,63 @@ defmodule ShoestringWeb.RunLiveTest do
         |> LazyHTML.to_html()
 
       assert byte_size(payload_html) < byte_size(big_error)
-      # The capped terminal pane must not contain the full payload, even
-      # though the same event also appears in the live event stream.
-      refute payload_html =~ big_error
+      # B4 fixed the event-stream leak this assertion used to work around:
+      # the whole page must not contain the full payload.
+      refute rendered =~ big_error
       assert payload_html =~ "bytes omitted"
+    end
+
+    test "B4 regression: oversized per-event payload is capped with explicit notice", %{
+      conn: conn,
+      goal: goal,
+      task: task,
+      run: run
+    } do
+      # At 114cfdd the event stream renders
+      # RunPresentation.format_payload(event.payload) with no cap, so a large
+      # payload crosses the WebSocket unbounded into the browser DOM.
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      big_output = String.duplicate("x", 40_000)
+
+      stream_event = %TrajectoryEvent{
+        id: Ecto.UUID.generate(),
+        goal_id: goal.id,
+        task_id: task.id,
+        run_id: run.id,
+        sequence: 999,
+        schema_version: 1,
+        type: "harness.event_recorded",
+        actor: "elf",
+        occurred_at: DateTime.utc_now(),
+        idempotency_key: "evt-stream-cap-#{run.id}",
+        payload: %{
+          "run_id" => run.id,
+          "source_event_id" => "stream-cap-probe",
+          "ordinal" => 1,
+          "occurred_at" => DateTime.to_iso8601(DateTime.utc_now()),
+          "kind" => "command",
+          "result" => %{"output" => big_output}
+        }
+      }
+
+      send(view.pid, {:trajectory_event_committed, stream_event})
+      rendered = render(view)
+
+      assert has_element?(view, "#run-event-#{stream_event.id}")
+      assert has_element?(view, ".event-payload-truncated")
+      assert rendered =~ "Event payload truncated"
+      assert rendered =~ "bytes omitted"
+
+      event_html =
+        rendered
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query_by_id("run-event-#{stream_event.id}")
+        |> LazyHTML.to_html()
+
+      assert byte_size(event_html) < byte_size(big_output)
+      refute event_html =~ big_output
+      assert event_html =~ "bytes omitted"
     end
 
     test "B2a regression: refresh recovers via run_id when mounted before commit" do
