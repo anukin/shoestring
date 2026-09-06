@@ -52,8 +52,10 @@ defmodule Shoestring.Elves.Elf do
   alias Shoestring.Elves.{Classifier, PortRunner}
   alias Shoestring.Harness.{Clock, HarnessEvent}
   alias Shoestring.Repo
+  alias Shoestring.State
   alias Shoestring.Trajectory
   alias Shoestring.Trajectory.{ArtifactStore, Redaction, TrajectoryEvent}
+  alias Shoestring.Worktrees
 
   @default_max_events_per_run 1_000
   @default_max_event_bytes 32_768
@@ -530,8 +532,35 @@ defmodule Shoestring.Elves.Elf do
   end
 
   defp spawn_group(state) do
-    PortRunner.spawn(state.command, [env: state.env] ++ state.runner_opts)
+    runner_opts = [env: state.env] ++ state.runner_opts
+
+    runner_opts = worktree_runner_opts(runner_opts, state.request.workspace_ref)
+
+    PortRunner.spawn(state.command, runner_opts)
   end
+
+  defp worktree_runner_opts(runner_opts, workspace_ref) when is_binary(workspace_ref) do
+    root = Path.expand(State.path(:worktrees))
+    candidate = Path.expand(Path.join(root, workspace_ref))
+
+    if candidate != root and String.starts_with?(candidate, root <> "/") and
+         File.dir?(candidate) do
+      try do
+        case Worktrees.get(candidate) do
+          {:ok, worktree} -> Keyword.put_new(runner_opts, :cd, worktree.path)
+          {:error, _reason} -> runner_opts
+        end
+      rescue
+        _error -> runner_opts
+      catch
+        _kind, _reason -> runner_opts
+      end
+    else
+      runner_opts
+    end
+  end
+
+  defp worktree_runner_opts(runner_opts, _workspace_ref), do: runner_opts
 
   defp begin_streaming(state) do
     case materialize_stream(state) do

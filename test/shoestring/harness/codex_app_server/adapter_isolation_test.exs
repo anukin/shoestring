@@ -43,20 +43,25 @@ defmodule Shoestring.Harness.CodexAppServer.AdapterIsolationTest do
         {FakeTransport, owner: self(), emit_connected: false, auto_respond: auto_respond}
       )
 
+    test_pid = self()
+
     monitor =
       start_supervised!(
         {CodexMonitor,
          name: :isolated_test_monitor,
          version: "0.150.1",
          transport_pid: fake_transport,
-         sink: fn snap -> {:ok, :persisted, snap} end,
+         sink: fn snap ->
+           send(test_pid, {:isolated_snapshot, snap})
+           {:ok, :persisted, snap}
+         end,
          clock: fn -> @eval_time end,
          base_backoff_ms: 50,
          max_backoff_ms: 100}
       )
 
     _ = :sys.get_state(monitor)
-    {:ok, monitor: monitor}
+    {:ok, monitor: monitor, fake_transport: fake_transport, normal_read: normal_read}
   end
 
   describe "adapter isolation" do
@@ -106,8 +111,10 @@ defmodule Shoestring.Harness.CodexAppServer.AdapterIsolationTest do
              ]
     end
 
-    test "an unexpected crash in an adapter session does not take down the monitor", %{
-      monitor: monitor
+    test "a crashed adapter session leaves the other monitor healthy and emitting", %{
+      monitor: monitor,
+      fake_transport: fake_transport,
+      normal_read: normal_read
     } do
       {:ok, req} =
         Shoestring.Harness.RunRequest.new(%{
@@ -121,11 +128,19 @@ defmodule Shoestring.Harness.CodexAppServer.AdapterIsolationTest do
           dispatch_id: "00000000-0000-4000-8000-000000000003"
         })
 
+      {:ok, session_transport} =
+        start_supervised(
+          {FakeTransport, owner: self(), emit_connected: false},
+          id: :isolated_session_transport
+        )
+
       # Start an unlinked real Session process
       {:ok, session_pid} =
         Shoestring.Harness.CodexAppServer.Session.start_link(
           run_request: req,
           auto_handshake: false,
+          transport: FakeTransport,
+          transport_pid: session_transport,
           thread_id: "01950000-0000-7000-8000-000000000001"
         )
 
@@ -146,6 +161,19 @@ defmodule Shoestring.Harness.CodexAppServer.AdapterIsolationTest do
                :disconnected,
                :unavailable
              ]
+
+      FakeTransport.push_notification(
+        fake_transport,
+        "account/rateLimits/updated",
+        put_in(normal_read, ["rateLimits", "primary", "usedPercent"], 21)
+      )
+
+      _ = :sys.get_state(monitor)
+      assert_receive {:isolated_snapshot, %{source: %{event: :update_notification}}}, 5_000
+
+      snapshot = CodexMonitor.last_observation(:isolated_test_monitor)
+      assert snapshot.windows != []
+      assert hd(snapshot.windows).used_percent == 21.0
     end
   end
 end
