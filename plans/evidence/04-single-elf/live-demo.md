@@ -76,10 +76,11 @@ the comparison was not recorded in the committed artifacts.
 - Elf reported `%{class: :completed}` with **zero** `harness.event_recorded`
   events (VERIFIED, `capture-run1.jsonl`; trajectory was additionally lost,
   see §5).
-- A real provider thread **did** start: rollout
-  `…21-37-55…jsonl` shows `task_started`, two assistant message items, one
-  `item_completed` (UserMessage), then `turn_aborted` (VERIFIED structurally,
-  `fixtures/demo/rollout-run1-summary.json`).
+- A real provider thread **did** start: the committed structural summary of
+  rollout `…21-37-55…jsonl` records `task_started: 1`, `message: 2`,
+  `item_completed: 1`, then `turn_aborted: 1` (VERIFIED structurally,
+  `fixtures/demo/rollout-run1-summary.json` — counts only; the summary
+  records no roles or item-type detail).
 - No `hello.txt` was created; `printf ok` never ran
   (OPERATOR-OBSERVED-NOT-CAPTURED — worktree contained only `README.md` +
   `.git` afterwards; no worktree listing or diff is committed. The
@@ -107,9 +108,18 @@ Deviations from run 1 (deliberate, documented): owned command
 the `Fake`-adapter default in `elves.ex`), dev env against the migrated
 SQLite file (see §5), wait on the **session** turn, then cancel.
 
-- Thread started in the Elf worktree; 5 events buffered live (userMessage
-  started/completed, agentMessage started, …) (VERIFIED, crash-state dump
-  in `crash-session-run2.log`).
+- The Session was **configured** with `workspace_ref:
+  "run-02da24d6-…"` (VERIFIED, `crash-session-run2.log` RunRequest dump —
+  configured intent: our own request naming the Elf worktree path in the
+  prompt; the log contains no `cwd` and no `session_meta`). That the provider
+  thread **started in** the Elf worktree (provider-side cwd) is
+  OPERATOR-OBSERVED-NOT-CAPTURED, consistent with S2 and S6. Live buffer:
+  the dump's `buffered_events` list is truncated by Elixir inspection after
+  ordinal 3 (`...}, ...}`), so only 3 entries are inspectable in the
+  committed bytes; the "5 buffered" count and the full enumeration
+  (userMessage started/completed, agentMessage started, …) are
+  OPERATOR-OBSERVED-NOT-CAPTURED (per capture note
+  `session-buffer-run2.json`).
 - At ~5 s the provider sent
   `item/agentMessage/delta` with `"delta": "I"` — a **bare string**.
   `EventNormalizer.do_normalize` assumes a map (`delta["text"]`,
@@ -123,15 +133,16 @@ SQLite file (see §5), wait on the **session** turn, then cancel.
   `normalize/4` documents `{:ok}|{:skip}|{:error}` returns but nothing
   rescues `do_normalize`, so one unshaped frame violates the contract and
   takes the supervision chain with it (REPO-INSPECTION).
-- Consequence: the 5 live-buffered events died in Session memory — the
+- Consequence: the live-buffered events died in Session memory — the
   durable trajectory holds **zero** `harness.event_recorded` for this run
   (VERIFIED, `trajectory-run2.json`, 7 events, none adapter-originated).
   No backfill exists by design, so they are unrecoverable.
 - The agent never acted: no `hello.txt`, empty worktree diff
   (OPERATOR-OBSERVED-NOT-CAPTURED — no worktree listing or diff is
   committed); no command executions in the 13-line rollout
-  (VERIFIED, `rollout-run2-summary.json` `command_executions: []`;
-  `turn_aborted` when our transport died).
+  (VERIFIED, `rollout-run2-summary.json` `command_executions: []` with
+  `turn_aborted: 1` recorded; timing consistent with our transport dying,
+  §4 crash narrative).
 - After a 240 s watch, `Elves.cancel_run/2` returned `{:ok, :cancelled}` and
   the trajectory closed `run.cancelling → run.cancelled`
   (VERIFIED, `trajectory-run2.json` seq 6–7; `capture-run2.jsonl`
@@ -188,7 +199,7 @@ SQLite file (see §5), wait on the **session** turn, then cancel.
 | + | Normalized event timeline | **PARTIAL** — durable run-lifecycle timeline VERIFIED (`trajectory-run2.json`); adapter event timeline lost with the Session (§4); run-1 timeline additionally lost to Sandbox rollback (§5) |
 | + | Terminal classification | **VERIFIED** — run 1 false `completed` (defect), run 2 `cancelled` via the orphan-reaping cancel path (defect context in §4), not via live-boundary cancellation |
 | + | pgid + provider thread id; worktree path/branch/base | **VERIFIED** — pgid + thread id in `trajectory-run2.json`, worktree path/branch/base in `capture-run2.jsonl` `worktree_created`; rollout-filename embedding is OPERATOR-OBSERVED-NOT-CAPTURED |
-| − | Not demonstrated | Safe-boundary cancellation of a **live** Elf; `session_meta.cwd` equality from a committed artifact; worktree file-absence/diff from a committed artifact; `diff-hash`/`index-hash`/`stash` source equality |
+| − | Not demonstrated | Safe-boundary cancellation of a **live** Elf; provider-side thread cwd / thread location from a committed artifact; `session_meta.cwd` equality from a committed artifact; worktree file-absence/diff from a committed artifact; `diff-hash`/`index-hash`/`stash` source equality |
 
 ## 7. Redaction map (`fixtures/demo/`; README convention)
 
