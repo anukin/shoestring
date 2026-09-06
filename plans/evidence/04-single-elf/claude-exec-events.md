@@ -9,7 +9,7 @@ probe). That doc is not redesigned here; this file records what the
 authorized live capture observed, and overturns one of its verdicts on
 live evidence.
 
-## Turn budget accounting (brief authorized up to 3 tiny turns, /tmp only)
+## Turn budget accounting — Part 1 (brief authorized up to 3 tiny turns, /tmp only)
 
 | Attempt | Command shape | Reached model? | Outcome |
 | --- | --- | --- | --- |
@@ -18,8 +18,12 @@ live evidence.
 | 3 (live) | `--tools="Bash"` + `--verbose`, tool-exercising prompt | API contacted, model never reached (HTTP 401, OAuth expired) | exit 1, 4 stream-json frames, empty stderr (fixture `stream-json-auth-failure.jsonl`) |
 | 4 (live resume) | `--resume <id> --print --verbose --output-format stream-json`, trivial prompt | API contacted, model never reached (same 401) | exit 1, 3 frames, empty stderr (fixture `stream-json-resume-auth-failure.jsonl`) |
 
-Model turns consumed: **0**. Cost: **$0** (`total_cost_usd: 0`, all usage
-counters 0 in both result frames — VERIFIED). Raw captures remain under
+Part 1 — model turns consumed: **0**. Cost: **$0** (`total_cost_usd: 0`,
+all usage counters 0 in both Part-1 result frames — VERIFIED). (Scope:
+this paragraph covers Part 1's four attempts only. PR-wide spend is
+nonzero — Part 2's committed result frame records `total_cost_usd:
+0.0847545`, and the operator reports ~$0.16 all-in for the
+operator-run side. Do not read this PR as costing nothing.) Raw captures remain under
 `/tmp/shoestring-claude-probe-A28wrH/` and `/tmp/shoestring-claude-evidence/`;
 only redacted fixtures are committed here.
 
@@ -106,9 +110,10 @@ honored (VERIFIED).
 
 Everything else — partial-message chunks, hook events, subagent
 frames — is UNVERIFIED (no such frame was ever emitted on this
-machine). (`user` frames and assistant tool-use content blocks were
-UNVERIFIED when this was written; Part 2 has since VERIFIED both —
-see (c revisited).)
+machine). (`user` frames, assistant tool-use content blocks, and
+`rate_limit_event` frames were UNVERIFIED when this was written; Part 2
+has since VERIFIED all three — see (c revisited) and Quota status
+signalling observed.)
 
 ### (c) TOOL/COMMAND BOUNDARY frames — UNVERIFIED in Part 1 (ANSWERED by Part 2 — see (c revisited); original retained below)
 
@@ -293,8 +298,9 @@ the map-to-`unknown` rule stands until a refusal is live-observed.
 "success"`, `stop_reason: "end_turn"`, `num_turns: 3`,
 `permission_denials: []`, plus `duration_ms/api_ms`,
 `time_to_request_ms`, `ttft_ms/ttft_stream_ms`,
-`first_content_frame_ms`, `total_cost_usd: 0.0847545` (the actual
-spend of this capture — future capture budgeting evidence),
+`first_content_frame_ms`, `total_cost_usd: 0.0847545` (this run's
+recorded spend — future capture budgeting evidence; PR-wide total is
+nonzero, see Turn budget accounting),
 per-model `modelUsage`, zeroed `subagent_stats`,
 `queued_turn_count: 0`. Part 1's warning holds and stays prominent:
 **key completion classification on `is_error` / `terminal_reason`,
