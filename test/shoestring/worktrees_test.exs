@@ -40,7 +40,15 @@ defmodule Shoestring.WorktreesTest do
 
   setup do
     unique = System.unique_integer([:positive, :monotonic])
-    tmp_root = Path.join(System.tmp_dir!(), "shoestring_wt_test_#{unique}")
+    token = Ecto.UUID.generate()
+    tmp_root = Path.join(System.tmp_dir!(), "shoestring_wt_test_#{token}_#{unique}")
+
+    # Self-cleaning fixture root: the callback is registered (and the name
+    # randomized) before any fallible step, so a raising setup still removes
+    # exactly this run's path, and a killed prior run's leftover can never be
+    # collided with.
+    on_exit(fn -> File.rm_rf(tmp_root) end)
+
     repo_path = Path.join(tmp_root, "source_repo")
     state_dir = Path.join(tmp_root, "state")
     worktrees_dir = Path.join(state_dir, "worktrees")
@@ -64,10 +72,6 @@ defmodule Shoestring.WorktreesTest do
 
     {commit_out, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: repo_path)
     initial_commit = String.trim(commit_out)
-
-    on_exit(fn ->
-      File.rm_rf(tmp_root)
-    end)
 
     %{
       tmp_root: tmp_root,
