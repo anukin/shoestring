@@ -66,7 +66,14 @@ defmodule Shoestring.Test.ElfWorktreeFixture do
     working_tree_hash =
       paths
       |> Enum.sort()
-      |> Enum.map(fn path -> path <> <<0>> <> File.read!(Path.join(source_repo, path)) end)
+      |> Enum.map(fn path ->
+        case File.read(Path.join(source_repo, path)) do
+          {:ok, contents} -> path <> <<0>> <> contents
+          # A file indexed by git but deleted from disk (uncommitted deletion)
+          # must report a snapshot difference, not raise File.Error.
+          {:error, _} -> path <> <<0>> <> "<<missing>>"
+        end
+      end)
       |> IO.iodata_to_binary()
       |> then(fn bytes -> :crypto.hash(:sha256, bytes) end)
       |> Base.encode16(case: :lower)

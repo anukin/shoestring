@@ -173,9 +173,7 @@ defmodule Shoestring.Elves.ElfTest do
     on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
 
     source_before = ElfWorktreeFixture.source_snapshot(fixture.source_repo)
-    request = ElvesHelpers.run_request(goal, task)
-
-    request = %{request | workspace_ref: fixture.worktree.workspace_ref}
+    request = ElvesHelpers.run_request(goal, task, workspace_ref: fixture.worktree.workspace_ref)
 
     child_script = """
     from pathlib import Path
