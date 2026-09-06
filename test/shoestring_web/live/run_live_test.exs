@@ -788,6 +788,132 @@ defmodule ShoestringWeb.RunLiveTest do
     end
   end
 
+  describe "PR #35 fix round 1: terminal cap (B1) and not-found consistency (B2)" do
+    setup %{repo_path: repo_path} do
+      %{goal: goal, task: task} = ElvesHelpers.insert_goal_task()
+      run_id = Ecto.UUID.generate()
+
+      {:ok, worktree} = Worktrees.create(repo_path, run_id, "HEAD")
+
+      run =
+        %RunRecord{
+          id: run_id,
+          dispatch_id: run_id,
+          goal_id: goal.id,
+          task_id: task.id,
+          provider_id: "fake",
+          workspace_ref: worktree.workspace_ref,
+          request_version: 1,
+          prompt: "PR35 round1 regression run",
+          continuation: nil,
+          policy: %{"mode" => "manual_execution"},
+          requested_capabilities: %{items: ["cancel"]},
+          extensions: %{},
+          status: "running"
+        }
+        |> Repo.insert!()
+
+      {:ok, goal: goal, task: task, run: run, worktree: worktree}
+    end
+
+    test "B1 regression: oversized terminal payload is capped with explicit notice", %{
+      conn: conn,
+      goal: goal,
+      task: task,
+      run: run
+    } do
+      # At b16f652 run_show_live.html.heex renders
+      # RunPresentation.format_payload(@terminal_event.payload) with no cap.
+      big_error = String.duplicate("x", 40_000)
+
+      assert {:ok, _} =
+               Trajectory.append(
+                 goal.id,
+                 %{
+                   "type" => "run.failed",
+                   "schema_version" => 1,
+                   "actor" => "elf",
+                   "occurred_at" => DateTime.utc_now(),
+                   "idempotency_key" => "evt-terminal-cap-#{run.id}",
+                   "payload" => %{
+                     "run_id" => run.id,
+                     "error_category" => "terminal_cap_probe",
+                     "error_code" => big_error
+                   }
+                 },
+                 trusted: [task_id: task.id, run_id: run.id]
+               )
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      rendered = render(view)
+
+      assert has_element?(view, "#terminal-payload-truncated")
+      assert rendered =~ "Terminal payload truncated"
+      assert rendered =~ "bytes omitted"
+
+      payload_html =
+        rendered
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query_by_id("terminal-payload")
+        |> LazyHTML.to_html()
+
+      assert byte_size(payload_html) < byte_size(big_error)
+      # The capped terminal pane must not contain the full payload, even
+      # though the same event also appears in the live event stream.
+      refute payload_html =~ big_error
+      assert payload_html =~ "bytes omitted"
+    end
+
+    test "B2a regression: refresh recovers via run_id when mounted before commit" do
+      # At b16f652 reload_run_state/1 checks only socket.assigns[:run],
+      # so a not-found mount can never recover via refresh.
+      missing_id = Ecto.UUID.generate()
+      {:ok, socket} = RunShowLive.mount(%{"run_id" => missing_id}, %{}, empty_socket())
+
+      assert socket.assigns[:run_not_found?]
+      assert socket.assigns[:run_id] == missing_id
+      assert socket.assigns[:run] == nil
+
+      %{goal: goal, task: task} = ElvesHelpers.insert_goal_task()
+
+      %RunRecord{
+        id: missing_id,
+        dispatch_id: missing_id,
+        goal_id: goal.id,
+        task_id: task.id,
+        provider_id: "fake",
+        workspace_ref: "workspace/#{missing_id}",
+        request_version: 1,
+        prompt: "late-committed run",
+        continuation: nil,
+        policy: %{"mode" => "manual_execution"},
+        requested_capabilities: %{items: ["cancel"]},
+        extensions: %{},
+        status: "running"
+      }
+      |> Repo.insert!()
+
+      assert {:noreply, refreshed} = RunShowLive.handle_event("refresh", %{}, socket)
+      refute refreshed.assigns[:run_not_found?]
+      assert refreshed.assigns[:run].id == missing_id
+      assert refreshed.assigns[:run_id] == missing_id
+    end
+
+    test "B2b regression: deleted run clears stale assign on refresh", %{run: run} do
+      # At b16f652 reload_run_state/1 leaves the stale :run struct in assigns
+      # while setting :run_not_found? => true.
+      {:ok, socket} = RunShowLive.mount(%{"run_id" => run.id}, %{}, empty_socket())
+      assert socket.assigns[:run].id == run.id
+
+      run |> Repo.reload!() |> Repo.delete!()
+
+      assert {:noreply, refreshed} = RunShowLive.handle_event("refresh", %{}, socket)
+      assert refreshed.assigns[:run_not_found?]
+      assert refreshed.assigns[:run] == nil
+      assert refreshed.assigns[:run_id] == run.id
+    end
+  end
+
   defp flash_group_html(html) do
     html
     |> LazyHTML.from_fragment()

@@ -309,7 +309,15 @@
               </span>
             </div>
             <%= if @terminal_event.payload do %>
-              <pre class="text-xs font-mono text-zinc-700 overflow-auto whitespace-pre-wrap">{RunPresentation.format_payload(@terminal_event.payload)}</pre>
+              <%= if @terminal_payload_truncated? do %>
+                <p id="terminal-payload-truncated" class="text-xs text-amber-700 mb-1">
+                  Terminal payload truncated, {@terminal_payload_omitted} bytes omitted for bounded rendering.
+                </p>
+              <% end %>
+              <pre
+                id="terminal-payload"
+                class="text-xs font-mono text-zinc-700 overflow-auto whitespace-pre-wrap"
+              >{@terminal_payload}</pre>
             <% end %>
           </div>
         <% else %>
@@ -365,7 +373,7 @@
 
         <%= if @events_truncated? do %>
           <p id="events-window-notice" class="text-xs text-amber-700">
-            Showing {@events_showing} of {@events_total} events (first/last window) for bounded rendering.
+            Showing {@events_showing} of {@events_total} events (bounded window) for bounded rendering.
           </p>
         <% end %>
 

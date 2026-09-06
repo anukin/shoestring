@@ -41,6 +41,7 @@ defmodule ShoestringWeb.RunShowLive do
              socket
              |> assign(:page_title, "Manual Run #{String.slice(run.id, 0, 8)}")
              |> assign(:run_not_found?, false)
+             |> assign(:run_id, run.id)
              |> assign(:run, run)
              |> assign(:goal, goal)
              |> assign(:task, task)
@@ -159,27 +160,51 @@ defmodule ShoestringWeb.RunShowLive do
   def handle_info(_other, socket), do: {:noreply, socket}
 
   defp reload_run_state(socket) do
-    case socket.assigns[:run] do
-      %{id: run_id} when is_binary(run_id) ->
-        case Repo.get(RunRecord, run_id) do
+    run_id =
+      case socket.assigns[:run] do
+        %{id: id} when is_binary(id) ->
+          id
+
+        _ ->
+          case socket.assigns[:run_id] do
+            id when is_binary(id) -> id
+            _ -> nil
+          end
+      end
+
+    case run_id && Ecto.UUID.cast(run_id) do
+      {:ok, uuid} ->
+        case Repo.get(RunRecord, uuid) do
           nil ->
             socket
             |> assign(:run_not_found?, true)
             |> assign(:run_id, run_id)
             |> assign(:page_title, "Run Not Found")
+            |> assign(:run, nil)
+            |> assign(:goal, nil)
+            |> assign(:task, nil)
 
-          run ->
+          %RunRecord{} = run ->
             goal = Repo.get(Goal, run.goal_id)
+            task = Repo.get(Task, run.task_id)
 
             socket
+            |> assign(:page_title, "Manual Run #{String.slice(run.id, 0, 8)}")
             |> assign(:run_not_found?, false)
+            |> assign(:run_id, run.id)
             |> assign(:run, run)
             |> assign(:goal, goal)
+            |> assign(:task, task)
             |> load_run_details(run, goal)
         end
 
       _ ->
-        assign(socket, :run_not_found?, true)
+        socket
+        |> assign(:run_not_found?, true)
+        |> assign(:page_title, "Run Not Found")
+        |> assign(:run, nil)
+        |> assign(:goal, nil)
+        |> assign(:task, nil)
     end
   end
 
@@ -222,6 +247,17 @@ defmodule ShoestringWeb.RunShowLive do
     terminal_event = find_terminal_event(events)
     sanitized_terminal = terminal_event && RunPresentation.sanitize_event(terminal_event)
     status_label = determine_status(run, terminal_event)
+
+    {terminal_payload, terminal_payload_omitted, terminal_payload_truncated?} =
+      case sanitized_terminal do
+        %{payload: payload} when not is_nil(payload) ->
+          # Cap AFTER redaction so truncation can never bisect a raw secret.
+          payload |> RunPresentation.format_payload() |> RunPresentation.cap_text()
+
+        _ ->
+          {"", 0, false}
+      end
+
     pgid = extract_pgid(events)
     elf_pid = Elves.whereis(run.id)
 
@@ -270,6 +306,9 @@ defmodule ShoestringWeb.RunShowLive do
     socket
     |> assign(:status, status_label)
     |> assign(:terminal_event, sanitized_terminal)
+    |> assign(:terminal_payload, terminal_payload)
+    |> assign(:terminal_payload_omitted, terminal_payload_omitted)
+    |> assign(:terminal_payload_truncated?, terminal_payload_truncated?)
     |> assign(:pgid, pgid)
     |> assign(:elf_alive?, alive?)
     |> assign(:worktree, worktree)
