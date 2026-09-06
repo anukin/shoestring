@@ -190,7 +190,7 @@ any future generic error map to `unknown` + checkpoint — **never
   not the parent doc's `test/fixtures/…` suggestion; evidence-only change,
   `lib/` and `test/` untouched.
 
-## Verdict for WP D dispatch
+## Verdict for WP D dispatch (ORIGINAL — SUPERSEDED by Part 2 below; retained as the auth-blocked record)
 
 WP D still cannot be built: the normalizer's load-bearing input (tool
 boundary frames) remains unobserved, and no successful turn of any kind
@@ -202,3 +202,117 @@ reach the model at all) — plus a resumed-turn completion to settle area
 overturned as a mechanism (it was the missing `--verbose` flag), but
 `unsupported` remains the correct *effective* status until a successful
 capture lands.
+
+## Part 2: successful tool-exercising capture (operator-run, 2026-09-06)
+
+My sandbox cannot authenticate (401 — environment limitation, not the
+account), so per instruction I ran no further live `claude` invocation.
+The operator ran the vetted capture from an authenticated shell:
+prompt as vetted, `hello.txt` really created, **exit=0** (operator
+report; `capture.stderr` is 0 bytes), 8 stream-json frames, 8931 raw
+bytes. I verified every claim below against
+`/tmp/claude-cap-0s49/capture.jsonl` myself; nothing is taken on trust.
+Committed redacted fixture:
+`fixtures/claude/stream-json-tool-exec.jsonl` (6781 bytes).
+
+Baseline note (corrected): the true baseline at fafa7ba is **692
+tests, 0 failures** — the 675 figure in my original brief was the
+2288ca4 baseline. My Part 1 "discrepancy" note was wrong; 692/0 is the
+expected gate.
+
+### Frame ordering (exactly as captured — VERIFIED)
+
+`system/init` → `rate_limit_event` → `assistant/tool_use` →
+`assistant/tool_use` → `user/tool_result` → `user/tool_result` →
+`assistant/text` → `result`. Both STARTs precede both ENDs — a
+normalizer must **not** assume start/end alternation; per-tool
+correlation is by id, not by adjacency.
+
+### (c revisited) TOOL BOUNDARY EXISTS (VERIFIED — the blocking unknown is answered)
+
+- START: `assistant` frame, content block `{type: "tool_use",
+  id: "toolu_…", name: "Bash", input: {command, description}}`
+  (2 observed: `printf 'hello\n' > …/hello.txt && cat …/hello.txt`
+  and `printf ok`). Each block also carries `caller: {type: "direct"}`
+  (recorded, uninterpreted).
+- END: `user` frame, content block `{type: "tool_result",
+  tool_use_id: "toolu_…", content, is_error: false}`, **plus** a
+  frame-level `tool_use_result: {stdout, stderr, interrupted,
+  isImage, noOutputExpected}` carrying the captured stdio verbatim
+  (`stdout: "hello"` / `"ok"`, `stderr: ""`).
+- Correlation: `tool_result.tool_use_id` ↔ `tool_use.id` exact match on
+  both pairs (verified programmatically raw and redacted). This is the
+  safe-boundary signal the lease rule needs: a command's completion —
+  with its failure flag (`is_error`) and output — is identifiable per
+  tool call.
+- Framing subtlety (VERIFIED): lines 2–3 share one `message.id` and one
+  `request_id` while carrying different `tool_use` blocks — a single
+  assistant message spans multiple frames, one tool-use block per frame.
+  Message identity ≠ frame identity; correlate tool calls by `toolu_`
+  id, not by frame or message id. Line 6 (final text) has a new
+  `message.id`/`request_id`; `num_turns: 3` (recorded verbatim).
+- Scope: Bash only. Any other tool's boundary shape is UNVERIFIED.
+
+### Quota status SUPPORTED (VERIFIED frame; classifier UNVERIFIED)
+
+`rate_limit_event` frame carries `rate_limit_info: {status:
+"allowed", resetsAt, rateLimitType: "five_hour", overageStatus,
+overageDisabledReason, isUsingOverage, unifiedWindows: {five_hour:
+{utilization, resetsAt}, seven_day: {utilization, resetsAt}}}`.
+This overturns Gate 0A's `unsupported` classification for quota
+*status*. Structurally similar to the Codex account/rateLimits signal,
+but whether the iteration-3 classifier applies unchanged is
+**UNVERIFIED** — establishing that is work package D's job. Quota
+**refusal** shape is UNVERIFIED (captured status was `"allowed"` only);
+the map-to-`unknown` rule stands until a refusal is live-observed.
+
+### Result frame, success path (VERIFIED)
+
+`is_error: false`, `terminal_reason: "completed"`, `subtype:
+"success"`, `stop_reason: "end_turn"`, `num_turns: 3`,
+`permission_denials: []`, plus `duration_ms/api_ms`,
+`time_to_request_ms`, `ttft_ms/ttft_stream_ms`,
+`first_content_frame_ms`, `total_cost_usd: 0.0847545` (the actual
+spend of this capture — future capture budgeting evidence),
+per-model `modelUsage`, zeroed `subagent_stats`,
+`queued_turn_count: 0`. Part 1's warning holds and stays prominent:
+**key completion classification on `is_error` / `terminal_reason`,
+never on `subtype`** (the error path proved `subtype` lies).
+
+### Session id (VERIFIED, unchanged)
+
+Same UUIDv4 `session_id` top-level on all 8 frames. Init confirms
+`claude_code_version: "2.1.261"`, `model: "claude-opus-5"`,
+`tools: ["Bash"]` (`--tools` restriction honored),
+`permissionMode: "bypassPermissions"`, `apiKeySource: "none"`.
+
+### Still UNVERIFIED (explicitly)
+
+Resume completion, cancellation semantics (no in-band interrupt
+equivalent to Codex `turn/interrupt` was exercised or observed),
+quota refusal shape, any tool other than Bash.
+
+### Redaction record, second fixture
+
+Same convention: session id → `aaaaaaaa-…-0002` (global 1:1; …-0001 is
+Part 1's session), 8 frame `uuid` → `bbbbbbbb-…-0008–0015` (all
+observed v4), `message.id` → `msg_…01–02`, `toolu_…` → shape-preserving
+`toolu_`-prefixed synthetics (prefix + 24 alphanumerics, correlation
+re-verified after substitution), `request_id` likewise (`req_` + 24).
+Operator path `/private/tmp/claude-cap-0s49` → `/tmp/claude-exec-spike`
+consistently in all 5 occurrences (cwd, both tool commands, both result
+texts — internal consistency preserved). Emptied: `slash_commands`,
+`terminal_slash_commands`, `agents`, `skills`, `plugins`,
+`mcp_servers` (non-empty here — operator-local servers),
+`memory_paths`; socket → `REDACTED`. Timestamps, `resetsAt` epochs,
+costs, usage counters, and model names kept verbatim. No
+thinking/reasoning blocks were emitted. Key-set parity raw-vs-redacted
+verified programmatically.
+
+### Verdict for WP D dispatch (revised — supersedes Part 1)
+
+WP D is unblocked for its two load-bearing inputs: tool boundary
+frames (start/end pair, id-correlated, with per-command completion
+status) and quota status frames are now committed evidence. Remaining
+UNVERIFIED items (resume completion, cancel, refusal shape, non-Bash
+tools) are bounded follow-ups, not feasibility blockers.
