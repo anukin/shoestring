@@ -371,6 +371,7 @@
 
         <div id="events-stream" phx-update="stream" class="space-y-3">
           <div
+            :if={@events_showing == 0}
             id="events-empty"
             class="hidden only:block rounded-lg border border-dashed border-zinc-300 p-6 text-center text-sm text-zinc-500"
           >

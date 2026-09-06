@@ -58,54 +58,66 @@ defmodule ShoestringWeb.RunShowLive do
 
   @impl true
   def handle_event("cancel_run", _params, socket) do
-    run = socket.assigns.run
+    case socket.assigns[:run] do
+      %{id: run_id} when is_binary(run_id) ->
+        case Elves.cancel_run(run_id) do
+          {:ok, :cancelled} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Run cancellation requested.")
+             |> reload_run_state()}
 
-    case Elves.cancel_run(run.id) do
-      {:ok, :cancelled} ->
+          {:ok, :already_terminal} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Run is already terminal.")
+             |> reload_run_state()}
+
+          {:error, reason} ->
+            Logger.warning("Failed to cancel run: #{inspect(reason)}")
+
+            {:noreply, put_flash(socket, :error, "Failed to cancel run. Please retry.")}
+        end
+
+      _ ->
+        Logger.warning("Failed to cancel run: run assign unavailable")
+
         {:noreply,
-         socket
-         |> put_flash(:info, "Run cancellation requested.")
-         |> reload_run_state()}
-
-      {:ok, :already_terminal} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Run is already terminal.")
-         |> reload_run_state()}
-
-      {:error, reason} ->
-        Logger.warning("Failed to cancel run: #{inspect(reason)}")
-
-        {:noreply, put_flash(socket, :error, "Failed to cancel run. Please retry.")}
+         put_flash(socket, :error, "Run is no longer available. Please refresh the page.")}
     end
   end
 
   @impl true
   def handle_event("request_stop", _params, socket) do
-    run = socket.assigns.run
+    case socket.assigns[:run] do
+      %{id: run_id} when is_binary(run_id) ->
+        case Elves.request_stop(run_id) do
+          {:ok, :stop_requested} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Safe stop requested at next boundary.")
+             |> reload_run_state()}
 
-    case Elves.request_stop(run.id) do
-      {:ok, :stop_requested} ->
+          {:ok, :already_terminal} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Run is already terminal.")
+             |> reload_run_state()}
+
+          {:error, :session_not_found} ->
+            {:noreply, put_flash(socket, :error, "No active session found to receive safe stop.")}
+
+          {:error, reason} ->
+            Logger.warning("Failed to request safe stop: #{inspect(reason)}")
+
+            {:noreply, put_flash(socket, :error, "Failed to request safe stop. Please retry.")}
+        end
+
+      _ ->
+        Logger.warning("Failed to request safe stop: run assign unavailable")
+
         {:noreply,
-         socket
-         |> put_flash(:info, "Safe stop requested at next boundary.")
-         |> reload_run_state()}
-
-      {:ok, :already_terminal} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Run is already terminal.")
-         |> reload_run_state()}
-
-      {:error, :session_not_found} ->
-        {:noreply,
-         socket
-         |> put_flash(:error, "No active session found to receive safe stop.")}
-
-      {:error, reason} ->
-        Logger.warning("Failed to request safe stop: #{inspect(reason)}")
-
-        {:noreply, put_flash(socket, :error, "Failed to request safe stop. Please retry.")}
+         put_flash(socket, :error, "Run is no longer available. Please refresh the page.")}
     end
   end
 
@@ -122,13 +134,15 @@ defmodule ShoestringWeb.RunShowLive do
         if event.goal_id == goal_id and (event.run_id == run_id or is_nil(event.run_id)) do
           sanitized = RunPresentation.sanitize_event(event)
           total = (socket.assigns[:events_total] || 0) + 1
-          showing = (socket.assigns[:events_showing] || 0) + 1
+          showing = min(total, RunPresentation.max_rendered_events())
+          truncated? = showing < total
 
           socket =
             socket
-            |> stream_insert(:events, sanitized)
+            |> stream_insert(:events, sanitized, limit: -RunPresentation.max_rendered_events())
             |> assign(:events_total, total)
             |> assign(:events_showing, showing)
+            |> assign(:events_truncated?, truncated?)
             |> maybe_refresh_on_event(event)
 
           {:noreply, socket}

@@ -8,6 +8,9 @@ defmodule ShoestringWeb.RunLiveTest do
   alias Shoestring.Repo
   alias Shoestring.Test.ElvesHelpers
   alias Shoestring.Trajectory
+  alias Shoestring.Trajectory.TrajectoryEvent
+  alias ShoestringWeb.RunShowLive
+  alias ShoestringWeb.RunPresentation
   alias Shoestring.Worktrees
   alias Shoestring.Worktrees.Worktree
 
@@ -483,6 +486,76 @@ defmodule ShoestringWeb.RunLiveTest do
       assert has_element?(view, "#run-not-found")
       assert html =~ "Run Not Found"
     end
+
+    test "cancel_run reports a clean flash when the run assign is unavailable" do
+      {:ok, socket} = RunShowLive.mount(%{"run_id" => Ecto.UUID.generate()}, %{}, empty_socket())
+
+      assert {:noreply, socket} = RunShowLive.handle_event("cancel_run", %{}, socket)
+
+      assert Phoenix.Flash.get(socket.assigns.flash, :error) ==
+               "Run is no longer available. Please refresh the page."
+    end
+
+    test "request_stop reports a clean flash when the run assign is unavailable" do
+      {:ok, socket} = RunShowLive.mount(%{"run_id" => Ecto.UUID.generate()}, %{}, empty_socket())
+
+      assert {:noreply, socket} = RunShowLive.handle_event("request_stop", %{}, socket)
+
+      assert Phoenix.Flash.get(socket.assigns.flash, :error) ==
+               "Run is no longer available. Please refresh the page."
+    end
+
+    test "live event stream stays bounded and reports the capped window", %{
+      conn: conn,
+      goal: goal,
+      run: run
+    } do
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      events =
+        for sequence <- 1..(RunPresentation.max_rendered_events() + 1) do
+          event = %TrajectoryEvent{
+            id: Ecto.UUID.generate(),
+            goal_id: goal.id,
+            run_id: run.id,
+            sequence: sequence,
+            schema_version: 1,
+            type: "harness.event_recorded",
+            actor: "elf",
+            occurred_at: DateTime.utc_now(),
+            idempotency_key: "evt-stream-bound-#{sequence}",
+            payload: %{
+              "run_id" => run.id,
+              "source_event_id" => "stream-bound-#{sequence}",
+              "ordinal" => sequence,
+              "kind" => "command"
+            }
+          }
+
+          send(view.pid, {:trajectory_event_committed, event})
+          _ = :sys.get_state(view.pid)
+          _ = render(view)
+          event
+        end
+
+      _ = :sys.get_state(view.pid)
+
+      document = LazyHTML.from_fragment(render(view))
+
+      rendered_events =
+        document
+        |> LazyHTML.query("#events-stream > div[data-sequence]")
+        |> LazyHTML.to_tree()
+
+      first_event = hd(events)
+      last_event = List.last(events)
+
+      assert length(rendered_events) == RunPresentation.max_rendered_events()
+      assert has_element?(view, "#events-window-notice")
+      assert render(view) =~ "Showing 200 of 201 events"
+      refute has_element?(view, "#run-event-#{first_event.id}")
+      assert has_element?(view, "#run-event-#{last_event.id}")
+    end
   end
 
   describe "Deterministic Eval: UI restart" do
@@ -720,5 +793,12 @@ defmodule ShoestringWeb.RunLiveTest do
     |> LazyHTML.from_fragment()
     |> LazyHTML.query_by_id("flash-group")
     |> LazyHTML.to_html()
+  end
+
+  defp empty_socket do
+    %Phoenix.LiveView.Socket{
+      assigns: %{__changed__: %{}, current_scope: nil, flash: %{}},
+      private: %{live_temp: %{}, lifecycle: %Phoenix.LiveView.Lifecycle{}}
+    }
   end
 end
