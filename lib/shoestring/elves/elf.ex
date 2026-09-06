@@ -393,7 +393,20 @@ defmodule Shoestring.Elves.Elf do
           select: event.idempotency_key
       )
 
-    %{state | seen: MapSet.new(keys)}
+    # event_count is the classifier's observed-adapter-events input: it counts
+    # newly persisted ADAPTER events (after_ingest/3), one per
+    # "elf-event:<dispatch>:<source>" key. It must be restored alongside seen,
+    # or a resumed Elf that skips its re-streamed events reports a run that
+    # genuinely produced events as transport/no_adapter_events.
+    #
+    # This is deliberately NOT MapSet.size(seen): seen also holds the Elf's
+    # own log-artifact row ("elf-log:<dispatch>", same type, non-nil key),
+    # which after_ingest/3 never counted. Only the elf-event: prefix is the
+    # same population event_count counts.
+    prefix = "elf-event:#{state.dispatch_id}:"
+    count = Enum.count(keys, &String.starts_with?(&1, prefix))
+
+    %{state | seen: MapSet.new(keys), event_count: count}
   end
 
   # A retry after a crash re-streams from the start but must not duplicate

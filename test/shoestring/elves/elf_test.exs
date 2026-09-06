@@ -108,6 +108,83 @@ defmodule Shoestring.Elves.ElfTest do
     assert ElvesHelpers.count_events(goal.id, run_id, ["harness.event_recorded"]) == 0
   end
 
+  test "crash recovery: re-streamed events restore the observed count, no false no_adapter_events",
+       %{sup: sup, goal: goal, task: task} do
+    # N1: rebuild_seen/1 restored state.seen from persisted events but left
+    # state.event_count at 0, so an Elf that resumed after a crash, skipped
+    # its re-streamed events as already-seen, then saw a clean OS exit with
+    # no verdict classified no_adapter_events (run.failed) — a terminal-state
+    # lie about a run that genuinely produced adapter events.
+    request = ElvesHelpers.run_request(goal, task)
+
+    restreamed = [
+      Scenario.lifecycle_event(source_event_id: "evt-life"),
+      Scenario.output_event("before crash", source_event_id: "evt-1")
+    ]
+
+    first_opts = [
+      supervisor: sup,
+      scenario: ElvesHelpers.custom_scenario(:crash_before_verdict, restreamed),
+      command: ["sleep", "30"],
+      runner_opts: @runner_opts,
+      notify: self()
+    ]
+
+    assert {:ok, first_pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(), first_opts)
+
+    run_id = wait_running(goal, request.dispatch_id)
+
+    assert {:ok, _} =
+             ElvesHelpers.wait_until(fn ->
+               if ElvesHelpers.count_events(goal.id, run_id, ["harness.event_recorded"]) >= 2,
+                 do: true
+             end)
+
+    pgid = ElvesHelpers.recorded_pgid(goal.id, run_id)
+    assert is_integer(pgid)
+
+    # Simulate the application dying mid-run and the orphaned group dying
+    # unobserved with it. The retry relaunches with a dead group, restores
+    # seen from durable events, and re-streams the same transport pair.
+    Process.exit(first_pid, :kill)
+    ref = Process.monitor(first_pid)
+    assert_receive {:DOWN, ^ref, :process, ^first_pid, _reason}, 5_000
+
+    ElvesHelpers.cleanup_group(pgid)
+
+    assert {:ok, []} =
+             ElvesHelpers.wait_until(fn ->
+               if ElvesHelpers.group_members(pgid) == [], do: []
+             end)
+
+    # The relaunched command sleeps briefly before exiting 0 so the
+    # re-streamed (already-seen) pair deterministically drains while the
+    # group is still alive; the classification under test then runs on the
+    # known exit, exactly like the silent-clean-exit regression above.
+    assert {:ok, second_pid} =
+             Elves.start_run(
+               request,
+               ElvesHelpers.fake_identity(),
+               Keyword.merge(first_opts,
+                 scenario: ElvesHelpers.custom_scenario(:crash_recovery_restream, restreamed),
+                 command: ["python3", "-c", "import time; time.sleep(2)"]
+               )
+             )
+
+    assert is_pid(second_pid) and second_pid != first_pid
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    # The re-streamed pair was skipped as already-seen (no duplicates), the
+    # clean exit observed prior adapter events, and the run completed.
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
+
+    assert ElvesHelpers.count_events(goal.id, run_id, ["harness.event_recorded"]) == 2
+
+    event = ElvesHelpers.terminal_event(goal.id, run_id)
+    assert event.type == "run.completed"
+  end
+
   test "missing python3 fails the launch with a diagnosable code, not an opaque default", %{
     sup: sup,
     goal: goal,
