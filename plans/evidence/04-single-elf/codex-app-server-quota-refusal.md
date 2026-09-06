@@ -3,8 +3,10 @@
 **Milestone**: `plans/milestones/04-single-elf.md`  
 **Date**: 2026-09-06  
 **CLI**: `codex-cli 0.153.4`  
-**Status**: VERIFIED live  
-**Fixture File**: `plans/evidence/04-single-elf/fixtures/codex/app-server-quota-refusal.json`  
+**Status**: VERIFIED live (wire frames & normalizer unit mapping)  
+**Fixture Files**:
+- App-server capture: `plans/evidence/04-single-elf/fixtures/codex/app-server-quota-refusal.json` (`.jsonl`)
+- Exec scratch capture: `plans/evidence/04-single-elf/fixtures/codex/exec-quota-refusal.jsonl`  
 **Conventions**: `plans/evidence/04-single-elf/README.md` (format-valid synthetic identifiers, zero secrets, zero machine paths)
 
 ---
@@ -21,7 +23,7 @@ category =
       :quota_refused
 ```
 
-`plans/evidence/04-single-elf/codex-app-server.md:231-235` previously recorded this mapping as **SCHEMA-ONLY**, because no quota refusal had been induced live during earlier spikes. Furthermore, an execution capture of `codex exec --json` during quota exhaustion (`_scratch/exec-refusal-raw.jsonl`) revealed that the `exec` transport emits **prose-only** errors without error codes or structured metadata:
+`plans/evidence/04-single-elf/codex-app-server.md:231-235` previously recorded this mapping as **SCHEMA-ONLY**, because no quota refusal had been induced live during earlier spikes. Furthermore, an execution capture of `codex exec --json` during quota exhaustion (`_scratch/exec-refusal-raw.jsonl`, committed as `plans/evidence/04-single-elf/fixtures/codex/exec-quota-refusal.jsonl`) revealed that the `exec` transport emits **prose-only** errors without error codes or structured metadata:
 
 ```json
 {"type":"error","message":"You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 8:52 PM."}
@@ -37,11 +39,11 @@ The question investigated here: **Does a real `codex app-server --stdio` turn re
 "codexErrorInfo": "usageLimitExceeded"
 ```
 
-This field is present in **both**:
-1. The server notification `method: "error"`, and
+This field is present on the wire in **both**:
+1. The server push notification `method: "error"`, and
 2. The terminal turn completion notification `method: "turn/completed"` under `params.turn.error`.
 
-### Impact on Normalization
+### Impact on Normalization: VERIFIED Unit Mapping (Elf Runtime UNVERIFIED)
 Because `codexErrorInfo` is populated with `"usageLimitExceeded"`, the clause in `Shoestring.Harness.CodexAppServer.EventNormalizer.normalize_codex_error/1`:
 
 ```elixir
@@ -49,7 +51,9 @@ info when info in ["usageLimitExceeded", "rateLimitExceeded"] ->
   :quota_refused
 ```
 
-is **VERIFIED live**. Live quota refusals under `codex app-server --stdio` are cleanly classified as `:quota_refused` with code `"usageLimitExceeded"`, rather than falling through to generic `:task_failed`.
+is **VERIFIED** against this live captured wire payload via a regression test in `test/shoestring/harness/codex_app_server/event_normalizer_test.exs` consuming `plans/evidence/04-single-elf/fixtures/codex/app-server-quota-refusal.jsonl`. The test proves that `EventNormalizer` maps this real refusal frame to `:quota_refused` with code `"usageLimitExceeded"`.
+
+**Scope boundary**: This verification establishes that the normalizer parses and maps the captured wire bytes correctly. No full Elf execution run or adapter session lifecycle ran during quota exhaustion; adapter-level and Elf-level behavior under live quota refusal remains **UNVERIFIED**.
 
 ---
 
@@ -93,6 +97,8 @@ Emitted at frame 20:
   "emittedAtMs": 1788735107622
 }
 ```
+
+> **REPO-INSPECTION note on `method: "error"`**: At commit `e168261`, `Shoestring.Harness.CodexAppServer.EventNormalizer` has no `do_normalize` clause for `method: "error"`. Under code inspection (`event_normalizer.ex:497-507`), this standalone notification falls through to the catch-all clause `{:skip, :unhandled_method}` — it is neither logged nor mis-normalized. Error classification rides solely on the subsequent `turn/completed` frame.
 
 ### Terminal Turn Completion Notification (`method: "turn/completed"`)
 Emitted at frame 21:
@@ -168,6 +174,7 @@ Immediately prior to the refusal error, the app server emitted two diagnostic st
 
 | Feature / Field | `codex exec --json` (CLI) | `codex app-server --stdio` (JSON-RPC) |
 | :--- | :--- | :--- |
+| **Data Provenance** | Operator scratch capture (`_scratch/exec-refusal-raw.jsonl`), committed as `exec-quota-refusal.jsonl` | Live foreground capture, committed as `app-server-quota-refusal.json` / `.jsonl` |
 | **Error Type** | Prose-only | Structured + Prose |
 | **`error.codexErrorInfo`** | **Absent** (null/undefined) | **Present**: `"usageLimitExceeded"` |
 | **Turn Status** | `"turn.failed"` | `"turn/completed"` with `turn.status: "failed"` |
@@ -175,19 +182,30 @@ Immediately prior to the refusal error, the app server emitted two diagnostic st
 | **Pre-failure Thread State** | N/A | `thread/status/changed` (`status.type: "systemError"`) |
 | **Adapter Normalization** | Requires prose regex / heuristic | Maps directly via `codexErrorInfo` |
 
+> **Provenance & Attribution**: The `codex exec --json` data was captured in operator scratch (`_scratch/exec-refusal-raw.jsonl`) during the same quota exhaustion window. It has been committed as a redacted fixture at `plans/evidence/04-single-elf/fixtures/codex/exec-quota-refusal.jsonl` so that both sides of the comparison are permanently verifiable in repository history.
+
 This structural divergence justifies the architectural selection of `codex app-server --stdio` as the primary execution transport for Iteration 4: it maintains protocol-level distinction between quota exhaustion and arbitrary agent failures.
 
 ---
 
 ## 5. Label Discipline
 
-- **VERIFIED live**:
-  - `codex app-server --stdio` turn refusal carries `codexErrorInfo: "usageLimitExceeded"` on `turn/completed` (`turn.error`).
-  - `codex app-server --stdio` emits `error` notification with `params.error.codexErrorInfo: "usageLimitExceeded"`.
+- **VERIFIED live (wire frames)**:
+  - `codex app-server --stdio` turn refusal wire frame carries `codexErrorInfo: "usageLimitExceeded"` on `turn/completed` (`turn.error`) (committed fixture: `plans/evidence/04-single-elf/fixtures/codex/app-server-quota-refusal.jsonl`).
+  - `codex app-server --stdio` emits wire `error` notification with `params.error.codexErrorInfo: "usageLimitExceeded"`.
   - `account/rateLimits/updated` is pushed prior to turn failure with `credits.balance: "0"` and `credits.hasCredits: false`.
   - `thread/status/changed` transitions to `{"type": "systemError"}` on refusal.
-  - Normalization in `Shoestring.Harness.CodexAppServer.EventNormalizer` yields `Error.new(:quota_refused, "usageLimitExceeded", message)` for this refusal shape.
+
+- **VERIFIED (normalizer unit mapping)**:
+  - `Shoestring.Harness.CodexAppServer.EventNormalizer.normalize/4` produces `Error.new(:quota_refused, "usageLimitExceeded", message)` when fed the live captured `turn/completed` frame (locked by golden test in `test/shoestring/harness/codex_app_server/event_normalizer_test.exs`).
+
+- **REPO-INSPECTION**:
+  - `method: "error"` push notification falls to `{:skip, :unhandled_method}` in `EventNormalizer` at `e168261` (no clause in `do_normalize`).
+
 - **SCHEMA-ONLY**:
   - `codexErrorInfo: "rateLimitExceeded"` (present in schema and normalizer match list, but not observed in this specific quota window).
   - `codexErrorInfo: "serverOverloaded"` (schema variant).
   - `codexErrorInfo: "unauthorized"` (schema variant).
+
+- **UNVERIFIED**:
+  - Full Elf execution run or adapter session lifecycle handling of live quota refusal (no Elf ran; testing is unit normalization on captured wire bytes).
