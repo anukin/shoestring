@@ -885,17 +885,32 @@ defmodule Shoestring.Elves.Elf do
         # The direct child is gone but stragglers linger: bounded reap, then
         # report what the OS exit says. This is termination of a run whose
         # primary already exited — not a timer kill of working processes.
+        # The observed adapter-event count travels with the classification:
+        # a clean exit with zero observed events is a launch that never
+        # began, never a completion.
         _ = terminate_owned_group(state)
 
         stop_with_terminal(
           state,
-          Classifier.classify(:no_verdict, state.os_exit, state.cancel_requested?)
+          Classifier.classify(
+            :no_verdict,
+            state.os_exit,
+            state.cancel_requested?,
+            state.event_count
+          )
         )
 
       true ->
+        # Same observed-events rule on the fully-reaped path: zero adapter
+        # events plus a clean exit fails as `transport/no_adapter_events`.
         stop_with_terminal(
           state,
-          Classifier.classify(:no_verdict, state.os_exit, state.cancel_requested?)
+          Classifier.classify(
+            :no_verdict,
+            state.os_exit,
+            state.cancel_requested?,
+            state.event_count
+          )
         )
     end
   end

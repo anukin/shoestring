@@ -1,0 +1,46 @@
+{
+  "fixture_kind": "streaming_delta_sequence",
+  "evidence_status": "live_observed",
+  "cli": "codex-cli 0.153.4",
+  "conventions": "plans/evidence/04-single-elf/README.md (format-valid synthetic identifiers, zero secrets, zero machine paths)",
+  "provenance": "Frames 1-2 are the live-captured item/agentMessage/delta bare-string shape from demo run 2 (2026-09-06) plus its map-shaped sibling: frame 1 transcribed byte-identical except for the already-redacted synthetic identifiers, frame 2 a synthetic same-envelope variant. Frame 3 is a synthetic malformed (integer) delta. Frame 4 is a synthetic null-params turn notification exercising the Session rescue backstop (the normalizer raises on non-map params shapes it does not guard; the Session must log, count, and survive). Driven through the full CodexAppServer.Session path by test/shoestring/harness/codex_app_server/session_test.exs (streaming delta shapes), not just the normalizer in isolation.",
+  "frames": [
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "01950000-0000-7000-8000-000000000001",
+        "turnId": "01950000-0000-7000-8000-000000000003",
+        "itemId": "msg_0000000000000000000000000000000000000000000000000000000000000001",
+        "delta": "I"
+      },
+      "emittedAtMs": 1788669895021
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "01950000-0000-7000-8000-000000000001",
+        "turnId": "01950000-0000-7000-8000-000000000003",
+        "itemId": "msg_0000000000000000000000000000000000000000000000000000000000000001",
+        "delta": {"text": "hello"}
+      },
+      "emittedAtMs": 1788669895022
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "01950000-0000-7000-8000-000000000001",
+        "turnId": "01950000-0000-7000-8000-000000000003",
+        "itemId": "msg_0000000000000000000000000000000000000000000000000000000000000001",
+        "delta": 12345
+      },
+      "emittedAtMs": 1788669895023
+    },
+    {
+      "method": "turn/started",
+      "params": {
+        "turn": "oops"
+      },
+      "emittedAtMs": 1788669895024
+    }
+  ]
+}

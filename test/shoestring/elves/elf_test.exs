@@ -72,6 +72,42 @@ defmodule Shoestring.Elves.ElfTest do
     assert String.starts_with?(event.payload["error_code"], "signal_exit_")
   end
 
+  test "clean OS exit with zero adapter events fails instead of completing (live-demo regression)",
+       %{
+         sup: sup,
+         goal: goal,
+         task: task
+       } do
+    # The live demo's placeholder command exited 0 instantly while the
+    # provider turn was still handshaking; the Elf reported run.completed
+    # having observed zero adapter events. A launch that never began is a
+    # launch failure, never a success.
+    #
+    # The owned command sleeps briefly before exiting 0 so the (empty)
+    # adapter stream deterministically drains while the group is still
+    # alive; the classification under test then runs on the known exit.
+    request = ElvesHelpers.run_request(goal, task)
+    scenario = ElvesHelpers.custom_scenario(:silent_clean_exit, [])
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["python3", "-c", "import time; time.sleep(2)"],
+               runner_opts: @runner_opts,
+               notify: self()
+             )
+
+    assert_receive {:elf_terminal, run_id, %{class: :failed}}, 10_000
+
+    event = ElvesHelpers.terminal_event(goal.id, run_id)
+    assert event.type == "run.failed"
+    assert event.payload["error_category"] == "transport"
+    assert event.payload["error_code"] == "no_adapter_events"
+    assert ElvesHelpers.count_events(goal.id, run_id, ["run.completed"]) == 0
+    assert ElvesHelpers.count_events(goal.id, run_id, ["harness.event_recorded"]) == 0
+  end
+
   test "missing python3 fails the launch with a diagnosable code, not an opaque default", %{
     sup: sup,
     goal: goal,
