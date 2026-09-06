@@ -65,7 +65,29 @@ metadata, or bundled types is **SCHEMA-ONLY**. Anything unknown is
   discarded**. Whatever error text the CLI printed (usage error, quota
   refusal, crash trace) is lost. Any re-probe must capture stderr.
 
-## Lead hypothesis — verdict: KILLED in its strong form
+## Lead hypothesis — verdict: CONFIRMED (corrected 2026-09-06; wrongly KILLED below — see correction)
+
+**Correction (2026-09-06, live evidence):** `claude --print
+--output-format stream-json` without `--verbose` exits 1 with `Error:
+When using --print, --output-format stream-json requires --verbose`
+(VERIFIED — reproduced 2/2 on 2.1.261, zero tokens; committed fixture
+`fixtures/claude/no-verbose-usage-error.stderr.txt`, writeup
+`claude-exec-events.md`). Operator CONFIRMED the identical error text
+from an authenticated shell. Gate 0A's status-1 was an argument error:
+its invocation used `--print` + `--output-format stream-json` with no
+`--verbose`, matching this signature exactly (exit 1, empty stdout,
+~1 s fast fail, stderr discarded).
+
+**Why the kill verdict below was wrong:** all three observations check
+the *non-`--print`* path. Observation 3's probe (`claude
+--output-format stream-json` with no `-p`) never enters the `--print`
+validation branch, so "no `--verbose` demand" there says nothing about
+the `--print` combination — the requirement is scoped to `--print`
+exactly as the error text states. `--help` (observation 1) documents no
+coupling, but the parser enforces one anyway; help text is not the
+validator. The three observations are retained below as accurate
+records of what was checked; only the conclusion drawn from them was
+wrong.
 
 Hypothesis: `claude -p --output-format stream-json` fails unless
 `--verbose` is also passed, so Gate 0A's status-1 was an argument error,
@@ -94,7 +116,7 @@ same arg shape as the sibling `json` probe that succeeded, with a real
 prompt, and it failed fast (1056 ms) at runtime. That is not the shape
 of the missing-input validation error above.
 
-**Conclusion:** Gate 0A's `status 1, no structured messages` was a
+**Conclusion (SUPERSEDED — see correction above):** Gate 0A's `status 1, no structured messages` was a
 genuine **runtime** failure on 2.1.251, not an argument error. The
 `--verbose` theory does not explain it. Open causes (UNVERIFIED):
 a 2.1.251-era stream-json bug since fixed, a provider/quota error whose

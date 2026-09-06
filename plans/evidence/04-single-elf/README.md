@@ -18,6 +18,17 @@ To ensure consistent fixture structure across provider transport spikes (`codex 
     01950000-0000-7000-8000-000000000001
     ```
   - Sequential items and turns may increment the low sequence bits (`...0002`, `...0003`, etc.).
+  - Provider-faithful variant (ruled, not a convention fork): where the
+    provider protocol emits UUIDv4 strings (Claude `session_id`, frame
+    `uuid`, `message.id` — version nibble `4`, variants `8`, `9`, `a`,
+    or `b`), the fixture value must be a deterministic, synthetic
+    UUIDv4-shaped string preserving the observed version and variant
+    nibbles (e.g., `aaaaaaaa-0000-4000-a000-000000000001`). Forcing the
+    v7 baseline pattern onto a v4-emitting protocol would fabricate
+    bytes the real protocol never emits. Prefixed non-UUID identifiers
+    (e.g., Claude `toolu_…`, `req_…`, `msg_…`) are substituted
+    shape-preserving: same prefix, same length, same character class,
+    1:1 mapping.
   - Local item identifiers (e.g., `item_0`, `item_1`) retain their natural zero-indexed ordinal naming from the stream.
 
 ### 2. Zero Secrets and Credentials
