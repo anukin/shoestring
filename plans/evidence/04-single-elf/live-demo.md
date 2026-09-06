@@ -7,19 +7,28 @@ are spent**; no further provider inference was consumed after run 2.
 Bottom line up front: this demo is a **documented partial failure**, which the
 brief names as a legitimate milestone outcome. The milestone's first
 acceptance criterion — **the source checkout is unchanged** — is VERIFIED
-byte-for-byte. The Elf lifecycle itself exhibits two genuine live defects
+only for what the two committed artifacts support: HEAD unchanged
+(`fd24c32` both files) and `git status --porcelain` identical (only
+pre-existing untracked `.pi/`) (VERIFIED, `source-baseline.txt`,
+`source-after.txt`). The baseline's `diff-hash` / `index-hash` / `stash`
+sections have no counterpart in `source-after.txt` (which contains ONLY
+HEAD, BRANCH, and status --porcelain), so no diff-hash, index-hash, or
+stash comparison was captured — NOT CAPTURED, not claimed. The Elf
+lifecycle itself exhibits two genuine live defects
 below; neither is written up as a success.
 
-Claim labels: `VERIFIED` = committed artifact or command output from this run;
+Claim labels: `VERIFIED` = committed artifact in this PR from this run;
 `REPO-INSPECTION` = code read without live execution;
-`UNVERIFIED` = stated as unknown.
+`OPERATOR-OBSERVED-NOT-CAPTURED` = operator saw it live but no artifact is
+committed in this PR; `UNVERIFIED` = stated as unknown; `NOT CAPTURED` =
+the comparison was not recorded in the committed artifacts.
 
-## 1. GO/NO-GO check — VERIFIED GO
+## 1. GO/NO-GO check — GO (on the committed capacity probe; version/login/doctor observed-not-captured)
 
-- `codex --version` → `codex-cli 0.153.4` (VERIFIED, shell output).
-- `codex login status` → `Logged in using ChatGPT` (VERIFIED).
+- `codex --version` → `codex-cli 0.153.4` (OPERATOR-OBSERVED-NOT-CAPTURED, shell output not committed).
+- `codex login status` → `Logged in using ChatGPT` (OPERATOR-OBSERVED-NOT-CAPTURED, output not committed).
 - `codex doctor` → auth configured (chatgpt tokens in file store), websocket
-  `connected (HTTP 101)` to the model provider, zero model cost (VERIFIED).
+  `connected (HTTP 101)` to the model provider, zero model cost (OPERATOR-OBSERVED-NOT-CAPTURED, output not committed).
 - Trivial no-cost auth probe: raw stdio handshake `initialize → initialized →
   account/read → account/rateLimits/read` over `codex app-server --stdio`,
   **no thread, no turn, zero quota** (script kept out of the repo at
@@ -30,7 +39,7 @@ Claim labels: `VERIFIED` = committed artifact or command output from this run;
   only a *missing account or unauthenticated marker* counts), the handshake
   succeeds (VERIFIED, `fixtures/demo/capacity-before.json`).
   Capacity before: primary 5h window **54%**, secondary weekly window **91%**,
-  `spendControlReached: false` (VERIFIED).
+  `spendControlReached: false` (VERIFIED, `fixtures/demo/capacity-before.json`).
 
 ## 2. Method (all runs through the module API)
 
@@ -38,7 +47,9 @@ Claim labels: `VERIFIED` = committed artifact or command output from this run;
   (base `7012722f…`; redacted placeholder `/tmp/iter4-live-demo-repo`).
 - Isolated state dir via `mktemp -d`, `SHOESTRING_STATE_DIR` /
   `SHOESTRING_TEST_STATE_DIR`; nothing under test touches the developer's
-  real state dir (VERIFIED).
+  real state dir (OPERATOR-OBSERVED-NOT-CAPTURED — isolated paths appear in
+  `capture-run*.jsonl`, but absence of writes to the real state dir was not
+  captured in a committed artifact).
 - Elf worktree per run via `Shoestring.Worktrees.create(fixture, run_id)`
   (branch `shoestring/run-<run_id>`, base = fixture HEAD) — i.e. the
   post-PR-#37 path where Elf children run in their worktree, not the host
@@ -46,14 +57,15 @@ Claim labels: `VERIFIED` = committed artifact or command output from this run;
 - `Elves.start_run(request, CodexAppServer.identity(), adapter:
   CodexAppServer, adapter_opts: %{live: true}, command: …, notify: self())`
   with `run_id == dispatch_id` (single UUID) so adapter session lookup and
-  Elf streaming agree (VERIFIED in code; REPO-INSPECTION for the equality
-  requirement — `session.ex:457` uses `workspace_ref` as thread cwd,
-  `codex_app_server.ex:220` stores the session under `request.dispatch_id`).
+   Elf streaming agree (REPO-INSPECTION for the equality
+   requirement — `session.ex:457` uses `workspace_ref` as thread cwd,
+   `codex_app_server.ex:220` stores the session under `request.dispatch_id`).
 - The adapter sends `workspace_ref` verbatim as the thread `cwd`
   (REPO-INSPECTION, `session.ex:457`); the driver ran with the BEAM cwd at
   the worktrees root so the relative ref resolves to the Elf worktree.
-  The run-2 rollout's `session_meta.cwd` equals the Elf worktree path
-  (VERIFIED structurally — rollout files themselves are NOT committed).
+  The run-2 rollout's `session_meta.cwd` equalled the Elf worktree path
+  (OPERATOR-OBSERVED-NOT-CAPTURED — the full rollout file is NOT committed;
+  `rollout-run2-summary.json` holds integer counts only, no `cwd`).
   Whether a relative thread cwd is robust in production is UNVERIFIED and
   flagged as a question, not a claim.
 - Prompt (credential-free by construction) instructed: create `hello.txt`
@@ -68,9 +80,12 @@ Claim labels: `VERIFIED` = committed artifact or command output from this run;
   `…21-37-55…jsonl` shows `task_started`, two assistant message items, one
   `item_completed` (UserMessage), then `turn_aborted` (VERIFIED structurally,
   `fixtures/demo/rollout-run1-summary.json`).
-- No `hello.txt` was created; `printf ok` never ran (VERIFIED — worktree
-  contained only `README.md` + `.git` afterwards).
-- Mechanism (REPO-INSPECTION + VERIFIED log/timing): the owned command was
+- No `hello.txt` was created; `printf ok` never ran
+  (OPERATOR-OBSERVED-NOT-CAPTURED — worktree contained only `README.md` +
+  `.git` afterwards; no worktree listing or diff is committed. The
+  zero-`commandExecution` counts in `rollout-run1-summary.json` are VERIFIED
+  and consistent with this, but do not by themselves prove file absence).
+- Mechanism (REPO-INSPECTION + VERIFIED timing in `capture-run1.jsonl`): the owned command was
   the production placeholder `["codex", "app-server", "--stdio"]`, which
   exits 0 almost instantly on EOF stdin; `handle_os_exit` →
   `finish_after_stream` with an empty verdict set → `Classifier.classify(
@@ -81,10 +96,11 @@ Claim labels: `VERIFIED` = committed artifact or command output from this run;
 - The turn abort at +70 ms was **my harness's fault**, not the provider's:
   the driver's trajectory dump raised (`Jason` on an unloaded Ecto
   association), the script process died, `mix run` tore the VM down, and the
-  transport died with it (VERIFIED timing correlation). Recorded here so the
+  transport died with it (OPERATOR-OBSERVED-NOT-CAPTURED — timing correlation
+  only; no driver crash log is committed). Recorded here so the
   abort is not misread as a provider refusal.
 
-## 4. Run 2 — Session crash on a bare-string delta; explicit cancel lands `run.cancelled` (VERIFIED)
+## 4. Run 2 — Session crash on a bare-string delta; late cancel reaps an already-dead Elf (defect + orphan reaping, NOT safe-boundary cancellation)
 
 Deviations from run 1 (deliberate, documented): owned command
 `["sleep", "240"]` (supervision anchor that outlives the turn; precedent:
@@ -98,8 +114,12 @@ SQLite file (see §5), wait on the **session** turn, then cancel.
   `item/agentMessage/delta` with `"delta": "I"` — a **bare string**.
   `EventNormalizer.do_normalize` assumes a map (`delta["text"]`,
   `event_normalizer.ex:344-345`) → `Access.get("I", "text", nil)` →
-  `FunctionClauseError` → Session GenServer death → linked Transport death
-  → linked Elf death (nothing traps) (VERIFIED, `crash-session-run2.log`).
+   `FunctionClauseError` → Session GenServer death → linked Transport death
+   (VERIFIED, `crash-session-run2.log` shows the Session `#PID<0.384.0>` and
+   Transport `#PID<0.385.0>` terminations and nothing else) → linked Elf
+   death (VERIFIED, `capture-run2.jsonl`: `elf_alive:false` from `5,044ms`
+   through `240,091ms`, i.e. the Elf was already dead ~235 s before the
+   cancel; nothing traps) (REPO-INSPECTION for the link chain).
   `normalize/4` documents `{:ok}|{:skip}|{:error}` returns but nothing
   rescues `do_normalize`, so one unshaped frame violates the contract and
   takes the supervision chain with it (REPO-INSPECTION).
@@ -107,26 +127,38 @@ SQLite file (see §5), wait on the **session** turn, then cancel.
   durable trajectory holds **zero** `harness.event_recorded` for this run
   (VERIFIED, `trajectory-run2.json`, 7 events, none adapter-originated).
   No backfill exists by design, so they are unrecoverable.
-- The agent never acted: no `hello.txt`, empty worktree diff, no command
-  executions in the 13-line rollout (`rollout-run2-summary.json`;
-  `turn_aborted` when our transport died) (VERIFIED).
+- The agent never acted: no `hello.txt`, empty worktree diff
+  (OPERATOR-OBSERVED-NOT-CAPTURED — no worktree listing or diff is
+  committed); no command executions in the 13-line rollout
+  (VERIFIED, `rollout-run2-summary.json` `command_executions: []`;
+  `turn_aborted` when our transport died).
 - After a 240 s watch, `Elves.cancel_run/2` returned `{:ok, :cancelled}` and
   the trajectory closed `run.cancelling → run.cancelled`
-  (VERIFIED, `trajectory-run2.json` seq 6–7). No `sleep`/`codex` processes
-  remained: the whole owned process group was reaped
-  (VERIFIED, empty `ps` after). Cancellation-at-a-boundary therefore works
-  as specified; it is recorded as the run's terminal state, **not** as a
-  completion.
-- Process/session identity (VERIFIED, `run.running` payload in
-  `trajectory-run2.json`): owned pgid `pgid:<synthetic>` (real value in the
-  substitution map below), provider thread id `<synthetic v7>` — cross-checked
-  against the rollout filename, which embeds the same thread id (VERIFIED).
+  (VERIFIED, `trajectory-run2.json` seq 6–7; `capture-run2.jsonl`
+  `cancel_run_result`). This is **orphan process-group reaping of an
+  already-dead Elf, NOT safe-boundary cancellation of a live one**: the
+  Session/Transport/Elf crashed at ~5 s (`capture-run2.jsonl` shows
+  `elf_alive:false` from `5,044ms` to `240,091ms`), so the 240 s cancel hit
+  the `cancel_without_elf` path (registry lookup misses a live Elf) and
+  reaped the owned process group after the fact. No `sleep`/`codex`
+  processes remained afterwards (OPERATOR-OBSERVED-NOT-CAPTURED — no `ps`
+  output is committed). Safe-boundary cancellation of a live Elf is
+  **not demonstrated** (see §6 not-demonstrated list); the `cancelled`
+  terminal state is recorded as the run's terminal state, **not** as a
+  completion and **not** as proof that boundary cancellation works.
+- Process/session identity (`run.running` payload in
+  `trajectory-run2.json`, VERIFIED): owned pgid `pgid:<synthetic>` (real value in the
+  substitution map below), provider thread id `<synthetic v7>` — which matches
+  the `thread_id` field of the committed `rollout-run2-summary.json`
+  (VERIFIED cross-check of the two committed artifacts). That the same id is
+  also embedded in the uncommitted rollout *filename* is
+  OPERATOR-OBSERVED-NOT-CAPTURED (rollout files themselves are not committed).
 - `dispatch.effect_failed` (seq 5) is dev-path noise from the Oban
   `UnconfiguredEffect` (REPO-INSPECTION, `dispatch_worker.ex` +
   `unconfigured_effect.ex`); it touches only the dispatch row and does not
   affect the Elf lifecycle.
 
-## 5. Harness/method lessons (all VERIFIED by command output)
+## 5. Harness/method lessons (OPERATOR-OBSERVED-NOT-CAPTURED — no command output committed; observations kept, labels corrected)
 
 - **Test-env SQLite is not durable for demos**: under `MIX_ENV=test` every
   write sits in the `Ecto.Adapters.SQL.Sandbox` transaction and rolls back
@@ -147,15 +179,16 @@ SQLite file (see §5), wait on the **session** turn, then cancel.
 
 | # | Expectation | Outcome |
 |---|---|---|
-| 1 | Elf creates a file in the fixture repo | **FAILED** — no `hello.txt` either run (VERIFIED) |
-| 2 | Elf runs one deterministic command (`printf ok`) | **FAILED** — never executed; run-2 rollout has zero `commandExecution` items (VERIFIED) |
-| 3 | Structured result returned | **FAILED** as run terminal; run 1's `completed` was false (§3); run 2's terminal is `cancelled` after explicit cancel (VERIFIED). Provider-side result events existed only in lost Session memory |
-| 4 | Resulting worktree diff inspected | **VERIFIED** — empty diff both runs (`git status --porcelain` clean, only base-commit `README.md`) |
+| 1 | Elf creates a file in the fixture repo | **FAILED** — no `hello.txt` either run (OPERATOR-OBSERVED-NOT-CAPTURED — no worktree listing committed; consistent with zero `commandExecution` counts in the committed rollout summaries) |
+| 2 | Elf runs one deterministic command (`printf ok`) | **FAILED** — never executed; run-2 rollout has zero `commandExecution` items (VERIFIED, `rollout-run2-summary.json` `command_executions: []`) |
+| 3 | Structured result returned | **FAILED** as run terminal; run 1's `completed` was false (§3); run 2's terminal is `cancelled` via the orphan-reaping path after the Elf had been dead ~235 s (§4), not via live-boundary cancellation (VERIFIED, `capture-run1.jsonl` + `trajectory-run2.json` + `capture-run2.jsonl`). Provider-side result events existed only in lost Session memory |
+| 4 | Resulting worktree diff inspected | **OPERATOR-OBSERVED-NOT-CAPTURED** — empty diff both runs per operator (`git status --porcelain` clean, only base-commit `README.md`); no worktree status/diff output is committed |
 | 5 | Capacity before and after | **VERIFIED** — 54%/91% before, unchanged after run 1 and after run 2 (`capacity-*.json`) |
-| ★ | **Source checkout unchanged** | **VERIFIED** — HEAD `fd24c32`, `git status --porcelain` identical (only pre-existing untracked `.pi/`), empty `git diff HEAD` hash `e3b0c44…`, identical index hash, identical stash list (`source-baseline.txt`, `source-after.txt`) |
+| ★ | **Source checkout unchanged** | **PARTIAL** — HEAD `fd24c32` unchanged and `git status --porcelain` identical (only pre-existing untracked `.pi/`) (VERIFIED, `source-baseline.txt` vs `source-after.txt`). `diff-hash` (`e3b0c44…`), `index-hash`, and `stash` comparisons are NOT CAPTURED: the baseline carries `diff-hash`/`index-hash`/empty-`stash` sections that have no counterpart in `source-after.txt` (HEAD/BRANCH/porcelain only), so no byte-for-byte, index, or stash equality is claimed |
 | + | Normalized event timeline | **PARTIAL** — durable run-lifecycle timeline VERIFIED (`trajectory-run2.json`); adapter event timeline lost with the Session (§4); run-1 timeline additionally lost to Sandbox rollback (§5) |
-| + | Terminal classification | **VERIFIED** — run 1 false `completed` (defect), run 2 `cancelled` via explicit cancel |
-| + | pgid + provider thread id; worktree path/branch/base | **VERIFIED** — `trajectory-run2.json` + capture files |
+| + | Terminal classification | **VERIFIED** — run 1 false `completed` (defect), run 2 `cancelled` via the orphan-reaping cancel path (defect context in §4), not via live-boundary cancellation |
+| + | pgid + provider thread id; worktree path/branch/base | **VERIFIED** — pgid + thread id in `trajectory-run2.json`, worktree path/branch/base in `capture-run2.jsonl` `worktree_created`; rollout-filename embedding is OPERATOR-OBSERVED-NOT-CAPTURED |
+| − | Not demonstrated | Safe-boundary cancellation of a **live** Elf; `session_meta.cwd` equality from a committed artifact; worktree file-absence/diff from a committed artifact; `diff-hash`/`index-hash`/`stash` source equality |
 
 ## 7. Redaction map (`fixtures/demo/`; README convention)
 
@@ -170,8 +203,12 @@ real item uuid → `…000004`; real `msg_…` (64-hex) → `msg_0…01`
 safe projections only. Rollout summaries carry counts, never model text or
 reasoning. Local run/goal/task UUIDs are kept (join keys, not sensitive).
 BEAM `#PID<…>`/`#Port<…>` values are kept: they are dead-VM-local and
-required to follow the link-crash narrative. Stash-list lines were dropped
-from `source-baseline.txt` (public PR branch names add no equality signal).
+required to follow the link-crash narrative. No stash-list equality is
+claimed: `source-baseline.txt` carries an (empty) `--- stash ---` section
+while `source-after.txt` carries no stash section at all, so a
+baseline-vs-after stash comparison is NOT CAPTURED (this supersedes any
+earlier identical-stash reading; §6 ★ states the only source-equality
+claim: HEAD + porcelain).
 
 ## 8. Gate and delivery
 
