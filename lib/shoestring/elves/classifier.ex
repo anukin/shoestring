@@ -48,14 +48,15 @@ defmodule Shoestring.Elves.Classifier do
   `os_exit` is `{:exit_status, non_neg_integer()}`, `:no_exit` (process still
   owned/alive), or `:unknown`. `cancel_requested?` forces `:cancelled`.
 
-  The 4-arity variant additionally takes the count of observed adapter
-  events (`observed_adapter_events`): a clean OS exit with no adapter
-  verdict completes ONLY when at least one adapter event was observed.
-  With zero observed events the launch never demonstrably began, so the
-  run fails as `transport/no_adapter_events` instead of reporting a
-  success it never witnessed. The 3-arity variant cannot tell the two
-  cases apart and fails closed: without evidence of stream activity,
-  success is never claimed.
+  The 5-arity variant additionally takes the count of observed adapter
+  events (`observed_adapter_events`) and the count of progress events
+  (`progress_events`): a clean OS exit with no adapter verdict completes
+  ONLY when at least one progress event was observed. With zero observed
+  events the launch never demonstrably began (`transport/no_adapter_events`);
+  with observed events but zero progress (handshake only, e.g. `:lifecycle`
+  or `:capacity`), the run fails as `transport/no_adapter_progress`. The 3-arity
+  variant cannot tell these cases apart and fails closed: without evidence of
+  stream activity, success is never claimed.
   """
   @spec classify(term(), term(), boolean()) :: terminal()
   def classify(_verdict, _os_exit, true) do
@@ -118,25 +119,70 @@ defmodule Shoestring.Elves.Classifier do
 
   @doc """
   Classifies a `:no_verdict` clean OS exit with knowledge of how many
-  adapter events were observed during the run.
+  adapter events were observed during the run and how many of those were
+  progress events (events whose kind is not `:lifecycle` or `:capacity`).
 
-  A positive count means the run streamed evidence and then ended without
-  an explicit verdict — the genuinely ambiguous ending, still deferred to
-  orchestrator-facing recovery as `:completed`. Zero means the launch
-  never began observably — never `:completed`.
+  A positive progress count means the run streamed evidence of model work and
+  then ended without an explicit verdict — the genuinely ambiguous ending, still
+  deferred to orchestrator-facing recovery as `:completed`.
+
+  Zero progress events with a positive observed adapter event count classifies
+  as `transport/no_adapter_progress` — events genuinely arrived (the transport
+  connected and handshook), but no actual work occurred before the clean exit.
+  This is kept distinct from `transport/no_adapter_events` (where zero adapter
+  events were observed).
   """
-  @spec classify(term(), term(), boolean(), non_neg_integer()) :: terminal()
-  def classify(:no_verdict, {:exit_status, 0}, false, observed_adapter_events)
-      when is_integer(observed_adapter_events) and observed_adapter_events > 0 do
-    %{class: :completed}
+  @spec classify(
+          term(),
+          term(),
+          boolean(),
+          non_neg_integer(),
+          non_neg_integer()
+        ) :: terminal()
+  def classify(_verdict, _os_exit, true, _observed, _progress) do
+    %{class: :cancelled}
   end
 
-  def classify(:no_verdict, {:exit_status, 0}, false, _observed_adapter_events) do
+  def classify(:no_verdict, {:exit_status, 0}, false, observed, _progress)
+      when not is_integer(observed) or observed <= 0 do
     %{class: :failed, error_category: "transport", error_code: "no_adapter_events"}
   end
 
-  def classify(verdict, os_exit, cancel_requested?, _observed_adapter_events) do
+  def classify(:no_verdict, {:exit_status, 0}, false, _observed, progress)
+      when not is_integer(progress) or progress <= 0 do
+    %{class: :failed, error_category: "transport", error_code: "no_adapter_progress"}
+  end
+
+  def classify(:no_verdict, {:exit_status, 0}, false, observed, progress)
+      when is_integer(observed) and observed > 0 and is_integer(progress) and progress > 0 do
+    %{class: :completed}
+  end
+
+  def classify(verdict, os_exit, cancel_requested?, _observed, _progress) do
     classify(verdict, os_exit, cancel_requested?)
+  end
+
+  @doc """
+  4-arity backwards-compatible variant.
+
+  When passed an integer count, treats progress as equal to observed
+  adapter events. Also accepts keyword list or map with `:events` and `:progress`.
+  """
+  @spec classify(term(), term(), boolean(), non_neg_integer() | keyword() | map()) :: terminal()
+  def classify(verdict, os_exit, cancel_requested?, opts) when is_list(opts) do
+    observed = Keyword.get(opts, :events, Keyword.get(opts, :observed, 0))
+    progress = Keyword.get(opts, :progress, observed)
+    classify(verdict, os_exit, cancel_requested?, observed, progress)
+  end
+
+  def classify(verdict, os_exit, cancel_requested?, %{} = opts) do
+    observed = Map.get(opts, :events, Map.get(opts, :observed, 0))
+    progress = Map.get(opts, :progress, observed)
+    classify(verdict, os_exit, cancel_requested?, observed, progress)
+  end
+
+  def classify(verdict, os_exit, cancel_requested?, observed_adapter_events) do
+    classify(verdict, os_exit, cancel_requested?, observed_adapter_events, observed_adapter_events)
   end
 
   @doc "Terminal for an Elf-side overflow: oversized output fails the run, never truncates silently."

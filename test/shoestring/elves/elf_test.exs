@@ -108,6 +108,46 @@ defmodule Shoestring.Elves.ElfTest do
     assert ElvesHelpers.count_events(goal.id, run_id, ["harness.event_recorded"]) == 0
   end
 
+  test "handshake-only stall that exits clean fails as no_adapter_progress, never completed",
+       %{sup: sup, goal: goal, task: task} do
+    # D1: after_ingest/3 counted EVERY ingested event, including :lifecycle
+    # handshakes (the Codex normalizer emits them for thread/turn/item
+    # notices before any model work), so classify/4 saw a positive count and
+    # a verdictless clean exit reported run.completed — a durable success
+    # for a run that did no work. Only progress kinds (neither :lifecycle
+    # nor :capacity) may complete a run that never produced a verdict.
+    request = ElvesHelpers.run_request(goal, task)
+
+    handshake = [
+      Scenario.lifecycle_event(source_event_id: "evt-thread"),
+      Scenario.lifecycle_event(source_event_id: "evt-turn"),
+      Scenario.lifecycle_event(source_event_id: "evt-item")
+    ]
+
+    scenario = ElvesHelpers.custom_scenario(:handshake_then_stall, handshake)
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["python3", "-c", "import time; time.sleep(2)"],
+               runner_opts: @runner_opts,
+               notify: self()
+             )
+
+    assert_receive {:elf_terminal, run_id, _terminal}, 10_000
+
+    event = ElvesHelpers.terminal_event(goal.id, run_id)
+    assert event.type == "run.failed"
+    assert event.payload["error_category"] == "transport"
+    assert event.payload["error_code"] == "no_adapter_progress"
+
+    # Both directions: the handshake events DID land durably (the failure is
+    # missing work, not a missing transport) and no completion exists.
+    assert ElvesHelpers.count_events(goal.id, run_id, ["harness.event_recorded"]) == 3
+    assert ElvesHelpers.count_events(goal.id, run_id, ["run.completed"]) == 0
+  end
+
   test "crash recovery: re-streamed events restore the observed count, no false no_adapter_events",
        %{sup: sup, goal: goal, task: task} do
     # N1: rebuild_seen/1 restored state.seen from persisted events but left
@@ -183,6 +223,90 @@ defmodule Shoestring.Elves.ElfTest do
 
     event = ElvesHelpers.terminal_event(goal.id, run_id)
     assert event.type == "run.completed"
+  end
+
+  test "crash recovery: handshake-only history restores as zero progress, no false completed",
+       %{sup: sup, goal: goal, task: task} do
+    # D1's recovery twin: rebuild_seen/1 restores the counters from durable
+    # events, and the persisted payloads carry "kind". A run whose entire
+    # pre-crash history was lifecycle/capacity handshakes must restore as
+    # ZERO progress and fail no_adapter_progress on a verdictless clean
+    # exit — the pre-fix code restored only the total event count, so the
+    # resumed run reported run.completed without ever having done work.
+    request = ElvesHelpers.run_request(goal, task)
+
+    handshake_only = [
+      Scenario.lifecycle_event(source_event_id: "evt-life"),
+      Scenario.capacity_event(
+        "00000000-0000-4000-8000-f0000000ff21",
+        65.0,
+        ~U[2026-09-01 10:00:00.000000Z],
+        source_event_id: "evt-cap"
+      )
+    ]
+
+    first_opts = [
+      supervisor: sup,
+      scenario: ElvesHelpers.custom_scenario(:crash_before_verdict, handshake_only),
+      command: ["sleep", "30"],
+      runner_opts: @runner_opts,
+      notify: self()
+    ]
+
+    assert {:ok, first_pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(), first_opts)
+
+    run_id = wait_running(goal, request.dispatch_id)
+
+    assert {:ok, _} =
+             ElvesHelpers.wait_until(fn ->
+               if ElvesHelpers.count_events(goal.id, run_id, ["harness.event_recorded"]) >= 2,
+                 do: true
+             end)
+
+    pgid = ElvesHelpers.recorded_pgid(goal.id, run_id)
+    assert is_integer(pgid)
+
+    # Simulate the application dying mid-run and the orphaned group dying
+    # unobserved with it. The retry relaunches with a dead group, restores
+    # seen and both counters from durable events, and re-streams the same
+    # handshake-only pair.
+    Process.exit(first_pid, :kill)
+    ref = Process.monitor(first_pid)
+    assert_receive {:DOWN, ^ref, :process, ^first_pid, _reason}, 5_000
+
+    ElvesHelpers.cleanup_group(pgid)
+
+    assert {:ok, []} =
+             ElvesHelpers.wait_until(fn ->
+               if ElvesHelpers.group_members(pgid) == [], do: []
+             end)
+
+    assert {:ok, second_pid} =
+             Elves.start_run(
+               request,
+               ElvesHelpers.fake_identity(),
+               Keyword.merge(first_opts,
+                 scenario:
+                   ElvesHelpers.custom_scenario(:crash_recovery_restream, handshake_only),
+                 command: ["python3", "-c", "import time; time.sleep(2)"]
+               )
+             )
+
+    assert is_pid(second_pid) and second_pid != first_pid
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+
+    event = ElvesHelpers.terminal_event(goal.id, run_id)
+    assert event.type == "run.failed"
+    assert event.payload["error_category"] == "transport"
+    assert event.payload["error_code"] == "no_adapter_progress"
+
+    # The re-streamed handshake pair was skipped as already-seen (no
+    # duplicates) and remains durable evidence that events DID arrive.
+    assert ElvesHelpers.count_events(goal.id, run_id, ["harness.event_recorded"]) == 2
+    assert ElvesHelpers.count_events(goal.id, run_id, ["run.completed"]) == 0
   end
 
   test "missing python3 fails the launch with a diagnosable code, not an opaque default", %{
