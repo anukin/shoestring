@@ -121,6 +121,14 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     GenServer.call(server, :status)
   end
 
+  @doc false
+  @spec shutdown(GenServer.server()) :: :ok
+  def shutdown(server) do
+    GenServer.call(server, :shutdown, 30_000)
+  catch
+    :exit, _reason -> :ok
+  end
+
   # --- GenServer Callbacks ---
 
   @impl GenServer
@@ -289,6 +297,12 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     }
 
     {:reply, {:ok, summary}, state}
+  end
+
+  def handle_call(:shutdown, _from, state) do
+    reap_descendants(state)
+    close_owned_transport(state)
+    {:stop, :normal, :ok, state}
   end
 
   # --- Transport Notifications & Handshake ---
@@ -764,6 +778,18 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     :ok
   rescue
     _ -> :ok
+  end
+
+  defp close_owned_transport(state) do
+    if ((is_nil(state.opts[:transport_pid]) and state.transport_pid) &&
+          Process.alive?(state.transport_pid)) and
+         function_exported?(state.transport_mod, :close, 1) do
+      state.transport_mod.close(state.transport_pid)
+    end
+
+    :ok
+  catch
+    _, _ -> :ok
   end
 
   defp kill_process_and_group(nil), do: :ok

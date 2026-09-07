@@ -46,12 +46,17 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
     @impl GenServer
     def init(opts) do
       owner = Keyword.get(opts, :owner) || Keyword.get(opts, :test_pid)
+      test_pid = Keyword.get(opts, :test_pid)
       canned_thread_id = Keyword.get(opts, :thread_id, "01950000-0000-7000-8000-000000000099")
       canned_turn_id = Keyword.get(opts, :turn_id, "01950000-0000-7000-8000-000000000088")
       mode = Keyword.get(opts, :mode, :normal)
 
       if owner && is_pid(owner) do
         send(owner, {:codex_transport_connected, self()})
+      end
+
+      if test_pid && is_pid(test_pid) do
+        send(test_pid, {:scripted_transport_started, self(), owner})
       end
 
       {:ok,
@@ -63,6 +68,8 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
          mode: mode
        }}
     end
+
+    def close(pid), do: GenServer.stop(pid, :normal)
 
     @impl GenServer
     def handle_call({:send_frame, frame}, _from, state) do
@@ -265,6 +272,62 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       assert {:error, %Error{} = err} = result
       assert err.category == :transport
       assert err.code == "handshake_timeout"
+    end
+
+    test "adapter start cleans up its session after a handshake failure" do
+      req = make_test_run_request()
+      test_pid = self()
+
+      task =
+        Task.async(fn ->
+          CodexAppServer.start(req, %{
+            transport: ScriptedTransport,
+            transport_opts: [test_pid: test_pid, mode: :silent_handshake],
+            handshake_timeout_ms: 50
+          })
+        end)
+
+      assert_receive {:scripted_transport_started, transport, session}, 5_000
+      session_ref = Process.monitor(session)
+      transport_ref = Process.monitor(transport)
+
+      assert {:error, %Error{category: :transport, code: "handshake_timeout"}} =
+               Task.await(task, 5_000)
+
+      assert_receive {:DOWN, ^session_ref, :process, ^session, :normal}, 5_000
+      assert_receive {:DOWN, ^transport_ref, :process, ^transport, _reason}, 5_000
+    end
+
+    test "adapter resume cleans up its session after a handshake failure" do
+      req = make_test_run_request()
+      test_pid = self()
+
+      {:ok, prior} =
+        RunIdentity.new(%{
+          run_id: req.dispatch_id,
+          harness_id: "codex_app_server_stdio",
+          process_id: "77777",
+          provider_session_id: "01950000-0000-7000-8000-000000000077"
+        })
+
+      task =
+        Task.async(fn ->
+          CodexAppServer.resume(prior, req, %{
+            transport: ScriptedTransport,
+            transport_opts: [test_pid: test_pid, mode: :silent_handshake],
+            handshake_timeout_ms: 50
+          })
+        end)
+
+      assert_receive {:scripted_transport_started, transport, session}, 5_000
+      session_ref = Process.monitor(session)
+      transport_ref = Process.monitor(transport)
+
+      assert {:error, %Error{category: :transport, code: "handshake_timeout"}} =
+               Task.await(task, 5_000)
+
+      assert_receive {:DOWN, ^session_ref, :process, ^session, :normal}, 5_000
+      assert_receive {:DOWN, ^transport_ref, :process, ^transport, _reason}, 5_000
     end
 
     test "adapter.start and adapter.resume end-to-end with spawned ScriptedTransport" do

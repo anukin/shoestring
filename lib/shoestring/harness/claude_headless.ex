@@ -248,9 +248,11 @@ defmodule Shoestring.Harness.ClaudeHeadless do
               {:ok, run_identity}
 
             {:error, %Error{} = err} ->
+              cleanup_failed_session(pid)
               {:error, err}
 
             {:error, reason} ->
+              cleanup_failed_session(pid)
               {:error, Error.new(:transport, "session_start_failed", inspect(reason))}
           end
 
@@ -561,9 +563,13 @@ defmodule Shoestring.Harness.ClaudeHeadless do
   end
 
   defp stop_session(pid) when is_pid(pid) do
-    if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
+    if Process.alive?(pid), do: Session.shutdown(pid)
     :ok
   catch
     :exit, _reason -> :ok
+  end
+
+  defp cleanup_failed_session(pid) do
+    stop_session(pid)
   end
 end
