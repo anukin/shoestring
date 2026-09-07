@@ -46,6 +46,39 @@ To ensure consistent fixture structure across provider transport spikes (`codex 
 ### 5. Deterministic Payload Bounding
 - Fixtures used for ExUnit test suites must be bounded in length (< 50 KB per stream) and free of nondeterministic timestamps or network dependencies to guarantee fast, hermetic test execution.
 
+
+### 6. Claims about a redacted original
+
+Redaction necessarily destroys the evidence for any claim about the value it
+replaced. This is structural, not an oversight, and it constrains labelling:
+
+- A claim about the **substituted** value — "every frame carries this
+  `session_id`", "these two ids correlate", "this field is absent" — is
+  checkable against the committed bytes and may be labelled `VERIFIED`.
+- A claim about the **original** — "mapped 1:1 from the real provider id",
+  "the original's version nibble was `4`", "the real path was under
+  `~/.claude/projects/`" — can never be `VERIFIED` from committed bytes,
+  because the original is deliberately absent and must stay absent. Label
+  these `OPERATOR-OBSERVED-NOT-CAPTURED`.
+- An operator-authored redaction note is a *record of intent*, not evidence
+  for the claim it describes. It may not back a `VERIFIED` label. (See the
+  general rule: no `VERIFIED` label may cite an operator-authored file.)
+
+This does not weaken the convention. Preserving version/variant nibbles is
+still required. It is an instruction the redactor must follow, not a fact the
+fixture can prove: the committed bytes show only that the *substitute* is
+well-formed, never that it matches the shape of the value it replaced.
+
+### 7. Prose is inside the redaction boundary
+
+Redaction review must scan the **prose of an evidence document**, not only the
+fixture bytes. Every redaction audit in this milestone verified fixtures
+byte-by-byte and passed; a real provider session-id prefix nevertheless reached
+`main` in a document's narrative text, because the narrative was outside the
+scan. A document may not quote, abbreviate, or elide a real provider-generated
+identifier, home path, or machine identifier — an 8-character prefix followed
+by an ellipsis is still a captured identifier. Refer to it by its synthetic
+substitute, or by role ("the session id") with no value at all.
 ---
 
 ## Directory Inventory
