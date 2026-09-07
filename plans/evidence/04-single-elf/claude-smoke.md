@@ -112,7 +112,18 @@ The live stream confirmed the structural behaviors:
 
 **Ruling: VERIFIED (committed stream) / REPO-INSPECTION (adapter unblocking)** (committed artifact: `plans/evidence/04-single-elf/fixtures/claude/stream-json-smoke-live.jsonl`)
 
-- Every frame (lines 0 through 9) contains top-level `session_id: "aaaaaaaa-0000-4000-a000-000000000003"` (synthetic format-valid UUIDv4 mapped 1:1 from the observed live provider session ID, version 4 variant a preserved) (VERIFIED).
+- Every frame (lines 0 through 9) of the committed fixture carries an identical
+  top-level `session_id`, `"aaaaaaaa-0000-4000-a000-000000000003"` — 10 of 10
+  frames, one distinct value (VERIFIED, `fixtures/claude/stream-json-smoke-live.jsonl`).
+  This is what backs the ruling: a session identifier is present on every frame,
+  and is stable within a run.
+- That this synthetic value was mapped 1:1 from the observed live provider session
+  ID, and that the original's version nibble (`4`) and variant nibble (`a`) are
+  preserved, is **OPERATOR-OBSERVED-NOT-CAPTURED**. No committed artifact records
+  the original, and none can: committing a real provider session identifier is
+  forbidden by the fixture convention. The only record of the mapping is the
+  operator-authored redaction note in this document, which may not back a VERIFIED
+  label (see `README.md`, "Claims about a redacted original").
 - In the adapter implementation, `Session.track_session_id/3` (`session.ex:457`) extracts `session_id` from the initial `system/init` frame, unblocking `Session.await_run_identity/2` with a populated `provider_session_id` without returning `nil` (REPO-INSPECTION).
 
 ### 4. Quota: do rate_limit_event frames arrive, and does the iteration-3 capacity classifier read them?
