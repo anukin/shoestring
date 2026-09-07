@@ -552,6 +552,7 @@ defmodule Shoestring.Elves.ElfTest do
 
     thread_id = "01950000-0000-7000-8000-000000000099"
     turn_id = "01950000-0000-7000-8000-000000000088"
+    item_id = "exec-01950000-0000-7000-8000-000000000077"
 
     def emit(frame):
         print(json.dumps(frame), flush=True)
@@ -570,6 +571,8 @@ defmodule Shoestring.Elves.ElfTest do
         elif method == "turn/start":
             emit({"jsonrpc": "2.0", "id": request_id, "result": {"turn": {"id": turn_id, "status": "inProgress"}}})
             emit({"method": "turn/started", "params": {"turn": {"id": turn_id, "status": "inProgress"}}})
+            emit({"method": "item/started", "params": {"threadId": thread_id, "item": {"id": item_id, "type": "fileChange", "status": "inProgress"}}})
+            emit({"method": "item/completed", "params": {"threadId": thread_id, "item": {"id": item_id, "type": "fileChange", "status": "completed", "changes": [{"path": str(pathlib.Path(cwd, "codex-through-elf.txt")), "kind": {"type": "add"}, "diff": "codex\\n"}]}}})
             emit({"method": "item/completed", "params": {"threadId": thread_id, "item": {"id": "item-1", "type": "agentMessage", "phase": "final", "text": "done"}}})
             emit({"method": "turn/completed", "params": {"turn": {"id": turn_id, "status": "completed"}}})
             time.sleep(30)
@@ -602,6 +605,19 @@ defmodule Shoestring.Elves.ElfTest do
     refute File.exists?(Path.join(fixture.worktree.path, "duplicate-codex"))
     assert {:error, :not_found} = CodexAppServer.lookup_session(run_id)
     assert ElfWorktreeFixture.source_snapshot(fixture.source_repo) == source_before
+
+    completion =
+      Repo.one!(
+        from e in TrajectoryEvent,
+          where:
+            e.goal_id == ^goal.id and e.run_id == ^run_id and
+              e.idempotency_key ==
+                ^"elf-event:#{request.dispatch_id}:item-completed-exec-01950000-0000-7000-8000-000000000077"
+      )
+
+    assert [change] = completion.payload["extensions"]["codex-app-server:changes"]
+    assert change["kind"] == "add"
+    refute is_map(change["kind"])
   end
 
   test "Claude adapter completes through the Elf with a hermetic headless process", %{

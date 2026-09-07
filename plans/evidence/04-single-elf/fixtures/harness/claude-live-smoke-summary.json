@@ -1,0 +1,30 @@
+{
+  "fixture_kind": "harness_live_smoke_summary",
+  "evidence_status": "live_observed",
+  "provider": "claude",
+  "captured_at": "2026-09-07",
+  "source_head": "1823b892a29aafaba78e9f40ddbaf7dfa4421a74",
+  "terminal_class": "completed",
+  "terminal_types": ["run.completed"],
+  "terminal_count": 1,
+  "normalized_event_count": 11,
+  "normalized_kinds": [
+    "lifecycle",
+    "lifecycle",
+    "command",
+    "lifecycle",
+    "command",
+    "lifecycle",
+    "lifecycle",
+    "command",
+    "command",
+    "output",
+    "result"
+  ],
+  "error_codes": [],
+  "expected_marker_only": true,
+  "marker_exact": true,
+  "source_checkout_unchanged": true,
+  "process_group_alive_after_terminal": false,
+  "adapter_session_released": true
+}

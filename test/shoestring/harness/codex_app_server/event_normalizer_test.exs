@@ -29,7 +29,10 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizerTest do
       assert event.run_id == @run_id
       assert event.extensions["codex-app-server:tool"] == "fileChange"
       assert event.extensions["codex-app-server:status"] == "completed"
-      assert is_list(event.extensions["codex-app-server:changes"])
+
+      assert [change] = event.extensions["codex-app-server:changes"]
+      assert change["kind"] == "add"
+      refute is_map(change["kind"])
 
       # Test completed turn
       turn = fixture["turn_completed"]
