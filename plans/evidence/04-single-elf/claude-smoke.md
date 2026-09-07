@@ -157,6 +157,12 @@ Committed artifacts in this PR:
 
 ### Redaction Map (per `plans/evidence/04-single-elf/README.md`)
 
+Every bullet below describes a mapping from an **observed live original** to its
+committed substitute. Per `README.md` rule 6, all of them are
+**OPERATOR-OBSERVED-NOT-CAPTURED**: the originals are deliberately absent, so no
+committed artifact can attest to the mapping or to the originals' shape. What is
+VERIFIED is only that the committed fixture carries the substitutes named here.
+
 - **Format-valid synthetic UUIDs**:
   - `session_id`: observed live provider session UUIDv4 mapped 1:1 to deterministic synthetic UUIDv4 `aaaaaaaa-0000-4000-a000-000000000003` (version 4, variant a preserved).
   - Frame `uuid`: 10 observed live frame UUIDs mapped sequentially 1:1 to deterministic synthetic UUIDv4s `bbbbbbbb-0000-4000-8000-000000000016` through `...0025`.

@@ -43,6 +43,10 @@ To ensure consistent fixture structure across provider transport spikes (`codex 
 - Milestone 04 strictly forbids storing or displaying hidden model thoughts or private reasoning traces.
 - Usage token counters (such as `reasoning_output_tokens: N`) may be preserved to verify telemetry tracking, but any raw reasoning blocks (`item.type: "reasoning"`, thinking blocks, or scratchpads) must be stripped before fixture persistence.
 
+### 5. Deterministic Payload Bounding
+- Fixtures used for ExUnit test suites must be bounded in length (< 50 KB per stream) and free of nondeterministic timestamps or network dependencies to guarantee fast, hermetic test execution.
+
+
 ### 6. Claims about a redacted original
 
 Redaction necessarily destroys the evidence for any claim about the value it
@@ -61,8 +65,9 @@ replaced. This is structural, not an oversight, and it constrains labelling:
   general rule: no `VERIFIED` label may cite an operator-authored file.)
 
 This does not weaken the convention. Preserving version/variant nibbles is
-still required — it is simply an instruction to the redactor, verified by the
-synthetic value parsing correctly, not a fact provable from the fixture.
+still required. It is an instruction the redactor must follow, not a fact the
+fixture can prove: the committed bytes show only that the *substitute* is
+well-formed, never that it matches the shape of the value it replaced.
 
 ### 7. Prose is inside the redaction boundary
 
@@ -74,10 +79,6 @@ scan. A document may not quote, abbreviate, or elide a real provider-generated
 identifier, home path, or machine identifier — an 8-character prefix followed
 by an ellipsis is still a captured identifier. Refer to it by its synthetic
 substitute, or by role ("the session id") with no value at all.
-
-### 5. Deterministic Payload Bounding
-- Fixtures used for ExUnit test suites must be bounded in length (< 50 KB per stream) and free of nondeterministic timestamps or network dependencies to guarantee fast, hermetic test execution.
-
 ---
 
 ## Directory Inventory
