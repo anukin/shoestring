@@ -315,6 +315,42 @@ defmodule Shoestring.Trajectory.EventRegistry do
         optional: [:prior_run_id],
         uuid_fields: [:run_id, :prior_run_id, :claim_id, :replacement_run_id]
       }
+    },
+    "admission.decided" => %{
+      1 => %{
+        required: [
+          :decision_id,
+          :result,
+          :reason_code,
+          :explanation,
+          :requested_capability,
+          :candidate,
+          :scope,
+          :observation,
+          :policy,
+          :proposed_bounds,
+          :reobservation_required,
+          :evaluated_at
+        ],
+        optional: [
+          :run_id,
+          :defer_until,
+          :override,
+          :extensions
+        ],
+        uuid_fields: [:decision_id, :run_id],
+        types: %{
+          candidate: :map,
+          observation: :map,
+          policy: :map,
+          override: :map,
+          proposed_bounds: :map,
+          reobservation_required: :boolean,
+          evaluated_at: :utc_datetime,
+          defer_until: :utc_datetime,
+          extensions: :map
+        }
+      }
     }
   }
 
@@ -452,8 +488,10 @@ defmodule Shoestring.Trajectory.EventRegistry do
         |> Map.take(allowed_keys)
         |> sanitize_payload(type, version, opts)
 
-      case validate_capacity_snapshot(type, version, validated, opts) do
-        :ok -> {:ok, validated}
+      with :ok <- validate_capacity_snapshot(type, version, validated, opts),
+           :ok <- validate_admission_decision(type, version, validated, opts) do
+        {:ok, validated}
+      else
         {:error, changeset} -> {:error, {:invalid_payload, type, version, changeset}}
       end
     else
@@ -599,6 +637,15 @@ defmodule Shoestring.Trajectory.EventRegistry do
   end
 
   defp validate_capacity_snapshot(_type, _version, _payload, _opts), do: :ok
+
+  defp validate_admission_decision("admission.decided", 1, payload, opts) do
+    case Shoestring.Cobbler.AdmissionDecision.from_payload(payload, opts) do
+      {:ok, _decision} -> :ok
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
+
+  defp validate_admission_decision(_type, _version, _payload, _opts), do: :ok
 
   defp valid_legacy_capacity_state?(%{"capacity_state" => "known"} = payload, opts) do
     with %{"items" => windows} = windows_payload when is_list(windows) <-
@@ -855,6 +902,13 @@ defmodule Shoestring.Trajectory.EventRegistry do
   defp legacy_validation_opts(_type, _version), do: []
 
   defp normalized_harness_event?(type) do
-    String.starts_with?(type, ["run.", "lease.", "checkpoint.", "capacity.", "harness."])
+    String.starts_with?(type, [
+      "run.",
+      "lease.",
+      "checkpoint.",
+      "capacity.",
+      "harness.",
+      "admission."
+    ])
   end
 end

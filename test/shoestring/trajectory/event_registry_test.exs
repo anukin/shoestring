@@ -53,7 +53,8 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
              {"dispatch.effect_deferred", 1},
              {"dispatch.effect_failed", 1},
              {"dispatch.effect_unknown", 1},
-             {"dispatch.requested", 1}
+             {"dispatch.requested", 1},
+             {"admission.decided", 1}
            ] -- registered == []
   end
 
