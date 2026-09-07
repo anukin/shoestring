@@ -182,7 +182,13 @@ defmodule Shoestring.Elves.Classifier do
   end
 
   def classify(verdict, os_exit, cancel_requested?, observed_adapter_events) do
-    classify(verdict, os_exit, cancel_requested?, observed_adapter_events, observed_adapter_events)
+    classify(
+      verdict,
+      os_exit,
+      cancel_requested?,
+      observed_adapter_events,
+      observed_adapter_events
+    )
   end
 
   @doc "Terminal for an Elf-side overflow: oversized output fails the run, never truncates silently."
