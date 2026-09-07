@@ -351,6 +351,70 @@ defmodule Shoestring.Trajectory.EventRegistry do
           extensions: :map
         }
       }
+    },
+    "cobbler.intent_submitted" => %{
+      1 => %{
+        required: [
+          :command_id,
+          :intent_id,
+          :goal_id,
+          :requested_capability,
+          :provider_id,
+          :scope,
+          :admission_decision_id,
+          :proposed_bounds,
+          :submitted_at
+        ],
+        optional: [:title, :account_id, :task_id, :override, :metadata, :extensions],
+        uuid_fields: [:intent_id, :goal_id, :admission_decision_id, :task_id],
+        types: %{
+          proposed_bounds: :map,
+          override: :map,
+          metadata: :map,
+          submitted_at: :utc_datetime,
+          extensions: :map
+        }
+      }
+    },
+    "cobbler.intent_claimed" => %{
+      1 => %{
+        required: [
+          :command_id,
+          :intent_id,
+          :claim_id,
+          :goal_id,
+          :provider_id,
+          :scope,
+          :claimed_at
+        ],
+        optional: [:account_id, :metadata, :extensions],
+        uuid_fields: [:intent_id, :claim_id, :goal_id],
+        types: %{
+          claimed_at: :utc_datetime,
+          metadata: :map,
+          extensions: :map
+        }
+      }
+    },
+    "cobbler.intent_transitioned" => %{
+      1 => %{
+        required: [
+          :command_id,
+          :intent_id,
+          :goal_id,
+          :from_status,
+          :to_status,
+          :event_name,
+          :transitioned_at
+        ],
+        optional: [:claim_id, :reason, :metadata, :extensions],
+        uuid_fields: [:intent_id, :goal_id, :claim_id],
+        types: %{
+          metadata: :map,
+          transitioned_at: :utc_datetime,
+          extensions: :map
+        }
+      }
     }
   }
 
