@@ -229,10 +229,16 @@ Consequences and operational constraints:
   these payloads — no adapter work needed for `probe()`.
 - Execution path is a DIFFERENT shape: turn failures carry
   `turn.error.codexErrorInfo` ∈ `usageLimitExceeded | rateLimitExceeded |
-  serverOverloaded | …` (schema-only). The capacity classifier does NOT
-  cover this shape — the adapter needs a small new mapping
-  (`usageLimitExceeded|rateLimitExceeded → :quota_refused`). No refusal was
-  induced live (UNVERIFIED end-to-end, deliberately — quota is scarce).
+  serverOverloaded | …`. The capacity classifier does NOT
+  cover this shape — the adapter maps
+  (`usageLimitExceeded|rateLimitExceeded → :quota_refused`).
+  Update (2026-09-06): The wire refusal was VERIFIED live during an exhausted-quota
+  free window (fixture `plans/evidence/04-single-elf/fixtures/codex/app-server-quota-refusal.json`
+  and evidence doc `codex-app-server-quota-refusal.md`), carrying
+  `codexErrorInfo: "usageLimitExceeded"` on both the `error` notification and the
+  `turn/completed` turn payload. The `EventNormalizer` unit mapping is locked by a golden test
+  against the committed frame. Full adapter/Elf runtime lifecycle on refusal remains UNVERIFIED.
+  `rateLimitExceeded` remains SCHEMA-ONLY.
 
 ### 262144-byte line cap for execution payloads
 

@@ -194,6 +194,35 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizerTest do
       end
     end
 
+    @captured_refusal_jsonl Path.expand(
+                              "../../../../plans/evidence/04-single-elf/fixtures/codex/app-server-quota-refusal.jsonl",
+                              __DIR__
+                            )
+
+    test "normalizes live-captured turn/completed quota refusal from committed fixture" do
+      turn_completed_frame =
+        @captured_refusal_jsonl
+        |> File.read!()
+        |> String.split("\n", trim: true)
+        |> Enum.map(&Jason.decode!/1)
+        |> Enum.find(fn frame -> frame["method"] == "turn/completed" end)
+
+      assert is_map(turn_completed_frame),
+             "turn/completed frame must exist in #{@captured_refusal_jsonl}"
+
+      assert {:ok, %HarnessEvent{} = event} =
+               EventNormalizer.normalize(turn_completed_frame, @run_id, 1, %{
+                 provider_session_id: @session_id
+               })
+
+      assert event.kind == :error
+      assert %Error{} = err = event.error
+      assert err.category == :quota_refused
+      assert err.code == "usageLimitExceeded"
+      assert err.message =~ "You've hit your usage limit"
+      assert event.extensions["codex-app-server:status"] == "failed"
+    end
+
     test "maps unauthorized to :authentication_required" do
       turn_error = %{
         "message" => "Authentication failed",

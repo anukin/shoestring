@@ -67,6 +67,12 @@ defmodule Shoestring.Harness.ClaudeHeadless.AdapterStartTest do
     end)
   end
 
+  setup do
+    File.mkdir_p!("workspace/contract-test")
+    on_exit(fn -> File.rm_rf!("workspace") end)
+    :ok
+  end
+
   test "start/2 returns the real provider session id from the first frame" do
     req = make_request("00000000-0000-4000-8000-000000000031")
     lines = fixture_lines("stream-json-tool-exec.jsonl")
@@ -115,5 +121,40 @@ defmodule Shoestring.Harness.ClaudeHeadless.AdapterStartTest do
 
     assert_receive {:emitter_session, session}, 5_000
     GenServer.stop(session)
+  end
+
+  test "start/2 fails closed with Error when workspace_ref directory does not exist" do
+    nonexistent = "workspace/nonexistent-#{System.unique_integer([:positive])}"
+    req = make_request("00000000-0000-4000-8000-000000000033")
+    req = %{req | workspace_ref: nonexistent}
+    lines = fixture_lines("stream-json-tool-exec.jsonl")
+
+    test_pid = self()
+
+    {:ok, transport} =
+      start_supervised({ClaudeScriptedTransport, owner: nil, lines: lines})
+
+    task =
+      Task.async(fn ->
+        :ok = GenServer.call(transport, {:set_test_pid, self()})
+        send(test_pid, :emitter_ready)
+
+        receive do
+          {:claude_scripted_adopted, _session} ->
+            ClaudeScriptedTransport.emit(transport)
+        after
+          2_000 -> :not_adopted
+        end
+      end)
+
+    assert_receive :emitter_ready, 5_000
+
+    assert {:error, %Error{category: :transport, code: "invalid_workdir"}} =
+             ClaudeHeadless.start(req, %{
+               transport: ClaudeScriptedTransport,
+               transport_pid: transport
+             })
+
+    Task.shutdown(task, :brutal_kill)
   end
 end
