@@ -223,31 +223,68 @@ defmodule Shoestring.Harness.ClaudeHeadless do
   end
 
   defp start_session(%RunRequest{} = request, opts) do
-    session_opts =
-      opts
-      |> Map.to_list()
-      |> Keyword.put(:run_request, request)
-      |> Keyword.put(:run_id, request.dispatch_id)
-      |> Keyword.put_new(:tools, "Bash")
-      |> Keyword.put_new(:permission_bypass, true)
+    workdir =
+      cond do
+        is_map(opts) and Map.has_key?(opts, :workdir) -> Map.get(opts, :workdir)
+        is_list(opts) and Keyword.has_key?(opts, :workdir) -> Keyword.get(opts, :workdir)
+        true -> request.workspace_ref
+      end
 
-    case Session.start_link(session_opts) do
-      {:ok, pid} ->
-        case Session.await_run_identity(pid) do
-          {:ok, run_identity} ->
-            store_session(run_identity.run_id, pid)
-            {:ok, run_identity}
+    with {:ok, valid_workdir} <- validate_workdir(workdir) do
+      session_opts =
+        opts
+        |> Map.to_list()
+        |> Keyword.put(:run_request, request)
+        |> Keyword.put(:run_id, request.dispatch_id)
+        |> Keyword.put(:workdir, valid_workdir)
+        |> Keyword.put_new(:tools, "Bash")
+        |> Keyword.put_new(:permission_bypass, true)
 
-          {:error, %Error{} = err} ->
-            {:error, err}
+      case Session.start_link(session_opts) do
+        {:ok, pid} ->
+          case Session.await_run_identity(pid) do
+            {:ok, run_identity} ->
+              store_session(run_identity.run_id, pid)
+              {:ok, run_identity}
 
-          {:error, reason} ->
-            {:error, Error.new(:transport, "session_start_failed", inspect(reason))}
-        end
+            {:error, %Error{} = err} ->
+              {:error, err}
 
-      {:error, reason} ->
-        {:error, Error.new(:transport, "session_start_failed", inspect(reason))}
+            {:error, reason} ->
+              {:error, Error.new(:transport, "session_start_failed", inspect(reason))}
+          end
+
+        {:error, reason} ->
+          {:error, Error.new(:transport, "session_start_failed", inspect(reason))}
+      end
     end
+  end
+
+  defp validate_workdir(nil) do
+    {:error, Error.new(:transport, "invalid_workdir", "Working directory is required")}
+  end
+
+  defp validate_workdir(dir) when is_binary(dir) do
+    cond do
+      dir == "" or String.contains?(dir, <<0>>) ->
+        {:error, Error.new(:transport, "invalid_workdir", "Working directory cannot be blank")}
+
+      File.dir?(dir) ->
+        {:ok, dir}
+
+      true ->
+        {:error,
+         Error.new(:transport, "invalid_workdir", "Working directory does not exist: #{dir}")}
+    end
+  end
+
+  defp validate_workdir(other) do
+    {:error,
+     Error.new(
+       :transport,
+       "invalid_workdir",
+       "Working directory must be a valid directory path, got: #{inspect(other)}"
+     )}
   end
 
   defp start_simulated(%RunRequest{} = request, _opts) do

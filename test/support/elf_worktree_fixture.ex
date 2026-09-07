@@ -12,8 +12,14 @@ defmodule Shoestring.Test.ElfWorktreeFixture do
 
   @doc "Creates a unique fixture and its Shoestring-managed worktree."
   def create!(run_id) do
+    # Randomized so a killed prior run's leftover can never be collided with:
+    # cleanup!/1 only runs via the caller's on_exit, which cannot register for
+    # a create! that raised partway.
     root =
-      Path.join(System.tmp_dir!(), "shoestring_elf_eval_#{System.unique_integer([:positive])}")
+      Path.join(
+        System.tmp_dir!(),
+        "shoestring_elf_eval_#{Ecto.UUID.generate()}_#{System.unique_integer([:positive])}"
+      )
 
     source_repo = Path.join(root, "source")
     worktrees_dir = Shoestring.State.path(:worktrees)
