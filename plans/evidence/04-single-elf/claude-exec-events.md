@@ -130,9 +130,12 @@ contract: the answer is UNVERIFIED, not absent.
 
 `session_id` is a top-level field on **every** observed frame (init,
 api_retry, assistant, result) and is identical across all of them within
-a run. Shape: UUIDv4 (`7d74c43c-…` real; version nibble `4`, variant
-`a` — hence the v4-preserving synthetic substitution, see redaction
-record). Satisfies the `RunIdentity.provider_session_id` need
+a run. In the committed fixtures it appears as the synthetic
+`aaaaaaaa-0000-4000-a000-000000000001` (VERIFIED). That the live original
+was UUIDv4-shaped with version nibble `4` and variant `a` — hence the
+v4-preserving substitution — is OPERATOR-OBSERVED-NOT-CAPTURED: the
+original is deliberately absent and may not be quoted, even in part
+(see `README.md`, "Prose is inside the redaction boundary"). Satisfies the `RunIdentity.provider_session_id` need
 (ContractSuite area 3) at the frame level.
 
 ### (e) Final-result frame shape — VERIFIED for the error path below (success path VERIFIED in Part 2)
@@ -151,13 +154,13 @@ result shape was UNVERIFIED when this was written; Part 2 has since VERIFIED it 
 ### Resume (step 3 of the brief — condition met, turn spent)
 
 A session id did appear, so one resume turn was spent:
-`claude --resume 7d74c43c-… --print --verbose --output-format
+`claude --resume <session-id> --print --verbose --output-format
 stream-json --dangerously-skip-permissions "Reply with exactly OK."`
 Result (fixture `stream-json-resume-auth-failure.jsonl`, 3 lines):
 `system/init` re-emitted the **same** `session_id` (VERIFIED — the CLI
 accepted the id and bound the turn to the persisted local transcript;
 that transcript exists on disk at
-`~/.claude/projects/…-iter4-spike-claude/7d74c43c-….jsonl`,
+`~/.claude/projects/<project-slug>/<session-id>.jsonl`,
 REPO-INSPECTION of the local fs), then the same 401 error assistant +
 result frames, exit 1. Whether a resumed turn can *complete* is
 UNVERIFIED (auth blocked the model call, deterministically — see
