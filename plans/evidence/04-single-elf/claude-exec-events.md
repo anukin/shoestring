@@ -24,7 +24,7 @@ this paragraph covers Part 1's four attempts only. PR-wide spend is
 nonzero — Part 2's committed result frame records `total_cost_usd:
 0.0847545`, and the operator reports ~$0.16 all-in for the
 operator-run side. Do not read this PR as costing nothing.) Raw captures remain under
-`/tmp/shoestring-claude-probe-A28wrH/` and `/tmp/shoestring-claude-evidence/`;
+`/tmp/shoestring-claude-probe-*/` and `/tmp/shoestring-claude-evidence/`;
 only redacted fixtures are committed here.
 
 ## Deviations from the vetted command (all forced by observed errors)
@@ -42,7 +42,7 @@ only redacted fixtures are committed here.
    comparability concern is moot.
 3. Ran from the worktree cwd instead of `cd "$FIXTURE_DIR"`. Consequence:
    the persisted session transcript landed under the worktree's project
-   slug dir (`~/.claude/projects/…-iter4-spike-claude/`), and `init.cwd`
+   slug dir (`~/.claude/projects/<project-slug>/`), and `init.cwd`
    carried the worktree path (redacted to `$WORKSPACE` in fixtures).
    Prompts were credential-free throughout, so the residue is inert.
 
@@ -239,8 +239,8 @@ account), so per instruction I ran no further live `claude` invocation.
 The operator ran the vetted capture from an authenticated shell:
 prompt as vetted, `hello.txt` really created, **exit=0** (operator
 report; `capture.stderr` is 0 bytes), 8 stream-json frames, 8931 raw
-bytes. I verified every claim below against
-`/tmp/claude-cap-0s49/capture.jsonl` myself; nothing is taken on trust.
+bytes. I verified every claim below against the operator capture before
+redaction; nothing is taken on trust.
 Committed redacted fixture:
 `fixtures/claude/stream-json-tool-exec.jsonl` (6781 bytes).
 
@@ -329,7 +329,7 @@ Part 1's session), 8 frame `uuid` → `bbbbbbbb-…-0008–0015` (all
 observed v4), `message.id` → `msg_…01–02`, `toolu_…` → shape-preserving
 `toolu_`-prefixed synthetics (prefix + 24 alphanumerics, correlation
 re-verified after substitution), `request_id` likewise (`req_` + 24).
-Operator path `/private/tmp/claude-cap-0s49` → `/tmp/claude-exec-spike`
+The operator capture root was replaced with `/tmp/claude-exec-spike`
 consistently in all 5 occurrences (cwd, both tool commands, both result
 texts — internal consistency preserved). Emptied: `slash_commands`,
 `terminal_slash_commands`, `agents`, `skills`, `plugins`,
