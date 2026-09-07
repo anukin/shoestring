@@ -287,8 +287,7 @@ defmodule Shoestring.Elves.ElfTest do
                request,
                ElvesHelpers.fake_identity(),
                Keyword.merge(first_opts,
-                 scenario:
-                   ElvesHelpers.custom_scenario(:crash_recovery_restream, handshake_only),
+                 scenario: ElvesHelpers.custom_scenario(:crash_recovery_restream, handshake_only),
                  command: ["python3", "-c", "import time; time.sleep(2)"]
                )
              )
