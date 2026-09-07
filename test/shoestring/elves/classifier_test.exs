@@ -84,6 +84,36 @@ defmodule Shoestring.Elves.ClassifierTest do
     assert %{class: :completed} = Classifier.classify(:no_verdict, {:exit_status, 0}, false, 42)
   end
 
+  test "clean exit with observed adapter events but zero progress fails as no_adapter_progress" do
+    # Handshake-only events arrived (:lifecycle or :capacity), but no model
+    # work took place before the clean exit. Fails as transport/no_adapter_progress,
+    # kept distinct from transport/no_adapter_events.
+    assert %{class: :failed, error_category: "transport", error_code: "no_adapter_progress"} =
+             Classifier.classify(:no_verdict, {:exit_status, 0}, false, 1, 0)
+
+    assert %{class: :failed, error_category: "transport", error_code: "no_adapter_progress"} =
+             Classifier.classify(:no_verdict, {:exit_status, 0}, false, 3, 0)
+  end
+
+  test "clean exit with positive progress events stays deferred as completed" do
+    assert %{class: :completed} =
+             Classifier.classify(:no_verdict, {:exit_status, 0}, false, 3, 1)
+
+    assert %{class: :completed} =
+             Classifier.classify(:no_verdict, {:exit_status, 0}, false, 42, 10)
+  end
+
+  test "the progress variant delegates cancellations, explicit exits, and verdicts" do
+    assert %{class: :cancelled} =
+             Classifier.classify(:no_verdict, {:exit_status, 0}, true, 3, 0)
+
+    assert %{class: :failed, error_code: "signal_exit_1"} =
+             Classifier.classify(:no_verdict, {:exit_status, 1}, false, 3, 0)
+
+    assert %{class: :completed} =
+             Classifier.classify({:result, "completed"}, {:exit_status, 0}, false, 3, 0)
+  end
+
   test "the observed-events variant delegates every other verdict shape" do
     assert %{class: :completed} =
              Classifier.classify({:result, "completed"}, {:exit_status, 0}, false, 0)

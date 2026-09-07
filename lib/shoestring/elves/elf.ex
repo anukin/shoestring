@@ -92,6 +92,7 @@ defmodule Shoestring.Elves.Elf do
           terminal: map() | nil,
           seen: MapSet.t(String.t()),
           event_count: non_neg_integer(),
+          progress_count: non_neg_integer(),
           provider_session_id: String.t() | nil,
           os_buffer: binary(),
           output_overflowed?: boolean()
@@ -125,6 +126,7 @@ defmodule Shoestring.Elves.Elf do
     terminal: nil,
     seen: nil,
     event_count: 0,
+    progress_count: 0,
     provider_session_id: nil,
     os_buffer: "",
     output_overflowed?: false
@@ -384,13 +386,13 @@ defmodule Shoestring.Elves.Elf do
   defp parse_pgid(_process_id), do: nil
 
   defp rebuild_seen(state) do
-    keys =
+    rows =
       state.repo.all(
         from event in TrajectoryEvent,
           where:
             event.goal_id == ^state.goal_id and event.run_id == ^state.run_id and
               event.type == "harness.event_recorded" and not is_nil(event.idempotency_key),
-          select: event.idempotency_key
+          select: {event.idempotency_key, event.payload}
       )
 
     # event_count is the classifier's observed-adapter-events input: it counts
@@ -399,14 +401,35 @@ defmodule Shoestring.Elves.Elf do
     # or a resumed Elf that skips its re-streamed events reports a run that
     # genuinely produced events as transport/no_adapter_events.
     #
+    # progress_count is the classifier's progress-events input: it counts
+    # adapter events whose kind is NOT in [:lifecycle, :capacity]. It must also
+    # be restored, or a resumed run with pre-crash progress reports a false
+    # transport/no_adapter_progress, and a resumed handshake-only run reports
+    # a false run.completed.
+    #
     # This is deliberately NOT MapSet.size(seen): seen also holds the Elf's
     # own log-artifact row ("elf-log:<dispatch>", same type, non-nil key),
     # which after_ingest/3 never counted. Only the elf-event: prefix is the
     # same population event_count counts.
     prefix = "elf-event:#{state.dispatch_id}:"
-    count = Enum.count(keys, &String.starts_with?(&1, prefix))
 
-    %{state | seen: MapSet.new(keys), event_count: count}
+    {event_count, progress_count, keys} =
+      Enum.reduce(rows, {0, 0, []}, fn {key, payload}, {evt_acc, prog_acc, keys_acc} ->
+        if String.starts_with?(key, prefix) do
+          kind = if is_map(payload), do: payload["kind"] || payload[:kind], else: nil
+          prog = if progress_kind?(kind), do: 1, else: 0
+          {evt_acc + 1, prog_acc + prog, [key | keys_acc]}
+        else
+          {evt_acc, prog_acc, [key | keys_acc]}
+        end
+      end)
+
+    %{
+      state
+      | seen: MapSet.new(keys),
+        event_count: event_count,
+        progress_count: progress_count
+    }
   end
 
   # A retry after a crash re-streams from the start but must not duplicate
@@ -676,7 +699,12 @@ defmodule Shoestring.Elves.Elf do
   end
 
   defp after_ingest(state, event, key) do
-    state = %{state | seen: MapSet.put(state.seen, key), event_count: state.event_count + 1}
+    state = %{
+      state
+      | seen: MapSet.put(state.seen, key),
+        event_count: state.event_count + 1,
+        progress_count: state.progress_count + progress_increment(event.kind)
+    }
 
     case verdict_of(event) do
       :none ->
@@ -691,6 +719,16 @@ defmodule Shoestring.Elves.Elf do
           Classifier.classify(verdict, state.os_exit, state.cancel_requested?)
         )
     end
+  end
+
+  defp progress_kind?(kind) when kind in [:lifecycle, :capacity, "lifecycle", "capacity"],
+    do: false
+
+  defp progress_kind?(kind) when is_atom(kind) or is_binary(kind), do: true
+  defp progress_kind?(_kind), do: false
+
+  defp progress_increment(kind) do
+    if progress_kind?(kind), do: 1, else: 0
   end
 
   defp verdict_of(%HarnessEvent{kind: :result, result: %{status: status}})
@@ -898,9 +936,10 @@ defmodule Shoestring.Elves.Elf do
         # The direct child is gone but stragglers linger: bounded reap, then
         # report what the OS exit says. This is termination of a run whose
         # primary already exited — not a timer kill of working processes.
-        # The observed adapter-event count travels with the classification:
-        # a clean exit with zero observed events is a launch that never
-        # began, never a completion.
+        # The observed adapter-event and progress-event counts travel with the
+        # classification: zero observed events is transport/no_adapter_events;
+        # zero progress events (only :lifecycle or :capacity handshakes) is
+        # transport/no_adapter_progress, never a false completion.
         _ = terminate_owned_group(state)
 
         stop_with_terminal(
@@ -909,20 +948,23 @@ defmodule Shoestring.Elves.Elf do
             :no_verdict,
             state.os_exit,
             state.cancel_requested?,
-            state.event_count
+            state.event_count,
+            state.progress_count
           )
         )
 
       true ->
-        # Same observed-events rule on the fully-reaped path: zero adapter
-        # events plus a clean exit fails as `transport/no_adapter_events`.
+        # Same observed-events and progress rules on the fully-reaped path:
+        # zero adapter events fails as `transport/no_adapter_events`; zero
+        # progress events fails as `transport/no_adapter_progress`.
         stop_with_terminal(
           state,
           Classifier.classify(
             :no_verdict,
             state.os_exit,
             state.cancel_requested?,
-            state.event_count
+            state.event_count,
+            state.progress_count
           )
         )
     end
