@@ -545,4 +545,25 @@ defmodule Shoestring.Harness.ClaudeHeadless do
   rescue
     _ -> {:error, :not_found}
   end
+
+  @doc false
+  @spec release(RunIdentity.t()) :: :ok
+  def release(%RunIdentity{run_id: run_id}) do
+    case lookup_session(run_id) do
+      {:ok, pid} -> stop_session(pid)
+      {:error, :not_found} -> :ok
+    end
+
+    :ets.delete(@table, run_id)
+    :ok
+  rescue
+    _error -> :ok
+  end
+
+  defp stop_session(pid) when is_pid(pid) do
+    if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
+    :ok
+  catch
+    :exit, _reason -> :ok
+  end
 end

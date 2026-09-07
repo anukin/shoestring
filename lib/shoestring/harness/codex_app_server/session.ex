@@ -414,18 +414,46 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
   def handle_info({:codex_transport_closed, _pid, reason}, state) do
     cancel_handshake_timer(state)
-    reap_descendants(state)
-    error = Error.new(:transport, "transport_closed", inspect(reason))
-    state = reply_identity_waiters(state, {:error, error})
-    {:noreply, %{state | status: :closed, terminal_result: reason}}
+
+    if terminal_status?(state.status) do
+      {:noreply, %{state | transport_pid: nil, transport_ref: nil}}
+    else
+      reap_descendants(state)
+      error = Error.new(:transport, "transport_closed", inspect(reason))
+      state = emit_synthetic_error(state, error)
+      state = reply_identity_waiters(state, {:error, error})
+
+      {:noreply,
+       %{
+         state
+         | transport_pid: nil,
+           transport_ref: nil,
+           status: :failed,
+           terminal_result: {:error, error}
+       }}
+    end
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{transport_ref: ref} = state) do
     cancel_handshake_timer(state)
-    reap_descendants(state)
-    error = Error.new(:transport, "transport_down", inspect(reason))
-    state = reply_identity_waiters(state, {:error, error})
-    {:noreply, %{state | transport_pid: nil, transport_ref: nil, status: :closed}}
+
+    if terminal_status?(state.status) do
+      {:noreply, %{state | transport_pid: nil, transport_ref: nil}}
+    else
+      reap_descendants(state)
+      error = Error.new(:transport, "transport_down", inspect(reason))
+      state = emit_synthetic_error(state, error)
+      state = reply_identity_waiters(state, {:error, error})
+
+      {:noreply,
+       %{
+         state
+         | transport_pid: nil,
+           transport_ref: nil,
+           status: :failed,
+           terminal_result: {:error, error}
+       }}
+    end
   end
 
   def handle_info(_other, state) do
@@ -482,7 +510,9 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         if state.opts[:resume] && state.thread_id do
           send_rpc(state, "thread/resume", %{"threadId" => state.thread_id}, :thread_resume)
         else
-          cwd = (state.run_request && state.run_request.workspace_ref) || "/tmp"
+          cwd =
+            state.opts[:workdir] || (state.run_request && state.run_request.workspace_ref) ||
+              "/tmp"
 
           # NOTE on ephemeral: false (Required for thread/resume):
           # Codex only persists rollout files on disk (~/.codex/sessions) for non-ephemeral threads.
@@ -833,4 +863,6 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       nil
     end
   end
+
+  defp terminal_status?(status), do: status in [:completed, :interrupted, :failed]
 end

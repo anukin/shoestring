@@ -5,10 +5,12 @@ defmodule Shoestring.Elves.ElfTest do
 
   alias Shoestring.Elves
   alias Shoestring.Elves.Elf
+  alias Shoestring.Harness.{ClaudeHeadless, CodexAppServer}
   alias Shoestring.Harness.Fake.Scenario
   alias Shoestring.Repo
   alias Shoestring.Test.ElfWorktreeFixture
   alias Shoestring.Test.ElvesHelpers
+  alias Shoestring.Test.LiveBufferedAdapter
   alias Shoestring.Trajectory.TrajectoryEvent
 
   @runner_opts [kill_grace_ms: 200, reap_timeout_ms: 2_000]
@@ -396,6 +398,273 @@ defmodule Shoestring.Elves.ElfTest do
     assert File.read!(Path.join(fixture.worktree.path, "elf-source-isolation.txt")) ==
              "written by the Elf child\n"
 
+    assert ElfWorktreeFixture.source_snapshot(fixture.source_repo) == source_before
+  end
+
+  test "adapter-owned provider polls live buffers and runs only in the recognized worktree", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = Ecto.UUID.generate()
+    fixture = ElfWorktreeFixture.create!(run_id)
+    on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+    on_exit(fn -> LiveBufferedAdapter.cleanup(run_id) end)
+
+    source_before = ElfWorktreeFixture.source_snapshot(fixture.source_repo)
+
+    request =
+      ElvesHelpers.run_request(goal, task,
+        workspace_ref: fixture.worktree.workspace_ref,
+        dispatch_id: run_id
+      )
+
+    duplicate_marker = Path.join(fixture.worktree.path, "duplicate-runner-started")
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, LiveBufferedAdapter.identity(),
+               supervisor: sup,
+               run_id: run_id,
+               adapter: LiveBufferedAdapter,
+               adapter_opts: %{test_pid: self()},
+               process_owner: :adapter,
+               command: ["touch", duplicate_marker],
+               runner_opts: [
+                 cd: fixture.worktree.path,
+                 kill_grace_ms: 200,
+                 reap_timeout_ms: 2_000
+               ],
+               adapter_poll_ms: 10,
+               notify: self()
+             )
+
+    assert_receive {:live_buffered_adapter_started, ^run_id, workdir, pgid}, 10_000
+    assert workdir == fixture.worktree.path
+    refute File.exists?(duplicate_marker)
+
+    assert_receive {:live_buffered_adapter_polled, ^run_id, 1}, 10_000
+    assert ElvesHelpers.recorded_pgid(goal.id, run_id) == pgid
+    assert_receive {:live_buffered_adapter_polled, ^run_id, 2}, 10_000
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 10_000
+
+    assert ElvesHelpers.count_events(goal.id, run_id, ["harness.event_recorded"]) == 3
+    assert ElfWorktreeFixture.source_snapshot(fixture.source_repo) == source_before
+    assert ElvesHelpers.group_members(pgid) == []
+  end
+
+  test "adapter-owned cancellation reaches the adapter and reaps its process group", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = Ecto.UUID.generate()
+    fixture = ElfWorktreeFixture.create!(run_id)
+    on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+    on_exit(fn -> LiveBufferedAdapter.cleanup(run_id) end)
+
+    request =
+      ElvesHelpers.run_request(goal, task,
+        workspace_ref: fixture.worktree.workspace_ref,
+        dispatch_id: run_id
+      )
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, LiveBufferedAdapter.identity(),
+               supervisor: sup,
+               run_id: run_id,
+               adapter: LiveBufferedAdapter,
+               adapter_opts: %{test_pid: self(), test_scenario: :quiet},
+               process_owner: :adapter,
+               command: ["sleep", "30"],
+               runner_opts: [
+                 cd: fixture.worktree.path,
+                 kill_grace_ms: 200,
+                 reap_timeout_ms: 2_000
+               ],
+               adapter_poll_ms: 10,
+               notify: self()
+             )
+
+    assert_receive {:live_buffered_adapter_started, ^run_id, _workdir, pgid}, 10_000
+    assert_receive {:live_buffered_adapter_polled, ^run_id, 1}, 10_000
+    assert {:ok, :cancelled} = Elves.cancel_run(run_id, kill_grace_ms: 200)
+    assert_receive {:live_buffered_adapter_cancelled, ^run_id}, 10_000
+    assert_receive {:elf_terminal, ^run_id, %{class: :cancelled}}, 10_000
+    assert ElvesHelpers.group_members(pgid) == []
+  end
+
+  test "adapter-owned launch fails closed when the worktree identity does not match", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = Ecto.UUID.generate()
+    fixture = ElfWorktreeFixture.create!(run_id)
+    on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+    on_exit(fn -> LiveBufferedAdapter.cleanup(run_id) end)
+
+    request =
+      ElvesHelpers.run_request(goal, task,
+        workspace_ref: "run-different",
+        dispatch_id: run_id
+      )
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, LiveBufferedAdapter.identity(),
+               supervisor: sup,
+               run_id: run_id,
+               adapter: LiveBufferedAdapter,
+               adapter_opts: %{test_pid: self()},
+               process_owner: :adapter,
+               runner_opts: [cd: fixture.worktree.path],
+               notify: self()
+             )
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :failed}}, 10_000
+    refute_received {:live_buffered_adapter_started, ^run_id, _workdir, _pgid}
+
+    event = ElvesHelpers.terminal_event(goal.id, run_id)
+    assert event.payload["error_code"] == "worktree_mismatch"
+    assert ElvesHelpers.count_events(goal.id, run_id, ["run.running"]) == 0
+  end
+
+  test "Codex adapter completes through the Elf with a hermetic app-server process", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = Ecto.UUID.generate()
+    fixture = ElfWorktreeFixture.create!(run_id)
+    on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+    source_before = ElfWorktreeFixture.source_snapshot(fixture.source_repo)
+
+    request =
+      ElvesHelpers.run_request(goal, task,
+        workspace_ref: fixture.worktree.workspace_ref,
+        dispatch_id: run_id
+      )
+
+    script = """
+    import json
+    import pathlib
+    import sys
+    import time
+
+    thread_id = "01950000-0000-7000-8000-000000000099"
+    turn_id = "01950000-0000-7000-8000-000000000088"
+
+    def emit(frame):
+        print(json.dumps(frame), flush=True)
+
+    for line in sys.stdin:
+        frame = json.loads(line)
+        method = frame.get("method")
+        request_id = frame.get("id")
+
+        if method == "initialize":
+            emit({"jsonrpc": "2.0", "id": request_id, "result": {}})
+        elif method == "thread/start":
+            cwd = frame["params"]["cwd"]
+            pathlib.Path(cwd, "codex-through-elf.txt").write_text("codex\\n")
+            emit({"jsonrpc": "2.0", "id": request_id, "result": {"thread": {"id": thread_id}}})
+        elif method == "turn/start":
+            emit({"jsonrpc": "2.0", "id": request_id, "result": {"turn": {"id": turn_id, "status": "inProgress"}}})
+            emit({"method": "turn/started", "params": {"turn": {"id": turn_id, "status": "inProgress"}}})
+            emit({"method": "item/completed", "params": {"threadId": thread_id, "item": {"id": "item-1", "type": "agentMessage", "phase": "final", "text": "done"}}})
+            emit({"method": "turn/completed", "params": {"turn": {"id": turn_id, "status": "completed"}}})
+            time.sleep(30)
+    """
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, CodexAppServer.identity(),
+               supervisor: sup,
+               run_id: run_id,
+               adapter: CodexAppServer,
+               adapter_opts: %{
+                 live: true,
+                 command: "python3",
+                 args: ["-u", "-c", script],
+                 handshake_timeout_ms: 5_000
+               },
+               process_owner: :adapter,
+               command: ["touch", Path.join(fixture.worktree.path, "duplicate-codex")],
+               runner_opts: [
+                 cd: fixture.worktree.path,
+                 kill_grace_ms: 200,
+                 reap_timeout_ms: 2_000
+               ],
+               adapter_poll_ms: 10,
+               notify: self()
+             )
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 10_000
+    assert File.read!(Path.join(fixture.worktree.path, "codex-through-elf.txt")) == "codex\n"
+    refute File.exists?(Path.join(fixture.worktree.path, "duplicate-codex"))
+    assert {:error, :not_found} = CodexAppServer.lookup_session(run_id)
+    assert ElfWorktreeFixture.source_snapshot(fixture.source_repo) == source_before
+  end
+
+  test "Claude adapter completes through the Elf with a hermetic headless process", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    run_id = Ecto.UUID.generate()
+    fixture = ElfWorktreeFixture.create!(run_id)
+    on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+    source_before = ElfWorktreeFixture.source_snapshot(fixture.source_repo)
+
+    request =
+      ElvesHelpers.run_request(goal, task,
+        workspace_ref: fixture.worktree.workspace_ref,
+        dispatch_id: run_id
+      )
+
+    script = """
+    import json
+    import pathlib
+    import time
+
+    session_id = "aaaaaaaa-0000-4000-a000-000000000099"
+    pathlib.Path("claude-through-elf.txt").write_text("claude\\n")
+
+    frames = [
+        {"type": "system", "subtype": "init", "cwd": str(pathlib.Path.cwd()), "session_id": session_id, "uuid": "bbbbbbbb-0000-4000-8000-000000000091"},
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "done"}]}, "session_id": session_id, "uuid": "bbbbbbbb-0000-4000-8000-000000000092"},
+        {"type": "result", "subtype": "success", "is_error": False, "terminal_reason": "completed", "result": "done", "session_id": session_id, "uuid": "bbbbbbbb-0000-4000-8000-000000000093"}
+    ]
+
+    for frame in frames:
+        print(json.dumps(frame), flush=True)
+
+    time.sleep(30)
+    """
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ClaudeHeadless.identity(),
+               supervisor: sup,
+               run_id: run_id,
+               adapter: ClaudeHeadless,
+               adapter_opts: %{
+                 live: true,
+                 argv: ["python3", "-u", "-c", script],
+                 permission_bypass: false
+               },
+               process_owner: :adapter,
+               command: ["touch", Path.join(fixture.worktree.path, "duplicate-claude")],
+               runner_opts: [
+                 cd: fixture.worktree.path,
+                 kill_grace_ms: 200,
+                 reap_timeout_ms: 2_000
+               ],
+               adapter_poll_ms: 10,
+               notify: self()
+             )
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 10_000
+    assert File.read!(Path.join(fixture.worktree.path, "claude-through-elf.txt")) == "claude\n"
+    refute File.exists?(Path.join(fixture.worktree.path, "duplicate-claude"))
+    assert {:error, :not_found} = ClaudeHeadless.lookup_session(run_id)
     assert ElfWorktreeFixture.source_snapshot(fixture.source_repo) == source_before
   end
 

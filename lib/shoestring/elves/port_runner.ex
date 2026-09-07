@@ -339,7 +339,9 @@ defmodule Shoestring.Elves.PortRunner do
 
   # Fails closed unless the spawned pid leads its own process group. Without
   # leadership, `killpg` could signal a group the Elf does not own.
-  defp verify_group_leader(os_pid) do
+  @doc false
+  @spec verify_group_leader(pos_integer()) :: :ok | {:error, atom()}
+  def verify_group_leader(os_pid) do
     case System.cmd("ps", ["-o", "pgid=", "-p", to_string(os_pid)], stderr_to_stdout: true) do
       {output, 0} ->
         case Integer.parse(String.trim(output)) do

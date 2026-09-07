@@ -60,6 +60,7 @@ defmodule Shoestring.Elves.Elf do
   @default_max_events_per_run 1_000
   @default_max_event_bytes 32_768
   @default_event_interval_ms 0
+  @default_adapter_poll_ms 25
   @default_orphan_poll_ms 100
 
   @hidden_extension_pattern ~r/(?i)(reasoning|thinking|chain_of_thought|scratchpad|system_prompt|raw_transcript|hidden)/
@@ -72,10 +73,13 @@ defmodule Shoestring.Elves.Elf do
           request: map(),
           adapter: module(),
           adapter_opts: map(),
+          adapter_identity: Shoestring.Harness.RunIdentity.t() | nil,
+          process_owner: :runner | :adapter,
           command: [binary()],
           env: [{binary(), binary()}],
           runner_opts: keyword(),
           event_interval_ms: non_neg_integer(),
+          adapter_poll_ms: pos_integer(),
           max_events_per_run: pos_integer(),
           max_event_bytes: pos_integer(),
           clock: module(),
@@ -106,10 +110,13 @@ defmodule Shoestring.Elves.Elf do
     :request,
     :adapter,
     :adapter_opts,
+    :adapter_identity,
+    :process_owner,
     :command,
     :env,
     :runner_opts,
     :event_interval_ms,
+    :adapter_poll_ms,
     :max_events_per_run,
     :max_event_bytes,
     :clock,
@@ -177,10 +184,12 @@ defmodule Shoestring.Elves.Elf do
       request: Keyword.fetch!(opts, :request),
       adapter: Keyword.get(opts, :adapter, Shoestring.Harness.Fake),
       adapter_opts: Keyword.get(opts, :adapter_opts, %{}),
+      process_owner: Keyword.get(opts, :process_owner, :runner),
       command: Keyword.get(opts, :command, ["sleep", "30"]),
       env: Keyword.get(opts, :env, []),
       runner_opts: Keyword.get(opts, :runner_opts, []),
       event_interval_ms: Keyword.get(opts, :event_interval_ms, @default_event_interval_ms),
+      adapter_poll_ms: Keyword.get(opts, :adapter_poll_ms, @default_adapter_poll_ms),
       max_events_per_run: Keyword.get(opts, :max_events_per_run, @default_max_events_per_run),
       max_event_bytes: Keyword.get(opts, :max_event_bytes, @default_max_event_bytes),
       clock: Keyword.get(opts, :clock, Shoestring.Harness.SystemClock),
@@ -215,12 +224,13 @@ defmodule Shoestring.Elves.Elf do
   end
 
   @impl GenServer
-  def handle_call({:cancel, _opts}, _from, state) do
+  def handle_call({:cancel, opts}, _from, state) do
     if state.terminal != nil do
       {:reply, {:ok, :already_terminal}, state}
     else
       state = %{state | cancel_requested?: true}
       _ = append_cancelling(state)
+      _ = cancel_adapter(state, opts)
       _ = terminate_owned_group(state)
 
       case commit_terminal(state, Classifier.classify(:no_verdict, state.os_exit, true)) do
@@ -244,6 +254,15 @@ defmodule Shoestring.Elves.Elf do
   @impl GenServer
   def handle_info(:next_event, state) do
     consume_next_event(state)
+  end
+
+  @impl GenServer
+  def handle_info(:poll_adapter, state) do
+    if state.terminal == nil do
+      begin_streaming(state)
+    else
+      {:noreply, state}
+    end
   end
 
   @impl GenServer
@@ -470,9 +489,10 @@ defmodule Shoestring.Elves.Elf do
 
   defp launch_fresh(state) do
     with :ok <- append_starting(state),
+         {:ok, state} <- prepare_adapter_workdir(state),
          {:ok, identity} <- start_adapter(state),
-         {:ok, runner} <- spawn_group(state) do
-      state = %{state | runner: runner, provider_session_id: identity.provider_session_id}
+         {:ok, state} <- attach_owned_process(%{state | adapter_identity: identity}, identity) do
+      state = %{state | provider_session_id: identity.provider_session_id}
 
       case append_running(state) do
         :ok -> begin_streaming(state)
@@ -526,7 +546,7 @@ defmodule Shoestring.Elves.Elf do
   end
 
   defp append_running(state) do
-    pgid = state.runner.pgid
+    pgid = owned_pgid(state)
 
     append_run_event(
       state,
@@ -566,6 +586,84 @@ defmodule Shoestring.Elves.Elf do
     adapter_opts = Map.merge(%{clock: state.clock}, state.adapter_opts)
     state.adapter.start(state.request, adapter_opts)
   end
+
+  defp prepare_adapter_workdir(%{process_owner: :runner} = state), do: {:ok, state}
+
+  defp prepare_adapter_workdir(%{process_owner: :adapter} = state) do
+    with {:ok, path} <- resolve_worktree_path(state) do
+      {:ok, %{state | adapter_opts: Map.put(state.adapter_opts, :workdir, path)}}
+    end
+  end
+
+  defp prepare_adapter_workdir(_state), do: {:error, :invalid_process_owner}
+
+  defp resolve_worktree_path(state) do
+    case Keyword.get(state.runner_opts, :cd) do
+      path when is_binary(path) -> recognized_worktree_path(path, state.request.workspace_ref)
+      nil -> recognized_workspace_ref(state.request.workspace_ref)
+      _other -> {:error, :invalid_worktree}
+    end
+  end
+
+  defp recognized_workspace_ref(workspace_ref) when is_binary(workspace_ref) do
+    root = Path.expand(State.path(:worktrees))
+    candidate = Path.expand(Path.join(root, workspace_ref))
+
+    if candidate != root and String.starts_with?(candidate, root <> "/") do
+      recognized_worktree_path(candidate, workspace_ref)
+    else
+      {:error, :invalid_worktree}
+    end
+  end
+
+  defp recognized_workspace_ref(_workspace_ref), do: {:error, :invalid_worktree}
+
+  defp recognized_worktree_path(path, workspace_ref) do
+    try do
+      case Worktrees.get(Path.expand(path)) do
+        {:ok, worktree} when worktree.workspace_ref == workspace_ref -> {:ok, worktree.path}
+        {:ok, _worktree} -> {:error, :worktree_mismatch}
+        {:error, _reason} -> {:error, :worktree_not_found}
+      end
+    rescue
+      _error -> {:error, :worktree_not_found}
+    catch
+      _kind, _reason -> {:error, :worktree_not_found}
+    end
+  end
+
+  defp attach_owned_process(%{process_owner: :runner} = state, _identity) do
+    case spawn_group(state) do
+      {:ok, runner} -> {:ok, %{state | runner: runner}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp attach_owned_process(%{process_owner: :adapter} = state, identity) do
+    with {:ok, pgid} <- parse_adapter_pgid(identity.process_id) do
+      state = %{state | adopted_pgid: pgid}
+
+      case PortRunner.verify_group_leader(pgid) do
+        :ok ->
+          {:ok, state}
+
+        {:error, _reason} = error ->
+          _ = cancel_adapter(state, [])
+          _ = terminate_owned_group(state)
+          _ = release_adapter(state)
+          error
+      end
+    end
+  end
+
+  defp parse_adapter_pgid(process_id) when is_binary(process_id) do
+    case Integer.parse(process_id) do
+      {pgid, ""} when pgid > 1 -> {:ok, pgid}
+      _other -> {:error, :os_pid_unavailable}
+    end
+  end
+
+  defp parse_adapter_pgid(_process_id), do: {:error, :os_pid_unavailable}
 
   defp spawn_group(state) do
     runner_opts = [env: state.env] ++ state.runner_opts
@@ -614,12 +712,14 @@ defmodule Shoestring.Elves.Elf do
   defp materialize_stream(state) do
     adapter_opts = Map.merge(%{clock: state.clock}, state.adapter_opts)
 
-    identity = %Shoestring.Harness.RunIdentity{
-      run_id: state.run_id,
-      harness_id: "elf",
-      process_id: nil,
-      provider_session_id: state.provider_session_id
-    }
+    identity =
+      state.adapter_identity ||
+        %Shoestring.Harness.RunIdentity{
+          run_id: state.run_id,
+          harness_id: "elf",
+          process_id: nil,
+          provider_session_id: state.provider_session_id
+        }
 
     case state.adapter.stream(identity, adapter_opts) do
       {:ok, enumerable} ->
@@ -898,6 +998,10 @@ defmodule Shoestring.Elves.Elf do
           Classifier.classify(state.adapter_verdict, state.os_exit, state.cancel_requested?)
         )
 
+      state.process_owner == :adapter ->
+        Process.send_after(self(), :poll_adapter, state.adapter_poll_ms)
+        {:noreply, state}
+
       state.pending_events == [] ->
         finish_after_stream(state)
 
@@ -923,6 +1027,10 @@ defmodule Shoestring.Elves.Elf do
           state,
           Classifier.classify(state.adapter_verdict, state.os_exit, state.cancel_requested?)
         )
+
+      state.process_owner == :adapter ->
+        Process.send_after(self(), :poll_adapter, state.adapter_poll_ms)
+        {:noreply, state}
 
       owned_group_alive?(state) and state.os_exit == :unknown ->
         # Quiet but working (or an adopted orphan with no verdict yet): the
@@ -1005,6 +1113,41 @@ defmodule Shoestring.Elves.Elf do
     end
   end
 
+  defp cancel_adapter(%{process_owner: :adapter, adapter_identity: identity} = state, opts)
+       when not is_nil(identity) do
+    if function_exported?(state.adapter, :cancel, 2) do
+      adapter_opts =
+        state.adapter_opts
+        |> Map.merge(Map.new(opts))
+        |> Map.put(:clock, state.clock)
+
+      state.adapter.cancel(identity, adapter_opts)
+    else
+      :ok
+    end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp cancel_adapter(_state, _opts), do: :ok
+
+  defp release_adapter(%{process_owner: :adapter, adapter_identity: identity} = state)
+       when not is_nil(identity) do
+    if function_exported?(state.adapter, :release, 1) do
+      state.adapter.release(identity)
+    else
+      :ok
+    end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp release_adapter(_state), do: :ok
+
   defp terminate_pgid(pgid, opts) do
     grace_ms = Keyword.get(opts, :kill_grace_ms, 5_000)
     _ = PortRunner.killpg_id(pgid, "TERM")
@@ -1044,6 +1187,8 @@ defmodule Shoestring.Elves.Elf do
   # crashes, retries, and concurrent exits converge on a single terminal
   # event. Callers adapt the result to their callback context.
   defp commit_terminal(state, terminal) do
+    _ = release_adapter(state)
+
     cond do
       state.terminal != nil ->
         {:duplicate, state}
