@@ -125,7 +125,8 @@ defmodule Shoestring.Elves do
 
   @doc """
   Requests stopping at the next safe boundary (after in-flight item/command completion).
-  Delegates to the codex session's `request_safe_stop/1`.
+  Dispatches to the adapter session's safe stop handler when supported, or returns
+  `{:error, :safe_stop_unsupported}` for adapters that cannot honour a safe-boundary stop (e.g. Claude).
   """
   @spec request_stop(Ecto.UUID.t(), keyword()) ::
           {:ok, :stop_requested | :already_terminal} | {:error, term()}
@@ -136,23 +137,57 @@ defmodule Shoestring.Elves do
       if terminal_event(run, repo) != nil do
         {:ok, :already_terminal}
       else
-        session =
-          Keyword.get(opts, :session) ||
-            Keyword.get(opts, :session_pid) ||
-            resolve_session(run.id, opts)
+        case adapter_for_run(run, opts) do
+          adapter when adapter in [:codex, :fake] ->
+            dispatch_safe_stop(run, opts)
 
-        case session do
-          nil ->
-            {:error, :session_not_found}
-
-          server ->
-            try do
-              Shoestring.Harness.CodexAppServer.Session.request_safe_stop(server)
-            catch
-              :exit, reason -> {:error, {:session_exit, reason}}
-            end
+          _unsupported ->
+            {:error, :safe_stop_unsupported}
         end
       end
+    end
+  end
+
+  defp adapter_for_run(run, opts) do
+    case Keyword.get(opts, :adapter) do
+      nil -> normalize_adapter(run.provider_id)
+      adapter -> normalize_adapter(adapter)
+    end
+  end
+
+  defp normalize_adapter(Shoestring.Harness.ClaudeHeadless), do: :claude
+  defp normalize_adapter("claude_headless_stream_json"), do: :claude
+  defp normalize_adapter("claude"), do: :claude
+  defp normalize_adapter(:claude), do: :claude
+
+  defp normalize_adapter(Shoestring.Harness.CodexAppServer), do: :codex
+  defp normalize_adapter("codex_app_server_stdio"), do: :codex
+  defp normalize_adapter("codex"), do: :codex
+  defp normalize_adapter(:codex), do: :codex
+
+  defp normalize_adapter(Shoestring.Harness.Fake), do: :fake
+  defp normalize_adapter("shoestring.harness.fake"), do: :fake
+  defp normalize_adapter("fake"), do: :fake
+  defp normalize_adapter(:fake), do: :fake
+
+  defp normalize_adapter(_), do: :unsupported
+
+  defp dispatch_safe_stop(run, opts) do
+    session =
+      Keyword.get(opts, :session) ||
+        Keyword.get(opts, :session_pid) ||
+        resolve_session(run.id, opts)
+
+    case session do
+      nil ->
+        {:error, :session_not_found}
+
+      server ->
+        try do
+          Shoestring.Harness.CodexAppServer.Session.request_safe_stop(server)
+        catch
+          :exit, reason -> {:error, {:session_exit, reason}}
+        end
     end
   end
 

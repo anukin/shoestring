@@ -105,4 +105,16 @@ defmodule Shoestring.Elves.RequestStopTest do
     assert {:error, {:session_exit, {:simulated_crash, _call_info}}} =
              Elves.request_stop(run.id, session: crashing_pid)
   end
+
+  test "returns {:error, :safe_stop_unsupported} for Claude adapter runs", %{
+    goal: goal,
+    task: task
+  } do
+    request = ElvesHelpers.run_request(goal, task)
+    identity = Shoestring.Harness.ClaudeHeadless.identity()
+    {:ok, dispatch, _job} = Shoestring.Harness.Dispatches.enqueue(request, identity)
+    run = Repo.get!(Shoestring.Harness.RunRecord, dispatch.run_id)
+
+    assert {:error, :safe_stop_unsupported} = Elves.request_stop(run.id)
+  end
 end
