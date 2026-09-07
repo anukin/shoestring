@@ -120,7 +120,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.AdapterStartTest do
              })
 
     assert_receive {:emitter_session, session}, 5_000
-    GenServer.stop(session)
+    session_ref = Process.monitor(session)
+    assert_receive {:DOWN, ^session_ref, :process, ^session, :noproc}
+    assert GenServer.call(transport, :was_terminated)
   end
 
   test "start/2 fails closed with Error when workspace_ref directory does not exist" do

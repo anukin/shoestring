@@ -654,7 +654,7 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
       change when is_map(change) ->
         %{
           "path" => sanitize_string(change["path"]),
-          "kind" => change["kind"],
+          "kind" => sanitize_change_kind(change["kind"]),
           "diff" => sanitize_string(change["diff"])
         }
 
@@ -664,6 +664,9 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
   end
 
   defp sanitize_changes(_), do: []
+
+  defp sanitize_change_kind(%{"type" => type}), do: sanitize_string(type)
+  defp sanitize_change_kind(kind), do: sanitize_string(kind)
 
   defp filter_nils(map) when is_map(map) do
     map

@@ -67,6 +67,8 @@ defmodule ShoestringWeb.RunLiveTest do
       assert has_element?(view, "#run-repo-path")
       assert has_element?(view, "#run-base-revision")
       assert has_element?(view, "#run-provider")
+      assert has_element?(view, "#run-provider option[value='codex']")
+      assert has_element?(view, "#run-provider option[value='claude']")
       assert has_element?(view, "#run-prompt")
       assert has_element?(view, "#run-timeout-seconds")
       assert has_element?(view, "#run-max-events")

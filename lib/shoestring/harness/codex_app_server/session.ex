@@ -121,6 +121,14 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     GenServer.call(server, :status)
   end
 
+  @doc false
+  @spec shutdown(GenServer.server()) :: :ok
+  def shutdown(server) do
+    GenServer.call(server, :shutdown, 30_000)
+  catch
+    :exit, _reason -> :ok
+  end
+
   # --- GenServer Callbacks ---
 
   @impl GenServer
@@ -291,6 +299,12 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     {:reply, {:ok, summary}, state}
   end
 
+  def handle_call(:shutdown, _from, state) do
+    reap_descendants(state)
+    close_owned_transport(state)
+    {:stop, :normal, :ok, state}
+  end
+
   # --- Transport Notifications & Handshake ---
 
   @impl GenServer
@@ -414,18 +428,46 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
   def handle_info({:codex_transport_closed, _pid, reason}, state) do
     cancel_handshake_timer(state)
-    reap_descendants(state)
-    error = Error.new(:transport, "transport_closed", inspect(reason))
-    state = reply_identity_waiters(state, {:error, error})
-    {:noreply, %{state | status: :closed, terminal_result: reason}}
+
+    if terminal_status?(state.status) do
+      {:noreply, %{state | transport_pid: nil, transport_ref: nil}}
+    else
+      reap_descendants(state)
+      error = Error.new(:transport, "transport_closed", inspect(reason))
+      state = emit_synthetic_error(state, error)
+      state = reply_identity_waiters(state, {:error, error})
+
+      {:noreply,
+       %{
+         state
+         | transport_pid: nil,
+           transport_ref: nil,
+           status: :failed,
+           terminal_result: {:error, error}
+       }}
+    end
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{transport_ref: ref} = state) do
     cancel_handshake_timer(state)
-    reap_descendants(state)
-    error = Error.new(:transport, "transport_down", inspect(reason))
-    state = reply_identity_waiters(state, {:error, error})
-    {:noreply, %{state | transport_pid: nil, transport_ref: nil, status: :closed}}
+
+    if terminal_status?(state.status) do
+      {:noreply, %{state | transport_pid: nil, transport_ref: nil}}
+    else
+      reap_descendants(state)
+      error = Error.new(:transport, "transport_down", inspect(reason))
+      state = emit_synthetic_error(state, error)
+      state = reply_identity_waiters(state, {:error, error})
+
+      {:noreply,
+       %{
+         state
+         | transport_pid: nil,
+           transport_ref: nil,
+           status: :failed,
+           terminal_result: {:error, error}
+       }}
+    end
   end
 
   def handle_info(_other, state) do
@@ -482,7 +524,9 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         if state.opts[:resume] && state.thread_id do
           send_rpc(state, "thread/resume", %{"threadId" => state.thread_id}, :thread_resume)
         else
-          cwd = (state.run_request && state.run_request.workspace_ref) || "/tmp"
+          cwd =
+            state.opts[:workdir] || (state.run_request && state.run_request.workspace_ref) ||
+              "/tmp"
 
           # NOTE on ephemeral: false (Required for thread/resume):
           # Codex only persists rollout files on disk (~/.codex/sessions) for non-ephemeral threads.
@@ -736,6 +780,18 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     _ -> :ok
   end
 
+  defp close_owned_transport(state) do
+    if ((is_nil(state.opts[:transport_pid]) and state.transport_pid) &&
+          Process.alive?(state.transport_pid)) and
+         function_exported?(state.transport_mod, :close, 1) do
+      state.transport_mod.close(state.transport_pid)
+    end
+
+    :ok
+  catch
+    _, _ -> :ok
+  end
+
   defp kill_process_and_group(nil), do: :ok
 
   defp kill_process_and_group(pid_val) do
@@ -833,4 +889,6 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       nil
     end
   end
+
+  defp terminal_status?(status), do: status in [:completed, :interrupted, :failed]
 end

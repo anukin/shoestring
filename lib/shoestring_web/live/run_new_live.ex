@@ -182,23 +182,29 @@ defmodule ShoestringWeb.RunNewLive do
 
     provider = run_params["provider"] || "fake"
 
-    {identity, adapter, command, adapter_opts} =
+    {identity, adapter, command, adapter_opts, process_owner} =
       case provider do
         "codex" ->
           {Shoestring.Harness.CodexAppServer.identity(), Shoestring.Harness.CodexAppServer,
-           ["codex", "app-server", "--stdio"], %{}}
+           ["codex", "app-server", "--stdio"], %{live: true}, :adapter}
+
+        "claude" ->
+          {Shoestring.Harness.ClaudeHeadless.identity(), Shoestring.Harness.ClaudeHeadless,
+           ["claude", "--print", "--verbose", "--output-format", "stream-json"], %{live: true},
+           :adapter}
 
         _fake ->
           scenario_name = parse_scenario(run_params["scenario"])
 
           {Shoestring.Harness.Fake.identity(), Shoestring.Harness.Fake, ["sleep", "30"],
-           %{scenario: scenario_name}}
+           %{scenario: scenario_name}, :runner}
       end
 
     elf_opts = [
       run_id: run_id,
       adapter: adapter,
       adapter_opts: adapter_opts,
+      process_owner: process_owner,
       command: command,
       runner_opts: [cd: worktree.path, kill_grace_ms: 2_000, reap_timeout_ms: 2_000],
       max_events_per_run: max_events

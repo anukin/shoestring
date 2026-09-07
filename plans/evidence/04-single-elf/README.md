@@ -87,4 +87,5 @@ substitute, or by role ("the session id") with no value at all.
 - Associated execution fixtures are tracked under `test/fixtures/codex/execution/`.
 - `codex-app-server.md`: Spike B and Work Package C writeup analyzing `codex app-server --stdio` transport, event streaming, in-band cancellation, safe lease boundary, and post-turn resume.
 - Associated app-server fixtures are tracked under `test/fixtures/codex/app_server/`.
-
+- `harness-live-verification.md`: end-to-end Claude and Codex runs through the Elf, including the hermetically reproduced and fixed Codex file-change completion persistence gap.
+- Sanitized live-run summaries are tracked under `fixtures/harness/`.

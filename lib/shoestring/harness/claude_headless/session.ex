@@ -148,6 +148,14 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     GenServer.call(server, :status)
   end
 
+  @doc false
+  @spec shutdown(GenServer.server()) :: :ok
+  def shutdown(server) do
+    GenServer.call(server, :shutdown, 30_000)
+  catch
+    :exit, _reason -> :ok
+  end
+
   # --- GenServer Callbacks ---
 
   @impl GenServer
@@ -301,6 +309,11 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
 
   def handle_call(:status, _from, state) do
     {:reply, {:ok, status_summary(state)}, state}
+  end
+
+  def handle_call(:shutdown, _from, state) do
+    state = terminate_transport_group(state)
+    {:stop, :normal, :ok, state}
   end
 
   # --- Transport messages ---
@@ -529,6 +542,14 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   # process group, then reap. There is no in-band interrupt on this
   # protocol, so every cancellation path ends here.
   defp do_kill(state) do
+    state = terminate_transport_group(state)
+
+    %{state | status: :cancelled, terminal_result: {:ok, :cancelled}}
+    |> reply_terminal_waiters()
+    |> reply_identity_waiters()
+  end
+
+  defp terminate_transport_group(state) do
     if state.transport_pid && Process.alive?(state.transport_pid) do
       try do
         state.transport_mod.terminate_group(state.transport_pid)
@@ -537,9 +558,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
       end
     end
 
-    %{state | status: :cancelled, terminal_result: {:ok, :cancelled}}
-    |> reply_terminal_waiters()
-    |> reply_identity_waiters()
+    state
   end
 
   defp emit_synthetic_error(state, %Error{} = error) do

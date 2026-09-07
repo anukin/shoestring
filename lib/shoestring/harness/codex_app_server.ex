@@ -221,9 +221,11 @@ defmodule Shoestring.Harness.CodexAppServer do
             {:ok, run_identity}
 
           {:error, %Error{} = err} ->
+            cleanup_failed_session(pid)
             {:error, err}
 
           {:error, reason} ->
+            cleanup_failed_session(pid)
             {:error, Error.new(:transport, "handshake_failed", inspect(reason))}
         end
 
@@ -252,9 +254,11 @@ defmodule Shoestring.Harness.CodexAppServer do
             {:ok, run_identity}
 
           {:error, %Error{} = err} ->
+            cleanup_failed_session(pid)
             {:error, err}
 
           {:error, reason} ->
+            cleanup_failed_session(pid)
             {:error, Error.new(:transport, "session_resume_failed", inspect(reason))}
         end
 
@@ -549,5 +553,30 @@ defmodule Shoestring.Harness.CodexAppServer do
     end
   rescue
     _ -> {:error, :not_found}
+  end
+
+  @doc false
+  @spec release(RunIdentity.t()) :: :ok
+  def release(%RunIdentity{run_id: run_id}) do
+    case lookup_session(run_id) do
+      {:ok, pid} -> stop_session(pid)
+      {:error, :not_found} -> :ok
+    end
+
+    :ets.delete(@table, run_id)
+    :ok
+  rescue
+    _error -> :ok
+  end
+
+  defp stop_session(pid) when is_pid(pid) do
+    if Process.alive?(pid), do: Session.shutdown(pid)
+    :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp cleanup_failed_session(pid) do
+    stop_session(pid)
   end
 end
