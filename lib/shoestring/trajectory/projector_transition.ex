@@ -51,6 +51,17 @@ defmodule Shoestring.Trajectory.ProjectorTransition do
       type when type in @harness_event_types ->
         {:ok, %{goal: goal, task: task, task_action: :none}}
 
+      "admission.decided" ->
+        # Admission decisions drive Cobbler evaluation, not goal/task rows.
+        {:ok, %{goal: goal, task: task, task_action: :none}}
+
+      "cobbler." <> _rest ->
+        # Command and claim outcomes are projected by
+        # Shoestring.Cobbler.Commands.rebuild/2, not by goal/task rows.
+        # The prefix match keeps unknown future cobbler.* events from
+        # halting this projector.
+        {:ok, %{goal: goal, task: task, task_action: :none}}
+
       type ->
         {:error, {:invalid_transition, :unsupported_event, type}}
     end

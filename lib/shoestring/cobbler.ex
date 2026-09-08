@@ -1,15 +1,36 @@
 defmodule Shoestring.Cobbler do
   @moduledoc """
   Cobbler: Quota-aware admission evaluation, deterministic reserve policies,
-  and durable admission decision persistence.
+  durable admission decision persistence, and the durable command/state/replay
+  foundation.
 
   In Milestone 05 (quota-aware MVP foundation), Cobbler evaluates admission
   requests deterministically against capacity observations, candidate capabilities,
   explicit occupancy evidence, and operator confirmations, persisting durable
   `admission.decided` trajectory events without activating automatic dispatch.
+
+  The command foundation adds durable, goal-scoped command ids with identical
+  replay / conflicting-reuse semantics, a validated command state machine with
+  recoverable `needs_user` outcomes, an atomic intent/transition/result store,
+  trajectory rebuild, and a SQLite-enforced exclusive global MVP task claim.
+  The first gated dispatch consumer (`Shoestring.Cobbler.Dispatcher`) reads
+  command rows, re-validates admission references and claim ownership, and
+  stops at an explicit execution-disabled boundary: nothing is spawned or
+  enqueued. Direct run paths accept an opt-in `require_cobbler_command: true`
+  guard (`Shoestring.Cobbler.DispatchGate`) that rejects dispatches for
+  goals holding no live claim instead of bypassing commands.
   """
 
-  alias Shoestring.Cobbler.{AdmissionDecision, AdmissionEvaluation, AdmissionPolicy}
+  alias Shoestring.Cobbler.{
+    AdmissionDecision,
+    AdmissionEvaluation,
+    AdmissionPolicy,
+    Commands,
+    DispatchGate,
+    Dispatcher,
+    GoalLifecycle
+  }
+
   alias Shoestring.Harness.CapacitySnapshot
 
   @doc """
@@ -48,157 +69,113 @@ defmodule Shoestring.Cobbler do
   @spec default_policy() :: AdmissionPolicy.t()
   def default_policy, do: AdmissionPolicy.default()
 
-  alias Shoestring.Cobbler.{Claim, Commands, Intent, StateReplay}
-  alias Shoestring.Repo
-  import Ecto.Query
-
   @doc """
-  Executes a durable command within a goal.
+  Records a durable command outcome for a goal-scoped command id.
+
+  Identical replay returns the original result without events; conflicting
+  reuse of the same command id is rejected. Commands are record-only and
+  never execute anything.
   """
-  @spec execute_command(Ecto.UUID.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def execute_command(goal_id, command_params, opts \\ []) do
-    Commands.execute(goal_id, command_params, opts)
-  end
-
-  @doc """
-  Submits an inert task intent to Cobbler with caller-supplied command ID.
-  """
-  @spec submit_intent(Ecto.UUID.t(), String.t(), map(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def submit_intent(goal_id, command_id, payload, opts \\ []) do
-    command = %{
-      command_id: command_id,
-      command_type: "submit_intent",
-      payload: payload
-    }
-
-    Commands.execute(goal_id, command, opts)
-  end
-
-  @doc """
-  Exclusively claims an inert pending intent for execution in SQLite.
-  """
-  @spec claim_intent(Ecto.UUID.t(), String.t(), Ecto.UUID.t(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def claim_intent(goal_id, command_id, intent_id, opts \\ []) do
-    command = %{
-      command_id: command_id,
-      command_type: "claim",
-      payload: %{"intent_id" => intent_id}
-    }
-
-    Commands.execute(goal_id, command, opts)
-  end
-
-  @doc """
-  Transitions an active intent to recoverable :needs_user state.
-  """
-  @spec request_user(Ecto.UUID.t(), String.t(), Ecto.UUID.t(), String.t(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def request_user(goal_id, command_id, intent_id, reason, opts \\ []) do
-    command = %{
-      command_id: command_id,
-      command_type: "needs_user",
-      payload: %{"intent_id" => intent_id, "reason" => reason}
-    }
-
-    Commands.execute(goal_id, command, opts)
-  end
-
-  @doc """
-  Recovers an intent from :needs_user back to :active state.
-  """
-  @spec resume_intent(Ecto.UUID.t(), String.t(), Ecto.UUID.t(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def resume_intent(goal_id, command_id, intent_id, opts \\ []) do
-    command = %{
-      command_id: command_id,
-      command_type: "resume",
-      payload: %{"intent_id" => intent_id}
-    }
-
-    Commands.execute(goal_id, command, opts)
-  end
-
-  @doc """
-  Terminally completes an active intent and releases its exclusive claim.
-  """
-  @spec complete_intent(Ecto.UUID.t(), String.t(), Ecto.UUID.t(), String.t() | nil, keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def complete_intent(goal_id, command_id, intent_id, reason \\ nil, opts \\ []) do
-    command = %{
-      command_id: command_id,
-      command_type: "complete",
-      payload: %{"intent_id" => intent_id, "reason" => reason || "Intent completed"}
-    }
-
-    Commands.execute(goal_id, command, opts)
-  end
-
-  @doc """
-  Terminally fails an intent and releases any active claim.
-  """
-  @spec fail_intent(Ecto.UUID.t(), String.t(), Ecto.UUID.t(), String.t(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def fail_intent(goal_id, command_id, intent_id, reason, opts \\ []) do
-    command = %{
-      command_id: command_id,
-      command_type: "fail",
-      payload: %{"intent_id" => intent_id, "reason" => reason}
-    }
-
-    Commands.execute(goal_id, command, opts)
-  end
-
-  @doc """
-  Terminally cancels an intent and releases any active claim.
-  """
-  @spec cancel_intent(Ecto.UUID.t(), String.t(), Ecto.UUID.t(), String.t() | nil, keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def cancel_intent(goal_id, command_id, intent_id, reason \\ nil, opts \\ []) do
-    command = %{
-      command_id: command_id,
-      command_type: "cancel",
-      payload: %{"intent_id" => intent_id, "reason" => reason || "Intent cancelled"}
-    }
-
-    Commands.execute(goal_id, command, opts)
-  end
-
-  @doc """
-  Retrieves an intent by ID.
-  """
-  @spec get_intent(Ecto.UUID.t(), keyword()) :: Intent.t() | nil
-  def get_intent(intent_id, opts \\ []) do
-    repo = Keyword.get(opts, :repo, Repo)
-    repo.get(Intent, intent_id)
-  end
-
-  @doc """
-  Lists all intents for a goal.
-  """
-  @spec list_intents(Ecto.UUID.t(), keyword()) :: [Intent.t()]
-  def list_intents(goal_id, opts \\ []) do
-    repo = Keyword.get(opts, :repo, Repo)
-    repo.all(from i in Intent, where: i.goal_id == ^goal_id, order_by: [asc: i.inserted_at])
-  end
-
-  @doc """
-  Retrieves the current globally active exclusive claim, if one exists.
-  """
-  @spec get_active_claim(keyword()) :: Claim.t() | nil
-  def get_active_claim(opts \\ []) do
-    repo = Keyword.get(opts, :repo, Repo)
-    repo.one(from c in Claim, where: c.status == "active", limit: 1)
-  end
-
-  @doc """
-  Replays a goal's canonical trajectory into in-memory Cobbler state.
-  """
-  @spec replay_state(Ecto.UUID.t(), keyword()) ::
-          {:ok, %{intents: %{String.t() => map()}, active_claim: map() | nil}}
+  @spec submit_command(Ecto.UUID.t(), map(), keyword()) ::
+          {:ok,
+           %{
+             command: Shoestring.Cobbler.CommandRecord.t(),
+             outcome: :recorded | :replayed,
+             events: [Shoestring.Trajectory.TrajectoryEvent.t()]
+           }}
           | {:error, term()}
-  def replay_state(goal_id, opts \\ []) do
-    StateReplay.replay(goal_id, opts)
+  def submit_command(goal_id, attrs, opts \\ []) do
+    Commands.submit(goal_id, attrs, opts)
+  end
+
+  @doc "Resolves a recoverable `needs_user` command with a validated operator response."
+  @spec respond_command(Ecto.UUID.t(), String.t(), map(), keyword()) ::
+          {:ok,
+           %{
+             command: Shoestring.Cobbler.CommandRecord.t(),
+             outcome: :recorded | :replayed,
+             events: [Shoestring.Trajectory.TrajectoryEvent.t()]
+           }}
+          | {:error, term()}
+  def respond_command(goal_id, command_id, response_attrs, opts \\ []) do
+    Commands.respond(goal_id, command_id, response_attrs, opts)
+  end
+
+  @doc "Returns the command row for a goal-scoped command id, or nil."
+  @spec command(Ecto.UUID.t(), String.t(), keyword()) ::
+          Shoestring.Cobbler.CommandRecord.t() | nil
+  def command(goal_id, command_id, opts \\ []) do
+    Commands.get(goal_id, command_id, opts)
+  end
+
+  @doc "Lists command rows for a goal in insertion order."
+  @spec list_commands(Ecto.UUID.t(), keyword()) :: [Shoestring.Cobbler.CommandRecord.t()]
+  def list_commands(goal_id, opts \\ []) do
+    Commands.list(goal_id, opts)
+  end
+
+  @doc "Lists pending operator decisions (`needs_user` commands) for a goal."
+  @spec pending_commands(Ecto.UUID.t(), keyword()) :: [Shoestring.Cobbler.CommandRecord.t()]
+  def pending_commands(goal_id, opts \\ []) do
+    Commands.pending(goal_id, opts)
+  end
+
+  @doc "Returns the single active global task claim, or nil."
+  @spec active_claim(keyword()) :: Shoestring.Cobbler.TaskClaimRecord.t() | nil
+  def active_claim(opts \\ []) do
+    Commands.active_claim(opts)
+  end
+
+  @doc "Rebuilds command and claim state from canonical events; reports divergence."
+  @spec rebuild_commands(Ecto.UUID.t(), keyword()) ::
+          {:ok,
+           %{
+             commands: [map()],
+             claim: map() | nil,
+             consistent?: boolean(),
+             divergences: [String.t()]
+           }}
+          | {:error, term()}
+  def rebuild_commands(goal_id, opts \\ []) do
+    Commands.rebuild(goal_id, opts)
+  end
+
+  @doc "Applies one goal lifecycle event to a goal state (pure; see `GoalLifecycle`)."
+  @spec lifecycle_transition(GoalLifecycle.state(), GoalLifecycle.event()) ::
+          {:ok, GoalLifecycle.state()} | {:error, term()}
+  def lifecycle_transition(state, event) do
+    GoalLifecycle.transition(state, event)
+  end
+
+  @doc """
+  Submits a command and gates its dispatch through the first gated consumer.
+
+  A fully validated claim stops at the explicit execution-disabled boundary
+  (`{:error, {:execution_disabled, detail}}`); nothing is spawned or
+  enqueued. Identical replays re-gate; conflicting reuse is rejected.
+  """
+  @spec claim_and_gate(Ecto.UUID.t(), map(), keyword()) :: Dispatcher.gate_result()
+  def claim_and_gate(goal_id, attrs, opts \\ []) do
+    Dispatcher.claim_and_gate(goal_id, attrs, opts)
+  end
+
+  @doc """
+  Gates dispatch for an already-recorded command row.
+
+  Only a live, owned, claimed outcome with a valid admission reference
+  reaches the execution-disabled boundary; anything else is rejected as
+  `{:error, {:no_claimed_command, detail}}`.
+  """
+  @spec dispatch_command(Ecto.UUID.t(), String.t(), keyword()) :: {:error, term()}
+  def dispatch_command(goal_id, command_id, opts \\ []) do
+    Dispatcher.dispatch(goal_id, command_id, opts)
+  end
+
+  @doc """
+  Verifies that a goal holds the exclusive global task claim (read-only).
+  """
+  @spec authorize_dispatch(Ecto.UUID.t(), keyword()) :: :ok | {:error, term()}
+  def authorize_dispatch(goal_id, opts \\ []) do
+    DispatchGate.authorize(goal_id, opts)
   end
 end

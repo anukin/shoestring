@@ -1,468 +1,735 @@
 defmodule Shoestring.Cobbler.CommandsTest do
+  @moduledoc """
+  Hermetic DataCase tests for the durable command store: replay and conflict
+  semantics, validated transitions, recoverable needs_user, atomic
+  intent/transition/result, competing goals, inert pending intents, no
+  execution, and no timed release.
+  """
   use Shoestring.DataCase, async: false
 
-  alias Shoestring.Cobbler
-  alias Shoestring.Cobbler.{AdmissionDecision, AdmissionPolicy}
+  alias Oban.Job
+  alias Shoestring.Cobbler.Command
+  alias Shoestring.Cobbler.Commands
+  alias Shoestring.Cobbler.CommandRecord
+  alias Shoestring.Cobbler.TaskClaimRecord
   alias Shoestring.Repo
-  alias Shoestring.Trajectory
-  alias Shoestring.Trajectory.Goal
+  alias Shoestring.Trajectory.TrajectoryEvent
+
+  import Ecto.Query
+  import Shoestring.Test.CobblerHelpers
+
+  @now ~U[2026-09-07 12:00:00.000000Z]
+  @stale_now ~U[2026-01-01 00:00:00.000000Z]
+
+  @cobbler_event_types [
+    "cobbler.command.accepted",
+    "cobbler.command.resolved",
+    "cobbler.claim.acquired",
+    "cobbler.claim.released"
+  ]
 
   setup do
-    goal =
-      %Goal{}
-      |> Goal.changeset(%{"title" => "Cobbler Commands Test Goal"})
-      |> Ecto.Changeset.put_change(:owner_id, Ecto.UUID.generate())
-      |> Repo.insert!()
-
-    # Create goal.created event in trajectory
-    {:ok, _} =
-      Trajectory.append(goal.id, %{
-        "type" => "goal.created",
-        "schema_version" => 1,
-        "actor" => "test_operator",
-        "payload" => %{"title" => "Cobbler Commands Test Goal"}
-      })
-
-    policy = AdmissionPolicy.default()
-
-    valid_candidate = %{
-      provider_id: "codex",
-      adapter_id: "codex_app_server",
-      support_tier: :proactive,
-      compatibility_state: :compatible
-    }
-
-    valid_observation = %{
-      "snapshot_id" => Ecto.UUID.generate(),
-      "observed_at" => "2026-09-07T13:58:00Z",
-      "expires_at" => "2026-09-07T14:03:00Z",
-      "age_seconds" => 120,
-      "confidence" => "high",
-      "freshness" => "fresh",
-      "capacity_state" => "observed",
-      "windows" => [
-        %{
-          "kind" => "five_hour",
-          "state" => "observed",
-          "used_percent" => 40.0,
-          "reset_at" => "2026-09-07T18:00:00Z",
-          "reason" => nil
-        }
-      ]
-    }
-
-    decision = %AdmissionDecision{
-      version: 1,
-      decision_id: Ecto.UUID.generate(),
-      goal_id: goal.id,
-      result: :admit,
-      reason_code: "automatic_admission_eligible",
-      explanation: "Within safe operational margins",
-      requested_capability: "supervised_execution",
-      candidate: valid_candidate,
-      scope: "account:default",
-      observation: valid_observation,
-      policy: AdmissionPolicy.to_map(policy),
-      proposed_bounds: %{
-        "response_budget" => 10,
-        "tool_budget" => 25,
-        "deadline" => "2026-09-07T15:00:00Z",
-        "checkpoint_cadence" => 1,
-        "reserves" => %{"response" => 1, "tool" => 1}
-      },
-      reobservation_required: false,
-      evaluated_at: ~U[2026-09-07 14:00:00Z]
-    }
-
-    %{goal: goal, decision: decision}
+    goal = create_goal!()
+    {:ok, goal: goal}
   end
 
-  describe "submit_intent" do
-    test "creates inert pending intent and emits cobbler.intent_submitted event", %{
-      goal: goal,
-      decision: decision
+  describe "submit task.claim" do
+    test "records the claimed outcome, the claim row, and canonical events atomically", %{
+      goal: goal
     } do
-      payload = %{
-        "title" => "Implement Feature X",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" => AdmissionDecision.to_payload(decision)
-      }
+      admission = append_admission_event!(goal.id)
+      command = claim_command(admission, command_id: "cmd-claim-1")
 
-      assert {:ok, result} = Cobbler.submit_intent(goal.id, "cmd-submit-1", payload)
-      assert result.status == "pending"
-      assert result.provider_id == "codex"
-      assert result.scope == "account:default"
+      assert {:ok, %{command: row, outcome: :recorded, events: events}} =
+               Commands.submit(goal.id, command, now: @now)
 
-      # Verify persisted intent in database
-      intent = Cobbler.get_intent(result.intent_id)
-      assert intent != nil
-      assert intent.status == "pending"
-      assert intent.title == "Implement Feature X"
-      assert intent.admission_decision_id == decision.decision_id
+      assert row.status == "resolved"
+      assert row.type == "task.claim"
+      assert row.result["kind"] == "claimed"
+      assert row.command_id == "cmd-claim-1"
+      assert Enum.map(events, & &1.type) == ["cobbler.command.accepted", "cobbler.claim.acquired"]
 
-      # Execution is completely disabled: intent is inert
-      assert Cobbler.get_active_claim() == nil
+      assert %TaskClaimRecord{} = claim = Commands.active_claim([])
+      assert claim.goal_id == goal.id
+      assert claim.command_id == "cmd-claim-1"
+      assert claim.intent == "supervised_execution"
+      assert claim.provider_id == "codex"
+      assert claim.status == "active"
+      assert claim.admission_event_id == admission.id
+      assert claim.admission_decision_id == admission.payload["decision_id"]
 
-      # Verify authoritative trajectory event
-      assert {:ok, events} = Trajectory.replay(goal.id)
-      submitted_event = Enum.find(events, &(&1.type == "cobbler.intent_submitted"))
-      assert submitted_event != nil
-      assert submitted_event.payload["command_id"] == "cmd-submit-1"
-      assert submitted_event.payload["intent_id"] == intent.id
-      assert submitted_event.payload["admission_decision_id"] == decision.decision_id
+      assert event_count(goal.id, @cobbler_event_types) == 2
     end
 
-    test "caller-supplied command ID is scoped to goal", %{goal: goal, decision: decision} do
-      goal2 =
-        %Goal{}
-        |> Goal.changeset(%{"title" => "Second Goal"})
-        |> Ecto.Changeset.put_change(:owner_id, Ecto.UUID.generate())
-        |> Repo.insert!()
+    test "identical replay returns the original result without appending events", %{goal: goal} do
+      admission = append_admission_event!(goal.id)
+      command = claim_command(admission, command_id: "cmd-claim-replay")
 
-      {:ok, _} =
-        Trajectory.append(goal2.id, %{
-          "type" => "goal.created",
+      assert {:ok, %{outcome: :recorded}} = Commands.submit(goal.id, command, now: @now)
+      events_before = cobbler_events(goal.id)
+
+      assert {:ok, %{command: replayed, outcome: :replayed, events: []}} =
+               Commands.submit(goal.id, command, now: @now)
+
+      assert replayed.result["kind"] == "claimed"
+      assert cobbler_events(goal.id) == events_before
+      assert length(cobbler_events(goal.id)) == 2
+      assert %TaskClaimRecord{} = Commands.active_claim([])
+    end
+
+    test "conflicting reuse of the same command id is rejected", %{goal: goal} do
+      admission = append_admission_event!(goal.id)
+      command = claim_command(admission, command_id: "cmd-claim-conflict")
+
+      assert {:ok, %{outcome: :recorded}} = Commands.submit(goal.id, command, now: @now)
+
+      conflicting =
+        command
+        |> put_in(["payload", "scope"], "account:claude")
+        |> put_in(["payload", "admission_event_id"], admission.id)
+
+      events_before = cobbler_events(goal.id)
+
+      assert {:error, {:command_conflict, conflict}} =
+               Commands.submit(goal.id, conflicting, now: @now)
+
+      assert conflict["command_id"] == "cmd-claim-conflict"
+      assert conflict["existing_digest"] != conflict["incoming_digest"]
+      assert cobbler_events(goal.id) == events_before
+
+      stored = Commands.get(goal.id, "cmd-claim-conflict", [])
+      assert stored.status == "resolved"
+      assert stored.result["kind"] == "claimed"
+      # The claim was recorded for the original scope, not the conflicting one.
+      assert Commands.active_claim([]).provider_id == "codex"
+    end
+
+    test "claiming while another goal holds the claim is needs_user and never releases it", %{
+      goal: goal
+    } do
+      holder = create_goal!()
+      holder_admission = append_admission_event!(holder.id)
+
+      assert {:ok, %{outcome: :recorded}} =
+               Commands.submit(
+                 holder.id,
+                 claim_command(holder_admission, command_id: "cmd-holder"),
+                 now: @now
+               )
+
+      admission = append_admission_event!(goal.id)
+      command = claim_command(admission, command_id: "cmd-contender")
+
+      assert {:ok, %{command: row, outcome: :recorded, events: events}} =
+               Commands.submit(goal.id, command, now: @now)
+
+      assert row.status == "needs_user"
+      assert row.result["kind"] == "needs_user"
+      assert row.result["reason"] == "claim_held"
+      assert row.result["options"] == ["abandon"]
+      assert row.result["active_claim"]["goal_id"] == holder.id
+      assert row.result["active_claim"]["claim_id"] == Commands.active_claim([]).id
+      assert Enum.map(events, & &1.type) == ["cobbler.command.accepted"]
+
+      # The holder's claim is untouched: no timer, staleness, or competing
+      # command ever releases it.
+      claim = Commands.active_claim([])
+      assert claim.goal_id == holder.id
+      assert claim.status == "active"
+      assert event_count(goal.id, @cobbler_event_types) == 1
+    end
+
+    test "invalid commands are rejected without persisting anything", %{goal: goal} do
+      admission = append_admission_event!(goal.id)
+
+      for invalid <- [
+            %{"type" => "task.execute", "payload" => %{}},
+            %{"type" => "task.claim", "payload" => %{"intent" => "x"}},
+            claim_command(admission) |> Map.put("payload", %{}),
+            claim_command(admission) |> put_in(["payload", "admission_event_id"], "not-a-uuid")
+          ] do
+        assert {:error, %Ecto.Changeset{}} = Commands.submit(goal.id, invalid, now: @now)
+      end
+
+      assert Commands.list(goal.id, []) == []
+      assert Commands.active_claim([]) == nil
+      assert event_count(goal.id, @cobbler_event_types) == 0
+    end
+
+    test "an admission reference from a different goal is rejected before any claim", %{
+      goal: goal
+    } do
+      other = create_goal!()
+      foreign_admission = append_admission_event!(other.id)
+
+      command = claim_command(foreign_admission, command_id: "cmd-cross-goal")
+
+      assert {:ok, %{command: row, outcome: :recorded}} =
+               Commands.submit(goal.id, command, now: @now)
+
+      assert row.status == "rejected"
+      assert row.result["reason"] == "admission_event_not_found"
+      assert Commands.active_claim([]) == nil
+    end
+
+    test "an admission reference that mismatches intent, scope, or candidate is rejected", %{
+      goal: goal
+    } do
+      admission = append_admission_event!(goal.id)
+
+      mismatches = [
+        {"intent", put_in(claim_command(admission), ["payload", "intent"], "read_only"),
+         "admission_intent_mismatch"},
+        {"scope", put_in(claim_command(admission), ["payload", "scope"], "account:claude"),
+         "admission_scope_mismatch"},
+        {"candidate",
+         put_in(claim_command(admission), ["payload", "candidate", "provider_id"], "claude"),
+         "admission_candidate_mismatch"}
+      ]
+
+      for {label, command, reason} <- mismatches do
+        command_id = "cmd-mismatch-#{label}"
+
+        assert {:ok, %{command: row, outcome: :recorded}} =
+                 Commands.submit(goal.id, %{command | "command_id" => command_id}, now: @now)
+
+        assert row.status == "rejected", "expected rejection for #{label}"
+        assert row.result["reason"] == reason
+      end
+
+      assert Commands.active_claim([]) == nil
+      assert event_count(goal.id, @cobbler_event_types) == 3
+    end
+
+    test "a non-admission event reference and a missing decision id are rejected", %{goal: goal} do
+      # A registered but non-admission event in the same goal.
+      {:ok, plain_event} =
+        Shoestring.Trajectory.append(goal.id, %{
+          "type" => "decision.recorded",
           "schema_version" => 1,
-          "actor" => "test_operator",
-          "payload" => %{"title" => "Second Goal"}
+          "actor" => "system",
+          "occurred_at" => @now,
+          "payload" => %{"decision" => "not an admission"}
         })
 
-      payload1 = %{
-        "title" => "Intent Goal 1",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" => AdmissionDecision.to_payload(decision)
+      wrong_type_command = %{
+        "type" => "task.claim",
+        "command_id" => "cmd-wrong-type",
+        "payload" => %{
+          "intent" => "supervised_execution",
+          "scope" => "account:codex",
+          "candidate" => %{"provider_id" => "codex", "adapter_id" => "codex_app_server"},
+          "admission_event_id" => plain_event.id
+        }
       }
 
-      decision2 = %{decision | goal_id: goal2.id, decision_id: Ecto.UUID.generate()}
+      assert {:ok, %{command: row}} = Commands.submit(goal.id, wrong_type_command, now: @now)
+      assert row.status == "rejected"
+      assert row.result["reason"] == "admission_event_type_invalid"
 
-      payload2 = %{
-        "title" => "Intent Goal 2",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" => AdmissionDecision.to_payload(decision2)
-      }
+      # An admission event whose stored payload lost its decision id.
+      {:ok, incomplete} = append_admission_event_to_repo(goal.id)
 
-      # Same command_id under two different goals succeeds independently
-      assert {:ok, res1} = Cobbler.submit_intent(goal.id, "cmd-shared-id", payload1)
-      assert {:ok, res2} = Cobbler.submit_intent(goal2.id, "cmd-shared-id", payload2)
-      assert res1.intent_id != res2.intent_id
+      Repo.update!(
+        Ecto.Changeset.change(incomplete,
+          payload: Map.put(incomplete.payload, "decision_id", nil)
+        )
+      )
+
+      command2 = claim_command(incomplete, command_id: "cmd-no-decision")
+
+      assert {:ok, %{command: row2}} = Commands.submit(goal.id, command2, now: @now)
+      assert row2.status == "rejected"
+      assert row2.result["reason"] == "admission_decision_id_missing"
+
+      assert Commands.active_claim([]) == nil
     end
 
-    test "replaying identical command returns original result without new events", %{
-      goal: goal,
-      decision: decision
+    test "a mid-transaction failure rolls back the claim, the command row, and the events", %{
+      goal: goal
     } do
-      payload = %{
-        "title" => "Idempotent Intent",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" => AdmissionDecision.to_payload(decision)
-      }
+      admission = append_admission_event!(goal.id)
+      command = claim_command(admission, command_id: "cmd-rollback")
 
-      assert {:ok, first_result} = Cobbler.submit_intent(goal.id, "cmd-idemp-1", payload)
+      # Pre-seed a canonical event holding the idempotency key the accepted
+      # event would use, so the event insert fails after the claim row was
+      # already inserted inside the same transaction.
+      next_sequence = next_sequence(goal.id)
 
-      {:ok, events_after_first} = Trajectory.replay(goal.id)
-      count_first = length(events_after_first)
+      %TrajectoryEvent{goal_id: goal.id, sequence: next_sequence}
+      |> TrajectoryEvent.changeset(%{
+        "type" => "decision.recorded",
+        "schema_version" => 1,
+        "actor" => "fixture",
+        "occurred_at" => @now,
+        "payload" => %{"decision" => "idempotency collision"},
+        "idempotency_key" => "cobbler-command-accepted:#{goal.id}:cmd-rollback"
+      })
+      |> Repo.insert!()
 
-      # Re-execute exact command
-      assert {:ok, second_result} = Cobbler.submit_intent(goal.id, "cmd-idemp-1", payload)
-      assert second_result["intent_id"] == first_result.intent_id
+      events_before = cobbler_events(goal.id)
 
-      # Zero new events emitted
-      {:ok, events_after_second} = Trajectory.replay(goal.id)
-      assert length(events_after_second) == count_first
+      assert {:error, {:event_append_failed, "cobbler.command.accepted", %Ecto.Changeset{}}} =
+               Commands.submit(goal.id, command, now: @now)
 
-      # Intent table count untouched
-      assert length(Cobbler.list_intents(goal.id)) == 1
+      # Nothing persisted: no claim, no command row, no new events.
+      assert Commands.active_claim([]) == nil
+      assert Commands.list(goal.id, []) == []
+      assert cobbler_events(goal.id) == events_before
     end
 
-    test "reusing command_id with conflicting payload is rejected", %{
-      goal: goal,
-      decision: decision
-    } do
-      payload1 = %{
-        "title" => "Original Intent",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" => AdmissionDecision.to_payload(decision)
-      }
+    test "submitting to a nonexistent goal rolls back atomically" do
+      missing_goal_id = Ecto.UUID.generate()
+      command = %{"type" => "task.release", "payload" => %{"reason" => "no goal"}}
 
-      assert {:ok, _} = Cobbler.submit_intent(goal.id, "cmd-conflict-1", payload1)
+      assert {:error, :goal_not_found} = Commands.submit(missing_goal_id, command, now: @now)
 
-      payload2 = %{
-        "title" => "Conflicting Intent with Different Title",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" => AdmissionDecision.to_payload(decision)
-      }
-
-      assert {:error, {:conflicting_command_payload, msg}} =
-               Cobbler.submit_intent(goal.id, "cmd-conflict-1", payload2)
-
-      assert msg =~ "was already executed with a different payload"
+      assert event_count(missing_goal_id, @cobbler_event_types) == 0
     end
   end
 
-  describe "admission reference validation (unbypassable)" do
-    test "rejects admission decisions that are not :admit", %{goal: goal, decision: decision} do
-      rejected_decision = %{decision | result: :reject, reason_code: "unsupported_capability"}
+  describe "task.release" do
+    test "the owning goal releases explicitly and the claim becomes re-acquirable", %{goal: goal} do
+      admission = append_admission_event!(goal.id)
+      claim_command = claim_command(admission, command_id: "cmd-claim-a")
 
-      payload = %{
-        "title" => "Bypass Attempt",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" => AdmissionDecision.to_payload(rejected_decision)
-      }
+      assert {:ok, %{outcome: :recorded}} = Commands.submit(goal.id, claim_command, now: @now)
+      claim_id = Commands.active_claim([]).id
 
-      assert {:error, {:admission_not_admitted, msg}} =
-               Cobbler.submit_intent(goal.id, "cmd-reject-ref", payload)
+      release = release_command("operator released", command_id: "cmd-release-a")
 
-      assert msg =~ "only :admit is permitted"
+      assert {:ok, %{command: row, outcome: :recorded, events: events}} =
+               Commands.submit(goal.id, release, now: @now)
 
-      deferred_decision = %{
-        decision
-        | result: :defer_until,
-          reason_code: "reserve_breach_five_hour"
-      }
+      assert row.status == "resolved"
+      assert row.result["kind"] == "released"
+      assert row.result["claim_id"] == claim_id
 
-      payload_deferred = %{
-        payload
-        | "admission_decision" => AdmissionDecision.to_payload(deferred_decision)
-      }
+      assert Enum.map(events, & &1.type) == [
+               "cobbler.command.accepted",
+               "cobbler.claim.released"
+             ]
 
-      assert {:error, {:admission_not_admitted, _}} =
-               Cobbler.submit_intent(goal.id, "cmd-defer-ref", payload_deferred)
+      assert Commands.active_claim([]) == nil
+      released_row = Repo.get!(TaskClaimRecord, claim_id)
+      assert released_row.status == "released"
+      assert released_row.released_by_command_id == "cmd-release-a"
+      assert released_row.release_reason == "operator released"
+      assert released_row.released_at == DateTime.truncate(@now, :microsecond)
+
+      # The global claim slot is free again: a new goal can acquire it.
+      other = create_goal!()
+      other_command = claim_command(append_admission_event!(other.id), command_id: "cmd-claim-b")
+
+      assert {:ok, %{command: new_row}} = Commands.submit(other.id, other_command, now: @now)
+      assert new_row.result["kind"] == "claimed"
     end
 
-    test "rejects provider mismatch between decision and intent", %{
-      goal: goal,
-      decision: decision
-    } do
-      payload = %{
-        "title" => "Mismatch Provider",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "claude",
-        "scope" => "account:default",
-        "admission_decision" => AdmissionDecision.to_payload(decision)
-      }
+    test "releasing with no active claim resolves without side effects", %{goal: goal} do
+      release = release_command("nothing held", command_id: "cmd-release-empty")
 
-      assert {:error, {:admission_provider_mismatch, msg}} =
-               Cobbler.submit_intent(goal.id, "cmd-prov-mismatch", payload)
+      assert {:ok, %{command: row, outcome: :recorded, events: events}} =
+               Commands.submit(goal.id, release, now: @now)
 
-      assert msg =~ "does not match requested 'claude'"
+      assert row.status == "resolved"
+      assert row.result["kind"] == "no_active_claim"
+      assert Enum.map(events, & &1.type) == ["cobbler.command.accepted"]
+      assert Commands.active_claim([]) == nil
     end
 
-    test "rejects capability mismatch between decision and intent", %{
-      goal: goal,
-      decision: decision
-    } do
-      payload = %{
-        "title" => "Mismatch Capability",
-        "requested_capability" => "autonomous_agent",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" => AdmissionDecision.to_payload(decision)
-      }
+    test "release by a goal that does not own the claim is rejected", %{goal: goal} do
+      holder = create_goal!()
+      holder_admission = append_admission_event!(holder.id)
 
-      assert {:error, {:admission_capability_mismatch, _}} =
-               Cobbler.submit_intent(goal.id, "cmd-cap-mismatch", payload)
-    end
+      assert {:ok, %{outcome: :recorded}} =
+               Commands.submit(
+                 holder.id,
+                 claim_command(holder_admission, command_id: "cmd-holder2"),
+                 now: @now
+               )
 
-    test "rejects scope mismatch between decision and intent", %{goal: goal, decision: decision} do
-      payload = %{
-        "title" => "Mismatch Scope",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:restricted_org",
-        "admission_decision" => AdmissionDecision.to_payload(decision)
-      }
+      release = release_command("hostile release", command_id: "cmd-release-other")
 
-      assert {:error, {:admission_scope_mismatch, _}} =
-               Cobbler.submit_intent(goal.id, "cmd-scope-mismatch", payload)
-    end
+      assert {:ok, %{command: row}} = Commands.submit(goal.id, release, now: @now)
 
-    test "rejects arbitrary invalid admission payload", %{goal: goal} do
-      payload = %{
-        "title" => "Fake Admit",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" => %{"result" => "admit", "fake_field" => "bogus"}
-      }
-
-      assert {:error, {:invalid_admission_decision, _}} =
-               Cobbler.submit_intent(goal.id, "cmd-fake-admit", payload)
+      assert row.status == "rejected"
+      assert row.result["reason"] == "claim_owned_by_other_goal"
+      assert row.result["claim_goal_id"] == holder.id
+      assert Commands.active_claim([]).goal_id == holder.id
     end
   end
 
-  describe "claim_intent and global SQLite exclusivity" do
-    setup %{goal: goal, decision: decision} do
-      payload = %{
-        "title" => "Task to Claim",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" => AdmissionDecision.to_payload(decision)
-      }
+  describe "recoverable needs_user" do
+    setup %{goal: goal} do
+      holder = create_goal!()
+      holder_admission = append_admission_event!(holder.id)
 
-      {:ok, intent_res} = Cobbler.submit_intent(goal.id, "cmd-submit-claimable", payload)
-      %{intent_id: intent_res.intent_id}
+      assert {:ok, _} =
+               Commands.submit(
+                 holder.id,
+                 claim_command(holder_admission, command_id: "cmd-holder-3"),
+                 now: @now
+               )
+
+      goal_admission = append_admission_event!(goal.id)
+
+      {:ok, %{command: contender}} =
+        Commands.submit(goal.id, claim_command(goal_admission, command_id: "cmd-contender"),
+          now: @now
+        )
+
+      {:ok, goal: goal, holder: holder, contender: contender}
     end
 
-    test "claims pending intent and asserts global active claim", %{
+    test "pending commands are inert, inspectable, and consume nothing", %{
       goal: goal,
-      intent_id: intent_id
+      holder: holder,
+      contender: contender
     } do
-      assert {:ok, claim_res} = Cobbler.claim_intent(goal.id, "cmd-claim-intent", intent_id)
-      assert claim_res.status == "active"
-      assert claim_res.intent_id == intent_id
+      assert [%CommandRecord{} = pending] = Commands.pending(goal.id, [])
+      assert pending.id == contender.id
+      assert pending.status == "needs_user"
 
-      intent = Cobbler.get_intent(intent_id)
-      assert intent.status == "active"
-
-      active_claim = Cobbler.get_active_claim()
-      assert active_claim != nil
-      assert active_claim.intent_id == intent_id
-      assert active_claim.active_slot == "global"
-
-      # Trajectory event emitted
-      {:ok, events} = Trajectory.replay(goal.id)
-      claimed_event = Enum.find(events, &(&1.type == "cobbler.intent_claimed"))
-      assert claimed_event != nil
-      assert claimed_event.payload["intent_id"] == intent_id
-      assert claimed_event.payload["claim_id"] == claim_res.claim_id
+      # Inert: the pending intent did not create or move a claim, and no
+      # background work was enqueued for it.
+      claim = Commands.active_claim([])
+      assert claim.goal_id == holder.id
+      assert claim.command_id == "cmd-holder-3"
+      assert Repo.aggregate(Job, :count, :id) == 0
     end
 
-    test "competing intent cannot claim while one is active (SQLite unique constraint)", %{
+    test "a validated response resolves the pending decision", %{
       goal: goal,
-      decision: decision,
-      intent_id: intent_id1
+      holder: holder,
+      contender: contender
     } do
-      # Submit second intent
-      payload2 = %{
-        "title" => "Competing Task",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" =>
-          AdmissionDecision.to_payload(%{decision | decision_id: Ecto.UUID.generate()})
-      }
+      assert {:ok, %{command: row, outcome: :recorded, events: events}} =
+               Commands.respond(goal.id, contender.command_id, %{"resolution" => "abandon"},
+                 now: @now
+               )
 
-      {:ok, %{intent_id: intent_id2}} =
-        Cobbler.submit_intent(goal.id, "cmd-submit-competing", payload2)
+      assert row.status == "resolved"
+      assert row.result["kind"] == "abandoned"
+      assert row.result["reason"] == "claim_held"
+      assert row.response == %{"resolution" => "abandon"}
+      assert Enum.map(events, & &1.type) == ["cobbler.command.resolved"]
+      assert Commands.pending(goal.id, []) == []
 
-      # First claim succeeds
-      assert {:ok, _} = Cobbler.claim_intent(goal.id, "cmd-claim-first", intent_id1)
-
-      # Second claim fails
-      assert {:error, {:already_claimed, current_claim}} =
-               Cobbler.claim_intent(goal.id, "cmd-claim-second", intent_id2)
-
-      assert current_claim.intent_id == intent_id1
-      assert current_claim.status == "active"
-
-      # Second intent remains inert pending
-      assert Cobbler.get_intent(intent_id2).status == "pending"
+      # Resolving the contender never released the holder's claim.
+      assert Commands.active_claim([]).goal_id == holder.id
     end
 
-    test "replaying claim with same command recovers existing claim", %{
-      goal: goal,
-      intent_id: intent_id
-    } do
-      assert {:ok, first} = Cobbler.claim_intent(goal.id, "cmd-claim-repeat", intent_id)
-      assert {:ok, second} = Cobbler.claim_intent(goal.id, "cmd-claim-repeat", intent_id)
+    test "an identical response replays without events", %{goal: goal, contender: contender} do
+      assert {:ok, %{outcome: :recorded}} =
+               Commands.respond(goal.id, contender.command_id, %{"resolution" => "abandon"},
+                 now: @now
+               )
 
-      assert first.claim_id == second["claim_id"]
+      events_before = cobbler_events(goal.id)
+
+      assert {:ok, %{command: replayed, outcome: :replayed, events: []}} =
+               Commands.respond(goal.id, contender.command_id, %{"resolution" => "abandon"},
+                 now: @now
+               )
+
+      assert replayed.result["kind"] == "abandoned"
+      assert cobbler_events(goal.id) == events_before
+    end
+
+    test "a conflicting response is rejected", %{goal: goal, contender: contender} do
+      assert {:ok, %{outcome: :recorded}} =
+               Commands.respond(goal.id, contender.command_id, %{"resolution" => "abandon"},
+                 now: @now
+               )
+
+      events_before = cobbler_events(goal.id)
+
+      assert {:error, {:response_conflict, conflict}} =
+               Commands.respond(goal.id, contender.command_id, %{"resolution" => "proceed"},
+                 now: @now
+               )
+
+      assert conflict["existing_digest"] != conflict["incoming_digest"]
+      assert cobbler_events(goal.id) == events_before
+      assert Commands.get(goal.id, contender.command_id, []).status == "resolved"
+    end
+
+    test "an unoffered response changes nothing and the command stays recoverable", %{
+      goal: goal,
+      contender: contender
+    } do
+      events_before = cobbler_events(goal.id)
+
+      assert {:error, {:invalid_response, ["abandon"]}} =
+               Commands.respond(goal.id, contender.command_id, %{"resolution" => "escalate"},
+                 now: @now
+               )
+
+      assert cobbler_events(goal.id) == events_before
+
+      still_pending = Commands.get(goal.id, contender.command_id, [])
+      assert still_pending.status == "needs_user"
+      assert is_nil(still_pending.response)
+
+      # Recovery still works afterwards.
+      assert {:ok, %{command: resolved}} =
+               Commands.respond(goal.id, contender.command_id, %{"resolution" => "abandon"},
+                 now: @now
+               )
+
+      assert resolved.status == "resolved"
+    end
+
+    test "respond is an illegal transition on non-needs_user commands", %{
+      goal: goal,
+      holder: holder
+    } do
+      # The claim slot is global and held by the setup holder, so free it
+      # first with an explicit release by the holder, then let a fresh goal
+      # acquire its own claim.
+      assert {:ok, _} =
+               Commands.submit(
+                 holder.id,
+                 release_command("freeing slot", command_id: "cmd-free-slot"),
+                 now: @now
+               )
+
+      fresh = create_goal!()
+      admission = append_admission_event!(fresh.id)
+
+      {:ok, %{command: claimed}} =
+        Commands.submit(fresh.id, claim_command(admission, command_id: "cmd-ok"), now: @now)
+
+      assert claimed.status == "resolved"
+
+      assert {:error, {:illegal_respond, error}} =
+               Commands.respond(fresh.id, claimed.command_id, %{"resolution" => "abandon"},
+                 now: @now
+               )
+
+      assert error["status"] == "resolved"
+
+      assert {:error, :command_not_found} =
+               Commands.respond(goal.id, "cmd-unknown", %{"resolution" => "abandon"}, now: @now)
     end
   end
 
-  describe "lifecycle state machine transitions" do
-    setup %{goal: goal, decision: decision} do
-      payload = %{
-        "title" => "Lifecycle Task",
-        "requested_capability" => "supervised_execution",
-        "provider_id" => "codex",
-        "scope" => "account:default",
-        "admission_decision" => AdmissionDecision.to_payload(decision)
-      }
+  describe "no execution, no timed release" do
+    test "a stale claim is never released and the full flow enqueues no jobs", %{goal: goal} do
+      holder = create_goal!()
+      holder_admission = append_admission_event!(holder.id)
 
-      {:ok, %{intent_id: intent_id}} = Cobbler.submit_intent(goal.id, "cmd-submit-lc", payload)
-      {:ok, _} = Cobbler.claim_intent(goal.id, "cmd-claim-lc", intent_id)
-      %{intent_id: intent_id}
+      {:ok, _} =
+        Commands.submit(
+          holder.id,
+          claim_command(holder_admission, command_id: "cmd-stale-holder"),
+          now: @stale_now
+        )
+
+      # Simulate staleness: the claim predates any plausible timer horizon,
+      # yet nothing in the system releases it.
+      assert %TaskClaimRecord{} = stale_claim = Commands.active_claim([])
+      assert DateTime.compare(stale_claim.inserted_at, @now) == :lt
+      assert stale_claim.status == "active"
+
+      # A competing goal is still refused; the stale claim is not released.
+      {:ok, _} =
+        Commands.submit(
+          goal.id,
+          claim_command(append_admission_event!(goal.id), command_id: "cmd-stale-contender"),
+          now: @now
+        )
+
+      assert Commands.active_claim([]).id == stale_claim.id
+
+      # Execution remains disabled: no Oban jobs were enqueued anywhere.
+      assert Repo.aggregate(Job, :count, :id) == 0
+
+      # Restart ambiguity: replaying the holder's identical command after
+      # "restart" returns the original result without events or a new claim.
+      assert {:ok, %{outcome: :replayed, events: []}} =
+               Commands.submit(
+                 holder.id,
+                 claim_command(holder_admission, command_id: "cmd-stale-holder"),
+                 now: @now
+               )
+
+      assert Commands.active_claim([]).id == stale_claim.id
+      assert Repo.aggregate(Job, :count, :id) == 0
+    end
+  end
+
+  describe "rebuild" do
+    test "reproduces command and claim state from canonical events", %{goal: goal} do
+      admission = append_admission_event!(goal.id)
+
+      {:ok, _} =
+        Commands.submit(goal.id, claim_command(admission, command_id: "cmd-rebuild-1"), now: @now)
+
+      {:ok, %{command: pending}} =
+        Commands.submit(goal.id, claim_command(admission, command_id: "cmd-rebuild-2"), now: @now)
+
+      {:ok, _} =
+        Commands.respond(goal.id, pending.command_id, %{"resolution" => "abandon"}, now: @now)
+
+      release = release_command("rebuild release", command_id: "cmd-rebuild-3")
+      {:ok, _} = Commands.submit(goal.id, release, now: @now)
+
+      assert {:ok, rebuilt} = Commands.rebuild(goal.id, [])
+      assert rebuilt.consistent?
+      assert rebuilt.divergences == []
+
+      by_id = Map.new(rebuilt.commands, &{&1["command_id"], &1})
+      assert by_id["cmd-rebuild-1"]["status"] == "resolved"
+      assert by_id["cmd-rebuild-1"]["result"]["kind"] == "claimed"
+      assert by_id["cmd-rebuild-2"]["status"] == "resolved"
+      assert by_id["cmd-rebuild-2"]["response"] == %{"resolution" => "abandon"}
+      assert by_id["cmd-rebuild-3"]["result"]["kind"] == "released"
+      assert rebuilt.claim["status"] == "released"
+      assert rebuilt.claim["claim_id"] == by_id["cmd-rebuild-1"]["result"]["claim_id"]
     end
 
-    test "needs_user is recoverable via resume", %{goal: goal, intent_id: intent_id} do
-      assert {:ok, res1} =
-               Cobbler.request_user(goal.id, "cmd-need-user", intent_id, "Missing OAuth token")
+    test "reports divergence when a row exists without canonical events", %{goal: goal} do
+      admission = append_admission_event!(goal.id)
 
-      assert res1.status == "needs_user"
-      assert Cobbler.get_intent(intent_id).status == "needs_user"
+      {:ok, _} =
+        Commands.submit(goal.id, claim_command(admission, command_id: "cmd-diverge"), now: @now)
 
-      # Recoverable! Resume brings it back to active
-      assert {:ok, res2} = Cobbler.resume_intent(goal.id, "cmd-resume", intent_id)
-      assert res2.status == "active"
-      assert Cobbler.get_intent(intent_id).status == "active"
+      {:ok, orphan_command} =
+        Command.new(%{
+          "type" => "task.release",
+          "payload" => %{"reason" => "r"},
+          "command_id" => "cmd-orphan-row"
+        })
+
+      %CommandRecord{}
+      |> CommandRecord.outcome_changeset(
+        goal.id,
+        orphan_command,
+        "resolved",
+        %{"kind" => "no_active_claim"},
+        @now
+      )
+      |> Repo.insert!()
+
+      assert {:ok, rebuilt} = Commands.rebuild(goal.id, [])
+      refute rebuilt.consistent?
+
+      assert rebuilt.divergences == [
+               "command cmd-orphan-row persisted without canonical events"
+             ]
     end
 
-    test "complete transitions to terminal and releases exclusive claim", %{
-      goal: goal,
-      intent_id: intent_id
-    } do
-      assert {:ok, res} = Cobbler.complete_intent(goal.id, "cmd-complete", intent_id, "Success")
-      assert res.status == "completed"
+    test "reports divergence when canonical events have no persisted row", %{goal: goal} do
+      admission = append_admission_event!(goal.id)
 
-      # Intent is completed
-      assert Cobbler.get_intent(intent_id).status == "completed"
+      {:ok, _} =
+        Commands.submit(goal.id, claim_command(admission, command_id: "cmd-events-only"),
+          now: @now
+        )
 
-      # Exclusive claim is RELEASED
-      assert Cobbler.get_active_claim() == nil
+      Repo.delete!(Commands.get(goal.id, "cmd-events-only", []))
 
-      # Completed intent rejects further transitions
-      assert {:error, {:illegal_transition, :completed, :needs_user}} =
-               Cobbler.request_user(goal.id, "cmd-post-complete", intent_id, "Try again")
+      assert {:ok, rebuilt} = Commands.rebuild(goal.id, [])
+      refute rebuilt.consistent?
+
+      assert rebuilt.divergences == [
+               "canonical events for command cmd-events-only have no persisted row"
+             ]
     end
 
-    test "fail transitions to terminal and releases exclusive claim", %{
-      goal: goal,
-      intent_id: intent_id
-    } do
-      assert {:ok, res} =
-               Cobbler.fail_intent(goal.id, "cmd-fail", intent_id, "Fatal network error")
+    test "fails loudly on an illegal canonical history", %{goal: goal} do
+      # Seed a resolution event for a command that was never accepted.
+      sequence = next_sequence(goal.id)
 
-      assert res.status == "failed"
+      %TrajectoryEvent{goal_id: goal.id, sequence: sequence}
+      |> TrajectoryEvent.changeset(%{
+        "type" => "cobbler.command.resolved",
+        "schema_version" => 1,
+        "actor" => "cobbler",
+        "occurred_at" => @now,
+        "payload" => %{
+          "command_id" => "cmd-orphan",
+          "command_type" => "task.claim",
+          "response" => %{"resolution" => "abandon"},
+          "response_digest" => Command.response_digest(%{"resolution" => "abandon"}),
+          "from_status" => "needs_user",
+          "to_status" => "resolved",
+          "result" => %{"kind" => "abandoned"}
+        }
+      })
+      |> Repo.insert!()
 
-      assert Cobbler.get_intent(intent_id).status == "failed"
-      assert Cobbler.get_active_claim() == nil
-
-      # Failed intent rejects transitions
-      assert {:error, {:illegal_transition, :failed, :resume}} =
-               Cobbler.resume_intent(goal.id, "cmd-post-fail", intent_id)
+      assert {:error, {:rebuild_resolved_without_accepted, ^sequence, "cmd-orphan"}} =
+               Commands.rebuild(goal.id, [])
     end
 
-    test "cancel transitions to terminal and releases exclusive claim", %{
-      goal: goal,
-      intent_id: intent_id
-    } do
-      assert {:ok, res} =
-               Cobbler.cancel_intent(goal.id, "cmd-cancel", intent_id, "User requested")
+    test "reports divergence when the active claim and canonical state disagree", %{goal: goal} do
+      admission = append_admission_event!(goal.id)
 
-      assert res.status == "cancelled"
+      {:ok, _} =
+        Commands.submit(goal.id, claim_command(admission, command_id: "cmd-claim-x"), now: @now)
 
-      assert Cobbler.get_intent(intent_id).status == "cancelled"
-      assert Cobbler.get_active_claim() == nil
+      # Mutate the stored claim so it no longer matches the canonical state.
+      claim = Commands.active_claim([])
+      Repo.update!(Ecto.Changeset.change(claim, command_id: "cmd-tampered"))
 
-      # Cancelled intent rejects transitions
-      assert {:error, {:illegal_transition, :cancelled, :complete}} =
-               Cobbler.complete_intent(goal.id, "cmd-post-cancel", intent_id)
+      assert {:ok, rebuilt} = Commands.rebuild(goal.id, [])
+      refute rebuilt.consistent?
+
+      assert "canonical active claim diverges from persisted active claim row" in rebuilt.divergences
+    end
+  end
+
+  describe "facade boundary" do
+    test "Shoestring.Cobbler exposes the command, claim, and rebuild boundary", %{goal: goal} do
+      admission = append_admission_event!(goal.id)
+      command = claim_command(admission, command_id: "cmd-facade")
+
+      assert {:ok, %{command: row, outcome: :recorded, events: events}} =
+               Shoestring.Cobbler.submit_command(goal.id, command, now: @now)
+
+      assert row.status == "resolved"
+      assert length(events) == 2
+      assert %TaskClaimRecord{} = Shoestring.Cobbler.active_claim([])
+      assert Shoestring.Cobbler.command(goal.id, "cmd-facade", []).id == row.id
+      assert Shoestring.Cobbler.list_commands(goal.id, []) |> length() == 1
+      assert Shoestring.Cobbler.pending_commands(goal.id, []) == []
+
+      assert {:ok, %{consistent?: true, divergences: []}} =
+               Shoestring.Cobbler.rebuild_commands(goal.id, [])
+    end
+  end
+
+  defp cobbler_events(goal_id) do
+    Repo.all(
+      from event in TrajectoryEvent,
+        where: event.goal_id == ^goal_id and event.type in @cobbler_event_types,
+        order_by: [asc: event.sequence]
+    )
+  end
+
+  defp next_sequence(goal_id) do
+    (Repo.one(
+       from event in TrajectoryEvent,
+         where: event.goal_id == ^goal_id,
+         select: max(event.sequence)
+     ) ||
+       0) + 1
+  end
+
+  # Appends an admission event through the standard boundary, returning the
+  # raw event for later row mutation in malformed-payload tests.
+  defp append_admission_event_to_repo(goal_id) do
+    case Shoestring.Trajectory.append(goal_id, %{
+           "type" => "admission.decided",
+           "schema_version" => 1,
+           "actor" => "cobbler",
+           "occurred_at" => now(),
+           "payload" => admission_payload()
+         }) do
+      {:ok, event} -> {:ok, event}
+      {:error, reason} -> flunk("admission event append failed: #{inspect(reason)}")
     end
   end
 end

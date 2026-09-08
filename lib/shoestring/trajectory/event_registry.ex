@@ -352,68 +352,67 @@ defmodule Shoestring.Trajectory.EventRegistry do
         }
       }
     },
-    "cobbler.intent_submitted" => %{
+    "cobbler.command.accepted" => %{
       1 => %{
         required: [
           :command_id,
-          :intent_id,
-          :goal_id,
-          :requested_capability,
-          :provider_id,
-          :scope,
-          :admission_decision_id,
-          :proposed_bounds,
-          :submitted_at
-        ],
-        optional: [:title, :account_id, :task_id, :override, :metadata, :extensions],
-        uuid_fields: [:intent_id, :goal_id, :admission_decision_id, :task_id],
-        types: %{
-          proposed_bounds: :map,
-          override: :map,
-          metadata: :map,
-          submitted_at: :utc_datetime,
-          extensions: :map
-        }
-      }
-    },
-    "cobbler.intent_claimed" => %{
-      1 => %{
-        required: [
-          :command_id,
-          :intent_id,
-          :claim_id,
-          :goal_id,
-          :provider_id,
-          :scope,
-          :claimed_at
-        ],
-        optional: [:account_id, :metadata, :extensions],
-        uuid_fields: [:intent_id, :claim_id, :goal_id],
-        types: %{
-          claimed_at: :utc_datetime,
-          metadata: :map,
-          extensions: :map
-        }
-      }
-    },
-    "cobbler.intent_transitioned" => %{
-      1 => %{
-        required: [
-          :command_id,
-          :intent_id,
-          :goal_id,
+          :command_type,
+          :command_digest,
+          :command_payload,
           :from_status,
           :to_status,
-          :event_name,
-          :transitioned_at
+          :result
         ],
-        optional: [:claim_id, :reason, :metadata, :extensions],
-        uuid_fields: [:intent_id, :goal_id, :claim_id],
+        optional: [:claim_id, :extensions],
+        uuid_fields: [:claim_id],
         types: %{
-          metadata: :map,
-          transitioned_at: :utc_datetime,
+          command_payload: :map,
+          result: :map,
           extensions: :map
         }
+      }
+    },
+    "cobbler.command.resolved" => %{
+      1 => %{
+        required: [
+          :command_id,
+          :command_type,
+          :response,
+          :response_digest,
+          :from_status,
+          :to_status,
+          :result
+        ],
+        optional: [:extensions],
+        uuid_fields: [],
+        types: %{
+          response: :map,
+          result: :map,
+          extensions: :map
+        }
+      }
+    },
+    "cobbler.claim.acquired" => %{
+      1 => %{
+        required: [
+          :claim_id,
+          :command_id,
+          :intent,
+          :provider_id,
+          :admission_decision_id,
+          :admission_event_id
+        ],
+        optional: [:extensions],
+        uuid_fields: [:claim_id, :admission_event_id],
+        types: %{extensions: :map}
+      }
+    },
+    "cobbler.claim.released" => %{
+      1 => %{
+        required: [:claim_id, :command_id, :reason],
+        optional: [:extensions],
+        uuid_fields: [:claim_id],
+        types: %{extensions: :map}
       }
     }
   }
@@ -972,7 +971,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
       "checkpoint.",
       "capacity.",
       "harness.",
-      "admission."
+      "admission.",
+      "cobbler."
     ])
   end
 end

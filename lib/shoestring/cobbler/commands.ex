@@ -1,686 +1,972 @@
 defmodule Shoestring.Cobbler.Commands do
   @moduledoc """
-  Durable, idempotent command engine for Cobbler.
+  Durable, goal-scoped Cobbler command store: submit, respond, inspect, rebuild.
 
-  Enforces:
-  1. Caller-supplied stable command IDs scoped to goal.
-  2. Idempotency: duplicate commands return original results without new events.
-  3. Conflict detection: conflicting payload reuse for the same command ID is rejected.
-  4. Admission validation: admission reference must be an `:admit` for the matching
-     goal, provider candidate, capability, and scope.
-  5. Deterministic lifecycle transitions via `Shoestring.Cobbler.StateMachine`.
-  6. SQLite-enforced atomic exclusivity for the global MVP task claim.
-  7. Trajectory authoritative persistence: trajectory event is emitted and
-     persisted atomically with database updates.
-  8. Inert pending intents: execution remains completely disabled.
+  ## Boundary semantics
+
+  - **Durable goal-scoped command ids.** A command id is unique per goal
+    (enforced by a unique index). The id, type, payload, and digest are
+    persisted together with the outcome.
+  - **Identical replay, conflicting reuse.** Re-submitting the same command
+    id with an identical digest returns the originally recorded result and
+    appends no events. The same command id with a different digest is
+    rejected as a conflict. `respond/4` applies the same rule to user
+    responses.
+  - **Validated legal transitions.** Every persisted transition passes the
+    pure `Shoestring.Cobbler.Command` state machine; illegal transitions are
+    rejected and never persisted.
+  - **Recoverable needs_user.** A command that requires an operator decision
+    is recorded as `needs_user` with its reason and offered options. A
+    validated response resolves it; an unoffered response changes nothing, so
+    the command stays recoverable.
+  - **Atomic intent/transition/result.** The command row, any claim row, and
+    the canonical trajectory events commit in ONE immediate SQLite write
+    transaction or not at all; there is no pending intent without a result
+    and no result without its events.
+  - **Trajectory rebuild.** Command and claim state is recomputed purely
+    from canonical `cobbler.*` events; `rebuild/2` reports divergence from
+    stored rows without mutating anything.
+  - **Exclusive global MVP claim.** Claim acquisition inserts a row covered
+    by a partial unique index on `scope` over active claims inside an
+    immediate write transaction. SQLite rejects the second concurrent
+    writer on that index; commands never count claims first.
+  - **No timed release.** An active claim is released only by an explicit
+    release command against the owning goal. There is no expiry, no
+    staleness trigger, and no release on ambiguous restart.
+  - **Execution disabled.** Submitting, responding to, or inspecting commands
+    never spawns a process, enqueues a job, or dispatches at startup. The
+    first gated consumer is `Shoestring.Cobbler.Dispatcher`, which reads
+    command rows and stops at an explicit execution-disabled boundary.
+    Direct run paths (Elves, harness adapters, dispatch) accept an opt-in
+    `require_cobbler_command: true` guard
+    (`Shoestring.Cobbler.DispatchGate`); without the flag they still do not
+    route through commands.
+
+  ## Event appends inside the store transaction
+
+  Unlike the per-goal `Shoestring.Trajectory.Writer` process (a separate
+  transaction that would deadlock against this one), this store constructs
+  the trusted event identity and sequence fields itself, inside the same
+  immediate write transaction as the command and claim rows. Sequence
+  assignment is safe because SQLite serializes write transactions;
+  concurrent writer appends retry on the busy lock and re-read the sequence.
+  Payload validation still goes through
+  `Shoestring.Trajectory.EventRegistry.validate_payload/4`, and inserts go
+  through the same `Shoestring.Trajectory.TrajectoryEvent.changeset/2`
+  constraint path the writer uses.
   """
 
   import Ecto.Query
-  alias Shoestring.Repo
-  alias Shoestring.Trajectory
-  alias Shoestring.Trajectory.TrajectoryEvent
-  alias Shoestring.Cobbler.{AdmissionDecision, Claim, CommandRecord, Intent, StateMachine}
+  require Logger
 
-  @supported_commands [
-    "submit_intent",
-    "claim",
-    "needs_user",
-    "resume",
-    "complete",
-    "fail",
-    "cancel"
-  ]
+  alias Shoestring.Cobbler.{Command, CommandRecord, TaskClaimRecord}
+  alias Shoestring.Harness.Contract
+  alias Shoestring.Repo
+  alias Shoestring.Trajectory.Goal
+  alias Shoestring.Trajectory.{EventRegistry, TrajectoryEvent}
+
+  @actor "cobbler"
+  @schema_version 1
+
+  @claim_event_types ["cobbler.claim.acquired", "cobbler.claim.released"]
+
+  @event_types ["cobbler.command.accepted", "cobbler.command.resolved"] ++ @claim_event_types
+
+  @type submit_result :: %{
+          required(:command) => CommandRecord.t(),
+          required(:outcome) => :recorded | :replayed,
+          required(:events) => [TrajectoryEvent.t()]
+        }
+
+  # ----------------------------------------------------------------------------
+  # Submission
+  # ----------------------------------------------------------------------------
 
   @doc """
-  Executes a command on Cobbler.
+  Records a command outcome for a goal-scoped command id.
 
-  Accepts `goal_id`, `command_params` map with `:command_id`, `:command_type`,
-  and `:payload`, and optional options.
+  Returns `{:ok, %{command: row, outcome: :recorded | :replayed, events: []}}`.
+  A replay carries the original result with an empty event list.
   """
-  @spec execute(Ecto.UUID.t(), map(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def execute(goal_id, command_params, opts \\ []) do
+  @spec submit(Ecto.UUID.t(), map(), keyword()) ::
+          {:ok, submit_result()} | {:error, term()}
+  def submit(goal_id, attrs, opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
-    with {:ok, normalized_goal_id} <- validate_uuid(goal_id, :goal_id),
-         {:ok, command} <- validate_command_envelope(command_params) do
-      payload_hash = compute_payload_hash(command.payload)
+    with {:ok, normalized_goal_id} <- cast_goal_id(goal_id),
+         {:ok, %Command{} = command} <- Command.new(attrs),
+         true <- repo_exists?(repo, normalized_goal_id) || {:error, :goal_not_found} do
+      run_transaction(repo, fn ->
+        accept_transaction(normalized_goal_id, command, repo, now(opts))
+      end)
+      |> case do
+        {:ok, %{command: command_row, outcome: outcome, events: events}} ->
+          publish(events, opts)
+          {:ok, %{command: command_row, outcome: outcome, events: events}}
 
-      # Check existing command for goal_id and command_id
-      case get_existing_command(repo, normalized_goal_id, command.command_id) do
-        %CommandRecord{} = existing ->
-          handle_existing_command(existing, payload_hash)
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      false -> {:error, :goal_not_found}
+      error -> error
+    end
+  end
 
-        nil ->
-          execute_command_flow(repo, normalized_goal_id, command, payload_hash, opts)
+  defp accept_transaction(goal_id, command, repo, now) do
+    case existing_command(repo, goal_id, command.command_id) do
+      %CommandRecord{digest: digest} = existing when digest == command.digest ->
+        %{command: existing, outcome: :replayed, events: []}
+
+      %CommandRecord{digest: existing_digest} ->
+        repo.rollback(
+          {:command_conflict,
+           %{
+             "command_id" => command.command_id,
+             "existing_digest" => existing_digest,
+             "incoming_digest" => command.digest
+           }}
+        )
+
+      nil ->
+        record_new_command(goal_id, command, repo, now)
+    end
+  end
+
+  defp record_new_command(goal_id, command, repo, now) do
+    {status, result, extra_events, claim_id} = evaluate(command, repo, goal_id, now)
+    :ok = Command.transition(:pending, :accept, status)
+
+    events =
+      append_events_in_transaction(
+        repo,
+        goal_id,
+        accepted_events(goal_id, command, status, result, claim_id) ++ extra_events,
+        now
+      )
+
+    command_row =
+      %CommandRecord{}
+      |> CommandRecord.outcome_changeset(
+        goal_id,
+        command,
+        Command.status_string(status),
+        result,
+        now
+      )
+      |> repo.insert()
+      |> case do
+        {:ok, row} -> row
+        {:error, changeset} -> repo.rollback({:command_record_failed, changeset})
+      end
+
+    %{command: command_row, outcome: :recorded, events: events}
+  end
+
+  # ----------------------------------------------------------------------------
+  # Command handlers
+  # ----------------------------------------------------------------------------
+
+  defp evaluate(%Command{type: "task.claim"} = command, repo, goal_id, now) do
+    case do_active_claim(repo) do
+      %TaskClaimRecord{} = claim ->
+        {:needs_user, needs_user_result("claim_held", claim), [], nil}
+
+      nil ->
+        with {:ok, decision} <- validate_admission_reference(repo, goal_id, command) do
+          acquire_claim(repo, goal_id, command, decision, now)
+        else
+          {:rejected, reason} -> {:rejected, rejected_result(reason, command), [], nil}
+        end
+    end
+  end
+
+  defp evaluate(%Command{type: "task.release"} = command, repo, goal_id, now) do
+    case do_active_claim(repo) do
+      nil ->
+        {:resolved, %{"kind" => "no_active_claim"}, [], nil}
+
+      %TaskClaimRecord{goal_id: ^goal_id} = claim ->
+        release_claim(repo, claim, command, now)
+
+      %TaskClaimRecord{} = claim ->
+        {:rejected,
+         %{
+           "kind" => "rejected",
+           "reason" => "claim_owned_by_other_goal",
+           "claim_goal_id" => claim.goal_id
+         }, [], nil}
+    end
+  end
+
+  defp acquire_claim(repo, goal_id, command, decision, now) do
+    claim_changeset =
+      TaskClaimRecord.acquire_changeset(
+        goal_id,
+        command.command_id,
+        %{
+          intent: command.payload["intent"],
+          provider_id: command.payload["candidate"]["provider_id"]
+        },
+        decision.decision_id,
+        command.payload["admission_event_id"],
+        now
+      )
+
+    case repo.insert(claim_changeset) do
+      {:ok, claim} ->
+        claimed = %{
+          "kind" => "claimed",
+          "claim_id" => claim.id,
+          "intent" => claim.intent,
+          "provider_id" => claim.provider_id,
+          "admission_decision_id" => claim.admission_decision_id,
+          "admission_event_id" => claim.admission_event_id
+        }
+
+        {:resolved, claimed, [claim_acquired_event(claim)], claim.id}
+
+      {:error, changeset} ->
+        # Inside the same immediate write transaction the read-first check
+        # cannot miss a claim, but if the partial unique index ever rejects
+        # the insert the claim demonstrably exists: degrade to the
+        # recoverable needs_user outcome instead of failing the command.
+        case do_active_claim(repo) do
+          %TaskClaimRecord{} = claim ->
+            {:needs_user, needs_user_result("claim_held", claim), [], nil}
+
+          nil ->
+            repo.rollback({:claim_insert_failed, changeset})
+        end
+    end
+  end
+
+  defp release_claim(repo, claim, command, now) do
+    released =
+      claim
+      |> TaskClaimRecord.release_changeset(command.command_id, command.payload["reason"], now)
+      |> repo.update()
+      |> case do
+        {:ok, released} -> released
+        {:error, changeset} -> repo.rollback({:claim_release_failed, changeset})
+      end
+
+    {:resolved,
+     %{
+       "kind" => "released",
+       "claim_id" => released.id,
+       "reason" => released.release_reason
+     }, [claim_released_event(released, command.command_id)], released.id}
+  end
+
+  defp needs_user_result(reason, claim) do
+    %{
+      "kind" => "needs_user",
+      "reason" => reason,
+      "options" => Command.response_options(reason),
+      "active_claim" => %{
+        "claim_id" => claim.id,
+        "goal_id" => claim.goal_id,
+        "command_id" => claim.command_id,
+        "intent" => claim.intent,
+        "provider_id" => claim.provider_id
+      }
+    }
+  end
+
+  defp rejected_result(reason, command) do
+    %{
+      "kind" => "rejected",
+      "reason" => reason,
+      "admission_event_id" => command.payload["admission_event_id"]
+    }
+  end
+
+  @doc """
+  Validates the admitted decision referenced by a claim command: the
+  trajectory event must exist in the same goal, be an `admission.decided` v1
+  event, and carry the same intent, scope, and candidate before any claim can
+  be attempted.
+  """
+  @spec validate_admission_reference(module(), Ecto.UUID.t(), Command.t()) ::
+          {:ok, %{decision_id: String.t(), occurred_at: DateTime.t()}} | {:rejected, String.t()}
+  def validate_admission_reference(repo, goal_id, command) do
+    event_id = command.payload["admission_event_id"]
+
+    event =
+      repo.one(
+        from trajectory_event in TrajectoryEvent,
+          where: trajectory_event.id == ^event_id and trajectory_event.goal_id == ^goal_id
+      )
+
+    cond do
+      is_nil(event) ->
+        {:rejected, "admission_event_not_found"}
+
+      event.type != "admission.decided" ->
+        {:rejected, "admission_event_type_invalid"}
+
+      event.schema_version != @schema_version ->
+        {:rejected, "admission_event_schema_unsupported"}
+
+      true ->
+        validate_admission_payload(event, command)
+    end
+  end
+
+  defp validate_admission_payload(event, command) do
+    payload = event.payload || %{}
+    candidate = command.payload["candidate"]
+
+    cond do
+      blank?(payload["decision_id"]) ->
+        {:rejected, "admission_decision_id_missing"}
+
+      payload["requested_capability"] != command.payload["intent"] ->
+        {:rejected, "admission_intent_mismatch"}
+
+      payload["scope"] != command.payload["scope"] ->
+        {:rejected, "admission_scope_mismatch"}
+
+      payload_candidate(payload) != candidate ->
+        {:rejected, "admission_candidate_mismatch"}
+
+      true ->
+        {:ok, %{decision_id: payload["decision_id"], occurred_at: event.occurred_at}}
+    end
+  end
+
+  defp payload_candidate(%{"candidate" => candidate}) when is_map(candidate) do
+    %{
+      "provider_id" => candidate["provider_id"],
+      "adapter_id" => candidate["adapter_id"]
+    }
+  end
+
+  defp payload_candidate(_payload), do: nil
+
+  # ----------------------------------------------------------------------------
+  # Response (needs_user recovery)
+  # ----------------------------------------------------------------------------
+
+  @doc """
+  Resolves a `needs_user` command with a validated operator response.
+
+  An identical response replays the recorded resolution without appending
+  events; a different response is rejected as a conflict; an unoffered
+  response option leaves the command in `needs_user` unchanged.
+  """
+  @spec respond(Ecto.UUID.t(), String.t(), map(), keyword()) ::
+          {:ok, submit_result()} | {:error, term()}
+  def respond(goal_id, command_id, response_attrs, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with {:ok, normalized_goal_id} <- cast_goal_id(goal_id),
+         {:ok, response} <- validate_response(response_attrs),
+         {:ok, %CommandRecord{} = existing} <- fetch_command(repo, normalized_goal_id, command_id) do
+      response_digest = Command.response_digest(response)
+
+      case Command.status_atom(existing.status) do
+        :needs_user ->
+          # The only persisted respond target is :resolved; the machine check
+          # keeps the transition table load-bearing even if targets grow.
+          :ok = Command.transition(:needs_user, :respond, :resolved)
+          resolve_response(existing, response, response_digest, repo, now(opts), opts)
+
+        :resolved ->
+          cond do
+            existing.response_digest == response_digest ->
+              # A repeated identical response (e.g. after an ambiguous
+              # restart) replays the recorded resolution without appending
+              # events.
+              {:ok, %{command: existing, outcome: :replayed, events: []}}
+
+            is_nil(existing.response_digest) ->
+              {:error, {:illegal_respond, %{"command_id" => command_id, "status" => "resolved"}}}
+
+            true ->
+              {:error,
+               {:response_conflict,
+                %{
+                  "command_id" => command_id,
+                  "existing_digest" => existing.response_digest,
+                  "incoming_digest" => response_digest
+                }}}
+          end
+
+        status ->
+          {:error,
+           {:illegal_respond, %{"command_id" => command_id, "status" => to_string(status)}}}
       end
     end
   end
 
-  defp validate_command_envelope(%{command_id: id, command_type: type} = params) do
-    payload = Map.get(params, :payload, %{})
-    validate_envelope_fields(id, type, payload)
-  end
-
-  defp validate_command_envelope(%{"command_id" => id, "command_type" => type} = params) do
-    payload = Map.get(params, "payload", %{})
-    validate_envelope_fields(id, type, payload)
-  end
-
-  defp validate_command_envelope(params) do
-    {:error,
-     {:malformed_command, "missing required command_id or command_type in #{inspect(params)}"}}
-  end
-
-  defp validate_envelope_fields(id, type, payload) do
-    type_str = to_string(type)
-
-    cond do
-      not is_binary(id) or String.trim(id) == "" ->
-        {:error, {:malformed_command, "command_id must be a non-empty string"}}
-
-      type_str not in @supported_commands ->
-        {:error, {:malformed_command, "unsupported command_type '#{type_str}'"}}
-
-      not is_map(payload) ->
-        {:error, {:malformed_command, "payload must be a map"}}
-
-      true ->
-        {:ok, %{command_id: id, command_type: type_str, payload: payload}}
-    end
-  end
-
-  defp validate_uuid(nil, field), do: {:error, {:malformed_command, "#{field} cannot be nil"}}
-
-  defp validate_uuid(uuid, field) when is_binary(uuid) do
-    case Ecto.UUID.cast(uuid) do
-      {:ok, casted} ->
-        {:ok, casted}
-
-      :error ->
-        {:error, {:malformed_command, "#{field} must be a valid UUID, got: #{inspect(uuid)}"}}
-    end
-  end
-
-  defp validate_uuid(other, field),
-    do: {:error, {:malformed_command, "#{field} must be a valid UUID, got: #{inspect(other)}"}}
-
-  defp compute_payload_hash(payload) do
-    canonical = canonicalize(payload)
-    :crypto.hash(:sha256, :erlang.term_to_binary(canonical)) |> Base.encode16(case: :lower)
-  end
-
-  defp canonicalize(%_{} = struct), do: struct |> Map.from_struct() |> canonicalize()
-
-  defp canonicalize(%{} = map) do
-    map
-    |> Enum.map(fn {k, v} -> {to_string(k), canonicalize(v)} end)
-    |> Enum.sort_by(&elem(&1, 0))
-  end
-
-  defp canonicalize(list) when is_list(list), do: Enum.map(list, &canonicalize/1)
-  defp canonicalize(other), do: other
-
-  defp get_existing_command(repo, goal_id, command_id) do
-    repo.one(
-      from c in CommandRecord,
-        where: c.goal_id == ^goal_id and c.command_id == ^command_id
-    )
-  end
-
-  defp handle_existing_command(%CommandRecord{} = existing, current_hash) do
-    if existing.payload_hash == current_hash do
-      {:ok, existing.result}
-    else
+  defp resolve_response(existing, response, response_digest, repo, now, opts) do
+    if existing.response_digest && existing.response_digest != response_digest do
       {:error,
-       {:conflicting_command_payload,
-        "command_id '#{existing.command_id}' was already executed with a different payload"}}
+       {:response_conflict,
+        %{
+          "command_id" => existing.command_id,
+          "existing_digest" => existing.response_digest,
+          "incoming_digest" => response_digest
+        }}}
+    else
+      case Command.resolution(existing.result["reason"], response["resolution"]) do
+        {:ok, kind} ->
+          record_response(existing, response, response_digest, kind, repo, now, opts)
+
+        {:error, :invalid_response} ->
+          {:error, {:invalid_response, Command.response_options(existing.result["reason"])}}
+      end
     end
   end
 
-  defp execute_command_flow(repo, goal_id, command, payload_hash, opts) do
-    case process_command(repo, goal_id, command, opts) do
-      {:ok, result, event_attrs} ->
-        trajectory_event_id =
-          if event_attrs do
-            case Trajectory.append(goal_id, event_attrs, opts) do
-              {:ok, %TrajectoryEvent{id: event_id}} ->
-                event_id
+  defp record_response(existing, response, response_digest, kind, repo, now, opts) do
+    result = %{
+      "kind" => kind,
+      "reason" => existing.result["reason"],
+      "resolved_by" => "user_response"
+    }
 
-              {:error, reason} ->
-                {:error, {:trajectory_append_failed, reason}}
-            end
-          else
-            nil
-          end
-
-        case trajectory_event_id do
-          {:error, _} = err ->
-            err
-
-          event_id ->
-            command_record_attrs = %{
-              command_id: command.command_id,
-              intent_id: Map.get(result, :intent_id) || Map.get(result, "intent_id"),
-              command_type: command.command_type,
-              payload: command.payload,
-              payload_hash: payload_hash,
-              status: "applied",
-              result: stringify_keys(result),
-              trajectory_event_id: event_id
+    run_transaction(repo, fn ->
+      events =
+        append_events_in_transaction(
+          repo,
+          existing.goal_id,
+          [
+            %{
+              "type" => "cobbler.command.resolved",
+              "idempotency_key" =>
+                "cobbler-command-resolved:#{existing.goal_id}:#{existing.command_id}",
+              "payload" => %{
+                "command_id" => existing.command_id,
+                "command_type" => existing.type,
+                "response" => response,
+                "response_digest" => response_digest,
+                "from_status" => "needs_user",
+                "to_status" => "resolved",
+                "result" => result
+              }
             }
+          ],
+          now
+        )
 
-            %CommandRecord{}
-            |> CommandRecord.changeset(command_record_attrs)
-            |> Ecto.Changeset.put_change(:goal_id, goal_id)
-            |> repo.insert!()
-
-            {:ok, result}
+      command_row =
+        existing
+        |> CommandRecord.response_changeset(response, response_digest, "resolved", result, now)
+        |> repo.update()
+        |> case do
+          {:ok, row} -> row
+          {:error, changeset} -> repo.rollback({:command_update_failed, changeset})
         end
+
+      %{command: command_row, outcome: :recorded, events: events}
+    end)
+    |> case do
+      {:ok, %{command: command_row, outcome: outcome, events: events}} ->
+        publish(events, opts)
+        {:ok, %{command: command_row, outcome: outcome, events: events}}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp process_command(repo, goal_id, %{command_type: "submit_intent"} = cmd, opts) do
-    payload = cmd.payload
+  defp validate_response(response) when is_map(response) do
+    case Contract.fetch(response, :resolution) do
+      {:ok, value} when is_binary(value) ->
+        {:ok, %{"resolution" => value}}
 
-    with {:ok, validated_intent_params} <- extract_intent_params(goal_id, payload),
-         {:ok, admission_ref} <-
-           validate_admission_reference(repo, goal_id, validated_intent_params, payload, opts) do
-      # Set up intent attributes
-      intent_id =
-        Map.get(payload, "intent_id") || Map.get(payload, :intent_id) || Ecto.UUID.generate()
+      {:ok, _other} ->
+        Contract.invalid(:resolution, "must be a string")
 
-      intent_attrs =
-        Map.merge(validated_intent_params, %{
-          id: intent_id,
-          goal_id: goal_id,
-          status: "pending",
-          admission_decision_id: admission_ref.decision_id,
-          proposed_bounds: admission_ref.proposed_bounds,
-          override: admission_ref.override
-        })
-
-      intent =
-        %Intent{}
-        |> Intent.changeset(intent_attrs)
-        |> Ecto.Changeset.put_change(:goal_id, goal_id)
-        |> then(fn cs ->
-          if intent_attrs[:task_id],
-            do: Ecto.Changeset.put_change(cs, :task_id, intent_attrs[:task_id]),
-            else: cs
-        end)
-        |> repo.insert!()
-
-      result = %{
-        intent_id: intent.id,
-        goal_id: goal_id,
-        status: "pending",
-        title: intent.title,
-        provider_id: intent.provider_id,
-        scope: intent.scope,
-        admission_decision_id: intent.admission_decision_id
-      }
-
-      event_attrs = %{
-        "type" => "cobbler.intent_submitted",
-        "schema_version" => 1,
-        "actor" => "cobbler",
-        "occurred_at" => DateTime.utc_now(),
-        "payload" => %{
-          "command_id" => cmd.command_id,
-          "intent_id" => intent.id,
-          "goal_id" => goal_id,
-          "title" => intent.title,
-          "requested_capability" => intent.requested_capability,
-          "provider_id" => intent.provider_id,
-          "account_id" => intent.account_id,
-          "scope" => intent.scope,
-          "admission_decision_id" => intent.admission_decision_id,
-          "proposed_bounds" => intent.proposed_bounds,
-          "override" => intent.override,
-          "submitted_at" => DateTime.to_iso8601(intent.inserted_at),
-          "metadata" => intent.metadata
-        }
-      }
-
-      {:ok, result, event_attrs}
+      :error ->
+        Contract.invalid(:resolution, "can't be blank")
     end
   end
 
-  defp process_command(repo, goal_id, %{command_type: "claim"} = cmd, _opts) do
-    payload = cmd.payload
+  defp validate_response(_response), do: Contract.invalid(:response, "must be an object")
 
-    with {:ok, intent_id} <- fetch_uuid(payload, "intent_id", :intent_id),
-         {:ok, intent} <- get_intent_for_goal(repo, goal_id, intent_id) do
-      # Check if this exact intent already has an active claim
-      existing_active_claim =
-        repo.one(
-          from c in Claim,
-            where: c.intent_id == ^intent.id and c.status == "active"
+  # ----------------------------------------------------------------------------
+  # Inspection
+  # ----------------------------------------------------------------------------
+
+  @doc "Returns the command row for a goal-scoped command id, or nil."
+  @spec get(Ecto.UUID.t(), String.t(), keyword()) :: CommandRecord.t() | nil
+  def get(goal_id, command_id, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    case cast_goal_id(goal_id) do
+      {:ok, normalized_goal_id} -> existing_command(repo, normalized_goal_id, command_id)
+      _error -> nil
+    end
+  end
+
+  @doc "Lists command rows for a goal in insertion order."
+  @spec list(Ecto.UUID.t(), keyword()) :: [CommandRecord.t()]
+  def list(goal_id, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    case cast_goal_id(goal_id) do
+      {:ok, normalized_goal_id} ->
+        repo.all(
+          from command in CommandRecord,
+            where: command.goal_id == ^normalized_goal_id,
+            order_by: [asc: command.inserted_at, asc: command.id]
         )
 
-      if existing_active_claim do
-        # Already claimed by this intent: recover existing claim
-        result = %{
-          intent_id: intent.id,
-          claim_id: existing_active_claim.id,
-          status: "active",
-          provider_id: existing_active_claim.provider_id,
-          scope: existing_active_claim.scope
-        }
+      _error ->
+        []
+    end
+  end
 
-        {:ok, result, nil}
+  @doc """
+  Lists pending operator decisions for a goal: commands recorded as
+  `needs_user`. Pending commands are inert; this function only reads.
+  """
+  @spec pending(Ecto.UUID.t(), keyword()) :: [CommandRecord.t()]
+  def pending(goal_id, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    case cast_goal_id(goal_id) do
+      {:ok, normalized_goal_id} ->
+        repo.all(
+          from command in CommandRecord,
+            where: command.goal_id == ^normalized_goal_id and command.status == "needs_user",
+            order_by: [asc: command.inserted_at, asc: command.id]
+        )
+
+      _error ->
+        []
+    end
+  end
+
+  @doc "Returns the single active global task claim, or nil."
+  @spec active_claim(keyword()) :: TaskClaimRecord.t() | nil
+  def active_claim(opts \\ []) do
+    do_active_claim(Keyword.get(opts, :repo, Repo))
+  end
+
+  # ----------------------------------------------------------------------------
+  # Rebuild
+  # ----------------------------------------------------------------------------
+
+  @doc """
+  Rebuilds command and claim state purely from canonical `cobbler.*` events
+  and reports divergence from the stored rows without mutating anything.
+
+  Returns
+  `{:ok, %{commands: [map()], claim: map() | nil, consistent?: boolean(), divergences: [String.t()]}}`.
+  """
+  @spec rebuild(Ecto.UUID.t(), keyword()) ::
+          {:ok,
+           %{
+             commands: [map()],
+             claim: map() | nil,
+             consistent?: boolean(),
+             divergences: [String.t()]
+           }}
+          | {:error, term()}
+  def rebuild(goal_id, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with {:ok, normalized_goal_id} <- cast_goal_id(goal_id),
+         events <- fetch_command_events(repo, normalized_goal_id),
+         :ok <- validate_history(events),
+         {:ok, rebuilt} <- fold_events(events) do
+      stored_commands = list(normalized_goal_id, opts)
+      divergences = divergences(rebuilt, stored_commands, do_active_claim(repo))
+
+      {:ok,
+       %{
+         commands: Map.values(rebuilt.commands),
+         claim: rebuilt.claim,
+         consistent?: divergences == [],
+         divergences: divergences
+       }}
+    end
+  end
+
+  defp fetch_command_events(repo, goal_id) do
+    repo.all(
+      from event in TrajectoryEvent,
+        where: event.goal_id == ^goal_id and event.type in @event_types,
+        order_by: [asc: event.sequence]
+    )
+  end
+
+  defp validate_history(events) do
+    Enum.reduce_while(events, :ok, fn event, :ok ->
+      case EventRegistry.validate(event_attributes(event)) do
+        {:ok, _validated} -> {:cont, :ok}
+        {:error, error} -> {:halt, {:error, error}}
+      end
+    end)
+  end
+
+  defp fold_events(events) do
+    Enum.reduce_while(events, {:ok, %{commands: %{}, claim: nil}}, fn event, {:ok, state} ->
+      case fold_event(state, event) do
+        {:ok, next_state} -> {:cont, {:ok, next_state}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp fold_event(state, %TrajectoryEvent{type: "cobbler.command.accepted"} = event) do
+    payload = event.payload
+
+    with :ok <- Command.transition(:pending, :accept, Command.status_atom(payload["to_status"])) do
+      command_state = %{
+        "command_id" => payload["command_id"],
+        "type" => payload["command_type"],
+        "digest" => payload["command_digest"],
+        "payload" => payload["command_payload"],
+        "status" => payload["to_status"],
+        "result" => payload["result"],
+        "response" => nil,
+        "response_digest" => nil
+      }
+
+      {:ok, put_in(state, [:commands, payload["command_id"]], command_state)}
+    else
+      {:error, {:invalid_transition, from, to}} ->
+        {:error, {:rebuild_transition_invalid, event.sequence, from, to}}
+    end
+  end
+
+  defp fold_event(state, %TrajectoryEvent{type: "cobbler.command.resolved"} = event) do
+    payload = event.payload
+    command_id = payload["command_id"]
+
+    with {:ok, prior} <- rebuilt_command(state, command_id, event),
+         :ok <- Command.transition(Command.status_atom(prior["status"]), :respond, :resolved) do
+      resolved =
+        prior
+        |> Map.put("status", payload["to_status"])
+        |> Map.put("result", payload["result"])
+        |> Map.put("response", payload["response"])
+        |> Map.put("response_digest", payload["response_digest"])
+
+      {:ok, put_in(state, [:commands, command_id], resolved)}
+    else
+      {:error, {:invalid_transition, from, to}} ->
+        {:error, {:rebuild_transition_invalid, event.sequence, from, to}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fold_event(state, %TrajectoryEvent{type: "cobbler.claim.acquired"} = event) do
+    payload = event.payload
+
+    if state.claim do
+      {:error, {:rebuild_claim_conflict, event.sequence, payload["claim_id"]}}
+    else
+      {:ok,
+       %{
+         state
+         | claim: %{
+             "claim_id" => payload["claim_id"],
+             "goal_id" => event.goal_id,
+             "command_id" => payload["command_id"],
+             "intent" => payload["intent"],
+             "provider_id" => payload["provider_id"],
+             "admission_decision_id" => payload["admission_decision_id"],
+             "status" => "active"
+           }
+       }}
+    end
+  end
+
+  defp fold_event(
+         state,
+         %TrajectoryEvent{
+           type: "cobbler.claim.released",
+           payload: %{"claim_id" => released_claim_id}
+         } =
+           event
+       ) do
+    case state.claim do
+      %{"claim_id" => ^released_claim_id, "status" => "active"} = claim ->
+        {:ok, %{state | claim: %{claim | "status" => "released"}}}
+
+      _other ->
+        {:error, {:rebuild_release_without_active_claim, event.sequence}}
+    end
+  end
+
+  defp rebuilt_command(state, command_id, event) do
+    case Map.fetch(state.commands, command_id) do
+      {:ok, prior} -> {:ok, prior}
+      :error -> {:error, {:rebuild_resolved_without_accepted, event.sequence, command_id}}
+    end
+  end
+
+  defp divergences(rebuilt, stored_commands, stored_active_claim) do
+    rebuilt_by_id = rebuilt.commands
+    stored_ids = MapSet.new(stored_commands, & &1.command_id)
+
+    row_divergences =
+      Enum.flat_map(stored_commands, fn row ->
+        case Map.get(rebuilt_by_id, row.command_id) do
+          nil ->
+            ["command #{row.command_id} persisted without canonical events"]
+
+          rebuilt_command ->
+            if canonical(row.status) == canonical(rebuilt_command["status"]) and
+                 canonical(row.result) == canonical(rebuilt_command["result"]) and
+                 canonical(row.digest) == canonical(rebuilt_command["digest"]) do
+              []
+            else
+              ["command #{row.command_id} diverges from canonical events"]
+            end
+        end
+      end)
+
+    event_only_divergences =
+      for command_id <- Map.keys(rebuilt_by_id),
+          not MapSet.member?(stored_ids, command_id) do
+        "canonical events for command #{command_id} have no persisted row"
+      end
+
+    row_divergences ++
+      event_only_divergences ++ claim_divergences(rebuilt.claim, stored_active_claim)
+  end
+
+  defp claim_divergences(rebuilt_claim, stored_active_claim) do
+    rebuilt_active =
+      if rebuilt_claim && rebuilt_claim["status"] == "active", do: rebuilt_claim, else: nil
+
+    cond do
+      is_nil(rebuilt_active) and is_nil(stored_active_claim) ->
+        []
+
+      is_nil(rebuilt_active) ->
+        ["persisted active claim has no canonical acquisition event"]
+
+      is_nil(stored_active_claim) ->
+        ["canonical active claim has no persisted active claim row"]
+
+      rebuilt_active["claim_id"] != stored_active_claim.id ->
+        ["canonical active claim diverges from persisted active claim row"]
+
+      rebuilt_active["command_id"] != stored_active_claim.command_id ->
+        ["canonical active claim diverges from persisted active claim row"]
+
+      true ->
+        []
+    end
+  end
+
+  # ----------------------------------------------------------------------------
+  # In-transaction event append
+  # ----------------------------------------------------------------------------
+
+  defp accepted_events(goal_id, command, status, result, claim_id) do
+    payload =
+      %{
+        "command_id" => command.command_id,
+        "command_type" => command.type,
+        "command_digest" => command.digest,
+        "command_payload" => command.payload,
+        "from_status" => "pending",
+        "to_status" => Command.status_string(status),
+        "result" => result
+      }
+      |> maybe_put("claim_id", claim_id)
+
+    [
+      %{
+        "type" => "cobbler.command.accepted",
+        "idempotency_key" => "cobbler-command-accepted:#{goal_id}:#{command.command_id}",
+        "payload" => payload
+      }
+    ]
+  end
+
+  defp claim_acquired_event(claim) do
+    %{
+      "type" => "cobbler.claim.acquired",
+      "idempotency_key" => "cobbler-claim-acquired:#{claim.id}",
+      "payload" => %{
+        "claim_id" => claim.id,
+        "command_id" => claim.command_id,
+        "intent" => claim.intent,
+        "provider_id" => claim.provider_id,
+        "admission_decision_id" => claim.admission_decision_id,
+        "admission_event_id" => claim.admission_event_id
+      }
+    }
+  end
+
+  defp claim_released_event(claim, command_id) do
+    %{
+      "type" => "cobbler.claim.released",
+      "idempotency_key" => "cobbler-claim-released:#{claim.id}",
+      "payload" => %{
+        "claim_id" => claim.id,
+        "command_id" => command_id,
+        "reason" => claim.release_reason
+      }
+    }
+  end
+
+  defp append_events_in_transaction(repo, goal_id, event_inputs, now) do
+    base_sequence = next_sequence(repo, goal_id)
+
+    Enum.with_index(event_inputs, fn input, index ->
+      append_one_event(repo, goal_id, input, base_sequence + index, now)
+    end)
+  end
+
+  defp append_one_event(repo, goal_id, input, sequence, now) do
+    try do
+      with {:ok, payload} <-
+             EventRegistry.validate_payload(input["type"], @schema_version, input["payload"],
+               now: now
+             ),
+           {:ok, event} <- insert_event(repo, goal_id, input, payload, sequence, now) do
+        event
       else
-        # Verify legal transition: pending -> active
-        case StateMachine.transition(intent.status, :claim) do
-          {:ok, :active} ->
-            # Attempt exclusive SQLite claim
-            claim_id = Ecto.UUID.generate()
-            now = DateTime.utc_now()
-
-            claim_attrs = %{
-              id: claim_id,
-              claim_slot: "global_active",
-              active_slot: "global",
-              goal_id: goal_id,
-              intent_id: intent.id,
-              command_id: cmd.command_id,
-              provider_id: intent.provider_id,
-              account_id: intent.account_id,
-              scope: intent.scope,
-              status: "active",
-              claimed_at: now,
-              metadata: Map.get(payload, "metadata", %{})
-            }
-
-            claim_changeset =
-              %Claim{}
-              |> Claim.acquire_changeset(claim_attrs)
-              |> Ecto.Changeset.put_change(:goal_id, goal_id)
-              |> Ecto.Changeset.put_change(:intent_id, intent.id)
-
-            case repo.insert(claim_changeset) do
-              {:ok, claim} ->
-                # Update intent status to active
-                intent
-                |> Ecto.Changeset.change(%{status: "active"})
-                |> repo.update!()
-
-                result = %{
-                  intent_id: intent.id,
-                  claim_id: claim.id,
-                  status: "active",
-                  provider_id: claim.provider_id,
-                  scope: claim.scope
-                }
-
-                event_attrs = %{
-                  "type" => "cobbler.intent_claimed",
-                  "schema_version" => 1,
-                  "actor" => "cobbler",
-                  "occurred_at" => now,
-                  "payload" => %{
-                    "command_id" => cmd.command_id,
-                    "intent_id" => intent.id,
-                    "claim_id" => claim.id,
-                    "goal_id" => goal_id,
-                    "provider_id" => claim.provider_id,
-                    "account_id" => claim.account_id,
-                    "scope" => claim.scope,
-                    "claimed_at" => DateTime.to_iso8601(now),
-                    "metadata" => claim.metadata
-                  }
-                }
-
-                {:ok, result, event_attrs}
-
-              {:error, %Ecto.Changeset{errors: errors}} ->
-                if Keyword.has_key?(errors, :active_slot) or Keyword.has_key?(errors, :claim_slot) do
-                  # Unique constraint violated: another task holds the global slot
-                  current_active =
-                    repo.one(
-                      from c in Claim,
-                        where: c.status == "active",
-                        limit: 1
-                    )
-
-                  {:error, {:already_claimed, current_active}}
-                else
-                  {:error, {:claim_failed, errors}}
-                end
-            end
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+        {:error, reason} -> repo.rollback({:event_append_failed, input["type"], reason})
       end
+    rescue
+      # SQLite reports unnamed FOREIGN KEY violations with a nil constraint
+      # name that Ecto cannot map to a changeset error; catch the raise so
+      # the whole store transaction still rolls back with a clean reason.
+      error in [Ecto.ConstraintError] ->
+        repo.rollback({:event_append_failed, input["type"], error})
     end
   end
 
-  defp process_command(repo, goal_id, %{command_type: "needs_user"} = cmd, _opts) do
-    payload = cmd.payload
+  defp insert_event(repo, goal_id, input, payload, sequence, now) do
+    event = %TrajectoryEvent{
+      id: Ecto.UUID.generate(),
+      goal_id: goal_id,
+      task_id: nil,
+      run_id: nil,
+      sequence: sequence,
+      parent_event_id: nil,
+      type: input["type"],
+      actor: @actor,
+      occurred_at: now,
+      schema_version: @schema_version,
+      payload: payload,
+      idempotency_key: input["idempotency_key"]
+    }
 
-    with {:ok, intent_id} <- fetch_uuid(payload, "intent_id", :intent_id),
-         {:ok, intent} <- get_intent_for_goal(repo, goal_id, intent_id),
-         {:ok, next_state} <- StateMachine.transition(intent.status, :needs_user) do
-      now = DateTime.utc_now()
-
-      reason =
-        Map.get(payload, "reason") || Map.get(payload, :reason) ||
-          "Operator intervention requested"
-
-      metadata = Map.get(payload, "metadata") || Map.get(payload, :metadata) || %{}
-
-      recovery_data = %{
-        "suspended_at" => DateTime.to_iso8601(now),
-        "reason" => reason,
-        "metadata" => metadata
-      }
-
-      intent
-      |> Ecto.Changeset.change(%{status: to_string(next_state), recovery_data: recovery_data})
-      |> repo.update!()
-
-      result = %{
-        intent_id: intent.id,
-        goal_id: goal_id,
-        status: to_string(next_state),
-        reason: reason
-      }
-
-      event_attrs = %{
-        "type" => "cobbler.intent_transitioned",
-        "schema_version" => 1,
-        "actor" => "cobbler",
-        "occurred_at" => now,
-        "payload" => %{
-          "command_id" => cmd.command_id,
-          "intent_id" => intent.id,
-          "goal_id" => goal_id,
-          "from_status" => intent.status,
-          "to_status" => to_string(next_state),
-          "event_name" => "needs_user",
-          "reason" => reason,
-          "metadata" => metadata,
-          "transitioned_at" => DateTime.to_iso8601(now)
-        }
-      }
-
-      {:ok, result, event_attrs}
-    end
+    event
+    |> TrajectoryEvent.changeset(%{})
+    |> repo.insert()
   end
 
-  defp process_command(repo, goal_id, %{command_type: "resume"} = cmd, _opts) do
-    payload = cmd.payload
-
-    with {:ok, intent_id} <- fetch_uuid(payload, "intent_id", :intent_id),
-         {:ok, intent} <- get_intent_for_goal(repo, goal_id, intent_id),
-         {:ok, next_state} <- StateMachine.transition(intent.status, :resume) do
-      now = DateTime.utc_now()
-      metadata = Map.get(payload, "metadata") || Map.get(payload, :metadata) || %{}
-
-      intent
-      |> Ecto.Changeset.change(%{status: to_string(next_state), recovery_data: nil})
-      |> repo.update!()
-
-      result = %{
-        intent_id: intent.id,
-        goal_id: goal_id,
-        status: to_string(next_state)
-      }
-
-      event_attrs = %{
-        "type" => "cobbler.intent_transitioned",
-        "schema_version" => 1,
-        "actor" => "cobbler",
-        "occurred_at" => now,
-        "payload" => %{
-          "command_id" => cmd.command_id,
-          "intent_id" => intent.id,
-          "goal_id" => goal_id,
-          "from_status" => intent.status,
-          "to_status" => to_string(next_state),
-          "event_name" => "resume",
-          "metadata" => metadata,
-          "transitioned_at" => DateTime.to_iso8601(now)
-        }
-      }
-
-      {:ok, result, event_attrs}
-    end
+  defp repo_exists?(repo, goal_id) do
+    repo.exists?(from goal in Goal, where: goal.id == ^goal_id)
   end
 
-  defp process_command(repo, goal_id, %{command_type: terminal_type} = cmd, _opts)
-       when terminal_type in ["complete", "fail", "cancel"] do
-    payload = cmd.payload
-    event_atom = String.to_existing_atom(terminal_type)
-
-    with {:ok, intent_id} <- fetch_uuid(payload, "intent_id", :intent_id),
-         {:ok, intent} <- get_intent_for_goal(repo, goal_id, intent_id),
-         {:ok, next_state} <- StateMachine.transition(intent.status, event_atom) do
-      now = DateTime.utc_now()
-
-      reason =
-        Map.get(payload, "reason") || Map.get(payload, :reason) ||
-          Map.get(payload, "terminal_reason") || "#{terminal_type} requested"
-
-      metadata = Map.get(payload, "metadata") || Map.get(payload, :metadata) || %{}
-
-      # Release active claim if this intent holds one
-      active_claim =
-        repo.one(
-          from c in Claim,
-            where: c.intent_id == ^intent.id and c.status == "active"
-        )
-
-      if active_claim do
-        active_claim
-        |> Claim.release_changeset(%{
-          status: "released",
-          active_slot: nil,
-          released_at: now,
-          release_reason: terminal_type
-        })
-        |> repo.update!()
-      end
-
-      intent
-      |> Ecto.Changeset.change(%{status: to_string(next_state), terminal_reason: reason})
-      |> repo.update!()
-
-      result = %{
-        intent_id: intent.id,
-        goal_id: goal_id,
-        status: to_string(next_state),
-        reason: reason
-      }
-
-      event_attrs = %{
-        "type" => "cobbler.intent_transitioned",
-        "schema_version" => 1,
-        "actor" => "cobbler",
-        "occurred_at" => now,
-        "payload" => %{
-          "command_id" => cmd.command_id,
-          "intent_id" => intent.id,
-          "claim_id" => if(active_claim, do: active_claim.id, else: nil),
-          "goal_id" => goal_id,
-          "from_status" => intent.status,
-          "to_status" => to_string(next_state),
-          "event_name" => terminal_type,
-          "reason" => reason,
-          "metadata" => metadata,
-          "transitioned_at" => DateTime.to_iso8601(now)
-        }
-      }
-
-      {:ok, result, event_attrs}
-    end
-  end
-
-  defp extract_intent_params(goal_id, payload) do
-    title = Map.get(payload, "title") || Map.get(payload, :title) || "Task Intent"
-    task_id = Map.get(payload, "task_id") || Map.get(payload, :task_id)
-
-    capability =
-      Map.get(payload, "requested_capability") || Map.get(payload, :requested_capability) ||
-        "supervised_execution"
-
-    provider_id = Map.get(payload, "provider_id") || Map.get(payload, :provider_id)
-    account_id = Map.get(payload, "account_id") || Map.get(payload, :account_id) || "default"
-    scope = Map.get(payload, "scope") || Map.get(payload, :scope) || "account:default"
-    metadata = Map.get(payload, "metadata") || Map.get(payload, :metadata) || %{}
-
-    cond do
-      not is_binary(provider_id) or String.trim(provider_id) == "" ->
-        {:error, {:malformed_command, "provider_id must be a non-empty string"}}
-
-      not is_binary(scope) or String.trim(scope) == "" ->
-        {:error, {:malformed_command, "scope must be a non-empty string"}}
-
-      true ->
-        {:ok,
-         %{
-           goal_id: goal_id,
-           task_id: task_id,
-           title: title,
-           requested_capability: capability,
-           provider_id: provider_id,
-           account_id: account_id,
-           scope: scope,
-           metadata: metadata
-         }}
-    end
-  end
-
-  defp validate_admission_reference(repo, goal_id, intent_params, payload, opts) do
-    raw_admission =
-      Map.get(payload, "admission_decision") || Map.get(payload, :admission_decision)
-
-    decision_id =
-      Map.get(payload, "admission_decision_id") || Map.get(payload, :admission_decision_id)
-
-    cond do
-      is_struct(raw_admission, AdmissionDecision) ->
-        validate_decision_struct(raw_admission, goal_id, intent_params)
-
-      is_map(raw_admission) ->
-        case AdmissionDecision.from_payload(raw_admission, opts) do
-          {:ok, decision} -> validate_decision_struct(decision, goal_id, intent_params)
-          {:error, changeset} -> {:error, {:invalid_admission_decision, changeset}}
-        end
-
-      is_binary(decision_id) ->
-        # Look up admission.decided event in trajectory for this goal
-        case find_admission_event(repo, goal_id, decision_id) do
-          {:ok, payload} ->
-            case AdmissionDecision.from_payload(payload, opts) do
-              {:ok, decision} -> validate_decision_struct(decision, goal_id, intent_params)
-              {:error, cs} -> {:error, {:invalid_admission_decision, cs}}
-            end
-
-          :not_found ->
-            {:error, {:admission_decision_not_found, decision_id}}
-        end
-
-      true ->
-        {:error,
-         {:missing_admission_reference,
-          "must supply a valid admission_decision or admission_decision_id"}}
-    end
-  end
-
-  defp validate_decision_struct(%AdmissionDecision{} = decision, goal_id, intent_params) do
-    candidate_provider =
-      case decision.candidate do
-        %{provider_id: p} -> p
-        %{"provider_id" => p} -> p
-        _ -> nil
-      end
-
-    cond do
-      decision.result != :admit ->
-        {:error,
-         {:admission_not_admitted,
-          "admission decision result is #{inspect(decision.result)}, only :admit is permitted"}}
-
-      decision.goal_id != nil and decision.goal_id != goal_id ->
-        {:error,
-         {:admission_scope_mismatch,
-          "admission decision goal_id #{decision.goal_id} does not match command goal_id #{goal_id}"}}
-
-      candidate_provider != intent_params.provider_id ->
-        {:error,
-         {:admission_provider_mismatch,
-          "candidate provider '#{candidate_provider}' does not match requested '#{intent_params.provider_id}'"}}
-
-      decision.requested_capability != intent_params.requested_capability ->
-        {:error,
-         {:admission_capability_mismatch,
-          "requested capability '#{decision.requested_capability}' does not match intent '#{intent_params.requested_capability}'"}}
-
-      decision.scope != intent_params.scope ->
-        {:error,
-         {:admission_scope_mismatch,
-          "scope '#{decision.scope}' does not match intent scope '#{intent_params.scope}'"}}
-
-      true ->
-        {:ok,
-         %{
-           decision_id: decision.decision_id,
-           proposed_bounds: decision.proposed_bounds || %{},
-           override: decision.override
-         }}
-    end
-  end
-
-  defp find_admission_event(repo, goal_id, decision_id) do
-    event =
+  defp next_sequence(repo, goal_id) do
+    last =
       repo.one(
-        from e in TrajectoryEvent,
-          where: e.goal_id == ^goal_id and e.type == "admission.decided",
-          order_by: [desc: e.sequence],
-          limit: 1
-      )
+        from event in TrajectoryEvent,
+          where: event.goal_id == ^goal_id,
+          select: max(event.sequence)
+      ) || 0
 
-    case event do
-      %TrajectoryEvent{payload: %{"decision_id" => ^decision_id} = p} -> {:ok, p}
-      %TrajectoryEvent{payload: %{decision_id: ^decision_id} = p} -> {:ok, p}
-      _ -> :not_found
+    last + 1
+  end
+
+  # ----------------------------------------------------------------------------
+  # Shared helpers
+  # ----------------------------------------------------------------------------
+
+  defp run_transaction(repo, fun) do
+    repo.transaction(fun, transaction_opts())
+  end
+
+  defp existing_command(repo, goal_id, command_id) do
+    repo.one(
+      from command in CommandRecord,
+        where: command.goal_id == ^goal_id and command.command_id == ^command_id
+    )
+  end
+
+  defp fetch_command(repo, goal_id, command_id) do
+    case existing_command(repo, goal_id, command_id) do
+      %CommandRecord{} = row -> {:ok, row}
+      nil -> {:error, :command_not_found}
     end
   end
 
-  defp get_intent_for_goal(repo, goal_id, intent_id) do
-    case repo.one(from i in Intent, where: i.goal_id == ^goal_id and i.id == ^intent_id) do
-      %Intent{} = intent -> {:ok, intent}
-      nil -> {:error, {:intent_not_found, intent_id}}
+  defp do_active_claim(repo) do
+    repo.one(from claim in TaskClaimRecord, where: claim.status == "active")
+  end
+
+  defp event_attributes(event) do
+    %{
+      id: event.id,
+      goal_id: event.goal_id,
+      task_id: event.task_id,
+      run_id: event.run_id,
+      sequence: event.sequence,
+      parent_event_id: event.parent_event_id,
+      type: event.type,
+      actor: event.actor,
+      occurred_at: event.occurred_at,
+      schema_version: event.schema_version,
+      payload: event.payload,
+      idempotency_key: event.idempotency_key
+    }
+  end
+
+  defp publish(events, opts) do
+    publish_fun = Keyword.get(opts, :publish_fun, &default_publish/1)
+    Enum.each(events, publish_fun)
+  end
+
+  defp default_publish(event) do
+    Phoenix.PubSub.broadcast(Shoestring.PubSub, Shoestring.Trajectory.topic(event.goal_id), {
+      :trajectory_event_committed,
+      event
+    })
+  rescue
+    error ->
+      # The command and its events are already durably committed; a PubSub
+      # hiccup must not fail the recorded outcome.
+      Logger.warning("cobbler command event publish failed: #{Exception.message(error)}")
+  end
+
+  defp transaction_opts, do: [mode: :immediate]
+
+  defp now(opts) do
+    case Keyword.get(opts, :now) do
+      %DateTime{} = now -> DateTime.truncate(now, :microsecond)
+      _other -> DateTime.truncate(DateTime.utc_now(), :microsecond)
     end
   end
 
-  defp fetch_uuid(payload, str_key, atom_key) do
-    val = Map.get(payload, str_key) || Map.get(payload, atom_key)
-
-    case val do
-      nil ->
-        {:error, {:malformed_command, "missing #{str_key} in payload"}}
-
-      uuid when is_binary(uuid) ->
-        validate_uuid(uuid, atom_key)
-
-      other ->
-        {:error, {:malformed_command, "#{str_key} must be a valid UUID, got: #{inspect(other)}"}}
+  defp cast_goal_id(goal_id) do
+    case Ecto.UUID.cast(goal_id) do
+      {:ok, normalized_goal_id} -> {:ok, normalized_goal_id}
+      :error -> {:error, {:invalid_goal_id, goal_id}}
     end
   end
 
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn {k, v} -> {to_string(k), stringify_value(v)} end)
+  defp blank?(nil), do: true
+  defp blank?(""), do: true
+  defp blank?(_other), do: false
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp canonical(term) when is_map(term) do
+    term
+    |> Map.new(fn {key, value} -> {to_string(key), canonical(value)} end)
+    |> Enum.sort(fn {left, _}, {right, _} -> left <= right end)
   end
 
-  defp stringify_value(%_{} = s), do: s |> Map.from_struct() |> stringify_keys()
-  defp stringify_value(map) when is_map(map), do: stringify_keys(map)
-  defp stringify_value(list) when is_list(list), do: Enum.map(list, &stringify_value/1)
-  defp stringify_value(other), do: other
+  defp canonical(term) when is_list(term), do: Enum.map(term, &canonical/1)
+  defp canonical(term), do: term
 end
