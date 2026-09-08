@@ -53,7 +53,11 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
              {"dispatch.effect_deferred", 1},
              {"dispatch.effect_failed", 1},
              {"dispatch.effect_unknown", 1},
-             {"dispatch.requested", 1}
+             {"dispatch.requested", 1},
+             {"admission.decided", 1},
+             {"cobbler.intent_submitted", 1},
+             {"cobbler.intent_claimed", 1},
+             {"cobbler.intent_transitioned", 1}
            ] -- registered == []
   end
 
@@ -395,14 +399,60 @@ defmodule Shoestring.Trajectory.EventRegistryTest do
              EventRegistry.upcast("capacity.snapshot_observed", 3, payload)
   end
 
-  test "v1 events can explicitly reference artifact metadata" do
-    artifact_id = Ecto.UUID.generate()
+  test "cobbler events validate correctly and reject unknown fields" do
+    goal_id = Ecto.UUID.generate()
+    intent_id = Ecto.UUID.generate()
+    claim_id = Ecto.UUID.generate()
+    decision_id = Ecto.UUID.generate()
 
-    assert {:ok, %{"decision" => "continue", "artifact_id" => ^artifact_id}} =
-             EventRegistry.validate_payload("decision.recorded", 1, %{
-               "decision" => "continue",
-               "artifact_id" => artifact_id
-             })
+    valid_submitted = %{
+      "command_id" => "cmd-1",
+      "intent_id" => intent_id,
+      "goal_id" => goal_id,
+      "requested_capability" => "supervised_execution",
+      "provider_id" => "codex",
+      "scope" => "account:default",
+      "admission_decision_id" => decision_id,
+      "proposed_bounds" => %{"response_budget" => 10},
+      "submitted_at" => "2026-09-07T14:00:00Z"
+    }
+
+    assert {:ok, _} =
+             EventRegistry.validate_payload("cobbler.intent_submitted", 1, valid_submitted)
+
+    assert {:error, {:invalid_payload, "cobbler.intent_submitted", 1, changeset}} =
+             EventRegistry.validate_payload(
+               "cobbler.intent_submitted",
+               1,
+               Map.put(valid_submitted, "unregistered_field", "forbidden")
+             )
+
+    assert "contains unsupported fields" in errors_on(changeset).base
+
+    valid_claimed = %{
+      "command_id" => "cmd-2",
+      "intent_id" => intent_id,
+      "claim_id" => claim_id,
+      "goal_id" => goal_id,
+      "provider_id" => "codex",
+      "scope" => "account:default",
+      "claimed_at" => "2026-09-07T14:01:00Z"
+    }
+
+    assert {:ok, _} = EventRegistry.validate_payload("cobbler.intent_claimed", 1, valid_claimed)
+
+    valid_transitioned = %{
+      "command_id" => "cmd-3",
+      "intent_id" => intent_id,
+      "goal_id" => goal_id,
+      "from_status" => "active",
+      "to_status" => "completed",
+      "event_name" => "complete",
+      "transitioned_at" => "2026-09-07T14:05:00Z"
+    }
+
+    assert {:ok, _} =
+             EventRegistry.validate_payload("cobbler.intent_transitioned", 1, valid_transitioned)
   end
 
   defp errors_on(changeset) do
