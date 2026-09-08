@@ -1,0 +1,77 @@
+<Layouts.app flash={@flash} current_scope={@current_scope}>
+  <div class="max-w-7xl mx-auto space-y-8 p-6">
+    <div class="flex justify-between items-center">
+      <div>
+        <h1 class="text-3xl font-bold text-zinc-900">Cobbler Goals</h1>
+        <p class="mt-2 text-zinc-600">
+          Quota-aware admission state per goal. Read-only: refresh re-reads, nothing here dispatches or executes.
+        </p>
+      </div>
+      <button
+        phx-click="refresh"
+        id="cobbler-refresh"
+        class="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700"
+      >
+        Refresh
+      </button>
+    </div>
+
+    <%= if @goals_empty? do %>
+      <div
+        id="cobbler-empty"
+        class="border border-dashed border-zinc-300 rounded-lg p-8 text-center bg-white"
+      >
+        <p class="text-lg font-medium text-zinc-900">No Cobbler goals yet</p>
+        <p class="mt-1 text-sm text-zinc-500">
+          No goals have been recorded. Submit a Cobbler command to populate this view.
+        </p>
+      </div>
+    <% end %>
+
+    <div id="cobbler-goals-list" phx-update="stream" class="grid gap-6 md:grid-cols-2">
+      <div
+        :for={{dom_id, goal} <- @streams.goals}
+        id={dom_id}
+        data-status={goal.presentation.status}
+        class="border border-zinc-200 rounded-lg p-6 space-y-4 bg-white shadow-sm"
+      >
+        <div class="flex justify-between items-start border-b pb-4">
+          <div>
+            <h2 class="text-xl font-bold text-zinc-900">{goal.title}</h2>
+            <p class="text-xs text-zinc-500 font-mono mt-1">{goal.id}</p>
+          </div>
+          <span class={[
+            "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-medium text-sm",
+            goal.presentation.badge_class
+          ]}>
+            <.icon name={goal.presentation.icon} class="w-3.5 h-3.5" />
+            {goal.presentation.label}
+          </span>
+        </div>
+
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          <dt class="text-zinc-500">Latest decision</dt>
+          <dd class="font-medium text-zinc-900">{goal.latest_result || "none recorded"}</dd>
+
+          <dt class="text-zinc-500">Commands</dt>
+          <dd class="font-medium text-zinc-900">{goal.commands_count}</dd>
+
+          <dt class="text-zinc-500">Awaiting operator</dt>
+          <dd class="font-medium text-zinc-900">{goal.pending_count}</dd>
+
+          <dt class="text-zinc-500">Claim</dt>
+          <dd class="font-medium text-zinc-900">
+            {if(goal.claim_held?, do: "held by this goal", else: "none")}
+          </dd>
+        </dl>
+
+        <.link
+          navigate={~p"/cobbler/goals/#{goal.id}"}
+          class="inline-block rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-zinc-700"
+        >
+          Open goal detail
+        </.link>
+      </div>
+    </div>
+  </div>
+</Layouts.app>
