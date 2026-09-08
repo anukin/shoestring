@@ -184,9 +184,37 @@ defmodule Shoestring.Trajectory.Projector do
     end
   end
 
+  defp project_event_from_storage(%{type: "cobbler." <> _} = event) do
+    # Unknown future cobbler.* event types (or versions) must not halt
+    # goal/task projection: command and claim state rebuilds through
+    # Shoestring.Cobbler.Commands.rebuild/2 instead. Registered cobbler.*
+    # events still validate exactly as before; only the unknown-type and
+    # unknown-version failures degrade to an unvalidated passthrough (which
+    # ProjectorTransition then ignores). Any other validation failure still
+    # halts visibly.
+    case EventRegistry.validate(event_attributes(event)) do
+      {:ok, validated} ->
+        upcast_validated(event, validated)
+
+      {:error, {:unknown_event_type, _type}} ->
+        {:ok, event}
+
+      {:error, {:unknown_event_version, _type, _version}} ->
+        {:ok, event}
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+
   defp project_event_from_storage(event) do
-    with {:ok, validated} <- EventRegistry.validate(event_attributes(event)),
-         {:ok, payload} <-
+    with {:ok, validated} <- EventRegistry.validate(event_attributes(event)) do
+      upcast_validated(event, validated)
+    end
+  end
+
+  defp upcast_validated(event, validated) do
+    with {:ok, payload} <-
            EventRegistry.upcast(event.type, event.schema_version, validated.payload,
              now: event.occurred_at
            ) do

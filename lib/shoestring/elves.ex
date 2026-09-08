@@ -50,7 +50,15 @@ defmodule Shoestring.Elves do
   @spec start_run(RunRequest.t(), Identity.t(), keyword()) ::
           {:ok, pid()} | {:ok, :already_running, pid()} | {:error, term()}
   def start_run(%RunRequest{} = request, %Identity{} = identity, opts \\ []) do
-    dispatch_opts = Keyword.take(opts, [:repo, :clock, :identifier, :writer_opts, :run_id])
+    dispatch_opts =
+      Keyword.take(opts, [
+        :repo,
+        :clock,
+        :identifier,
+        :writer_opts,
+        :run_id,
+        :require_cobbler_command
+      ])
 
     with {:ok, dispatch, _job} <- Dispatches.enqueue(request, identity, dispatch_opts) do
       start_elf(request, dispatch, opts)

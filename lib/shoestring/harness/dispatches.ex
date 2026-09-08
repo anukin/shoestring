@@ -45,10 +45,24 @@ defmodule Shoestring.Harness.Dispatches do
   @spec enqueue(RunRequest.t(), Identity.t(), keyword()) ::
           {:ok, DispatchRecord.t(), Job.t() | nil} | {:error, term()}
   def enqueue(%RunRequest{} = request, %Identity{} = identity, opts \\ []) do
-    with {:ok, dispatch, job, run, recovered?} <- create_run_and_delivery(request, identity, opts),
+    with :ok <- cobbler_gate(request, opts),
+         {:ok, dispatch, job, run, recovered?} <- create_run_and_delivery(request, identity, opts),
          :ok <- Runs.ensure_requested_event(run, request, identity, opts, recovered?),
          :ok <- ensure_requested_event(dispatch, opts) do
       {:ok, dispatch, job}
+    end
+  end
+
+  # Opt-in Cobbler protection for the direct dispatch path. Off by default;
+  # pass `require_cobbler_command: true` to reject dispatches for goals that
+  # do not hold the exclusive global task claim instead of bypassing
+  # commands. Read-only: the claim itself is performed by
+  # Shoestring.Cobbler.Commands.submit/3.
+  defp cobbler_gate(request, opts) do
+    if Keyword.get(opts, :require_cobbler_command, false) do
+      Shoestring.Cobbler.DispatchGate.authorize(request.goal_id, opts)
+    else
+      :ok
     end
   end
 

@@ -34,10 +34,13 @@ defmodule Shoestring.Cobbler.Commands do
     release command against the owning goal. There is no expiry, no
     staleness trigger, and no release on ambiguous restart.
   - **Execution disabled.** Submitting, responding to, or inspecting commands
-    never spawns a process, enqueues a job, or dispatches at startup. There
-    are no consumers of command rows in this slice. Direct run paths
-    (Elves, harness adapters, dispatch) are not routed through commands and
-    are not protected by this module.
+    never spawns a process, enqueues a job, or dispatches at startup. The
+    first gated consumer is `Shoestring.Cobbler.Dispatcher`, which reads
+    command rows and stops at an explicit execution-disabled boundary.
+    Direct run paths (Elves, harness adapters, dispatch) accept an opt-in
+    `require_cobbler_command: true` guard
+    (`Shoestring.Cobbler.DispatchGate`); without the flag they still do not
+    route through commands.
 
   ## Event appends inside the store transaction
 

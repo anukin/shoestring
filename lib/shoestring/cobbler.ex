@@ -13,15 +13,22 @@ defmodule Shoestring.Cobbler do
   replay / conflicting-reuse semantics, a validated command state machine with
   recoverable `needs_user` outcomes, an atomic intent/transition/result store,
   trajectory rebuild, and a SQLite-enforced exclusive global MVP task claim.
-  Commands are record-only: execution, spawning, enqueuing, and startup
-  dispatch remain disabled, and direct run paths are not protected by them.
+  The first gated dispatch consumer (`Shoestring.Cobbler.Dispatcher`) reads
+  command rows, re-validates admission references and claim ownership, and
+  stops at an explicit execution-disabled boundary: nothing is spawned or
+  enqueued. Direct run paths accept an opt-in `require_cobbler_command: true`
+  guard (`Shoestring.Cobbler.DispatchGate`) that rejects dispatches for
+  goals holding no live claim instead of bypassing commands.
   """
 
   alias Shoestring.Cobbler.{
     AdmissionDecision,
     AdmissionEvaluation,
     AdmissionPolicy,
-    Commands
+    Commands,
+    DispatchGate,
+    Dispatcher,
+    GoalLifecycle
   }
 
   alias Shoestring.Harness.CapacitySnapshot
@@ -131,5 +138,44 @@ defmodule Shoestring.Cobbler do
           | {:error, term()}
   def rebuild_commands(goal_id, opts \\ []) do
     Commands.rebuild(goal_id, opts)
+  end
+
+  @doc "Applies one goal lifecycle event to a goal state (pure; see `GoalLifecycle`)."
+  @spec lifecycle_transition(GoalLifecycle.state(), GoalLifecycle.event()) ::
+          {:ok, GoalLifecycle.state()} | {:error, term()}
+  def lifecycle_transition(state, event) do
+    GoalLifecycle.transition(state, event)
+  end
+
+  @doc """
+  Submits a command and gates its dispatch through the first gated consumer.
+
+  A fully validated claim stops at the explicit execution-disabled boundary
+  (`{:error, {:execution_disabled, detail}}`); nothing is spawned or
+  enqueued. Identical replays re-gate; conflicting reuse is rejected.
+  """
+  @spec claim_and_gate(Ecto.UUID.t(), map(), keyword()) :: Dispatcher.gate_result()
+  def claim_and_gate(goal_id, attrs, opts \\ []) do
+    Dispatcher.claim_and_gate(goal_id, attrs, opts)
+  end
+
+  @doc """
+  Gates dispatch for an already-recorded command row.
+
+  Only a live, owned, claimed outcome with a valid admission reference
+  reaches the execution-disabled boundary; anything else is rejected as
+  `{:error, {:no_claimed_command, detail}}`.
+  """
+  @spec dispatch_command(Ecto.UUID.t(), String.t(), keyword()) :: {:error, term()}
+  def dispatch_command(goal_id, command_id, opts \\ []) do
+    Dispatcher.dispatch(goal_id, command_id, opts)
+  end
+
+  @doc """
+  Verifies that a goal holds the exclusive global task claim (read-only).
+  """
+  @spec authorize_dispatch(Ecto.UUID.t(), keyword()) :: :ok | {:error, term()}
+  def authorize_dispatch(goal_id, opts \\ []) do
+    DispatchGate.authorize(goal_id, opts)
   end
 end
