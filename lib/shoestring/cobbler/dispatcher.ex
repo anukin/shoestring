@@ -35,7 +35,7 @@ defmodule Shoestring.Cobbler.Dispatcher do
   here.
   """
 
-  alias Shoestring.Cobbler.{Command, Commands}
+  alias Shoestring.Cobbler.{Command, Commands, Leases}
   alias Shoestring.Cobbler.CommandRecord
   alias Shoestring.Repo
 
@@ -44,9 +44,22 @@ defmodule Shoestring.Cobbler.Dispatcher do
            %{
              required(:command) => CommandRecord.t(),
              required(:outcome) => :recorded | :replayed,
-             required(:disposition) => :awaiting_operator | :command_rejected,
+             required(:disposition) => :awaiting_operator | :command_rejected | :leased,
              required(:detail) => map()
            }}
+          | {:ok,
+             %{
+               required(:command) => CommandRecord.t(),
+               required(:outcome) => :recorded | :replayed,
+               required(:disposition) => :leased,
+               required(:lease_outcome) => :recorded | :replayed,
+               required(:run) => Shoestring.Harness.RunRecord.t() | nil,
+               required(:lease) => Shoestring.Harness.ExecutionLease.t(),
+               required(:grant_id) => Ecto.UUID.t(),
+               required(:events) => [Shoestring.Trajectory.TrajectoryEvent.t()],
+               required(:claim_id) => Ecto.UUID.t(),
+               required(:admission_event_id) => Ecto.UUID.t()
+             }}
           | {:error, term()}
 
   @doc """
@@ -59,6 +72,12 @@ defmodule Shoestring.Cobbler.Dispatcher do
   - `rejected` → `{:ok, %{disposition: :command_rejected, ...}}`.
   - Identical re-submission replays (`outcome: :replayed`) and re-gates;
     conflicting reuse returns `{:error, {:command_conflict, ...}}`.
+
+  Opt-in lease issuance: pass `grant_lease: [...]` (see
+  `Shoestring.Cobbler.Leases.issue_for_claim/6`; requires `:task_id`) to
+  issue an execution lease on the validated-claim path. Without the option
+  the behavior is byte-for-byte the execution-disabled boundary above;
+  `require_cobbler_command` handling elsewhere is unchanged.
   """
   @spec claim_and_gate(Ecto.UUID.t(), map(), keyword()) :: gate_result()
   def claim_and_gate(goal_id, attrs, opts \\ []) do
@@ -90,7 +109,10 @@ defmodule Shoestring.Cobbler.Dispatcher do
         {:error, :command_not_found}
 
       %CommandRecord{} = row ->
-        gate_recorded(row, :recorded, opts)
+        # `dispatch/3` never issues leases: the post-claim hook is a
+        # `claim_and_gate/3` opt-in only, so `grant_lease:` is stripped here
+        # and gating keeps its exact execution-disabled semantics.
+        gate_recorded(row, :recorded, Keyword.delete(opts, :grant_lease))
         |> case do
           {:error, {:execution_disabled, _detail} = gated} ->
             {:error, gated}
@@ -118,16 +140,7 @@ defmodule Shoestring.Cobbler.Dispatcher do
     with {:ok, command} <- rebuild_command(row),
          {:ok, _decision} <- admission_reference(repo, row, command),
          {:ok, claim} <- live_owned_claim(repo, row) do
-      {:error,
-       {:execution_disabled,
-        %{
-          boundary: "execution_disabled",
-          goal_id: row.goal_id,
-          command_id: row.command_id,
-          outcome: outcome,
-          claim_id: claim.id,
-          admission_event_id: row.payload["admission_event_id"]
-        }}}
+      maybe_grant_lease(row, command, claim, outcome, opts)
     end
   end
 
@@ -159,6 +172,33 @@ defmodule Shoestring.Cobbler.Dispatcher do
        disposition: :command_rejected,
        detail: %{status: status, kind: result["kind"]}
      }}
+  end
+
+  # ----------------------------------------------------------------------------
+  # Post-claim lease hook (opt-in delegation only)
+  # ----------------------------------------------------------------------------
+
+  # Without `grant_lease:` opts the validated claim stops at the explicit
+  # execution-disabled boundary, exactly as before. With the option, issuance
+  # delegates to `Shoestring.Cobbler.Leases.issue_for_claim/6`; this private
+  # hook adds no evaluation or effects of its own.
+  defp maybe_grant_lease(row, command, claim, outcome, opts) do
+    case Keyword.fetch(opts, :grant_lease) do
+      :error ->
+        {:error,
+         {:execution_disabled,
+          %{
+            boundary: "execution_disabled",
+            goal_id: row.goal_id,
+            command_id: row.command_id,
+            outcome: outcome,
+            claim_id: claim.id,
+            admission_event_id: row.payload["admission_event_id"]
+          }}}
+
+      {:ok, lease_opts} when is_list(lease_opts) ->
+        Leases.issue_for_claim(row.goal_id, row, command, claim, outcome, lease_opts)
+    end
   end
 
   defp rebuild_command(%CommandRecord{} = row) do
