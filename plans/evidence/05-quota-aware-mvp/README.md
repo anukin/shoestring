@@ -28,4 +28,5 @@ Consistent with repository and global standing agent contracts (`~/.config/agent
 ## Directory Inventory
 
 - `admission-policy.md`: Architectural specification and evaluation contract for deterministic versioned admission decisions (`admission.decided` v1), operational reserve thresholds, manual confirmation boundaries, delayed recheck policy, and SQLite concurrency guarantees.
+<<<<<<< HEAD
 - `cobbler-commands.md`: Durable goal-scoped command ids with identical-replay / conflicting-reuse semantics, validated command state machine with recoverable `needs_user`, atomic intent/transition/result persistence, trajectory rebuild, SQLite-enforced exclusive global MVP task claim, and the honest limitations of this slice (execution disabled; direct run paths unprotected).
