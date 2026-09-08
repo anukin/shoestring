@@ -28,7 +28,11 @@ defmodule Shoestring.Cobbler do
     Commands,
     DispatchGate,
     Dispatcher,
-    GoalLifecycle
+    GoalLifecycle,
+    LeaseBounds,
+    LeaseGrant,
+    LeaseRenewal,
+    Leases
   }
 
   alias Shoestring.Harness.CapacitySnapshot
@@ -177,5 +181,65 @@ defmodule Shoestring.Cobbler do
   @spec authorize_dispatch(Ecto.UUID.t(), keyword()) :: :ok | {:error, term()}
   def authorize_dispatch(goal_id, opts \\ []) do
     DispatchGate.authorize(goal_id, opts)
+  end
+
+  @doc """
+  Builds a pure execution-lease grant from an admitted decision event.
+
+  See `Shoestring.Cobbler.LeaseGrant.build/5`.
+  """
+  @spec build_lease_grant(
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          Shoestring.Trajectory.TrajectoryEvent.t(),
+          Shoestring.Cobbler.Command.t(),
+          keyword()
+        ) ::
+          {:ok, Shoestring.Harness.ExecutionLease.t()} | {:error, term()}
+  def build_lease_grant(goal_id, run_id, event, command, opts \\ []) do
+    LeaseGrant.build(goal_id, run_id, event, command, opts)
+  end
+
+  @doc """
+  Persists `lease.proposed → lease.granted → lease.active` for a built lease.
+
+  See `Shoestring.Cobbler.Leases.grant/3`.
+  """
+  @spec grant_lease(Ecto.UUID.t(), Shoestring.Harness.ExecutionLease.t(), keyword()) ::
+          {:ok, Leases.grant_result()} | {:error, term()}
+  def grant_lease(goal_id, lease, opts \\ []) do
+    Leases.grant(goal_id, lease, opts)
+  end
+
+  @doc """
+  Renews (or expires) a lease at the safe boundary.
+
+  See `Shoestring.Cobbler.LeaseRenewal.maybe_renew/3`.
+  """
+  @spec renew_lease(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, LeaseRenewal.renew_result() | :awaiting_boundary} | {:error, term()}
+  def renew_lease(goal_id, grant_id, opts \\ []) do
+    LeaseRenewal.maybe_renew(goal_id, grant_id, opts)
+  end
+
+  @doc """
+  Immediate re-observe + re-evaluate on a Codex `:quota_refused` error.
+
+  See `Shoestring.Cobbler.LeaseRenewal.handle_quota_refusal/3`.
+  """
+  @spec handle_lease_quota(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, LeaseRenewal.renew_result()} | {:error, term()}
+  def handle_lease_quota(goal_id, grant_id, opts \\ []) do
+    LeaseRenewal.handle_quota_refusal(goal_id, grant_id, opts)
+  end
+
+  @doc """
+  Builds bound state for a granted lease.
+
+  See `Shoestring.Cobbler.LeaseBounds.new/1`.
+  """
+  @spec lease_bounds(Shoestring.Harness.ExecutionLease.t() | map()) :: LeaseBounds.t()
+  def lease_bounds(lease) do
+    LeaseBounds.new(lease)
   end
 end
