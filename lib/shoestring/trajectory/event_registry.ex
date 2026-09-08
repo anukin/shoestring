@@ -351,6 +351,69 @@ defmodule Shoestring.Trajectory.EventRegistry do
           extensions: :map
         }
       }
+    },
+    "cobbler.command.accepted" => %{
+      1 => %{
+        required: [
+          :command_id,
+          :command_type,
+          :command_digest,
+          :command_payload,
+          :from_status,
+          :to_status,
+          :result
+        ],
+        optional: [:claim_id, :extensions],
+        uuid_fields: [:claim_id],
+        types: %{
+          command_payload: :map,
+          result: :map,
+          extensions: :map
+        }
+      }
+    },
+    "cobbler.command.resolved" => %{
+      1 => %{
+        required: [
+          :command_id,
+          :command_type,
+          :response,
+          :response_digest,
+          :from_status,
+          :to_status,
+          :result
+        ],
+        optional: [:extensions],
+        uuid_fields: [],
+        types: %{
+          response: :map,
+          result: :map,
+          extensions: :map
+        }
+      }
+    },
+    "cobbler.claim.acquired" => %{
+      1 => %{
+        required: [
+          :claim_id,
+          :command_id,
+          :intent,
+          :provider_id,
+          :admission_decision_id,
+          :admission_event_id
+        ],
+        optional: [:extensions],
+        uuid_fields: [:claim_id, :admission_event_id],
+        types: %{extensions: :map}
+      }
+    },
+    "cobbler.claim.released" => %{
+      1 => %{
+        required: [:claim_id, :command_id, :reason],
+        optional: [:extensions],
+        uuid_fields: [:claim_id],
+        types: %{extensions: :map}
+      }
     }
   }
 
@@ -908,7 +971,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
       "checkpoint.",
       "capacity.",
       "harness.",
-      "admission."
+      "admission.",
+      "cobbler."
     ])
   end
 end
