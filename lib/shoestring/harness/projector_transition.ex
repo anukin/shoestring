@@ -21,12 +21,18 @@ defmodule Shoestring.Harness.ProjectorTransition do
       {:lease, lease_action} -> project_lease(state, event, lease_action)
       :checkpoint -> project_checkpoint(state, event)
       :capacity_snapshot -> project_capacity_snapshot(state, event)
+      :handoff -> project_handoff(state, event)
       :ignore -> {:ok, state}
     end
   end
 
   @spec action(String.t()) ::
-          {:run, atom()} | {:lease, atom()} | :checkpoint | :capacity_snapshot | :ignore
+          {:run, atom()}
+          | {:lease, atom()}
+          | :checkpoint
+          | :capacity_snapshot
+          | :handoff
+          | :ignore
   def action("run.requested"), do: {:run, :request}
   def action("run.starting"), do: {:run, :begin}
   def action("run.running"), do: {:run, :started}
@@ -47,6 +53,7 @@ defmodule Shoestring.Harness.ProjectorTransition do
   def action("lease.checkpoint_required"), do: {:lease, :require_checkpoint}
   def action("checkpoint.created"), do: :checkpoint
   def action("capacity.snapshot_observed"), do: :capacity_snapshot
+  def action("handoff.created"), do: :handoff
   def action(_type), do: :ignore
 
   defp project_run(state, event, :request) do
@@ -110,6 +117,25 @@ defmodule Shoestring.Harness.ProjectorTransition do
          run_id: run_id,
          stop_reason: Map.fetch!(event.payload, "stop_reason")
        })}
+    end
+  end
+
+  # A handoff is a pointer event: the durable effect is the new run's
+  # `run.requested` carrying the continuation. The pure transition
+  # therefore advances without mutating derived state, after verifying the
+  # pointer is well-formed against the envelope.
+  defp project_handoff(state, event) do
+    with {:ok, run_id} <- handoff_key(event.payload, "run_id"),
+         {:ok, _checkpoint_id} <- handoff_key(event.payload, "checkpoint_id"),
+         :ok <- matching_run_id(event, run_id) do
+      {:ok, state}
+    end
+  end
+
+  defp handoff_key(payload, key) do
+    case Map.fetch(payload, key) do
+      {:ok, value} when is_binary(value) -> {:ok, value}
+      _other -> {:error, {:handoff_missing, key}}
     end
   end
 

@@ -33,7 +33,19 @@ defmodule Shoestring.Elves do
   import Ecto.Query
 
   alias Shoestring.Elves.{Elf, PortRunner, Staleness}
-  alias Shoestring.Harness.{Clock, DispatchRecord, Dispatches, Identity, RunRecord, RunRequest}
+
+  alias Shoestring.Harness.{
+    Clock,
+    Continuation,
+    DispatchRecord,
+    Dispatches,
+    ExecutionLeaseRecord,
+    Identity,
+    RunIdentity,
+    RunRecord,
+    RunRequest
+  }
+
   alias Shoestring.Repo
   alias Shoestring.Trajectory
   alias Shoestring.Trajectory.TrajectoryEvent
@@ -301,6 +313,293 @@ defmodule Shoestring.Elves do
       extensions: run.extensions || %{}
     })
   end
+
+  @doc """
+  Resumes a run from its latest checkpoint, or hands it to another provider.
+
+  Pipeline (fail-fast, all refusals happen before any adapter call):
+
+    1. project the fresh continuation (`Continuation.for_goal/2`, run-scoped
+       with goal fallback; decision refs from `admission.decided` only);
+    2. validate the presented continuation (`opts[:continuation]`, defaulting
+       to the run's stored continuation) with `Continuation.validate_attrs/1`
+       and `Continuation.validate_resume/3`;
+    3. when `require_cobbler_command: true` is explicitly passed, authorize
+       through `Shoestring.Cobbler.DispatchGate` (read-only; the flag is
+       plumbed, never defaulted);
+    4. same provider (`opts[:to_provider_id]` defaults to the run's own) →
+       `adapter.resume/3` with a rebuilt `RunRequest` carrying the fresh
+       continuation;
+    5. different provider → verify `GoalLifecycle` accepts
+       `:handoff_requested` from `opts[:goal_state]` (default `:working`),
+       create a NEW run of the SAME goal carrying the continuation, resume
+       the target adapter into it, and append the `handoff.created` pointer
+       event (durable effect: the new run's `run.requested`).
+
+  Resume is strictly same-run; handoff targets a new run of the same goal
+  (cross-goal handoff is out of scope). Live cross-provider handoff is
+  UNVERIFIED: hermetic tests cover the Fake-to-Fake path only.
+  """
+  @spec resume_run(Ecto.UUID.t(), keyword()) ::
+          {:ok, RunIdentity.t()}
+          | {:ok, %{handoff_id: Ecto.UUID.t(), run: RunRecord.t(), run_identity: RunIdentity.t()}}
+          | {:error, term()}
+  def resume_run(run_id, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with {:ok, run} <- fetch_run(run_id, repo),
+         {:ok, fresh_record} <-
+           Continuation.latest_checkpoint(repo, run.goal_id, run_id: run.id),
+         fresh_refs <- Continuation.decision_refs(repo, run.goal_id),
+         {:ok, fresh_cont} <- Continuation.project_latest([fresh_record], fresh_refs),
+         {:ok, presented} <- presented_binding(run, opts),
+         :ok <- Continuation.validate_attrs(presented_attrs(run, opts)),
+         :ok <-
+           Continuation.validate_resume(
+             presented,
+             fresh_binding(fresh_cont, fresh_record),
+             resume_context(repo, run, opts)
+           ),
+         :ok <- maybe_authorize_gate(run.goal_id, opts) do
+      case resume_mode(run, opts) do
+        :resume -> resume_same_run(run, fresh_cont, opts)
+        :handoff -> resume_handoff(run, fresh_cont, fresh_record, opts)
+      end
+    end
+  end
+
+  # -- Resume/handoff private helpers --
+
+  defp presented_attrs(run, opts) do
+    case Keyword.get(opts, :continuation) do
+      nil -> run_continuation_attrs(run)
+      presented when is_map(presented) -> presented
+      _other -> :invalid
+    end
+  end
+
+  defp run_continuation_attrs(%RunRecord{continuation: continuation})
+       when is_map(continuation),
+       do: continuation
+
+  defp run_continuation_attrs(_run), do: %{}
+
+  defp presented_binding(run, opts) do
+    case presented_attrs(run, opts) do
+      :invalid ->
+        {:error, {:invalid_continuation, :must_be_a_map}}
+
+      attrs ->
+        {:ok,
+         %{
+           checkpoint_id: attrs[:checkpoint_id] || attrs["checkpoint_id"],
+           decision_refs: attrs[:decision_refs] || attrs["decision_refs"] || [],
+           run_id: run.id,
+           provider_session_id: Keyword.get(opts, :provider_session_id, run.provider_session_id)
+         }}
+    end
+  end
+
+  defp fresh_binding(fresh_cont, fresh_record) do
+    %{
+      checkpoint_id: fresh_cont.checkpoint_id,
+      decision_refs: fresh_cont.decision_refs,
+      run_id: fresh_record.run_id,
+      provider_session_id: fresh_record.provider_session_id
+    }
+  end
+
+  defp resume_context(repo, run, opts) do
+    %{
+      mode: resume_mode(run, opts),
+      lease_status: latest_lease_status(repo, run.id, opts),
+      confirmation_pending: Keyword.get(opts, :confirmation_pending, false),
+      adapter_migrates_session: Keyword.get(opts, :adapter_migrates_session, false)
+    }
+  end
+
+  defp resume_mode(run, opts) do
+    if Keyword.get(opts, :to_provider_id, run.provider_id) == run.provider_id do
+      :resume
+    else
+      :handoff
+    end
+  end
+
+  defp latest_lease_status(repo, run_id, opts) do
+    case Keyword.fetch(opts, :lease_status) do
+      {:ok, status} ->
+        status
+
+      :error ->
+        query =
+          from lease in ExecutionLeaseRecord,
+            where: lease.run_id == ^run_id,
+            order_by: [desc: lease.projection_sequence, asc: lease.id],
+            limit: 1
+
+        case repo.one(query) do
+          %ExecutionLeaseRecord{status: status} -> status
+          nil -> :no_lease
+        end
+    end
+  end
+
+  defp latest_lease_id(repo, run_id) do
+    query =
+      from lease in ExecutionLeaseRecord,
+        where: lease.run_id == ^run_id,
+        order_by: [desc: lease.projection_sequence, asc: lease.id],
+        limit: 1,
+        select: lease.id
+
+    repo.one(query)
+  end
+
+  defp maybe_authorize_gate(goal_id, opts) do
+    if Keyword.get(opts, :require_cobbler_command, false) do
+      Shoestring.Cobbler.DispatchGate.authorize(goal_id, repo: Keyword.get(opts, :repo, Repo))
+    else
+      :ok
+    end
+  end
+
+  defp resume_same_run(run, fresh_cont, opts) do
+    adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
+    adapter_opts = Keyword.get(opts, :adapter_opts, %{})
+
+    with {:ok, request} <- resume_request(run, fresh_cont, run.dispatch_id) do
+      invoke_resume(adapter, prior_identity(run, opts), request, adapter_opts)
+    end
+  end
+
+  defp resume_handoff(run, fresh_cont, fresh_record, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+    clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
+    adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
+    adapter_opts = Keyword.get(opts, :adapter_opts, %{})
+    to_provider_id = Keyword.get(opts, :to_provider_id)
+    goal_state = Keyword.get(opts, :goal_state, :working)
+    handoff_id = Keyword.get(opts, :handoff_id, Ecto.UUID.generate())
+    new_dispatch_id = Keyword.get(opts, :new_dispatch_id, Ecto.UUID.generate())
+    new_run_id = Keyword.get(opts, :new_run_id, Ecto.UUID.generate())
+    reason = Keyword.get(opts, :reason, "provider_handoff")
+
+    with {:ok, :handing_off} <- handoff_transition(goal_state),
+         {:ok, request} <- resume_request(run, fresh_cont, new_dispatch_id),
+         {:ok, identity} <- adapter_identity(adapter),
+         {:ok, new_run} <-
+           Shoestring.Harness.Runs.request(request, identity,
+             repo: repo,
+             clock: clock,
+             run_id: new_run_id
+           ),
+         {:ok, run_identity} <-
+           invoke_resume(adapter, prior_identity(run, opts), request, adapter_opts),
+         {:ok, payload} <-
+           Continuation.handoff_payload(%{
+             handoff_id: handoff_id,
+             run_id: new_run.id,
+             checkpoint_id: fresh_record.id,
+             from_provider_id: run.provider_id,
+             to_provider_id: to_provider_id,
+             contract_version: 1,
+             next_action: fresh_cont.next_action,
+             decision_refs: fresh_cont.decision_refs,
+             reason: reason,
+             extensions: %{},
+             prior_run_id: run.id,
+             lease_grant_id: latest_lease_id(repo, run.id)
+           }),
+         {:ok, _event} <-
+           Trajectory.append(
+             run.goal_id,
+             %{
+               "type" => "handoff.created",
+               "schema_version" => 1,
+               "actor" => "elf",
+               "occurred_at" => Clock.now(clock),
+               "idempotency_key" => "handoff:" <> handoff_id,
+               "payload" => payload
+             },
+             trusted: [task_id: run.task_id, run_id: new_run.id]
+           ) do
+      {:ok, %{handoff_id: handoff_id, run: new_run, run_identity: run_identity}}
+    end
+  end
+
+  defp handoff_transition(goal_state) do
+    case Shoestring.Cobbler.GoalLifecycle.transition(goal_state, :handoff_requested) do
+      {:ok, :handing_off} -> {:ok, :handing_off}
+      {:error, reason} -> {:error, {:handoff_not_allowed, reason}}
+    end
+  end
+
+  defp adapter_identity(adapter) do
+    case adapter.identity() do
+      %Identity{} = identity -> {:ok, identity}
+      {:ok, %Identity{} = identity} -> {:ok, identity}
+      _other -> {:error, :adapter_identity_unavailable}
+    end
+  rescue
+    _error -> {:error, :adapter_identity_unavailable}
+  end
+
+  defp invoke_resume(adapter, prior, request, adapter_opts) do
+    if function_exported?(adapter, :resume, 3) do
+      adapter.resume(prior, request, adapter_opts)
+    else
+      {:error, :resume_unsupported}
+    end
+  end
+
+  defp prior_identity(run, opts) do
+    %RunIdentity{
+      run_id: run.id,
+      harness_id: run.provider_id,
+      process_id: nil,
+      provider_session_id: Keyword.get(opts, :provider_session_id, run.provider_session_id)
+    }
+  end
+
+  defp resume_request(run, continuation, dispatch_id) do
+    attrs = %{
+      version: 1,
+      goal_id: run.goal_id,
+      task_id: run.task_id,
+      workspace_ref: run.workspace_ref,
+      prompt: run.prompt,
+      continuation: %{
+        checkpoint_id: continuation.checkpoint_id,
+        next_action: continuation.next_action,
+        decision_refs: continuation.decision_refs
+      },
+      policy: run.policy || %{mode: "supervised"},
+      requested_capabilities: resume_capabilities(run),
+      dispatch_id: dispatch_id,
+      extensions: run.extensions || %{}
+    }
+
+    case RunRequest.new(attrs) do
+      {:ok, request} -> {:ok, request}
+      {:error, changeset} -> {:error, {:invalid_resume_request, changeset}}
+    end
+  end
+
+  # Twin of `capabilities_from_run/1` (Oban effect path): string items back
+  # to capability atoms, dropping anything unrecognized.
+  defp resume_capabilities(%RunRecord{requested_capabilities: %{"items" => items}})
+       when is_list(items) do
+    Enum.flat_map(items, fn
+      "resume" -> [:resume]
+      "send" -> [:send]
+      "cancel" -> [:cancel]
+      "interactive" -> [:interactive]
+      _other -> []
+    end)
+  end
+
+  defp resume_capabilities(_run), do: []
 
   # -- Private helpers --
 
