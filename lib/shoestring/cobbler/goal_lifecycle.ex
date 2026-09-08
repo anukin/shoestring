@@ -19,7 +19,11 @@ defmodule Shoestring.Cobbler.GoalLifecycle do
   - `:sleeping` - deferred until an explicit recheck (quota reset, occupancy
     clearing). Per the locked iteration-4 decisions, staleness is evidence,
     not a trigger: only an explicit `:recheck_due` event wakes a sleeping
-    goal. There are no timers here.
+    goal. There are no timers here. A sleeping goal also waits in place on
+    a repeat `defer_until` (resleep) or a `require_confirmation` (the
+    operator confirms out-of-band and wakes the goal with an explicit
+    recheck); a claim released while sleeping returns the goal to
+    `:evaluating`.
   - `:handing_off` - terminal. The goal leaves automated handling (rejected
     candidate, explicit operator handoff). Nothing transitions out.
 
@@ -125,6 +129,15 @@ defmodule Shoestring.Cobbler.GoalLifecycle do
   def transition(:evaluating, {:admission_decision, :reject}), do: {:ok, :handing_off}
   def transition(:sleeping, {:admission_decision, :admit}), do: {:ok, :queued}
   def transition(:sleeping, {:admission_decision, :reject}), do: {:ok, :handing_off}
+  # A repeat deferral while asleep re-parks in place (resleep with a new
+  # wake time); the wake worker schedules the new intent separately.
+  def transition(:sleeping, {:admission_decision, :defer_until}), do: {:ok, :sleeping}
+  # A confirmation demand while asleep waits in place: the operator surface
+  # (pending commands plus the recorded decision) stays addressable and the
+  # next wake comes from an explicit operator recheck.
+  def transition(:sleeping, {:admission_decision, :require_confirmation}),
+    do: {:ok, :sleeping}
+
   def transition(:queued, {:admission_decision, :defer_until}), do: {:ok, :sleeping}
   def transition(:working, {:admission_decision, :defer_until}), do: {:ok, :sleeping}
   def transition(:checkpointing, {:admission_decision, :defer_until}), do: {:ok, :sleeping}
@@ -140,6 +153,9 @@ defmodule Shoestring.Cobbler.GoalLifecycle do
   def transition(:queued, {:command_outcome, :released}), do: {:ok, :evaluating}
   def transition(:dispatching, {:command_outcome, :released}), do: {:ok, :evaluating}
   def transition(:dispatching, {:command_outcome, :no_active_claim}), do: {:ok, :evaluating}
+  # A claim released while the goal sleeps (operator release out-of-band)
+  # returns the goal to evaluation instead of stranding it asleep.
+  def transition(:sleeping, {:command_outcome, :released}), do: {:ok, :evaluating}
 
   # Dispatch gate reports.
   def transition(:dispatching, :dispatch_started), do: {:ok, :working}

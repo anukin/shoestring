@@ -575,9 +575,15 @@ defmodule Shoestring.Cobbler.AdmissionEvaluation do
 
   defp find_window(_snapshot, _kind), do: nil
 
+  # Unknown windows carry no `reset_at` key at all (see `CapacitySnapshot`
+  # window construction and the `window_unknown/2` normalizer shape), so the
+  # lookup must be nil-safe like the map clause below: missing means "no
+  # reset", never a crash. Every refused struct snapshot has unknown-only
+  # windows, so without this the hard-quota path raises instead of
+  # deferring.
   defp extract_snapshot_reset_at(%CapacitySnapshot{windows: windows}) when is_list(windows) do
     windows
-    |> Enum.map(& &1.reset_at)
+    |> Enum.map(&Map.get(&1, :reset_at))
     |> Enum.reject(&is_nil/1)
     |> Enum.sort(&(DateTime.compare(&1, &2) == :gt))
     |> List.first()
