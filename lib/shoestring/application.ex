@@ -20,6 +20,7 @@ defmodule Shoestring.Application do
         {Oban, Application.fetch_env!(:shoestring, Oban)}
       ] ++
         dispatch_reconciler_children() ++
+        wakeup_reconciler_children() ++
         capacity_supervisor_children() ++
         elves_children() ++
         [
@@ -71,6 +72,16 @@ defmodule Shoestring.Application do
   defp dispatch_reconciler_children do
     if Application.get_env(:shoestring, :dispatch_reconciler, true) do
       [Shoestring.Harness.Dispatch.Reconciler]
+    else
+      []
+    end
+  end
+
+  # Startup-only wakeup repair (E4): one reconcile pass at boot, no timers,
+  # no auto-wake semantics. Disabled in test via `:wakeup_reconciler`.
+  defp wakeup_reconciler_children do
+    if Application.get_env(:shoestring, :wakeup_reconciler, true) do
+      [Shoestring.Cobbler.WakeupReconciler]
     else
       []
     end
