@@ -194,6 +194,29 @@ defmodule Shoestring.Trajectory.EventRegistry do
         }
       }
     },
+    "handoff.created" => %{
+      1 => %{
+        required: [
+          :handoff_id,
+          :run_id,
+          :checkpoint_id,
+          :from_provider_id,
+          :to_provider_id,
+          :contract_version,
+          :next_action,
+          :decision_refs,
+          :reason,
+          :extensions
+        ],
+        optional: [:prior_run_id, :lease_grant_id],
+        uuid_fields: [:handoff_id, :run_id, :checkpoint_id, :prior_run_id, :lease_grant_id],
+        types: %{
+          contract_version: :integer,
+          decision_refs: {:array, :string},
+          extensions: :map
+        }
+      }
+    },
     "capacity.snapshot_observed" => %{
       1 => %{
         required: [
@@ -552,7 +575,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
         |> sanitize_payload(type, version, opts)
 
       with :ok <- validate_capacity_snapshot(type, version, validated, opts),
-           :ok <- validate_admission_decision(type, version, validated, opts) do
+           :ok <- validate_admission_decision(type, version, validated, opts),
+           :ok <- validate_handoff(type, version, validated, opts) do
         {:ok, validated}
       else
         {:error, changeset} -> {:error, {:invalid_payload, type, version, changeset}}
@@ -709,6 +733,72 @@ defmodule Shoestring.Trajectory.EventRegistry do
   end
 
   defp validate_admission_decision(_type, _version, _payload, _opts), do: :ok
+
+  # Handoff pointers must stay small, structured, and secret-free. Decision
+  # refs are admission decision ids (UUIDs); free-text checkpoint decisions
+  # are never valid here. The normalized `handoff.` prefix additionally
+  # subjects the whole payload to `Contract.safe_term?/1` secret scanning.
+  defp validate_handoff("handoff.created", 1, payload, _opts) do
+    with {:ok, _handoff_id} <- handoff_uuid(payload, "handoff_id"),
+         {:ok, _run_id} <- handoff_uuid(payload, "run_id"),
+         {:ok, _checkpoint_id} <- handoff_uuid(payload, "checkpoint_id"),
+         :ok <- handoff_optional_uuid(payload, "prior_run_id"),
+         :ok <- handoff_optional_uuid(payload, "lease_grant_id"),
+         {:ok, _version} <- handoff_contract_version(payload),
+         {:ok, _next_action} <-
+           Contract.text(Map.get(payload, "next_action"), :next_action, max: 2_000),
+         :ok <- handoff_decision_refs(payload),
+         {:ok, _reason} <- Contract.text(Map.get(payload, "reason"), :reason, max: 500),
+         {:ok, _from} <-
+           Contract.text(Map.get(payload, "from_provider_id"), :from_provider_id, max: 200),
+         {:ok, _to} <-
+           Contract.text(Map.get(payload, "to_provider_id"), :to_provider_id, max: 200) do
+      :ok
+    else
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
+
+  defp validate_handoff(_type, _version, _payload, _opts), do: :ok
+
+  defp handoff_uuid(payload, key) do
+    case Ecto.UUID.cast(Map.get(payload, key)) do
+      {:ok, _uuid} -> {:ok, Map.get(payload, key)}
+      :error -> Contract.invalid(String.to_atom(key), "must be a UUID")
+    end
+  end
+
+  defp handoff_optional_uuid(payload, key) do
+    case Map.get(payload, key) do
+      nil -> :ok
+      _value -> handoff_uuid(payload, key) |> then(&handoff_uuid_result/1)
+    end
+  end
+
+  defp handoff_uuid_result({:ok, _uuid}), do: :ok
+  defp handoff_uuid_result({:error, changeset}), do: {:error, changeset}
+
+  defp handoff_contract_version(payload) do
+    case Map.get(payload, "contract_version") do
+      1 -> {:ok, 1}
+      _other -> Contract.invalid(:contract_version, "must equal 1")
+    end
+  end
+
+  defp handoff_decision_refs(payload) do
+    case Map.get(payload, "decision_refs") do
+      refs when is_list(refs) and length(refs) <= 32 ->
+        Enum.reduce_while(refs, :ok, fn ref, :ok ->
+          case Ecto.UUID.cast(ref) do
+            {:ok, _uuid} -> {:cont, :ok}
+            :error -> {:halt, Contract.invalid(:decision_refs, "must be UUIDs")}
+          end
+        end)
+
+      _other ->
+        Contract.invalid(:decision_refs, "must be a list of at most 32 UUIDs")
+    end
+  end
 
   defp valid_legacy_capacity_state?(%{"capacity_state" => "known"} = payload, opts) do
     with %{"items" => windows} = windows_payload when is_list(windows) <-
@@ -971,6 +1061,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
       "checkpoint.",
       "capacity.",
       "harness.",
+      "handoff.",
       "admission.",
       "cobbler."
     ])

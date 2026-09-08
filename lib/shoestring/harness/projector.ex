@@ -162,6 +162,7 @@ defmodule Shoestring.Harness.Projector do
       {:lease, action} -> persist_lease(event, payload, action, opts)
       :checkpoint -> persist_checkpoint(event, payload, opts)
       :capacity_snapshot -> persist_capacity_snapshot(event, payload, opts)
+      :handoff -> persist_handoff(event, payload)
       :ignore -> :ok
     end
   end
@@ -253,6 +254,32 @@ defmodule Shoestring.Harness.Projector do
       end
     else
       nil -> {:error, {:run_not_found, Map.get(payload, "run_id")}}
+      error -> error
+    end
+  end
+
+  # A handoff is a pointer event: no derived row is written. The guard
+  # verifies the pointer resolves to a goal-owned checkpoint that was
+  # projected no later than the handoff sequence, and to a goal-owned run.
+  defp persist_handoff(event, payload) do
+    with {:ok, handoff_run_id} <- payload_uuid(payload, "run_id"),
+         {:ok, checkpoint_id} <- payload_uuid(payload, "checkpoint_id"),
+         :ok <- matching_run_id(event, handoff_run_id),
+         %RunRecord{} <-
+           Repo.get_by(RunRecord, id: handoff_run_id, goal_id: event.goal_id),
+         %CheckpointRecord{} = checkpoint <- Repo.get(CheckpointRecord, checkpoint_id) do
+      cond do
+        checkpoint.goal_id != event.goal_id ->
+          {:error, {:checkpoint_not_owned, checkpoint_id}}
+
+        checkpoint.projection_sequence > event.sequence ->
+          {:error, {:handoff_before_checkpoint, checkpoint_id}}
+
+        true ->
+          :ok
+      end
+    else
+      nil -> {:error, {:handoff_dependency_not_found, Map.get(payload, "checkpoint_id")}}
       error -> error
     end
   end

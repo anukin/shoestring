@@ -24,7 +24,8 @@ defmodule Shoestring.Trajectory.ProjectorTransition do
     "lease.checkpoint_required",
     "checkpoint.created",
     "capacity.snapshot_observed",
-    "harness.event_recorded"
+    "harness.event_recorded",
+    "handoff.created"
   ]
 
   @type result ::
