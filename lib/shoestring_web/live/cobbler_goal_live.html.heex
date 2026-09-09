@@ -110,6 +110,10 @@
             <dd id="cobbler-decision-reserves" class="font-mono text-xs text-zinc-900">
               {Jason.encode!(@latest_decision.reserves)}
             </dd>
+            <dt class="text-zinc-500">Capacity evidence</dt>
+            <dd id="cobbler-decision-observation" class="font-mono text-xs text-zinc-900">
+              {Jason.encode!(@latest_decision.observation)}
+            </dd>
             <%= if @latest_decision.defer_until do %>
               <dt class="text-zinc-500">Deferred until</dt>
               <dd id="cobbler-decision-defer-until" class="font-medium text-zinc-900">
@@ -256,6 +260,67 @@
           </h3>
           <p class="mt-2 text-sm text-zinc-500 italic">
             This goal holds no active task claim.
+          </p>
+        </div>
+      <% end %>
+
+      <%!-- Handoff (read-only; a handoff targets a new run of the same goal) --%>
+      <%= if @handoffs != [] do %>
+        <div
+          id="cobbler-handoff"
+          class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4"
+        >
+          <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
+            <.icon name="hero-arrow-right-circle" class="w-4 h-4 text-zinc-500" /> Handoff
+          </h3>
+          <%= for handoff <- @handoffs do %>
+            <div
+              id={"cobbler-handoff-#{handoff.sequence}"}
+              class="rounded-md border border-zinc-200 p-4 space-y-2"
+            >
+              <dl class="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+                <dt class="text-zinc-500">Source provider</dt>
+                <dd
+                  id={"cobbler-handoff-source-#{handoff.sequence}"}
+                  class="font-medium text-zinc-900"
+                >
+                  {handoff.source}
+                </dd>
+                <dt class="text-zinc-500">Receiver provider</dt>
+                <dd
+                  id={"cobbler-handoff-receiver-#{handoff.sequence}"}
+                  class="font-medium text-zinc-900"
+                >
+                  {handoff.receiver}
+                </dd>
+                <dt class="text-zinc-500">Reason</dt>
+                <dd class="font-medium text-zinc-900">{handoff.reason}</dd>
+                <dt class="text-zinc-500">Next action</dt>
+                <dd class="font-medium text-zinc-900">{handoff.next_action}</dd>
+                <dt class="text-zinc-500">New run</dt>
+                <dd class="font-mono text-xs text-zinc-900">{handoff.run_id}</dd>
+                <dt class="text-zinc-500">Prior run</dt>
+                <dd class="font-mono text-xs text-zinc-900">{handoff.prior_run_id}</dd>
+                <dt class="text-zinc-500">Checkpoint</dt>
+                <dd class="font-mono text-xs text-zinc-900">{handoff.checkpoint_id}</dd>
+              </dl>
+              <p class="text-xs text-zinc-500">
+                Handoff targets a new run of this same goal; the goal rests in terminal handing_off.
+                Sequence {handoff.sequence}.
+              </p>
+            </div>
+          <% end %>
+        </div>
+      <% else %>
+        <div
+          id="cobbler-handoff-empty"
+          class="rounded-lg border border-dashed border-zinc-300 bg-white p-6"
+        >
+          <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
+            <.icon name="hero-arrow-right-circle" class="w-4 h-4 text-zinc-500" /> Handoff
+          </h3>
+          <p class="mt-2 text-sm text-zinc-500 italic">
+            No handoff has been recorded for this goal.
           </p>
         </div>
       <% end %>
