@@ -82,6 +82,9 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
   } do
     snapshot = eligible_snapshot!()
     wakeup = schedule_wake!(goal, run, "cmd-wake-fresh")
+    # P1 durable delivery: the setup grant enqueued exactly one dispatch job.
+    # The wake path itself must add none.
+    dispatch_jobs_before = dispatch_job_count()
 
     assert {:ok, summary} =
              Wakeups.perform_wakeup(wakeup.id,
@@ -104,8 +107,9 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
 
     # No checkpoint is written on the admit path ...
     assert Repo.aggregate(CheckpointRecord, :count, :id) == 0
-    # ... and dispatch stays behind the gate: nothing enqueued for effects.
-    assert Repo.aggregate(from(job in Job, where: job.queue == "dispatch"), :count, :id) == 0
+    # ... and the wake dispatch stays behind the gate: the wakeup enqueues no
+    # new effect jobs beyond the setup grant's durable delivery.
+    assert dispatch_job_count() == dispatch_jobs_before
   end
 
   test "refused snapshot expires the lease, checkpoints, and resleeps", %{
@@ -214,6 +218,10 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
     |> Shoestring.Trajectory.Task.changeset(%{"title" => "Wake task"})
     |> Ecto.Changeset.put_change(:goal_id, goal.id)
     |> Repo.insert!()
+  end
+
+  defp dispatch_job_count do
+    Repo.aggregate(from(job in Job, where: job.queue == "dispatch"), :count, :id)
   end
 
   defp grant_payload(snapshot_id, result, reason_code, opts \\ []) do

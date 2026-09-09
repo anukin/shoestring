@@ -2,7 +2,8 @@ defmodule Shoestring.Cobbler.LeaseGrantTest do
   @moduledoc """
   Hermetic DataCase tests for admission-wired lease issuance: an admitted
   claim issues a lease through the post-claim dispatcher hook (run row first,
-  then `lease.proposed → lease.granted → lease.active`), every non-admit
+  then `lease.proposed → lease.granted → lease.active`, then durable dispatch
+  delivery: dispatch record + Oban job, never a direct spawn), every non-admit
   outcome refuses with the decision reason, a nil admitted snapshot refuses
   fail-closed, and replay returns the existing grant without new rows.
 
@@ -90,9 +91,15 @@ defmodule Shoestring.Cobbler.LeaseGrantTest do
 
     assert lease_event_types(goal.id) == ["lease.proposed", "lease.granted", "lease.active"]
 
-    # Issuance never spawns or enqueues: the only run row is the inert
-    # requested intent, and Oban stays empty.
-    assert Repo.aggregate(Job, :count, :id) == 0
+    # Issuance never spawns directly: the grant is persisted first, then
+    # durable delivery is enqueued through the dispatch pipeline (dispatch
+    # record + exactly one Oban job). The run row stays `requested` until
+    # the Oban worker claims and delivers it.
+    assert Repo.aggregate(Job, :count, :id) == 1
+    assert leased.dispatch.status == "requested"
+    assert leased.dispatch.run_id == leased.run.id
+    assert leased.dispatch.goal_id == goal.id
+    assert leased.job.args["dispatch_id"] == leased.dispatch.dispatch_id
     assert Repo.get!(RunRecord, leased.run.id).status == "requested"
   end
 

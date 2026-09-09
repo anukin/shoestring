@@ -66,6 +66,31 @@ defmodule Shoestring.Harness.Dispatches do
     end
   end
 
+  @doc """
+  Durable dispatch delivery for an already-created run row.
+
+  Creates the `harness_dispatches` intent, the Oban delivery job, and the
+  `dispatch.requested` event for an existing `RunRecord` — the terminal step
+  of the gated Cobbler pipeline (claim → grant → dispatch), used after
+  `Shoestring.Cobbler.Leases.issue_for_claim/6` has persisted the run row and
+  the lease grant. Idempotent: when the dispatch row already exists, ensures
+  a live job is linked (repairing a missing job) without duplicating intent,
+  and the requested event re-appends under its stable idempotency key.
+
+  Never spawns an Elf and never performs the harness effect; the Oban
+  `DispatchWorker` delivers the effect after `prepare_for_effect/2` claims
+  it. Callers that start the supervising Elf directly must already hold the
+  gated claim (see `Shoestring.Cobbler.Dispatcher`).
+  """
+  @spec enqueue_for_run(RunRecord.t(), keyword()) ::
+          {:ok, DispatchRecord.t(), Job.t() | nil} | {:error, term()}
+  def enqueue_for_run(%RunRecord{} = run, opts \\ []) do
+    with {:ok, dispatch, job, _repaired?} <- ensure_delivery(run, opts),
+         :ok <- ensure_requested_event(dispatch, opts) do
+      {:ok, dispatch, job}
+    end
+  end
+
   defp create_run_and_delivery(request, identity, opts) do
     repo = Keyword.get(opts, :repo, Repo)
     now = now(opts)

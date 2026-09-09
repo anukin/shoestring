@@ -4,10 +4,26 @@ defmodule Shoestring.Cobbler.Dispatcher do
 
   The consumer reads `cobbler_commands` rows, re-validates the admission
   reference, confirms the exclusive claim is still live and owned by the
-  goal, and then dispatches — except dispatching stops at an explicit
-  execution-disabled boundary:
+  goal, and then dispatches through the durable dispatch pipeline:
 
-  ## Execution-disabled boundary
+  ## Claim + grant + dispatch pipeline (P1)
+
+  After claim and grant, work starts ONLY through
+  `Shoestring.Harness.Dispatches.enqueue_for_run/2` (dispatch record + Oban
+  job + `dispatch.requested` event), never a direct `Elves.start_run` — intent
+  (command + claim + run row + grant) is durable before any delivery exists.
+  The Oban `DispatchWorker` performs the effect after
+  `Dispatches.prepare_for_effect/2` claims it; the one-Elf invariant is the
+  SQLite-enforced exclusive claim (a second concurrent dispatch is refused by
+  the claim, visibly, with no second enforcement mechanism).
+
+  Opt-in lease issuance: pass `grant_lease: [...]` (see
+  `Shoestring.Cobbler.Leases.issue_for_claim/6`; requires `:task_id`) to
+  issue an execution lease on the validated-claim path and enqueue its
+  durable delivery. Without the option the consumer stops at the explicit
+  execution-disabled boundary below.
+
+  ## Execution-disabled boundary (no `grant_lease:`)
 
   Submitting, validating, and gating commands never spawns a process,
   enqueues a job, or starts an Elf. A command that is fully validated
@@ -37,6 +53,7 @@ defmodule Shoestring.Cobbler.Dispatcher do
 
   alias Shoestring.Cobbler.{Command, Commands, Leases}
   alias Shoestring.Cobbler.CommandRecord
+  alias Shoestring.Harness.Dispatches
   alias Shoestring.Repo
 
   @type gate_result ::
@@ -58,7 +75,9 @@ defmodule Shoestring.Cobbler.Dispatcher do
                required(:grant_id) => Ecto.UUID.t(),
                required(:events) => [Shoestring.Trajectory.TrajectoryEvent.t()],
                required(:claim_id) => Ecto.UUID.t(),
-               required(:admission_event_id) => Ecto.UUID.t()
+               required(:admission_event_id) => Ecto.UUID.t(),
+               required(:dispatch) => Shoestring.Harness.DispatchRecord.t() | nil,
+               required(:job) => Oban.Job.t() | nil
              }}
           | {:error, term()}
 
@@ -66,7 +85,14 @@ defmodule Shoestring.Cobbler.Dispatcher do
   Submits a command (performing the exclusive claim atomically in the store)
   and gates its dispatch.
 
-  - `resolved` + `claimed` → `{:error, {:execution_disabled, detail}}`.
+  - `resolved` + `claimed` with `grant_lease:` → `{:ok, %{disposition:
+    :leased, ...}}`: the grant is persisted first (WP C), then durable
+    delivery is enqueued through `Dispatches.enqueue_for_run/2` (dispatch
+    record + Oban job + `dispatch.requested`), never a direct
+    `Elves.start_run`. Replays (`lease_outcome: :replayed`) create zero new
+    rows and carry `dispatch: nil, job: nil`.
+  - `resolved` + `claimed` without `grant_lease:` → `{:error,
+    {:execution_disabled, detail}}`.
   - `needs_user` → `{:ok, %{disposition: :awaiting_operator, ...}}`; the
     command stays inert until an operator responds.
   - `rejected` → `{:ok, %{disposition: :command_rejected, ...}}`.
@@ -180,8 +206,12 @@ defmodule Shoestring.Cobbler.Dispatcher do
 
   # Without `grant_lease:` opts the validated claim stops at the explicit
   # execution-disabled boundary, exactly as before. With the option, issuance
-  # delegates to `Shoestring.Cobbler.Leases.issue_for_claim/6`; this private
-  # hook adds no evaluation or effects of its own.
+  # delegates to `Shoestring.Cobbler.Leases.issue_for_claim/6` (persisting
+  # the run row and the grant first), and the granted run is then delivered
+  # through the durable dispatch pipeline (`Dispatches.enqueue_for_run/2`:
+  # dispatch record + Oban job + `dispatch.requested`), never a direct
+  # `Elves.start_run` — intent before dispatch. This private hook adds no
+  # evaluation or effects of its own.
   defp maybe_grant_lease(row, command, claim, outcome, opts) do
     case Keyword.fetch(opts, :grant_lease) do
       :error ->
@@ -197,7 +227,39 @@ defmodule Shoestring.Cobbler.Dispatcher do
           }}}
 
       {:ok, lease_opts} when is_list(lease_opts) ->
-        Leases.issue_for_claim(row.goal_id, row, command, claim, outcome, lease_opts)
+        with {:ok, leased} <-
+               Leases.issue_for_claim(row.goal_id, row, command, claim, outcome, lease_opts) do
+          dispatch_granted(leased, opts)
+        end
+    end
+  end
+
+  # Enqueues durable delivery for a freshly granted run. Replays carry
+  # `run: nil` (zero new rows by contract) and pass through with
+  # `dispatch: nil, job: nil` rather than inventing delivery.
+  defp dispatch_granted(%{run: nil} = leased, _opts) do
+    {:ok, Map.merge(leased, %{dispatch: nil, job: nil})}
+  end
+
+  defp dispatch_granted(
+         %{run: %Shoestring.Harness.RunRecord{} = run} = leased,
+         opts
+       ) do
+    dispatch_opts = Keyword.take(opts, [:repo, :clock, :writer_opts])
+
+    case Dispatches.enqueue_for_run(run, dispatch_opts) do
+      {:ok, dispatch, job} ->
+        {:ok, Map.merge(leased, %{dispatch: dispatch, job: job})}
+
+      {:error, reason} ->
+        {:error,
+         {:dispatch_failed,
+          %{
+            goal_id: run.goal_id,
+            run_id: run.id,
+            grant_id: leased.grant_id,
+            reason: reason
+          }}}
     end
   end
 
