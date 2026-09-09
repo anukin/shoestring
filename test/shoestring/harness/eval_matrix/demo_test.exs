@@ -1,18 +1,28 @@
 defmodule Shoestring.Harness.EvalMatrix.DemoTest do
   @moduledoc """
-  Hermetic scripted demo (T6): submit → admission evidence + lease grant →
-  partial work → injected exhaustion → deterministic checkpoint →
+  Hermetic scripted demo (T6, loop-closure I7): submit → admission evidence +
+  lease grant → partial work → injected exhaustion → deterministic checkpoint →
   restart-while-sleeping → wake-after-simulated-reset (fresh recheck, then a
-  provider switch) → continue sans first transcript → terminal projection.
+  provider switch) → continue sans first transcript → terminal projection
+  through resumed execution.
 
   Eight steps, two Fake adapter legs (first leg `sudden_quota_refusal`, second
-  leg `handoff_target`), two request logs, FixedClock. No provider CLI, no
-  network, no production code in this file.
+  leg `handoff_target`), two request logs, FixedClock. Steps 1–7 drive the
+  guarded dispatch pipeline (I1), the lease loop (I2), the fallback checkpoint
+  (I3 writer), the admitted wake→dispatch (I4), and the intent-first
+  fresh-session handoff with composed prompt (I5). Step 8 drives leg B to
+  `run.completed` through a real supervised Elf bound to the handoff run via
+  the durable dispatch pipeline — the terminal arrives through the Elf's
+  production commit path (plus the I3 terminal checkpoint), never via a
+  hand-appended insert in this file. No provider CLI, no network, no
+  production code in this file.
 
-  Locking note (standing contract): on the base commit (`c3779f0`) with the
-  T6 files removed this file errors on the missing
-  `Shoestring.Test.EvalMatrixHelpers` driver — documentation, not a
-  behavior-change lock.
+  Locking note (standing contract): on the base commit (`cc116f4`) with the
+  I7 driver (`Shoestring.Test.EvalMatrixHelpers.drive_leg_to_terminal!/2`)
+  removed this file errors on the missing driver — documentation, not a
+  behavior-change lock. I7 ships no producer, so with the driver present these
+  tests document wired loop behavior honestly rather than locking a behavior
+  change.
   """
   use Shoestring.DataCase, async: false
 
@@ -21,6 +31,7 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
 
   alias Oban.Job
   alias Shoestring.Cobbler.{Dispatcher, Wakeups}
+  alias Shoestring.Elves
 
   alias Shoestring.Harness.{
     CheckpointFallback,
@@ -191,16 +202,77 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
     refute inspect(recorded.continuation) =~ @first_transcript_text
     assert recorded.prompt != @first_transcript_text
 
-    # Step 8 — terminal projection: the switched leg completes and every
-    # decision remains explainable from persisted inputs.
-    Eval.append_event!(goal.id, new_run.id, "run.starting", %{"run_id" => new_run.id})
+    # Step 8 — terminal projection through resumed execution: leg B runs to
+    # completion under a real supervised Elf bound to the handoff run through
+    # the durable dispatch pipeline. run.starting / run.running / run.completed
+    # arrive via the Elf's production commit path (plus the I3 terminal
+    # checkpoint) — no hand-appended terminal insert exists on this path.
+    leg_b_run = Repo.get!(RunRecord, new_run.id)
 
-    Eval.append_event!(goal.id, new_run.id, "run.running", %{
-      "run_id" => new_run.id,
-      "provider_session_id" => "fake-session-handoff-b"
-    })
+    assert {:ok, handoff_request} = Elves.request_from_run(leg_b_run)
 
-    Eval.append_event!(goal.id, new_run.id, "run.completed", %{"run_id" => new_run.id})
+    assert handoff_request.prompt ==
+             Continuation.compose_handoff_prompt(%{
+               checkpoint_id: continuation.checkpoint_id,
+               next_action: continuation.next_action,
+               decision_refs: continuation.decision_refs
+             })
+
+    refute handoff_request.prompt =~ @first_transcript_text
+
+    %{dispatch: dispatch_b, terminal: terminal} =
+      Eval.drive_leg_to_terminal!(leg_b_run, scenario: Scenario.handoff_target())
+
+    assert terminal.class == :completed
+
+    # No hand-appended events on the driven path: every leg-B lifecycle event
+    # carries a production actor (the eval-matrix actor appears nowhere for
+    # the handoff run), and the terminal bears the Elf's durable key.
+    leg_b_actors =
+      Repo.all(
+        from event in TrajectoryEvent,
+          where: event.goal_id == ^goal.id and event.run_id == ^new_run.id,
+          select: event.actor
+      )
+
+    refute "eval-matrix" in leg_b_actors
+    assert "elf" in leg_b_actors
+
+    assert Repo.one!(
+             from event in TrajectoryEvent,
+               where:
+                 event.goal_id == ^goal.id and event.run_id == ^new_run.id and
+                   event.type == "run.completed" and
+                   event.idempotency_key == ^"elf-terminal:#{dispatch_b.dispatch_id}"
+           )
+
+    # I3 terminal checkpoint: the Elf recorded repo-evidence checkpoint
+    # contents BEFORE the terminal commit through its production path.
+    completed_event =
+      Repo.one!(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^goal.id and event.run_id == ^new_run.id and
+              event.type == "run.completed",
+          order_by: [desc: event.sequence],
+          limit: 1
+      )
+
+    terminal_checkpoint =
+      Repo.one!(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^goal.id and event.run_id == ^new_run.id and
+              event.type == "checkpoint.created",
+          order_by: [asc: event.sequence],
+          limit: 1
+      )
+
+    assert terminal_checkpoint.sequence < completed_event.sequence
+
+    assert terminal_checkpoint.payload["extensions"]["shoestring.elf:checkpoint_kind"] ==
+             "terminal"
+
     assert {:ok, _} = Projector.project(goal.id, clock: Shoestring.Test.FixedClock)
 
     assert Repo.get!(RunRecord, new_run.id).status == "completed"

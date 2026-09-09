@@ -86,3 +86,81 @@ require explicit authorization naming the run budget (provider, scenario,
 and spend cap) before execution. Hermetic coverage is Fake-to-Fake only.
 Real-model semantic effects (as opposed to the deterministic
 fallback-template ablation recorded here) remain `UNVERIFIED`.
+
+---
+
+## 6. Loop-Closure Addendum — 2026-09-09 (`VERIFIED`, hermetic)
+
+Prior §§1–5 above are quoted unchanged from the T6 work package. This section
+records the I7 genuine loop-closure evals (branch `polly/iter5-i7-evals`,
+stacked on `cc116f4`): the demo and ablation legs were rewritten to execute
+through the real pipeline, and the milestone's three ablation arms were
+implemented. Tests + test support + these docs only; `lib/`, `priv/`,
+`shoestring_web/` templates, and Oban queues untouched (`REPO-INSPECTION`).
+
+### 6.1 What changed (P1–P5 ledger)
+
+- **P1 — real resumed execution.** `demo_test.exs` step 8 and every
+  `ablation_test.exs` leg-B terminal now drive a real supervised Elf bound to
+  the handoff run via `Dispatches.enqueue_for_run/1` (dispatch record + Oban
+  job + stable `dispatch.requested` intent) and `Elves.start_elf/3` with the
+  scripted Fake leg + a trivial local command
+  (`test/support/eval_matrix_helpers.ex: drive_leg_to_terminal!/2`). The
+  `run.starting` / `run.running` / `run.completed` events arrive via the
+  Elf's production commit path together with the I3 terminal checkpoint.
+  Every `Eval.append_event!` terminal insert on the driven path was removed;
+  the tests additionally assert the `eval-matrix` actor appears nowhere on
+  the driven runs and the terminal bears the Elf's durable
+  `elf-terminal:<dispatch_id>` key. Setup history seeding (admission,
+  capacity, lease events; leg-A suspend path) is retained and labeled as
+  such.
+- **P2 — three milestone arms.** `ablation_test.exs` drives worktree-only,
+  naive-summary, and trajectory-projection inputs on one scripted fixture
+  task (`fixture_leg_scenario/0`: relevant+irrelevant file inspection,
+  constraint + rejected-approach record, partial implement, failing test,
+  scripted refusal), with arm-differing checkpoint `next_action` only. Scores
+  use the deterministic harness-synthesized normalization (terminal class,
+  composed-prompt bytes, content class, decision-ref count, genuine event
+  counts — no model judgment; see `ablation.md` §4).
+- **P3 — fallback arm retained.** The prior authored-vs-fallback comparison
+  is the fourth arm and reproduces: trajectory-projection vs fallback
+  normalized terminal state is byte-equal (`:erlang.term_to_binary/1`).
+- **P4 — acceptance re-assertion.** Every acceptance bullet below is
+  re-asserted against the genuine loop; **UNWIRED rows: none** — every row is
+  wired to a real producer seam and no producer change was needed.
+- **P5 — no production changes.** Tests + `test/support` + evidence only.
+
+### 6.2 Acceptance gate re-asserted against the genuine loop (`VERIFIED`)
+
+- Reserves never auto-violated (matrix row 1, unchanged + genuine).
+- Unknown/stale modes per policy (row 2, unchanged + genuine).
+- Every planned/failure stop yields a structural checkpoint: leg-A fallback
+  checkpoint via the `Checkpoints` writer (demo step 5, ablation arms) AND
+  the automatic I3 terminal checkpoint before every Elf-driven `run.completed`
+  (demo step 8, all four ablation arms).
+- Fallback performs no inference (row 4: pure template, empty log delta).
+- Wakeups + dispatches idempotent across restart (rows 5–6; demo steps 6–7
+  admitted wake with fresh-snapshot renewal).
+- Same-resume + fake-backed cross-handoff work (row 8; demo steps 7–8 and all
+  ablation arms: exactly 1 fresh `start`, 0 `resume`s per handoff log,
+  pointer-only continuations, `handoff.created`).
+- Semantic eval shows receiver behavior + handoff tax (ablation §4:
+  trajectory-projection totals 12 vs 9/9/9; per-arm prompt bytes 331 vs
+  244/948/445; 3 scripted leg-B turns and 1-start/0-resume delivery on every
+  arm).
+- Every decision explainable from persisted inputs (row 10; demo step 8
+  additionally asserts the leg-B prompt is byte-equal to the genuinely
+  composed handoff prompt and carries no transcript text).
+
+### 6.3 Lock vs documentation (standing contract)
+
+Fail-on-base verification (`VERIFIED`): with the I7 driver additions
+(`drive_leg_to_terminal!/2`, `fixture_leg_scenario/0`, `arm_next_action/1`,
+`score_arm/1`, `leg_tax/2` in `test/support/eval_matrix_helpers.ex`)
+removed, the demo and ablation files error on the missing driver module —
+the right reason (missing driver, not a behavioural difference). I7 ships no
+producer, so with the driver present these tests **document** wired loop
+behavior honestly rather than locking a behavior change. No row is a
+regression lock; stated honestly here rather than claimed as coverage.
+
+Gate: `mix precommit` (exact command and counts in the work report).
