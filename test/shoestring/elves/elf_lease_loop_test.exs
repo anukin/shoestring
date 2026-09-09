@@ -92,7 +92,10 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     assert count_types(goal.id, run_id, ["lease.renewal_due"]) == 1
     assert count_types(goal.id, run_id, ["lease.renewed"]) == 1
-    assert count_types(goal.id, run_id, ["checkpoint.created"]) == 0
+    assert reactive_checkpoint_count(goal.id, run_id) == 0
+    # I3 terminal checkpoint: every terminal appends exactly one repo-evidence
+    # checkpoint before the terminal event, even when the loop wrote none.
+    assert terminal_checkpoint_count(goal.id, run_id) == 1
 
     ordered = ordered_events(goal.id, run_id)
     assert sequence_before?(ordered, {:harness, "evt-out-3"}, {"lease.renewal_due", nil})
@@ -322,7 +325,8 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
     assert count_types(goal.id, run_id, ["lease.checkpoint_required"]) == 1
-    assert count_types(goal.id, run_id, ["checkpoint.created"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert terminal_checkpoint_count(goal.id, run_id) == 1
 
     ordered = ordered_events(goal.id, run_id)
 
@@ -392,7 +396,8 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
-    assert count_types(goal.id, run_id, ["checkpoint.created"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert terminal_checkpoint_count(goal.id, run_id) == 1
 
     ordered = ordered_events(goal.id, run_id)
 
@@ -460,7 +465,8 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
     assert count_types(goal.id, run_id, ["lease.checkpoint_required"]) == 1
-    assert count_types(goal.id, run_id, ["checkpoint.created"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert terminal_checkpoint_count(goal.id, run_id) == 1
 
     ordered = ordered_events(goal.id, run_id)
 
@@ -490,7 +496,10 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     assert count_types(goal.id, run_id, ["lease.renewed"]) == 0
     assert count_types(goal.id, run_id, ["lease.expired"]) == 0
     assert count_types(goal.id, run_id, ["lease.checkpoint_required"]) == 0
-    assert count_types(goal.id, run_id, ["checkpoint.created"]) == 0
+    assert reactive_checkpoint_count(goal.id, run_id) == 0
+    # I3 terminal checkpoint: every terminal appends exactly one repo-evidence
+    # checkpoint before the terminal event, even when the loop wrote none.
+    assert terminal_checkpoint_count(goal.id, run_id) == 1
     assert ElvesHelpers.terminal_event(goal.id, run_id).type == "run.completed"
   end
 
@@ -541,7 +550,10 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     assert count_types(goal.id, run_id, ["lease.renewal_due"]) == 0
     assert count_types(goal.id, run_id, ["lease.renewed"]) == 0
     assert count_types(goal.id, run_id, ["lease.expired"]) == 0
-    assert count_types(goal.id, run_id, ["checkpoint.created"]) == 0
+    assert reactive_checkpoint_count(goal.id, run_id) == 0
+    # I3 terminal checkpoint: every terminal appends exactly one repo-evidence
+    # checkpoint before the terminal event, even when the loop wrote none.
+    assert terminal_checkpoint_count(goal.id, run_id) == 1
     assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status == "active"
   end
 
@@ -712,6 +724,33 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
   defp count_types(goal_id, run_id, types) do
     ElvesHelpers.count_events(goal_id, run_id, types)
+  end
+
+  # I2 loop checkpoints vs I3 terminal checkpoints: the reactive path carries
+  # no terminal-kind extension; the terminal path always does, so the two
+  # counts partition `checkpoint.created` exactly.
+  defp reactive_checkpoint_count(goal_id, run_id) do
+    checkpoint_events(goal_id, run_id)
+    |> Enum.count(fn event ->
+      event.payload["extensions"]["shoestring.elf:checkpoint_kind"] != "terminal"
+    end)
+  end
+
+  defp terminal_checkpoint_count(goal_id, run_id) do
+    checkpoint_events(goal_id, run_id)
+    |> Enum.count(fn event ->
+      event.payload["extensions"]["shoestring.elf:checkpoint_kind"] == "terminal"
+    end)
+  end
+
+  defp checkpoint_events(goal_id, run_id) do
+    Repo.all(
+      from event in TrajectoryEvent,
+        where:
+          event.goal_id == ^goal_id and event.run_id == ^run_id and
+            event.type == "checkpoint.created",
+        order_by: [asc: event.sequence]
+    )
   end
 
   defp ordered_events(goal_id, run_id) do
