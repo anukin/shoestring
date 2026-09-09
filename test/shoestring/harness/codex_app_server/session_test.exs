@@ -1,6 +1,7 @@
 defmodule Shoestring.Harness.CodexAppServer.SessionTest do
   use ExUnit.Case, async: true
 
+  alias Shoestring.Elves.PortRunner
   alias Shoestring.Harness.{CodexAppServer, Error, RunIdentity, RunRequest}
   alias Shoestring.Harness.CodexAppServer.Session
 
@@ -41,7 +42,11 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       GenServer.call(pid, {:send_frame, frame})
     end
 
-    def os_pid(_pid), do: 88888
+    def os_pid(pid) do
+      GenServer.call(pid, :os_pid)
+    catch
+      :exit, _ -> 88888
+    end
 
     @impl GenServer
     def init(opts) do
@@ -50,6 +55,7 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       canned_thread_id = Keyword.get(opts, :thread_id, "01950000-0000-7000-8000-000000000099")
       canned_turn_id = Keyword.get(opts, :turn_id, "01950000-0000-7000-8000-000000000088")
       mode = Keyword.get(opts, :mode, :normal)
+      os_pid_override = Keyword.get(opts, :os_pid_override)
 
       if owner && is_pid(owner) do
         send(owner, {:codex_transport_connected, self()})
@@ -65,11 +71,22 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
          sent_frames: [],
          canned_thread_id: canned_thread_id,
          canned_turn_id: canned_turn_id,
-         mode: mode
+         mode: mode,
+         os_pid_override: os_pid_override
        }}
     end
 
     def close(pid), do: GenServer.stop(pid, :normal)
+
+    @impl GenServer
+    def handle_call(:os_pid, _from, %{os_pid_override: os_pid} = state)
+        when is_integer(os_pid) do
+      {:reply, os_pid, state}
+    end
+
+    def handle_call(:os_pid, _from, state) do
+      {:reply, 88888, state}
+    end
 
     @impl GenServer
     def handle_call({:send_frame, frame}, _from, state) do
@@ -352,6 +369,67 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
                })
 
       assert resumed_identity.provider_session_id == real_thread_id
+    end
+
+    test "elf-owned process group is not reaped on turn/completed" do
+      # Regression lock for the iter5 Elf flake: with process_owner: :adapter
+      # the Elf adopts the transport's process group AFTER the handshake and
+      # reaps it AFTER the verdict. A Session self-reap on turn/completed
+      # kills the transport between the Elf's identity await and its
+      # group-leader verify, failing launch as `group_leader_unverifiable`
+      # under scheduler pressure. The stand-in below is a real OS process
+      # group (owned by this test) reported as the transport's os_pid.
+      test_pid = self()
+      req = make_test_run_request()
+
+      {:ok, runner} = PortRunner.spawn(["sleep", "30"])
+      on_exit(fn -> PortRunner.killpg_id(runner.pgid, "KILL") end)
+
+      {:ok, transport} =
+        start_supervised({ScriptedTransport, test_pid: test_pid, os_pid_override: runner.pgid})
+
+      session =
+        start_supervised!(
+          {Session,
+           run_request: req,
+           transport_pid: transport,
+           transport: ScriptedTransport,
+           elf_owned_process_group: true,
+           owner: test_pid}
+        )
+
+      :sys.replace_state(transport, fn state -> %{state | owner: session} end)
+      send(session, {:codex_transport_connected, transport})
+
+      {:ok, identity} = Session.await_run_identity(session, 5_000)
+      assert identity.process_id == to_string(runner.pgid)
+
+      send(
+        session,
+        {:codex_transport_frame, transport,
+         Jason.encode!(%{
+           "method" => "turn/completed",
+           "params" => %{
+             "turn" => %{
+               "id" => "01950000-0000-7000-8000-000000000088",
+               "status" => "completed"
+             }
+           }
+         })}
+      )
+
+      # GenServer.call barrier: the frame was fully handled before this returns.
+      _ = :sys.get_state(session)
+      assert {:ok, status} = Session.status(session)
+      assert status.status == :completed
+
+      # Required evidence present...
+      assert {:ok, events} = Session.stream_events(session)
+      assert Enum.any?(events, &(&1.kind == :result and &1.result.status == "completed"))
+
+      # ...and the Elf-owned group was NOT reaped.
+      assert PortRunner.alive_id?(runner.pgid)
+      assert :ok = PortRunner.verify_group_leader(runner.pgid)
     end
   end
 

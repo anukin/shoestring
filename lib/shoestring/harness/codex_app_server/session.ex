@@ -50,7 +50,12 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     :handshake_timeout_ms,
     :handshake_timer,
     :auto_handshake,
-    :identity_waiters
+    :identity_waiters,
+    # When true, a supervising Elf owns the OS process group (Elf
+    # `process_owner: :adapter`): it adopts the group after the handshake and
+    # reaps it after the verdict, so this session must not tear the group
+    # down on its own success path first.
+    :elf_owned_process_group
   ]
 
   # --- Public API ---
@@ -143,6 +148,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     max_frame_size = Keyword.get(opts, :max_frame_size, @default_max_frame_size)
     handshake_timeout_ms = Keyword.get(opts, :handshake_timeout_ms, @default_handshake_timeout_ms)
     auto_handshake = Keyword.get(opts, :auto_handshake, true)
+    elf_owned_process_group = Keyword.get(opts, :elf_owned_process_group, false)
 
     state = %__MODULE__{
       run_id: run_id,
@@ -169,7 +175,8 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       handshake_timeout_ms: handshake_timeout_ms,
       handshake_timer: nil,
       auto_handshake: auto_handshake,
-      identity_waiters: []
+      identity_waiters: [],
+      elf_owned_process_group: elf_owned_process_group
     }
 
     {:ok, state, {:continue, :init_transport}}
@@ -670,7 +677,17 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     # Once turn/completed arrives, this Elf execution turn is finished. Because this session
     # oversees a single turn, we reap any background child processes and terminate the app-server
     # transport OS process to ensure clean teardown without lingering resources.
-    reap_descendants(state)
+    #
+    # Exception: when a supervising Elf owns the process group
+    # (`elf_owned_process_group: true`), teardown is the Elf's job — it adopts
+    # the group after the handshake and killpg-reaps it after the verdict
+    # lands. Reaping here would kill the transport between the Elf's identity
+    # await and its group-leader verify, failing launch as
+    # `group_leader_unverifiable` under scheduler pressure. The turn outcome is
+    # already buffered above, so the Elf still observes the full evidence.
+    unless state.elf_owned_process_group do
+      reap_descendants(state)
+    end
 
     status =
       case turn_status do
