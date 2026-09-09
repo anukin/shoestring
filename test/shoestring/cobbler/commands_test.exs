@@ -404,14 +404,17 @@ defmodule Shoestring.Cobbler.CommandsTest do
       contender: contender
     } do
       assert {:ok, %{command: row, outcome: :recorded, events: events}} =
-               Commands.respond(goal.id, contender.command_id, %{"resolution" => "abandon"},
+               Commands.respond(
+                 goal.id,
+                 contender.command_id,
+                 %{"resolution" => "abandon", "confirmed_by" => "Ada Operator"},
                  now: @now
                )
 
       assert row.status == "resolved"
       assert row.result["kind"] == "abandoned"
       assert row.result["reason"] == "claim_held"
-      assert row.response == %{"resolution" => "abandon"}
+      assert row.response == %{"resolution" => "abandon", "confirmed_by" => "Ada Operator"}
       assert Enum.map(events, & &1.type) == ["cobbler.command.resolved"]
       assert Commands.pending(goal.id, []) == []
 
@@ -421,14 +424,20 @@ defmodule Shoestring.Cobbler.CommandsTest do
 
     test "an identical response replays without events", %{goal: goal, contender: contender} do
       assert {:ok, %{outcome: :recorded}} =
-               Commands.respond(goal.id, contender.command_id, %{"resolution" => "abandon"},
+               Commands.respond(
+                 goal.id,
+                 contender.command_id,
+                 %{"resolution" => "abandon", "confirmed_by" => "Ada Operator"},
                  now: @now
                )
 
       events_before = cobbler_events(goal.id)
 
       assert {:ok, %{command: replayed, outcome: :replayed, events: []}} =
-               Commands.respond(goal.id, contender.command_id, %{"resolution" => "abandon"},
+               Commands.respond(
+                 goal.id,
+                 contender.command_id,
+                 %{"resolution" => "abandon", "confirmed_by" => "Ada Operator"},
                  now: @now
                )
 
@@ -438,14 +447,20 @@ defmodule Shoestring.Cobbler.CommandsTest do
 
     test "a conflicting response is rejected", %{goal: goal, contender: contender} do
       assert {:ok, %{outcome: :recorded}} =
-               Commands.respond(goal.id, contender.command_id, %{"resolution" => "abandon"},
+               Commands.respond(
+                 goal.id,
+                 contender.command_id,
+                 %{"resolution" => "abandon", "confirmed_by" => "Ada Operator"},
                  now: @now
                )
 
       events_before = cobbler_events(goal.id)
 
       assert {:error, {:response_conflict, conflict}} =
-               Commands.respond(goal.id, contender.command_id, %{"resolution" => "proceed"},
+               Commands.respond(
+                 goal.id,
+                 contender.command_id,
+                 %{"resolution" => "proceed", "confirmed_by" => "Ada Operator"},
                  now: @now
                )
 
@@ -461,7 +476,10 @@ defmodule Shoestring.Cobbler.CommandsTest do
       events_before = cobbler_events(goal.id)
 
       assert {:error, {:invalid_response, ["abandon"]}} =
-               Commands.respond(goal.id, contender.command_id, %{"resolution" => "escalate"},
+               Commands.respond(
+                 goal.id,
+                 contender.command_id,
+                 %{"resolution" => "escalate", "confirmed_by" => "Ada Operator"},
                  now: @now
                )
 
@@ -473,7 +491,10 @@ defmodule Shoestring.Cobbler.CommandsTest do
 
       # Recovery still works afterwards.
       assert {:ok, %{command: resolved}} =
-               Commands.respond(goal.id, contender.command_id, %{"resolution" => "abandon"},
+               Commands.respond(
+                 goal.id,
+                 contender.command_id,
+                 %{"resolution" => "abandon", "confirmed_by" => "Ada Operator"},
                  now: @now
                )
 
@@ -503,14 +524,22 @@ defmodule Shoestring.Cobbler.CommandsTest do
       assert claimed.status == "resolved"
 
       assert {:error, {:illegal_respond, error}} =
-               Commands.respond(fresh.id, claimed.command_id, %{"resolution" => "abandon"},
+               Commands.respond(
+                 fresh.id,
+                 claimed.command_id,
+                 %{"resolution" => "abandon", "confirmed_by" => "Ada Operator"},
                  now: @now
                )
 
       assert error["status"] == "resolved"
 
       assert {:error, :command_not_found} =
-               Commands.respond(goal.id, "cmd-unknown", %{"resolution" => "abandon"}, now: @now)
+               Commands.respond(
+                 goal.id,
+                 "cmd-unknown",
+                 %{"resolution" => "abandon", "confirmed_by" => "Ada Operator"},
+                 now: @now
+               )
     end
   end
 
@@ -570,7 +599,12 @@ defmodule Shoestring.Cobbler.CommandsTest do
         Commands.submit(goal.id, claim_command(admission, command_id: "cmd-rebuild-2"), now: @now)
 
       {:ok, _} =
-        Commands.respond(goal.id, pending.command_id, %{"resolution" => "abandon"}, now: @now)
+        Commands.respond(
+          goal.id,
+          pending.command_id,
+          %{"resolution" => "abandon", "confirmed_by" => "Ada Operator"},
+          now: @now
+        )
 
       release = release_command("rebuild release", command_id: "cmd-rebuild-3")
       {:ok, _} = Commands.submit(goal.id, release, now: @now)
@@ -583,7 +617,12 @@ defmodule Shoestring.Cobbler.CommandsTest do
       assert by_id["cmd-rebuild-1"]["status"] == "resolved"
       assert by_id["cmd-rebuild-1"]["result"]["kind"] == "claimed"
       assert by_id["cmd-rebuild-2"]["status"] == "resolved"
-      assert by_id["cmd-rebuild-2"]["response"] == %{"resolution" => "abandon"}
+
+      assert by_id["cmd-rebuild-2"]["response"] == %{
+               "resolution" => "abandon",
+               "confirmed_by" => "Ada Operator"
+             }
+
       assert by_id["cmd-rebuild-3"]["result"]["kind"] == "released"
       assert rebuilt.claim["status"] == "released"
       assert rebuilt.claim["claim_id"] == by_id["cmd-rebuild-1"]["result"]["claim_id"]

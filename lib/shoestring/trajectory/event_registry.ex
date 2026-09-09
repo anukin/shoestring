@@ -406,7 +406,11 @@ defmodule Shoestring.Trajectory.EventRegistry do
           :to_status,
           :result
         ],
-        optional: [:extensions],
+        # Strict response attribution rides v1 as purely additive optional
+        # keys (projector stays at version 1): pre-attribution events omit
+        # them and still validate; new writes mirror the digest-covered
+        # response attribution at the top level for schema visibility.
+        optional: [:confirmed_by, :confirmed_intent, :extensions],
         uuid_fields: [],
         types: %{
           response: :map,

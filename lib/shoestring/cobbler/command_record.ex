@@ -33,6 +33,12 @@ defmodule Shoestring.Cobbler.CommandRecord do
     field :result, :map
     field :response, :map
     field :response_digest, :string
+    # Strict response attribution (nullable per P3: pre-migration rows stay
+    # nil and still rebuild). New responses persist the validated
+    # confirmed_by identity (+ the confirmed intent where carried) here and
+    # inside the digest-covered response map.
+    field :confirmed_by, :string
+    field :confirmed_intent, :string
 
     belongs_to :goal, Shoestring.Trajectory.Goal
 
@@ -77,19 +83,61 @@ defmodule Shoestring.Cobbler.CommandRecord do
   end
 
   @doc "Applies a validated user response that resolves a needs_user command."
-  @spec response_changeset(t(), map(), String.t(), String.t(), map(), DateTime.t()) ::
+  @spec response_changeset(t(), map(), String.t(), String.t(), map(), DateTime.t(), map()) ::
           Ecto.Changeset.t()
-  def response_changeset(%__MODULE__{} = record, response, response_digest, status, result, now) do
+  def response_changeset(
+        %__MODULE__{} = record,
+        response,
+        response_digest,
+        status,
+        result,
+        now,
+        attribution \\ %{}
+      ) do
     record
     |> cast(%{}, [])
     |> put_change(:response, response)
     |> put_change(:response_digest, response_digest)
     |> put_change(:status, status)
     |> put_change(:result, result)
+    |> put_change(:confirmed_by, attribution_value(attribution, response, :confirmed_by))
+    |> put_change(:confirmed_intent, attribution_value(attribution, response, :confirmed_intent))
     |> put_change(:updated_at, now)
     |> foreign_key_constraint(:goal_id)
     |> check_constraint(:status, name: "cobbler_commands_status_valid")
     |> check_constraint(:response_digest, name: "cobbler_commands_response_digest_pair")
+  end
+
+  # Attribution is validated fail-closed in Commands.respond/4 before any
+  # write; the changeset only persists it. Prefer the explicit attribution
+  # map, falling back to the digest-covered response map so legacy callers
+  # that embed attribution in the response still persist it.
+  defp attribution_value(attribution, response, :confirmed_by) do
+    fetch_attribution(attribution, response, [:confirmed_by, "confirmed_by"])
+  end
+
+  defp attribution_value(attribution, response, :confirmed_intent) do
+    fetch_attribution(attribution, response, [
+      :confirmed_intent,
+      "confirmed_intent",
+      :intent,
+      "intent"
+    ])
+  end
+
+  defp fetch_attribution(attribution, response, keys) do
+    Enum.find_value(keys, fn key ->
+      case attribution do
+        %{^key => value} when is_binary(value) -> value
+        _ -> nil
+      end
+    end) ||
+      Enum.find_value(keys, fn key ->
+        case response do
+          %{^key => value} when is_binary(value) -> value
+          _ -> nil
+        end
+      end)
   end
 
   @type t :: %__MODULE__{}

@@ -17,7 +17,8 @@ defmodule Shoestring.Cobbler.TaskClaimRaceTest do
 
   @migrations [
     {20_260_830_012_112, Shoestring.Repo.Migrations.CreateTrajectoryFoundation},
-    {20_260_907_234_724, Shoestring.Repo.Migrations.AddCobblerCommands}
+    {20_260_907_234_724, Shoestring.Repo.Migrations.AddCobblerCommands},
+    {20_260_909_035_800, Shoestring.Repo.Migrations.AddResponseAttributionToCobblerCommands}
   ]
 
   @now ~U[2026-09-07 12:00:00.000000Z]
