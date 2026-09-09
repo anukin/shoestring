@@ -18,11 +18,11 @@
               id="manual-mode-badge"
               class="rounded bg-amber-200/80 px-2 py-0.5 text-xs font-semibold text-amber-900"
             >
-              Not Cobbler Routing
+              Cobbler Claim-Gated
             </span>
           </div>
           <p class="text-xs text-amber-800 mt-0.5">
-            Direct manual run with explicit bounded leases. Automatic provider admission and Cobbler routing are not active.
+            Direct manual run with explicit bounded leases. Submits a Cobbler claim command and dispatches only while holding the exclusive execution claim.
           </p>
         </div>
       </div>
@@ -34,6 +34,35 @@
         Provision an isolated worktree and launch one bounded external harness run.
       </p>
     </div>
+
+    <%= if @claim_held do %>
+      <div
+        id="claim-held-panel"
+        class="rounded-lg border border-red-300 bg-red-50 p-5 shadow-sm"
+      >
+        <div class="flex items-center gap-3">
+          <span class="inline-flex items-center justify-center p-2 rounded-md bg-red-200 text-red-900">
+            <.icon name="hero-no-symbol" class="w-5 h-5" />
+          </span>
+          <div>
+            <h2 class="text-base font-bold text-red-950 tracking-wide uppercase">
+              Execution Claim Held — Run Not Started
+            </h2>
+            <p class="text-xs text-red-800 mt-0.5">
+              Another run holds the exclusive execution claim (reason: {@claim_held.reason}).
+              Confirm or release the claim in the Cobbler dashboard, then retry.
+            </p>
+            <.link
+              navigate={~p"/cobbler/goals/#{@claim_held.goal_id}"}
+              id="claim-held-dashboard-link"
+              class="text-xs text-red-700 hover:text-red-900 underline font-medium"
+            >
+              Open Cobbler goal dashboard →
+            </.link>
+          </div>
+        </div>
+      </div>
+    <% end %>
 
     <.form
       for={@form}
@@ -194,6 +223,39 @@
           <p class="text-xs text-zinc-500 mt-1">
             Preset harness behavior for hermetic runs.
           </p>
+        </div>
+      </div>
+
+      <%!-- Section 5: Expert/test escape hatch (explicit bypass, always logged) --%>
+      <div class="rounded-lg border border-red-200 bg-red-50/50 p-6 space-y-4">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-red-800">
+          5. Expert/Test Escape Hatch (Optional)
+        </h3>
+        <p class="text-xs text-red-700">
+          Bypasses the Cobbler claim and starts the run directly. The bypass is logged as an
+          auditable admission event and requires attribution. Leave unchecked for the normal
+          claim-gated path.
+        </p>
+
+        <div>
+          <.input
+            field={@form[:expert_bypass]}
+            id="run-expert-bypass"
+            type="checkbox"
+            label="Bypass Cobbler claim (expert/test only, logged)"
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-zinc-700">
+            Confirmed by (required for bypass)
+          </label>
+          <.input
+            field={@form[:confirmed_by]}
+            id="run-confirmed-by"
+            type="text"
+            placeholder="operator identity for the bypass audit event"
+          />
         </div>
       </div>
 

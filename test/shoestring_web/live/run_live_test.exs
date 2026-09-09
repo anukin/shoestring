@@ -60,7 +60,7 @@ defmodule ShoestringWeb.RunLiveTest do
 
       assert has_element?(view, "#manual-execution-banner")
       assert html =~ "MANUAL EXECUTION"
-      assert html =~ "Not Cobbler Routing"
+      assert html =~ "Cobbler Claim-Gated"
 
       # Verify required form fields
       assert has_element?(view, "#manual-run-form")

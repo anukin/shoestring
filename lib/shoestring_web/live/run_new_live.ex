@@ -1,10 +1,13 @@
 defmodule ShoestringWeb.RunNewLive do
   use ShoestringWeb, :live_view
 
+  alias Shoestring.Cobbler
   alias Shoestring.Elves
+  alias Shoestring.Harness.Dispatches
   alias Shoestring.Harness.RunRequest
   alias Shoestring.Repo
   alias Shoestring.State
+  alias Shoestring.Trajectory
   alias Shoestring.Trajectory.{Goal, Task}
   alias Shoestring.Worktrees
   require Logger
@@ -35,7 +38,8 @@ defmodule ShoestringWeb.RunNewLive do
      socket
      |> assign(:page_title, "New Manual Run")
      |> assign(:form, to_form(@default_params, as: :run))
-     |> assign(:form_errors, %{})}
+     |> assign(:form_errors, %{})
+     |> assign(:claim_held, nil)}
   end
 
   @impl true
@@ -73,6 +77,15 @@ defmodule ShoestringWeb.RunNewLive do
         {:noreply,
          socket
          |> put_flash(:error, "Source repository path is required.")
+         |> assign(:form, to_form(run_params, as: :run))}
+
+      expert_bypass?(run_params) and String.trim(run_params["confirmed_by"] || "") == "" ->
+        {:noreply,
+         socket
+         |> put_flash(
+           :error,
+           "Expert bypass requires attribution: fill in Confirmed by before submitting."
+         )
          |> assign(:form, to_form(run_params, as: :run))}
 
       true ->
@@ -123,6 +136,19 @@ defmodule ShoestringWeb.RunNewLive do
     end
   end
 
+  # Manual runs are Cobbler commands, not direct database mutation (WP A):
+  # the normal path records an operator-confirmed admission decision, submits
+  # a `task.claim` command (exclusive global claim), enqueues gated dispatch
+  # (`require_cobbler_command: true`), and only then starts the supervising
+  # Elf for the already-persisted intent. Without a live owned claim nothing
+  # starts: the claim-held panel is surfaced instead.
+  #
+  # The expert/test escape hatch (`expert_bypass` + `confirmed_by`) keeps the
+  # legacy direct `Elves.start_run`, but its use is logged as a
+  # `require_confirmation` admission event first — never silent.
+  @claim_intent "manual_execution"
+  @claim_scope "account:manual"
+
   defp launch_run(run_params, worktree, run_id, socket) do
     goal_id = Ecto.UUID.generate()
     task_id = Ecto.UUID.generate()
@@ -138,7 +164,7 @@ defmodule ShoestringWeb.RunNewLive do
       |> Ecto.Changeset.put_change(:owner_id, owner_id)
       |> Repo.insert!()
 
-    _task =
+    task =
       %Task{id: task_id}
       |> Task.changeset(%{
         "title" => "Task for #{String.slice(run_id, 0, 8)}",
@@ -156,11 +182,39 @@ defmodule ShoestringWeb.RunNewLive do
     lease_seconds =
       parse_bounded_integer(run_params["lease_seconds"], 60, @lease_min, @lease_max)
 
+    bounds = %{
+      timeout_seconds: timeout_seconds,
+      max_events: max_events,
+      lease_seconds: lease_seconds
+    }
+
+    provider = run_params["provider"] || "fake"
+    candidate = candidate_for(provider)
+
+    extensions = %{
+      "shoestring.manual:lease_bounded" => true,
+      "shoestring.manual:timeout_seconds" => timeout_seconds,
+      "shoestring.manual:max_events" => max_events,
+      "shoestring.manual:lease_seconds" => lease_seconds,
+      "shoestring.manual:repo_path" => worktree.repo_path,
+      "shoestring.manual:base_revision" => worktree.base_commit
+    }
+
+    extensions =
+      if expert_bypass?(run_params) do
+        Map.merge(extensions, %{
+          "shoestring.manual:expert_bypass" => true,
+          "shoestring.manual:confirmed_by" => String.trim(run_params["confirmed_by"] || "")
+        })
+      else
+        extensions
+      end
+
     {:ok, request} =
       RunRequest.new(%{
         version: 1,
         goal_id: goal.id,
-        task_id: task_id,
+        task_id: task.id,
         workspace_ref: worktree.workspace_ref,
         prompt: prompt,
         continuation: nil,
@@ -170,17 +224,8 @@ defmodule ShoestringWeb.RunNewLive do
         },
         requested_capabilities: [:cancel],
         dispatch_id: run_id,
-        extensions: %{
-          "shoestring.manual:lease_bounded" => true,
-          "shoestring.manual:timeout_seconds" => timeout_seconds,
-          "shoestring.manual:max_events" => max_events,
-          "shoestring.manual:lease_seconds" => lease_seconds,
-          "shoestring.manual:repo_path" => worktree.repo_path,
-          "shoestring.manual:base_revision" => worktree.base_commit
-        }
+        extensions: extensions
       })
-
-    provider = run_params["provider"] || "fake"
 
     {identity, adapter, command, adapter_opts, process_owner} =
       case provider do
@@ -210,24 +255,271 @@ defmodule ShoestringWeb.RunNewLive do
       max_events_per_run: max_events
     ]
 
-    case Elves.start_run(request, identity, elf_opts) do
-      {:ok, _pid} ->
-        {:noreply, push_navigate(socket, to: ~p"/runs/#{run_id}")}
+    if expert_bypass?(run_params) do
+      hatch_start_run(run_params, socket, goal, candidate, bounds, request, identity, elf_opts)
+    else
+      gated_start_run(socket, goal, candidate, bounds, request, identity, elf_opts, run_id)
+    end
+  end
 
-      {:ok, :already_running, _pid} ->
-        {:noreply, push_navigate(socket, to: ~p"/runs/#{run_id}")}
+  # Gated path: admission → claim → gated dispatch → Elf for persisted intent.
+  defp gated_start_run(socket, goal, candidate, bounds, request, identity, elf_opts, run_id) do
+    with {:ok, admission} <- append_manual_admission(goal, candidate, bounds),
+         {:ok, %{command: command}} <-
+           Cobbler.submit_command(goal.id, claim_attrs(candidate, admission, run_id)) do
+      case command.status do
+        "resolved" ->
+          gated_dispatch(socket, request, identity, elf_opts, run_id)
 
+        "needs_user" ->
+          hold = hold_details(command)
+          Logger.warning("Manual run refused: execution claim held (#{hold.reason})")
+
+          {:noreply,
+           socket
+           |> put_flash(
+             :error,
+             "Another run holds the execution claim. This run was not started; " <>
+               "confirm or release the claim in the Cobbler dashboard."
+           )
+           |> assign(:claim_held, hold)}
+
+        "rejected" ->
+          Logger.warning("Manual run claim rejected: #{inspect(command.result)}")
+
+          {:noreply,
+           socket
+           |> put_flash(:error, "Cobbler admission rejected this run. It was not started.")
+           |> assign(:form, to_form(socket.assigns.form.params, as: :run))}
+      end
+    else
       {:error, reason} ->
-        Logger.warning("Failed to start run: #{inspect(reason)}")
+        Logger.warning("Manual run admission/claim failed: #{inspect(reason)}")
+
+        {:noreply,
+         socket
+         |> put_flash(:error, "Cobbler admission failed. This run was not started.")
+         |> assign(:form, to_form(socket.assigns.form.params, as: :run))}
+    end
+  end
+
+  # The single durable entry for manual execution: gated enqueue refuses goals
+  # without a live owned claim instead of bypassing commands. `run_id:` keeps
+  # the run row on the worktree/dispatch identity the UI navigates to.
+  defp gated_dispatch(socket, request, identity, elf_opts, run_id) do
+    case Dispatches.enqueue(request, identity, require_cobbler_command: true, run_id: run_id) do
+      {:ok, dispatch, _job} ->
+        case Elves.start_elf(request, dispatch, elf_opts) do
+          {:ok, _pid} ->
+            {:noreply, push_navigate(socket, to: ~p"/runs/#{request.dispatch_id}")}
+
+          {:ok, :already_running, _pid} ->
+            {:noreply, push_navigate(socket, to: ~p"/runs/#{request.dispatch_id}")}
+
+          {:error, reason} ->
+            Logger.warning("Failed to start Elf for gated run: #{inspect(reason)}")
+
+            {:noreply,
+             socket
+             |> put_flash(
+               :error,
+               "Dispatch was recorded but the Elf failed to start. Check server logs."
+             )
+             |> assign(:form, to_form(socket.assigns.form.params, as: :run))}
+        end
+
+      {:error, {:no_claimed_command, detail}} ->
+        Logger.warning("Manual run dispatch refused without claim: #{inspect(detail)}")
 
         {:noreply,
          socket
          |> put_flash(
            :error,
-           "Failed to start run. Please retry; if the problem persists, check server logs."
+           "Cobbler claim lost before dispatch (#{detail.reason}). This run was not started."
          )
+         |> assign(
+           :claim_held,
+           %{
+             goal_id: request.goal_id,
+             command_id: nil,
+             reason: to_string(detail.reason),
+             holder_goal_id: Map.get(detail, :holder),
+             options: []
+           }
+         )}
+
+      {:error, reason} ->
+        Logger.warning("Failed to dispatch gated run: #{inspect(reason)}")
+
+        {:noreply,
+         socket
+         |> put_flash(
+           :error,
+           "Failed to dispatch run. Please retry; if the problem persists, check server logs."
+         )
+         |> assign(:form, to_form(socket.assigns.form.params, as: :run))}
+    end
+  end
+
+  # Expert/test escape hatch: direct start, allowed ONLY with explicit
+  # attribution, and logged as a `require_confirmation` admission event first.
+  defp hatch_start_run(
+         run_params,
+         socket,
+         goal,
+         candidate,
+         bounds,
+         request,
+         identity,
+         elf_opts
+       ) do
+    confirmed_by = String.trim(run_params["confirmed_by"] || "")
+
+    with {:ok, _event} <- append_bypass_admission(goal, candidate, bounds, confirmed_by) do
+      Logger.warning("Expert bypass manual run started by #{confirmed_by} for goal #{goal.id}")
+
+      case Elves.start_run(request, identity, elf_opts) do
+        {:ok, _pid} ->
+          {:noreply, push_navigate(socket, to: ~p"/runs/#{request.dispatch_id}")}
+
+        {:ok, :already_running, _pid} ->
+          {:noreply, push_navigate(socket, to: ~p"/runs/#{request.dispatch_id}")}
+
+        {:error, reason} ->
+          Logger.warning("Failed to start run: #{inspect(reason)}")
+
+          {:noreply,
+           socket
+           |> put_flash(
+             :error,
+             "Failed to start run. Please retry; if the problem persists, check server logs."
+           )
+           |> assign(:form, to_form(run_params, as: :run))}
+      end
+    else
+      {:error, reason} ->
+        Logger.warning("Expert bypass logging failed: #{inspect(reason)}")
+
+        {:noreply,
+         socket
+         |> put_flash(:error, "Bypass audit event failed. This run was not started.")
          |> assign(:form, to_form(run_params, as: :run))}
     end
+  end
+
+  defp expert_bypass?(run_params) do
+    run_params["expert_bypass"] in [true, "true", "on"]
+  end
+
+  defp candidate_for("codex"),
+    do: %{"provider_id" => "codex", "adapter_id" => "codex_app_server_stdio"}
+
+  defp candidate_for("claude"),
+    do: %{"provider_id" => "claude", "adapter_id" => "claude_headless_stream_json"}
+
+  defp candidate_for(_fake),
+    do: %{"provider_id" => "fake", "adapter_id" => "shoestring.harness.fake"}
+
+  defp claim_attrs(candidate, admission, run_id) do
+    %{
+      "type" => "task.claim",
+      "command_id" => "manual-claim-#{run_id}",
+      "payload" => %{
+        "intent" => @claim_intent,
+        "scope" => @claim_scope,
+        "candidate" => candidate,
+        "admission_event_id" => admission.id
+      }
+    }
+  end
+
+  defp append_manual_admission(goal, candidate, bounds) do
+    Trajectory.append(
+      goal.id,
+      %{
+        "type" => "admission.decided",
+        "schema_version" => 1,
+        "actor" => "operator",
+        "occurred_at" => DateTime.utc_now(),
+        "payload" =>
+          manual_admission_payload(
+            candidate,
+            bounds,
+            "admit",
+            "operator_confirmed_manual",
+            "Operator-confirmed manual bounded run; local timeout/max-events/lease bounds " <>
+              "apply, no automatic quota admission."
+          )
+      }
+    )
+  end
+
+  defp append_bypass_admission(goal, candidate, bounds, confirmed_by) do
+    Trajectory.append(
+      goal.id,
+      %{
+        "type" => "admission.decided",
+        "schema_version" => 1,
+        "actor" => "operator",
+        "occurred_at" => DateTime.utc_now(),
+        "payload" =>
+          manual_admission_payload(
+            candidate,
+            bounds,
+            "require_confirmation",
+            "operator_confirmed_expert_bypass",
+            "Expert/test escape hatch used by #{confirmed_by}: direct start without a " <>
+              "Cobbler claim. Auditable bypass, never silent."
+          )
+      }
+    )
+  end
+
+  defp manual_admission_payload(candidate, bounds, result, reason_code, explanation) do
+    %{
+      "decision_id" => Ecto.UUID.generate(),
+      "result" => result,
+      "reason_code" => reason_code,
+      "explanation" => explanation,
+      "requested_capability" => @claim_intent,
+      "candidate" =>
+        Map.merge(candidate, %{
+          "support_tier" => "manual",
+          "compatibility_state" => "compatible"
+        }),
+      "scope" => @claim_scope,
+      "observation" => %{
+        "snapshot_id" => nil,
+        "confidence" => "unknown",
+        "freshness" => "unknown",
+        "note" =>
+          "Manual execution: no capacity observation consulted; operator-confirmed local bounds apply."
+      },
+      "policy" => %{"version" => 1},
+      "proposed_bounds" => %{
+        "response_budget" => bounds.max_events,
+        "tool_budget" => 0,
+        "checkpoint_cadence" => 1,
+        "manual_timeout_seconds" => bounds.timeout_seconds,
+        "manual_max_events" => bounds.max_events,
+        "manual_lease_seconds" => bounds.lease_seconds
+      },
+      "reobservation_required" => false,
+      "evaluated_at" => DateTime.to_iso8601(DateTime.utc_now())
+    }
+  end
+
+  defp hold_details(command) do
+    result = command.result || %{}
+    active_claim = result["active_claim"] || %{}
+
+    %{
+      goal_id: command.goal_id,
+      command_id: command.command_id,
+      reason: result["reason"] || "claim_held",
+      holder_goal_id: active_claim["goal_id"],
+      options: result["options"] || []
+    }
   end
 
   defp create_temporary_fixture_repo do
