@@ -27,9 +27,18 @@ defmodule Shoestring.Cobbler.Wakeups do
   - `:admit` → renew (when a renewable lease exists) + resume
     (`GoalLifecycle` sleeping → evaluating → queued; lease
     `renewal_due → renewed` chained to the fresh snapshot; run
-    `suspended → starting` via `run.starting`; dispatch stays behind
-    `DispatchGate` — nothing is enqueued). Without a lease the goal still
-    reaches queued and waits for the claim flow.
+    `suspended → starting` via `run.starting`) + dispatch one continuation
+    through the durable `Dispatches.enqueue/3` pipeline (never direct
+    `Elves.start_run/3`). The continuation is a NEW run of the same
+    goal+task carrying the resumed run's workspace, prompt, policy, and
+    capabilities; its `dispatch_id` is the wakeup row id, so a crash
+    between enqueue and the `woken` mark re-performs into
+    `Runs.recover_existing_run/2` + `ensure_delivery/2` (one dispatch
+    record, one job). Enqueue passes `require_cobbler_command: true`, so
+    the live claim trajectory still authorizes the dispatch — an admit
+    without the claim fails closed and the intent stays due. Without a run
+    there is nothing to continue and dispatch stays `:gated`: the goal
+    still reaches queued and waits for the claim flow.
   - `:defer_until` → expire (+ `checkpoint_required`) + checkpoint contents
     (via the deterministic `CheckpointFallback` template and the
     `Checkpoints` writer) + resleep with the evaluation's new `wake_at`
@@ -70,10 +79,13 @@ defmodule Shoestring.Cobbler.Wakeups do
     CheckpointFallback,
     Checkpoints,
     Clock,
+    Dispatches,
     EventPayload,
     ExecutionLeaseRecord,
+    Fake,
     Projector,
-    RunRecord
+    RunRecord,
+    RunRequest
   }
 
   alias Shoestring.Repo
@@ -517,8 +529,9 @@ defmodule Shoestring.Cobbler.Wakeups do
   returning `{:ok, CapacitySnapshot.t()} | {:error, reason}`),
   `:occupancy` (default: derived from the live global claim), `:policy`,
   `:request`, `:candidate`, `:decision_event_id`, `:actor` (default
-  `"cobbler"`), `:writer_opts`, `:checkpoint_criteria`,
-  `:repository_revision`.
+  `"cobbler"`), `:identity` (dispatch identity for the admitted
+  continuation; default `Fake.identity/0`, mirroring `Leases`),
+  `:writer_opts`, `:checkpoint_criteria`, `:repository_revision`.
   """
   @spec perform_wakeup(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def perform_wakeup(wakeup_id, opts \\ []) do
@@ -768,6 +781,7 @@ defmodule Shoestring.Cobbler.Wakeups do
          {:ok, :queued} <- GoalLifecycle.apply_decision(:evaluating, :admit),
          {:ok, lease_state} <- renew_lease(repo, goal, lease, snapshot, opts),
          {:ok, run_state} <- resume_run(repo, goal, run, wakeup, now, opts),
+         {:ok, dispatch_state} <- dispatch_continuation(repo, goal, run, wakeup, opts),
          {:ok, _position} <- Projector.project(goal.id, clock: clock(opts)),
          {:ok, wakeup} <- mark_status(repo, wakeup, "woken", now) do
       {:ok,
@@ -779,7 +793,7 @@ defmodule Shoestring.Cobbler.Wakeups do
          decision_id: evaluation.decision_id,
          lease: lease_state,
          run: run_state,
-         dispatch: :gated
+         dispatch: dispatch_state
        }}
     end
   end
@@ -843,6 +857,87 @@ defmodule Shoestring.Cobbler.Wakeups do
 
   defp resume_run(_repo, _goal, %RunRecord{status: status}, _wakeup, _now, _opts),
     do: {:error, {:unexpected_run_state, status}}
+
+  # Admitted → dispatch → Elf chain (loop-closure I4, P2). The wake's resume
+  # decision is already on the trajectory (`run.starting` on the suspended
+  # run); the continuation work itself travels through the durable dispatch
+  # pipeline so `harness_dispatches` stays the effect truth and the Oban
+  # `dispatch`-queue job stays a mere delivery attempt:
+  #
+  #   wakeup row (due) → admit → `Dispatches.enqueue/3` (new continuation
+  #   run + dispatch record + dispatch job, `require_cobbler_command: true`)
+  #   → `DispatchWorker` claims the dispatch → Elf executes.
+  #
+  # The `dispatch_id` is the wakeup row id: deterministic across retries, so
+  # a crash between enqueue and the `woken` mark re-performs into the
+  # dispatch pipeline's own recovery (one dispatch record, one job), never
+  # into `Elves.start_run/3` directly. With no run there is nothing to
+  # continue and dispatch stays `:gated`.
+  defp dispatch_continuation(_repo, _goal, nil, _wakeup, _opts), do: {:ok, :gated}
+
+  defp dispatch_continuation(repo, _goal, %RunRecord{} = run, wakeup, opts) do
+    with {:ok, request} <- continuation_request(run, wakeup),
+         {:ok, dispatch, job} <- enqueue_continuation(request, repo, opts) do
+      {:ok,
+       %{
+         outcome: :dispatched,
+         dispatch_id: dispatch.dispatch_id,
+         run_id: dispatch.run_id,
+         job_id: job && job.id
+       }}
+    end
+  end
+
+  defp continuation_request(%RunRecord{} = run, wakeup) do
+    attrs = %{
+      version: run.request_version,
+      goal_id: run.goal_id,
+      task_id: run.task_id,
+      workspace_ref: run.workspace_ref,
+      prompt: run.prompt,
+      continuation: nil,
+      policy: run.policy || %{mode: "supervised"},
+      requested_capabilities: wake_capabilities(run),
+      dispatch_id: wakeup.id,
+      extensions: run.extensions || %{}
+    }
+
+    case RunRequest.new(attrs) do
+      {:ok, request} -> {:ok, request}
+      {:error, changeset} -> {:error, {:wakeup_dispatch_invalid, changeset}}
+    end
+  end
+
+  defp enqueue_continuation(request, repo, opts) do
+    dispatch_opts =
+      opts
+      |> Keyword.take([:clock, :writer_opts])
+      |> Keyword.put(:repo, repo)
+      |> Keyword.put(:require_cobbler_command, true)
+
+    identity = Keyword.get(opts, :identity, Fake.identity())
+
+    case Dispatches.enqueue(request, identity, dispatch_opts) do
+      {:ok, dispatch, job} -> {:ok, dispatch, job}
+      {:error, reason} -> {:error, {:wakeup_dispatch_failed, reason}}
+    end
+  end
+
+  # Twin of `Shoestring.Elves.resume_capabilities/1` (I5 owns that file; the
+  # copy stays local so this slice never edits Elf-owned code): stored
+  # string items back to capability atoms, dropping anything unrecognized.
+  defp wake_capabilities(%RunRecord{requested_capabilities: %{"items" => items}})
+       when is_list(items) do
+    Enum.flat_map(items, fn
+      "resume" -> [:resume]
+      "send" -> [:send]
+      "cancel" -> [:cancel]
+      "interactive" -> [:interactive]
+      _other -> []
+    end)
+  end
+
+  defp wake_capabilities(_run), do: []
 
   defp defer_branch(repo, wakeup, goal, run, lease, _snapshot, evaluation, now, opts) do
     with {:ok, wake_at} <- defer_wake_at(evaluation),

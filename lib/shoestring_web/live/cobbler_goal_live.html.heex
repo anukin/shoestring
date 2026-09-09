@@ -324,11 +324,10 @@
           </p>
         </div>
       <% end %>
-
-      <%!-- Sleep honesty --%>
+      <%!-- Sleep honesty + manual wake/recheck --%>
       <div
         id="cobbler-sleep-card"
-        class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-2"
+        class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4"
       >
         <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
           <.icon name="hero-moon" class="w-4 h-4 text-zinc-500" /> Deferred / Sleep State
@@ -340,14 +339,50 @@
             }>
               {to_string(@latest_decision.defer_until)}
             </time>.
-            Wake-up still requires an explicit recheck event; no timer wakes this goal.
+            Waking happens only through a durable wake intent: an Oban wakeup-queue
+            delivery for this goal's cobbler_wakeups row, which re-observes capacity
+            before acting. No timer wakes this goal.
           </p>
         <% else %>
           <p class="text-sm text-zinc-700">
-            No scheduled wake source is recorded for this goal. A sleeping goal wakes only on an
-            explicit recheck event; the wake producer lands in T3. No wake time is invented here.
+            No scheduled wake source is recorded for this goal. A sleeping goal wakes
+            only through a durable wake intent — an Oban wakeup-queue delivery for a
+            cobbler_wakeups row, scheduled from an admission deferral or an operator
+            recheck below. No wake time is invented here.
           </p>
         <% end %>
+        <%= if @pending_wakeup do %>
+          <p id="cobbler-pending-wake" class="text-sm text-zinc-700">
+            Next wake intent:
+            <time datetime={DateTime.to_iso8601(@pending_wakeup.wake_at)}>
+              {DateTime.to_iso8601(@pending_wakeup.wake_at)}
+            </time>
+            <span class="text-zinc-500">
+              ({@pending_wakeup.reason}, {@pending_wakeup.status})
+            </span>
+          </p>
+        <% end %>
+        <.form
+          for={@recheck_form}
+          id="cobbler-recheck-form"
+          phx-submit="request_recheck"
+          class="space-y-3 rounded-md border border-sky-200 bg-sky-50 p-4"
+        >
+          <.input
+            field={@recheck_form[:operator_identity]}
+            id="cobbler-recheck-operator"
+            type="text"
+            label="Operator identity (required for manual wake/recheck)"
+            autocomplete="off"
+          />
+          <button
+            type="submit"
+            id="cobbler-recheck-submit"
+            class="rounded-md bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-800"
+          >
+            Request wake recheck
+          </button>
+        </.form>
       </div>
 
       <%!-- Commands + confirm/respond forms --%>
