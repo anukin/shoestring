@@ -8,11 +8,14 @@ defmodule Shoestring.Cobbler.GoalLifecycleTest do
 
   alias Shoestring.Cobbler.GoalLifecycle
 
-  test "initial state is evaluating and only handing_off is terminal" do
+  test "initial state is evaluating and completed/failed/handing_off are terminal" do
     assert GoalLifecycle.initial() == :evaluating
     assert GoalLifecycle.terminal?(:handing_off)
+    assert GoalLifecycle.terminal?(:completed)
+    assert GoalLifecycle.terminal?(:failed)
+    refute GoalLifecycle.terminal?(:needs_user)
 
-    for state <- GoalLifecycle.states() -- [:handing_off] do
+    for state <- GoalLifecycle.states() -- [:handing_off, :completed, :failed] do
       refute GoalLifecycle.terminal?(state)
     end
   end
