@@ -83,10 +83,12 @@ defmodule Shoestring.Cobbler.WakeupProductionTest do
     assert summary.branch == :admitted
     assert summary.lifecycle == :queued
 
-    # Exactly one dispatch record keyed by the wakeup-derived dispatch id ...
-    # (asserted before touching the summary shape so a missing dispatch
-    # fails here for the behavioural reason, not on map access).
-    assert Repo.aggregate(DispatchRecord, :count, :dispatch_id) == 1
+    # Exactly one continuation dispatch record keyed by the wakeup-derived
+    # dispatch id (asserted before touching the summary shape so a missing
+    # dispatch fails here for the behavioural reason, not on map access).
+    # Total records are 2: the fixture's setup durable delivery (I1 entry
+    # path) plus this wake continuation.
+    assert Repo.aggregate(DispatchRecord, :count, :dispatch_id) == 2
 
     assert summary.dispatch.outcome == :dispatched
     assert summary.dispatch.dispatch_id == wakeup.id
@@ -102,8 +104,9 @@ defmodule Shoestring.Cobbler.WakeupProductionTest do
     assert continuation.task_id == run.task_id
     assert continuation.dispatch_id == wakeup.id
 
-    # ... and exactly one dispatch-queue delivery attempt.
-    assert dispatch_job_count() == 1
+    # ... and exactly one dispatch-queue delivery attempt for the wake
+    # continuation (plus the fixture setup delivery).
+    assert dispatch_job_count() == 2
 
     # The wake's own effects still hold: lease renewed, run resumed, row woken.
     assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "renewed"
@@ -122,8 +125,10 @@ defmodule Shoestring.Cobbler.WakeupProductionTest do
     assert {:ok, %{outcome: :already_woken, branch: :already_woken}} =
              Wakeups.perform_wakeup(wakeup.id, opts)
 
-    assert Repo.aggregate(DispatchRecord, :count, :dispatch_id) == 1
-    assert dispatch_job_count() == 1
+    # Double perform adds nothing: still exactly the fixture setup delivery
+    # plus the single wake continuation (2 records, 2 jobs).
+    assert Repo.aggregate(DispatchRecord, :count, :dispatch_id) == 2
+    assert dispatch_job_count() == 2
     assert Repo.get!(WakeupRecord, wakeup.id).status == "woken"
   end
 
@@ -137,10 +142,12 @@ defmodule Shoestring.Cobbler.WakeupProductionTest do
     assert :ok = WakeupWorker.perform(worker_job(wakeup))
 
     assert Repo.get!(WakeupRecord, wakeup.id).status == "woken"
-    assert Repo.aggregate(DispatchRecord, :count, :dispatch_id) == 1
+    # Fixture setup delivery plus the worker-driven continuation.
+    assert Repo.aggregate(DispatchRecord, :count, :dispatch_id) == 2
     assert %DispatchRecord{goal_id: goal_id} = Repo.get!(DispatchRecord, wakeup.id)
     assert goal_id == goal.id
-    assert dispatch_job_count() == 1
+    # Setup delivery job plus the worker-driven continuation job.
+    assert dispatch_job_count() == 2
   end
 
   test "admit with no run leaves dispatch gated" do
@@ -211,7 +218,8 @@ defmodule Shoestring.Cobbler.WakeupProductionTest do
     assert Repo.get!(WakeupRecord, wakeup.id).status == "woken"
     assert Repo.get!(RunRecord, run.id).status == "suspended"
     assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "checkpoint_required"
-    assert Repo.aggregate(DispatchRecord, :count, :dispatch_id) == 0
+    # Deferred path adds no dispatch: only the fixture setup delivery remains.
+    assert Repo.aggregate(DispatchRecord, :count, :dispatch_id) == 1
   end
 
   test "production observe reads the freshest ledger observation" do

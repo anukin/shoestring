@@ -294,6 +294,57 @@ defmodule Shoestring.Harness.Continuation do
 
   def handoff_payload(_params), do: {:error, {:invalid_handoff, :must_be_a_map}}
 
+  @handoff_prompt_max_chars 4_000
+
+  @doc "Maximum characters for a composed handoff prompt (transcript-free, bounded)."
+  @spec handoff_prompt_max_chars() :: 4_000
+  def handoff_prompt_max_chars, do: @handoff_prompt_max_chars
+
+  @doc """
+  Composes a bounded, transcript-free handoff prompt from a continuation.
+
+  Carries only the checkpoint pointer, `next_action`, decision refs, and a
+  constraints summary. Never includes raw transcript terms: only the three
+  continuation keys are read. Output is truncated to
+  `handoff_prompt_max_chars/0` characters.
+  """
+  @spec compose_handoff_prompt(map(), keyword()) :: String.t()
+  def compose_handoff_prompt(continuation, opts \\ []) when is_map(continuation) do
+    checkpoint_id =
+      continuation[:checkpoint_id] || continuation["checkpoint_id"] || "unknown"
+
+    next_action =
+      continuation[:next_action] || continuation["next_action"] || ""
+
+    refs =
+      continuation[:decision_refs] || continuation["decision_refs"] || []
+
+    constraints =
+      Keyword.get(
+        opts,
+        :constraints,
+        "supervised, fresh session; no prior transcript available"
+      )
+
+    refs_text =
+      case Enum.filter(List.wrap(refs), &is_binary/1) do
+        [] -> "none"
+        list -> Enum.join(list, ", ")
+      end
+
+    text =
+      "Continue from checkpoint #{checkpoint_id}. " <>
+        "Next action: #{next_action}. " <>
+        "Decision refs: #{refs_text}. " <>
+        "Constraints: #{constraints}."
+
+    if String.length(text) > @handoff_prompt_max_chars do
+      String.slice(text, 0, @handoff_prompt_max_chars)
+    else
+      text
+    end
+  end
+
   # -- Pure projection helpers --
 
   defp latest_first(a, b) do

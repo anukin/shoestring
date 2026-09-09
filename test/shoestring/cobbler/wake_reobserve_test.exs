@@ -84,6 +84,9 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
   } do
     snapshot = eligible_snapshot!()
     wakeup = schedule_wake!(goal, run, "cmd-wake-fresh")
+    # P1 durable delivery: the setup grant enqueued exactly one dispatch job.
+    # The wake path itself must add none.
+    dispatch_jobs_before = dispatch_job_count()
 
     assert {:ok, summary} =
              Wakeups.perform_wakeup(wakeup.id,
@@ -99,8 +102,10 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
 
     # Exactly one continuation dispatch through the durable pipeline
     # (asserted before the summary shape so a missing dispatch fails here
-    # for the behavioural reason, not on map access).
-    assert Repo.aggregate(Shoestring.Harness.DispatchRecord, :count, :dispatch_id) == 1
+    # for the behavioural reason, not on map access). Total dispatch
+    # records are 2: the setup grant's durable delivery (I1 entry path)
+    # plus this wake continuation.
+    assert Repo.aggregate(Shoestring.Harness.DispatchRecord, :count, :dispatch_id) == 2
 
     assert summary.dispatch.outcome == :dispatched
     assert summary.dispatch.dispatch_id == wakeup.id
@@ -128,7 +133,9 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
     assert continuation.task_id == run.task_id
     assert continuation.dispatch_id == wakeup.id
 
-    assert Repo.aggregate(from(job in Job, where: job.queue == "dispatch"), :count, :id) == 1
+    # Two dispatch-queue jobs: the setup grant's durable delivery plus the
+    # wake continuation asserted above.
+    assert Repo.aggregate(from(job in Job, where: job.queue == "dispatch"), :count, :id) == 2
   end
 
   test "refused snapshot expires the lease, checkpoints, and resleeps", %{
@@ -237,6 +244,10 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
     |> Shoestring.Trajectory.Task.changeset(%{"title" => "Wake task"})
     |> Ecto.Changeset.put_change(:goal_id, goal.id)
     |> Repo.insert!()
+  end
+
+  defp dispatch_job_count do
+    Repo.aggregate(from(job in Job, where: job.queue == "dispatch"), :count, :id)
   end
 
   defp grant_payload(snapshot_id, result, reason_code, opts \\ []) do

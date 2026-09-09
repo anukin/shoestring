@@ -99,7 +99,14 @@ defmodule Shoestring.Elves.Elf do
           progress_count: non_neg_integer(),
           provider_session_id: String.t() | nil,
           os_buffer: binary(),
-          output_overflowed?: boolean()
+          output_overflowed?: boolean(),
+          lease_bounds: Shoestring.Cobbler.LeaseBounds.t() | nil,
+          lease_grant_id: Ecto.UUID.t() | nil,
+          lease_deadline: DateTime.t() | nil,
+          lease_stop_requested?: boolean(),
+          lease_settled?: boolean(),
+          lease_checkpointed?: boolean(),
+          lease_checkpoint_id: Ecto.UUID.t() | nil
         }
 
   defstruct [
@@ -136,7 +143,14 @@ defmodule Shoestring.Elves.Elf do
     progress_count: 0,
     provider_session_id: nil,
     os_buffer: "",
-    output_overflowed?: false
+    output_overflowed?: false,
+    lease_bounds: nil,
+    lease_grant_id: nil,
+    lease_deadline: nil,
+    lease_stop_requested?: false,
+    lease_settled?: false,
+    lease_checkpointed?: false,
+    lease_checkpoint_id: nil
   ]
 
   @doc """
@@ -819,6 +833,14 @@ defmodule Shoestring.Elves.Elf do
         progress_count: state.progress_count + progress_increment(event.kind)
     }
 
+    # Lease loop (WP C, loop-closure I2): advances the run's execution-lease
+    # bounds from this normalized event, marks renewal-due at the configured
+    # boundary or deadline, runs the renewal sequence at item.completed, and
+    # enters the reactive checkpoint path on in-flight exhaustion. Never
+    # interrupts a mutation mid-item and never crashes the run (see
+    # `lease_account/2`).
+    state = lease_account(state, event)
+
     case verdict_of(event) do
       :none ->
         schedule_next(state)
@@ -854,6 +876,509 @@ defmodule Shoestring.Elves.Elf do
   end
 
   defp verdict_of(_event), do: :none
+
+  # -- Lease loop: bounds, renewal, reactive checkpoint (WP C, loop-closure I2) --
+  #
+  # Pinned wiring (P1–P5):
+  #
+  # - Bounds advance only from normalized `HarnessEvent`s ingested here (the
+  #   live buffer), keyed by the run's lease loaded by `run_id`. No lease (or
+  #   any unknown lease state) means no accounting — a leased-out run is never
+  #   crashed by this path.
+  # - Counting follows the `LeaseBounds` T2 rule (message completions, never
+  #   delta frames); the item.completed boundary is derived from the live
+  #   counters (this event incremented responses or tools), never redefined.
+  # - On renewal-due or deadline: the durable `lease.renewal_due` marker is
+  #   appended, a safe stop is ensured through the existing `LeaseBoundary`
+  #   (exactly once — never restopped), and at the item.completed boundary the
+  #   T2 renewal sequence runs (fresh snapshot + re-evaluate → renewed, or
+  #   expired → checkpoint_required plus checkpoint contents).
+  # - On in-flight exhaustion the reactive checkpoint path builds checkpoint
+  #   contents through the T3 `Checkpoints` writer (used as-is) and stops at
+  #   the safe boundary; a mutation is never interrupted mid-item — every
+  #   branch below only appends durable events and flips in-memory flags.
+  # - No new trajectory event types, no timer processes. The deadline is
+  #   evaluated inline on ingest with the Elf clock.
+  #
+  # For adapters without a live session (notably the hermetic `Fake`), no
+  # session exists to interrupt: the safe stop is recorded virtually (the flag
+  # the renewal sequence requires) and ingestion still runs every item to its
+  # own completion, so the boundary guarantee holds without an external call.
+  defp lease_account(state, event) do
+    lease_account_inner(state, event)
+  rescue
+    _error -> state
+  catch
+    _kind, _reason -> state
+  end
+
+  defp lease_account_inner(state, event) do
+    case ensure_lease_bounds(state) do
+      {:ok, state} ->
+        previous = state.lease_bounds
+
+        {bounds, effects} =
+          Shoestring.Cobbler.LeaseBounds.advance(previous, event)
+
+        state = %{state | lease_bounds: bounds}
+        boundary? = spent_more?(previous, bounds)
+
+        state =
+          if :quota_refused in effects do
+            quota_path(state)
+          else
+            state
+          end
+
+        state = due_path(state, effects)
+        state = stop_path(state)
+        renew_path(state, boundary?)
+
+      :skip ->
+        state
+    end
+  end
+
+  # The item.completed boundary, derived — not redefined — from the T2 rule:
+  # this normalized event spent responses or tools.
+  defp spent_more?(previous, current) do
+    current.responses > previous.responses or current.tools > previous.tools
+  end
+
+  defp exhausted?(state) do
+    case state.lease_bounds do
+      %Shoestring.Cobbler.LeaseBounds{} = bounds ->
+        bounds.responses >= bounds.response_budget or bounds.tools >= bounds.tool_budget
+
+      _other ->
+        false
+    end
+  end
+
+  defp due_level?(state) do
+    case state.lease_bounds do
+      %Shoestring.Cobbler.LeaseBounds{} = bounds ->
+        Shoestring.Cobbler.LeaseBounds.due?(bounds)
+
+      _other ->
+        false
+    end
+  end
+
+  defp deadline_passed?(state) do
+    case state.lease_deadline do
+      %DateTime{} = deadline ->
+        DateTime.compare(Clock.now(state.clock), deadline) != :lt
+
+      _other ->
+        false
+    end
+  rescue
+    _error -> false
+  catch
+    _kind, _reason -> false
+  end
+
+  # Loads the run's lease by `run_id` on first need and rebuilds spend from
+  # durable normalized events, so a lease granted while the stream is already
+  # flowing still counts exactly (idempotent on `source_event_id`: the current
+  # event is already persisted, so re-advancing it is a no-op).
+  defp ensure_lease_bounds(%{lease_bounds: %Shoestring.Cobbler.LeaseBounds{}} = state) do
+    {:ok, state}
+  end
+
+  defp ensure_lease_bounds(state) do
+    case active_lease_for(state) do
+      {:ok, record} ->
+        bounds =
+          Shoestring.Cobbler.LeaseBounds.new(%{
+            grant_id: record.id,
+            run_id: record.run_id,
+            response_budget: record.response_budget,
+            tool_budget: record.tool_budget,
+            response_reserve: record.response_reserve,
+            tool_reserve: record.tool_reserve,
+            checkpoint_cadence: record.checkpoint_cadence
+          })
+
+        {bounds, _effects} = rebuild_spend(state, bounds)
+
+        {:ok,
+         %{
+           state
+           | lease_bounds: bounds,
+             lease_grant_id: record.id,
+             lease_deadline: record.deadline
+         }}
+
+      :skip ->
+        :skip
+    end
+  rescue
+    _error -> :skip
+  catch
+    _kind, _reason -> :skip
+  end
+
+  defp active_lease_for(state) do
+    query =
+      from lease in Shoestring.Harness.ExecutionLeaseRecord,
+        where: lease.run_id == ^state.run_id,
+        order_by: [desc: lease.projection_sequence, asc: lease.id],
+        limit: 1
+
+    case state.repo.one(query) do
+      %Shoestring.Harness.ExecutionLeaseRecord{status: status} = record
+      when status in [
+             "proposed",
+             "granted",
+             "active",
+             "renewal_due",
+             "renewed",
+             "expired",
+             "revoked",
+             "checkpoint_required"
+           ] ->
+        {:ok, record}
+
+      _other ->
+        :skip
+    end
+  rescue
+    _error -> :skip
+  catch
+    _kind, _reason -> :skip
+  end
+
+  defp rebuild_spend(state, bounds) do
+    rows =
+      state.repo.all(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^state.goal_id and event.run_id == ^state.run_id and
+              event.type == "harness.event_recorded",
+          order_by: [asc: event.sequence],
+          select: event.payload
+      )
+
+    events = Enum.flat_map(rows, &persisted_harness_event(state, &1))
+    Shoestring.Cobbler.LeaseBounds.drain(bounds, state.run_id, events)
+  rescue
+    _error -> {bounds, []}
+  catch
+    _kind, _reason -> {bounds, []}
+  end
+
+  defp persisted_harness_event(state, payload) when is_map(payload) do
+    with kind when not is_nil(kind) <- persisted_kind(payload),
+         source when is_binary(source) <- payload["source_event_id"],
+         extensions when is_map(extensions) <- payload["extensions"] do
+      [
+        %HarnessEvent{
+          version: 1,
+          run_id: payload["run_id"] || state.run_id,
+          source_event_id: source,
+          ordinal: payload["ordinal"] || 1,
+          occurred_at: persisted_time(state, payload),
+          kind: kind,
+          process_id: nil,
+          provider_session_id: nil,
+          artifact_id: nil,
+          capacity_snapshot_id: nil,
+          error: persisted_error(payload),
+          result: nil,
+          extensions: extensions
+        }
+      ]
+    else
+      _other -> []
+    end
+  rescue
+    _error -> []
+  catch
+    _kind, _reason -> []
+  end
+
+  defp persisted_harness_event(_state, _payload), do: []
+
+  defp persisted_kind(payload) do
+    case payload["kind"] do
+      kind when is_binary(kind) ->
+        atom = String.to_existing_atom(kind)
+        if atom in HarnessEvent.kinds(), do: atom, else: nil
+
+      _other ->
+        nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp persisted_time(state, payload) do
+    case payload["occurred_at"] do
+      at when is_binary(at) ->
+        case DateTime.from_iso8601(at) do
+          {:ok, time, _offset} -> time
+          _error -> Clock.now(state.clock)
+        end
+
+      _other ->
+        Clock.now(state.clock)
+    end
+  end
+
+  defp persisted_error(%{"kind" => "error", "error" => %{"category" => "quota_refused"} = error}) do
+    Shoestring.Harness.Error.new(
+      :quota_refused,
+      error["code"] || "quota_refused",
+      error["message"] || "quota refused",
+      details: %{}
+    )
+  end
+
+  defp persisted_error(_payload), do: nil
+
+  # Marks renewal-due durably at the configured boundary or deadline.
+  # Idempotent by LeaseStateMachine validation: an already-due lease simply
+  # reports an error that is ignored here.
+  defp due_path(state, effects) do
+    if state.lease_grant_id != nil and (:renewal_due in effects or deadline_passed?(state)) do
+      case Shoestring.Cobbler.Leases.transition(state.goal_id, state.lease_grant_id, :renewal_due,
+             repo: state.repo
+           ) do
+        {:ok, _transition} -> state
+        {:error, _reason} -> state
+      end
+    else
+      state
+    end
+  rescue
+    _error -> state
+  catch
+    _kind, _reason -> state
+  end
+
+  # Ensures a safe stop was requested through the existing LeaseBoundary —
+  # exactly once. With no live session (hermetic Fake runs) the stop is
+  # recorded virtually: ingestion still runs every in-flight item to its own
+  # completion, so nothing is ever interrupted mid-item either way.
+  defp stop_path(%{lease_stop_requested?: true} = state), do: state
+
+  defp stop_path(state) do
+    if state.lease_bounds == nil or not (due_level?(state) or deadline_passed?(state)) do
+      state
+    else
+      case resolve_session(state) do
+        nil ->
+          %{state | lease_stop_requested?: true}
+
+        session ->
+          now = Clock.now(state.clock)
+
+          case Shoestring.Elves.LeaseBoundary.enforce(
+                 session,
+                 state.lease_deadline || now,
+                 now: now
+               ) do
+            {:ok, _effect} -> %{state | lease_stop_requested?: true}
+            {:error, _reason} -> state
+          end
+      end
+    end
+  rescue
+    _error -> state
+  catch
+    _kind, _reason -> state
+  end
+
+  defp resolve_session(state) do
+    case Shoestring.Harness.CodexAppServer.lookup_session(state.run_id) do
+      {:ok, pid} when is_pid(pid) ->
+        if Process.alive?(pid), do: pid, else: nil
+
+      _other ->
+        nil
+    end
+  rescue
+    _error -> nil
+  catch
+    _kind, _reason -> nil
+  end
+
+  # Runs the T2 renewal sequence at the item.completed boundary only: fresh
+  # snapshot + re-evaluate → renewed, or expired → checkpoint_required plus
+  # reactive checkpoint contents. Anything else (mid-item, no stop yet,
+  # already settled) waits without appending.
+  defp renew_path(%{lease_settled?: true} = state, _boundary?), do: state
+
+  defp renew_path(state, boundary?) do
+    cond do
+      state.lease_bounds == nil -> state
+      state.lease_grant_id == nil -> state
+      not (due_level?(state) or deadline_passed?(state)) -> state
+      not boundary? -> state
+      not state.lease_stop_requested? -> state
+      true -> run_renewal(state)
+    end
+  rescue
+    _error -> state
+  catch
+    _kind, _reason -> state
+  end
+
+  defp run_renewal(state) do
+    opts = [
+      repo: state.repo,
+      now: Clock.now(state.clock),
+      stop: :already_requested,
+      boundary: :item_completed,
+      observe: fn -> probe_capacity(state) end
+    ]
+
+    case Shoestring.Cobbler.LeaseRenewal.maybe_renew(state.goal_id, state.lease_grant_id, opts) do
+      {:ok, %{outcome: :renewed}} ->
+        %{state | lease_settled?: true}
+
+      {:ok, %{outcome: :expired}} ->
+        state
+        |> write_reactive_checkpoint("lease_exhausted")
+        |> settle_on_checkpoint()
+
+      {:ok, :awaiting_boundary} ->
+        state
+
+      {:error, {:lease_not_renewable, _status}} ->
+        # Already terminal elsewhere: still ensure checkpoint contents when
+        # the allowance is exhausted, then settle so later items stay quiet.
+        state =
+          if exhausted?(state) do
+            write_reactive_checkpoint(state, "lease_exhausted")
+          else
+            state
+          end
+
+        %{state | lease_settled?: true}
+
+      {:error, _reason} ->
+        state
+    end
+  rescue
+    _error -> state
+  catch
+    _kind, _reason -> state
+  end
+
+  # Immediate re-observe + re-evaluate on the Codex quota fast path (the
+  # provider already halted the turn, so no stop/boundary wait): zero spend
+  # here, spend accounting lives in `LeaseBounds`.
+  defp quota_path(state) do
+    if state.lease_grant_id == nil or state.lease_settled? do
+      state
+    else
+      opts = [
+        repo: state.repo,
+        now: Clock.now(state.clock),
+        observe: fn -> probe_capacity(state) end
+      ]
+
+      case Shoestring.Cobbler.LeaseRenewal.handle_quota_refusal(
+             state.goal_id,
+             state.lease_grant_id,
+             opts
+           ) do
+        {:ok, %{outcome: :renewed}} ->
+          %{state | lease_settled?: true}
+
+        {:ok, %{outcome: :expired}} ->
+          state
+          |> write_reactive_checkpoint("lease_exhausted")
+          |> settle_on_checkpoint()
+
+        {:error, _reason} ->
+          state
+      end
+    end
+  rescue
+    _error -> state
+  catch
+    _kind, _reason -> state
+  end
+
+  defp settle_on_checkpoint(%{lease_checkpointed?: true} = state) do
+    %{state | lease_settled?: true}
+  end
+
+  defp settle_on_checkpoint(state), do: state
+
+  # The reactive checkpoint path: deterministic, model-free checkpoint
+  # contents through the T3 writer (used as-is, read-only), then the run
+  # continues to the safe boundary — the item that just completed is durable
+  # before this append, and ingestion is never interrupted mid-item.
+  defp write_reactive_checkpoint(state, reason) do
+    bounds = state.lease_bounds
+
+    spent =
+      case bounds do
+        %Shoestring.Cobbler.LeaseBounds{} = bounds ->
+          "spent #{bounds.responses} responses and #{bounds.tools} tools"
+
+        _other ->
+          "allowance exhausted"
+      end
+
+    {state, checkpoint_id} =
+      case state.lease_checkpoint_id do
+        nil ->
+          id = Ecto.UUID.generate()
+          {%{state | lease_checkpoint_id: id}, id}
+
+        id ->
+          {state, id}
+      end
+
+    inputs = %{
+      checkpoint_id: checkpoint_id,
+      goal_id: state.goal_id,
+      run_id: state.run_id,
+      acceptance_criteria: ["complete the supervised task per the goal acceptance contract"],
+      repository_revision: "unknown",
+      stop_reason: reason,
+      provider_session_id: state.provider_session_id,
+      evidence: ["reactive checkpoint for lease #{state.lease_grant_id}: #{spent}"],
+      extensions: %{"shoestring.elf:lease_grant_id" => state.lease_grant_id}
+    }
+
+    case Shoestring.Harness.CheckpointFallback.build(inputs) do
+      {:ok, checkpoint} ->
+        case Shoestring.Harness.Checkpoints.record(state.goal_id, checkpoint,
+               repo: state.repo,
+               now: Clock.now(state.clock),
+               actor: "elf"
+             ) do
+          {:ok, _recorded} -> %{state | lease_checkpointed?: true}
+          {:error, _reason} -> state
+        end
+
+      {:error, _reason} ->
+        state
+    end
+  rescue
+    _error -> state
+  catch
+    _kind, _reason -> state
+  end
+
+  # Fresh observable capacity through the running adapter only (Fake in
+  # hermetic tests, provider probe in production). Never raw provider output:
+  # the snapshot struct is the admitted re-evaluation input.
+  defp probe_capacity(state) do
+    opts = Map.merge(%{clock: state.clock}, state.adapter_opts)
+    state.adapter.probe(opts)
+  rescue
+    error -> {:error, {:observation_failed, error}}
+  catch
+    kind, reason -> {:error, {:observation_failed, {kind, reason}}}
+  end
 
   defp persist_normalized_event(state, event, key) do
     payload = normalized_payload(state, event)

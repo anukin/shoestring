@@ -67,7 +67,13 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
 
     run = leased.run
     grant_id = leased.grant_id
-    assert Repo.aggregate(Job, :count, :id) == 0
+
+    # P1 durable delivery: the grant is persisted first, then exactly one
+    # dispatch job is enqueued (dispatch record + Oban job, never a direct
+    # spawn). The run row stays `requested` until the worker delivers it.
+    assert Repo.aggregate(Job, :count, :id) == 1
+    assert leased.dispatch.run_id == run.id
+    assert leased.job.args["dispatch_id"] == leased.dispatch.dispatch_id
 
     # Step 3 — partial work on the first Fake leg (its own request log).
     {:ok, log_a} = RequestLog.start()
@@ -171,7 +177,10 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
 
     # Continue sans first transcript: the second leg received pointer keys
     # only, and the first leg's transcript text traveled nowhere.
-    [recorded] = RequestLog.resumes(log_b)
+    # I5 handoff correction (P2): cross-provider transfer starts a FRESH
+    # session via adapter.start/2, never resume.
+    [recorded] = RequestLog.starts(log_b)
+    assert RequestLog.resumes(log_b) == []
 
     assert Enum.sort(Map.keys(recorded.continuation)) == [
              :checkpoint_id,

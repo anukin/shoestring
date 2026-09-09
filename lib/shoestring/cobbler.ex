@@ -14,11 +14,15 @@ defmodule Shoestring.Cobbler do
   recoverable `needs_user` outcomes, an atomic intent/transition/result store,
   trajectory rebuild, and a SQLite-enforced exclusive global MVP task claim.
   The first gated dispatch consumer (`Shoestring.Cobbler.Dispatcher`) reads
-  command rows, re-validates admission references and claim ownership, and
-  stops at an explicit execution-disabled boundary: nothing is spawned or
-  enqueued. Direct run paths accept an opt-in `require_cobbler_command: true`
-  guard (`Shoestring.Cobbler.DispatchGate`) that rejects dispatches for
-  goals holding no live claim instead of bypassing commands.
+  command rows, re-validates admission references and claim ownership, and —
+  with the `grant_lease:` opt-in — persists the run row and lease grant
+  before enqueueing durable delivery (`Shoestring.Harness.Dispatches.enqueue_for_run/2`:
+  dispatch record + Oban job), never a direct `Elves.start_run`. Without the
+  opt-in, validated claims stop at an explicit execution-disabled boundary:
+  nothing is spawned or enqueued. Direct run paths accept an opt-in
+  `require_cobbler_command: true` guard (`Shoestring.Cobbler.DispatchGate`)
+  that rejects dispatches for goals holding no live claim instead of
+  bypassing commands.
   """
 
   alias Shoestring.Cobbler.{
@@ -154,13 +158,28 @@ defmodule Shoestring.Cobbler do
   @doc """
   Submits a command and gates its dispatch through the first gated consumer.
 
-  A fully validated claim stops at the explicit execution-disabled boundary
+  With `grant_lease:` a fully validated claim persists the run row and lease
+  grant first, then enqueues durable delivery (dispatch record + Oban job);
+  nothing is spawned directly. Without the opt-in the validated claim stops
+  at the explicit execution-disabled boundary
   (`{:error, {:execution_disabled, detail}}`); nothing is spawned or
   enqueued. Identical replays re-gate; conflicting reuse is rejected.
   """
   @spec claim_and_gate(Ecto.UUID.t(), map(), keyword()) :: Dispatcher.gate_result()
   def claim_and_gate(goal_id, attrs, opts \\ []) do
     Dispatcher.claim_and_gate(goal_id, attrs, opts)
+  end
+
+  @doc """
+  Enqueues durable dispatch delivery for an already-created run row.
+
+  See `Shoestring.Harness.Dispatches.enqueue_for_run/2`: dispatch record +
+  Oban job + `dispatch.requested`, idempotent, never spawns an Elf.
+  """
+  @spec enqueue_for_run(Shoestring.Harness.RunRecord.t(), keyword()) ::
+          {:ok, Shoestring.Harness.DispatchRecord.t(), Oban.Job.t() | nil} | {:error, term()}
+  def enqueue_for_run(run, opts \\ []) do
+    Shoestring.Harness.Dispatches.enqueue_for_run(run, opts)
   end
 
   @doc """

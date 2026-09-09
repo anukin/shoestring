@@ -327,14 +327,18 @@ defmodule Shoestring.Elves do
     3. when `require_cobbler_command: true` is explicitly passed, authorize
        through `Shoestring.Cobbler.DispatchGate` (read-only; the flag is
        plumbed, never defaulted);
-    4. same provider (`opts[:to_provider_id]` defaults to the run's own) →
-       `adapter.resume/3` with a rebuilt `RunRequest` carrying the fresh
-       continuation;
-    5. different provider → verify `GoalLifecycle` accepts
-       `:handoff_requested` from `opts[:goal_state]` (default `:working`),
-       create a NEW run of the SAME goal carrying the continuation, resume
-       the target adapter into it, and append the `handoff.created` pointer
-       event (durable effect: the new run's `run.requested`).
+     4. same provider (`opts[:to_provider_id]` defaults to the run's own) →
+        `adapter.resume/3` with a rebuilt `RunRequest` carrying the fresh
+        continuation (adapters without `resume/3`, e.g. Claude, return
+        `:resume_unsupported_for_provider`);
+     5. different provider → verify `GoalLifecycle` accepts
+        `:handoff_requested` from `opts[:goal_state]` (default `:working`),
+        then intent-first: append the `handoff.created` pointer event
+        (idempotency key `handoff:<handoff_id>`; replays converge without
+        duplicating), create a NEW run of the SAME goal via `Runs.request`,
+        and start the target adapter FRESH via `adapter.start/2` with a
+        continuation-composed prompt (the sender's session identity is
+        never presented to the target).
 
   Resume is strictly same-run; handoff targets a new run of the same goal
   (cross-goal handoff is out of scope). Live cross-provider handoff is
@@ -473,11 +477,23 @@ defmodule Shoestring.Elves do
     end
   end
 
+  # Intent-first handoff (P1): validate -> handoff.created intent ->
+  # run.requested -> adapter.start (fresh session, P2). Re-performing with
+  # the same handoff_id replays instead of duplicating: the idempotency-key
+  # guard runs before any side effect, so a crash between intent and effect
+  # yields exactly one effect on replay, and a replay after success performs
+  # zero new adapter calls (the stored run is returned with a
+  # durable-derived identity; the uncertain external effect is never
+  # duplicated).
+  #
+  # Writer constraint (recorded deviation from the brief's literal order):
+  # the trajectory writer requires a trusted `run_id` to already exist as a
+  # goal-owned run row, so the bare run row is inserted just before the
+  # handoff.created append. The observable event order is still
+  # handoff.created < run.requested < adapter effect, and the guard still
+  # precedes everything.
   defp resume_handoff(run, fresh_cont, fresh_record, opts) do
     repo = Keyword.get(opts, :repo, Repo)
-    clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
-    adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
-    adapter_opts = Keyword.get(opts, :adapter_opts, %{})
     to_provider_id = Keyword.get(opts, :to_provider_id)
     goal_state = Keyword.get(opts, :goal_state, :working)
     handoff_id = Keyword.get(opts, :handoff_id, Ecto.UUID.generate())
@@ -486,20 +502,10 @@ defmodule Shoestring.Elves do
     reason = Keyword.get(opts, :reason, "provider_handoff")
 
     with {:ok, :handing_off} <- handoff_transition(goal_state),
-         {:ok, request} <- resume_request(run, fresh_cont, new_dispatch_id),
-         {:ok, identity} <- adapter_identity(adapter),
-         {:ok, new_run} <-
-           Shoestring.Harness.Runs.request(request, identity,
-             repo: repo,
-             clock: clock,
-             run_id: new_run_id
-           ),
-         {:ok, run_identity} <-
-           invoke_resume(adapter, prior_identity(run, opts), request, adapter_opts),
          {:ok, payload} <-
            Continuation.handoff_payload(%{
              handoff_id: handoff_id,
-             run_id: new_run.id,
+             run_id: new_run_id,
              checkpoint_id: fresh_record.id,
              from_provider_id: run.provider_id,
              to_provider_id: to_provider_id,
@@ -511,20 +517,165 @@ defmodule Shoestring.Elves do
              prior_run_id: run.id,
              lease_grant_id: latest_lease_id(repo, run.id)
            }),
-         {:ok, _event} <-
-           Trajectory.append(
-             run.goal_id,
-             %{
-               "type" => "handoff.created",
-               "schema_version" => 1,
-               "actor" => "elf",
-               "occurred_at" => Clock.now(clock),
-               "idempotency_key" => "handoff:" <> handoff_id,
-               "payload" => payload
-             },
-             trusted: [task_id: run.task_id, run_id: new_run.id]
-           ) do
+         {:ok, intent} <- check_handoff_intent(repo, run.goal_id, handoff_id) do
+      case intent do
+        {:replay, event} ->
+          case repo.get(RunRecord, event.payload["run_id"] || event.run_id) do
+            %RunRecord{} = stored_run ->
+              {:ok,
+               %{
+                 handoff_id: handoff_id,
+                 run: stored_run,
+                 run_identity: replay_identity(stored_run)
+               }}
+
+            nil ->
+              # Crash between intent and effect: continue to exactly one
+              # effect, reusing the stored run_id pointer.
+              handoff_effect(run, fresh_cont, payload, handoff_id,
+                run_id: event.payload["run_id"] || event.run_id,
+                dispatch_id: new_dispatch_id,
+                opts: opts
+              )
+          end
+
+        :fresh ->
+          handoff_effect(run, fresh_cont, payload, handoff_id,
+            run_id: new_run_id,
+            dispatch_id: new_dispatch_id,
+            opts: opts
+          )
+      end
+    end
+  end
+
+  # Idempotency-key guard before any side effect: reports whether a
+  # handoff.created intent already exists for this handoff_id. Never
+  # appends, inserts, or calls the adapter.
+  defp check_handoff_intent(repo, goal_id, handoff_id) do
+    key = "handoff:" <> handoff_id
+
+    case repo.one(
+           from event in TrajectoryEvent,
+             where:
+               event.goal_id == ^goal_id and event.type == "handoff.created" and
+                 event.idempotency_key == ^key,
+             order_by: [asc: event.sequence],
+             limit: 1
+         ) do
+      %TrajectoryEvent{} = event -> {:ok, {:replay, event}}
+      nil -> {:ok, :fresh}
+    end
+  end
+
+  # Single effect path: bare run row (writer trusted-reference requirement)
+  # -> handoff.created intent -> run.requested durable effect ->
+  # adapter.start fresh session. The sender's session identity is never
+  # presented to the target.
+  defp handoff_effect(run, fresh_cont, payload, handoff_id,
+         run_id: run_id,
+         dispatch_id: dispatch_id,
+         opts: opts
+       ) do
+    repo = Keyword.get(opts, :repo, Repo)
+    clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
+    adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
+    adapter_opts = Keyword.get(opts, :adapter_opts, %{})
+
+    with {:ok, request} <- handoff_request(run, fresh_cont, dispatch_id),
+         {:ok, identity} <- adapter_identity(adapter),
+         {:ok, changeset} <-
+           Shoestring.Harness.Runs.build_intent_changeset(request, identity,
+             repo: repo,
+             clock: clock,
+             run_id: run_id
+           ),
+         {:ok, new_run} <- Shoestring.Harness.Runs.insert_or_recover(repo, changeset),
+         {:ok, _event} <- append_handoff_created(run, new_run.id, payload, handoff_id, opts),
+         :ok <-
+           Shoestring.Harness.Runs.ensure_requested_event(new_run, request, identity,
+             repo: repo,
+             clock: clock,
+             writer_opts: Keyword.get(opts, :writer_opts, [])
+           ),
+         {:ok, run_identity} <- invoke_start(adapter, request, adapter_opts) do
       {:ok, %{handoff_id: handoff_id, run: new_run, run_identity: run_identity}}
+    end
+  end
+
+  defp append_handoff_created(run, new_run_id, payload, handoff_id, opts) do
+    clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
+
+    Trajectory.append(
+      run.goal_id,
+      %{
+        "type" => "handoff.created",
+        "schema_version" => 1,
+        "actor" => "elf",
+        "occurred_at" => Clock.now(clock),
+        "idempotency_key" => "handoff:" <> handoff_id,
+        "payload" => payload
+      },
+      trusted: [task_id: run.task_id, run_id: new_run_id],
+      writer_opts: Keyword.get(opts, :writer_opts, [])
+    )
+  end
+
+  defp replay_identity(%RunRecord{} = stored_run) do
+    case RunIdentity.new(%{
+           run_id: stored_run.id,
+           harness_id: stored_run.provider_id,
+           process_id: nil,
+           provider_session_id: stored_run.provider_session_id
+         }) do
+      {:ok, identity} ->
+        identity
+
+      {:error, _} ->
+        %RunIdentity{
+          run_id: stored_run.id,
+          harness_id: stored_run.provider_id,
+          process_id: nil,
+          provider_session_id: stored_run.provider_session_id
+        }
+    end
+  end
+
+  # Cross-provider handoff request (P2): a FRESH session whose prompt is
+  # composed from the continuation (checkpoint pointer + next_action +
+  # decision refs + constraints summary, bounded, transcript-free). The
+  # sender's original prompt and session identity are never carried over.
+  defp handoff_request(run, fresh_cont, dispatch_id) do
+    attrs = %{
+      version: 1,
+      goal_id: run.goal_id,
+      task_id: run.task_id,
+      workspace_ref: run.workspace_ref,
+      prompt: Continuation.compose_handoff_prompt(fresh_cont),
+      continuation: %{
+        checkpoint_id: fresh_cont.checkpoint_id,
+        next_action: fresh_cont.next_action,
+        decision_refs: fresh_cont.decision_refs
+      },
+      policy: run.policy || %{mode: "supervised"},
+      requested_capabilities: resume_capabilities(run),
+      dispatch_id: dispatch_id,
+      extensions: run.extensions || %{}
+    }
+
+    case RunRequest.new(attrs) do
+      {:ok, request} -> {:ok, request}
+      {:error, changeset} -> {:error, {:invalid_resume_request, changeset}}
+    end
+  end
+
+  # Fresh-session effect for handoff targets (P2): adapter.start, never
+  # resume. The sender's RunIdentity is never constructed for the target.
+  defp invoke_start(adapter, request, adapter_opts) do
+    if adapter_exports?(adapter, :start, 2) do
+      adapter.start(request, adapter_opts)
+    else
+      {:error, :handoff_start_unsupported}
     end
   end
 
@@ -545,13 +696,29 @@ defmodule Shoestring.Elves do
     _error -> {:error, :adapter_identity_unavailable}
   end
 
+  # Same-provider resume without a resume/3 (e.g. Claude) is impossible
+  # (P5): a precise error, never a fake resume. Cross-provider targets go
+  # through invoke_start/3 instead and never reach this path.
+  #
+  # The module is explicitly loaded first: `function_exported?/3` does not
+  # load unloaded modules, so without this the first resume call in a fresh
+  # VM would spuriously report unsupported.
   defp invoke_resume(adapter, prior, request, adapter_opts) do
-    if function_exported?(adapter, :resume, 3) do
+    if adapter_exports?(adapter, :resume, 3) do
       adapter.resume(prior, request, adapter_opts)
     else
-      {:error, :resume_unsupported}
+      {:error, :resume_unsupported_for_provider}
     end
   end
+
+  defp adapter_exports?(adapter, fun, arity) when is_atom(adapter) do
+    case Code.ensure_loaded(adapter) do
+      {:module, _} -> function_exported?(adapter, fun, arity)
+      {:error, _} -> false
+    end
+  end
+
+  defp adapter_exports?(_adapter, _fun, _arity), do: false
 
   defp prior_identity(run, opts) do
     %RunIdentity{
