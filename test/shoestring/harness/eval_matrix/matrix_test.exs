@@ -1,14 +1,22 @@
 defmodule Shoestring.Harness.EvalMatrix.MatrixTest do
   @moduledoc """
-  Deterministic Milestone 05 eval matrix (T6): ten injection → required-result
-  rows driven hermetically through the real T1–T5 producer interfaces
-  (Fake scenarios, FixedClock/ManualClock, synthetic identifiers). No provider
-  CLI, no network, no production code in this file.
+  Deterministic Milestone 05 eval matrix (T6, loop-closure I7): ten injection
+  → required-result rows driven hermetically through the real T1–T5 producer
+  interfaces (Fake scenarios, FixedClock/ManualClock, synthetic identifiers).
+  No provider CLI, no network, no production code in this file.
+
+  I7 loop-closure note: every acceptance bullet is additionally re-asserted
+  against the genuine loop by the rewritten demo (`demo_test.exs`: all eight
+  steps including a real supervised Elf terminal) and ablation
+  (`ablation_test.exs`: four arms × real supervised Elf terminals); rows that
+  cannot be driven genuinely would be marked UNWIRED with the exact missing
+  seam — there are none. See
+  `plans/evidence/05-quota-aware-mvp/eval-matrix-results.md` (§6 addendum).
 
   Locking note (standing contract): this file introduces no producer, so on
-  the base commit (`c3779f0`) with the T6 files removed these tests error on
-  the missing `Shoestring.Test.EvalMatrixHelpers` driver rather than failing
-  behaviourally. They are documentation of wired producer behaviour — except
+  the base commit (`cc116f4`) with the eval driver files removed these tests
+  error on the missing `Shoestring.Test.EvalMatrixHelpers` driver rather than
+  failing behaviourally. They are documentation of wired producer behaviour — except
   where a row pins a pre-existing regression lock (noted inline) — and are
   labeled honestly as such.
   """

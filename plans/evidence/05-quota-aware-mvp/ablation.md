@@ -73,3 +73,70 @@ recorded as informative; the deterministic tests are authoritative.
 Record per-arm scores plus the delta (ablation tax). A single human run is
 anecdotal, not statistical: report it as `UNVERIFIED` evidence with the
 trajectory attached, never as a pass/fail gate.
+
+---
+
+## 4. Loop-Closure Addendum — 2026-09-09 (`VERIFIED`, hermetic)
+
+Prior §§1–3 above are quoted unchanged from the T6 work package. This section
+records the I7 genuine loop-closure ablation (branch `polly/iter5-i7-evals`,
+stacked on `cc116f4`): the milestone's three arms plus the retained fallback
+arm, every leg-B terminal driven through a real supervised Elf. Tests + test
+support + these docs only; no production code changed.
+
+### 4.1 Arms (one scripted fixture task, arms differ ONLY in `next_action`)
+
+Leg A (identical all arms): `fixture_leg_scenario/0` — lifecycle, three
+outputs (relevant `lib/widget.ex` + irrelevant `lib/unrelated.ex`
+inspection; constraint `five-hour reserve` + rejected approach B in-memory
+cache; partial implement steps 1–2 with `WidgetTest` second case FAILING),
+then scripted `quota_refused/rate_limit_exceeded`. Checkpoint through the
+genuine `Checkpoints` writer (arm `next_action`; shared evidence/decisions),
+projection, `Elves.resume_run/3` handoff to `fake-harness-b`, then leg B
+(`handoff_target` RESULT) consumed by a real Elf bound via
+`Dispatches.enqueue_for_run/1` + `Elves.start_elf/3`.
+
+| Arm | `next_action` input (bytes) | Composed prompt (bytes) |
+| :--- | ---: | ---: |
+| worktree-only | 43 (generic: no constraint, no step) | 244 |
+| naive-summary | 747 (constraint buried in transcript noise) | 948 |
+| trajectory-projection | 130 (crisp: step + constraint + rejection) | 331 |
+| fallback-template | 244 (deterministic resume template) | 445 |
+
+### 4.2 Rubric scores (deterministic normalization, `VERIFIED`)
+
+Normalization (also in `EvalMatrixHelpers` moduledoc): acceptance from the
+Elf-reported terminal class; constraint from constraint-presence × prompt
+concision (≤800 B crisp); recognition from concrete-step × decision-refs ×
+concision; repeated-work from prompt bytes (≤500/1200 B); turns from the
+genuine leg-B `harness.event_recorded` count (3 every arm — scenario-fixed);
+capacity from the genuine handoff delivery (1 start, 0 resumes every arm).
+No model judgment; semantic redo beyond these proxies stays human-judged.
+
+| Arm | Accept | Constraint | Recognition | Repeated | Turns | Capacity | **Total** |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| worktree-only | 2 | 0 | 1 | 2 | 2 | 2 | **9** |
+| naive-summary | 2 | 1 | 1 | 1 | 2 | 2 | **9** |
+| trajectory-projection | 2 | 2 | 2 | 2 | 2 | 2 | **12** |
+| fallback-template | 2 | 0 | 1 | 2 | 2 | 2 | **9** |
+
+### 4.3 Handoff tax per arm (genuine, `VERIFIED`)
+
+Every arm: terminal class `completed` via Elf; `RunRecord` status
+`completed`; privacy sweep green (`scan_term == []`, `safe_term? == true`);
+3 scripted leg-B turns; exactly 1 fresh adapter `start`, 0 `resume`s; the
+`eval-matrix` actor appears nowhere on the driven runs. Tax delta is the
+input: 244–948 prompt bytes for the same completed outcome.
+
+### 4.4 Prior result reproduced (P3, `VERIFIED`)
+
+Trajectory-projection vs fallback-template normalized terminal state
+(run status, decision-ref count, reason, provider, next-action presence,
+stop — raw identifiers excluded by construction) is byte-equal via
+`:erlang.term_to_binary/1`, exactly as in §1. The template preserves safe
+completion but carries no task constraint (constraint score 0) — recorded
+honestly, not softened.
+
+**UNWIRED rows: none.** Every arm is wired end-to-end (adapter leg →
+checkpoint writer → projection → handoff → dispatch pipeline → supervised
+Elf terminal); no producer seam was missing and none was added.

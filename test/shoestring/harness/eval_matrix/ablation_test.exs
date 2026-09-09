@@ -1,23 +1,36 @@
 defmodule Shoestring.Harness.EvalMatrix.AblationTest do
   @moduledoc """
-  Deterministic semantic ablation (T6): intact authored `next_action` vs
-  fallback-template arms on the `sudden_quota_refusal → handoff_target`
-  trajectory.
+  Genuine semantic ablation (T6, loop-closure I7): four arms on one scripted
+  fixture task (inspect relevant+irrelevant files, record constraint + rejected
+  approach, partial implement, failing test, scripted refusal).
 
-  PASS (asserted): the fallback arm still reaches `run.completed` with the
-  privacy sweep green and a normalized terminal projection state
-  byte-comparable to the intact arm. Per the brief, EITHER outcome would be
-  recorded as informative; the deterministic tests here are authoritative and
-  the manual-trajectory procedure plus scoring rubric live in
-  `plans/evidence/05-quota-aware-mvp/ablation.md` for a later human run.
+  The milestone's three input arms — worktree-only, naive-summary, and
+  trajectory-projection — differ ONLY in the checkpoint `next_action` Elf B
+  receives; the fourth arm is the retained deterministic fallback template
+  (prior authored-vs-fallback result must reproduce: byte-equal normalized
+  terminal state). Every arm: Fake fixture leg + quota refusal → genuine
+  checkpoint writer → projection → `Continuation.for_goal/1` (what Elf B
+  receives — never the transcript) → `Elves.resume_run/3` handoff →
+  leg-B Fake stream (`handoff_target` RESULT) consumed by a real supervised
+  Elf bound through the durable dispatch pipeline → `run.completed` arrives
+  through the Elf's production commit path, never via a hand-appended insert
+  in this file.
+
+  Scoring follows the milestone rubric with the harness-synthesized
+  deterministic normalization documented in
+  `Shoestring.Test.EvalMatrixHelpers` and
+  `plans/evidence/05-quota-aware-mvp/ablation.md`; turns-to-progress and
+  capacity consumed are recorded as genuine handoff-tax metrics per arm.
 
   Hermetic: Fake scenarios, FixedClock, synthetic identifiers only. No
   provider CLI, no network, no production code in this file.
 
-  Locking note (standing contract): on the base commit (`c3779f0`) with the
-  T6 files removed this file errors on the missing
+  Locking note (standing contract): on the base commit (`cc116f4`) with the
+  I7 driver removed this file errors on the missing
   `Shoestring.Test.EvalMatrixHelpers` driver — documentation, not a
-  behavior-change lock.
+  behavior-change lock. I7 ships no producer, so with the driver present these
+  tests document wired loop behavior honestly rather than locking a behavior
+  change.
   """
   use Shoestring.DataCase, async: false
 
@@ -25,7 +38,9 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
   import Shoestring.Test.CobblerHelpers
 
   alias Shoestring.Harness.{
+    Checkpoint,
     CheckpointFallback,
+    Checkpoints,
     Continuation,
     Fake,
     Projector,
@@ -37,37 +52,70 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
   alias Shoestring.Test.Fixtures.FakeHelpers
   alias Shoestring.Trajectory.TrajectoryEvent
 
-  @authored_next_action "continue from step 3: implement the widget and run the suite"
   @session "fake-session-resume"
 
-  test "fallback arm reaches completed with privacy green and comparable terminal state" do
-    intact = run_arm(%{mode: :intact, command_id: "cmd-eval-ablation-intact"})
-    fallback = run_arm(%{mode: :fallback, command_id: "cmd-eval-ablation-fallback"})
+  @arms [:worktree_only, :naive_summary, :trajectory_projection, :fallback_template]
 
-    assert intact.new_run_status == "completed"
-    assert fallback.new_run_status == "completed"
+  test "four arms complete genuinely; trajectory projection carries context at the lowest tax" do
+    sup = start_supervised!({Shoestring.Elves.Supervisor, name: nil})
+    results = Map.new(@arms, fn mode -> {mode, run_arm(mode, sup)} end)
 
-    assert intact.privacy_scan == []
-    assert fallback.privacy_scan == []
+    # Every arm reaches `run.completed` through resumed Elf execution with a
+    # green privacy sweep.
+    for mode <- @arms do
+      assert results[mode].terminal_class == :completed
+      assert results[mode].new_run_status == "completed"
+      assert results[mode].privacy_scan == []
+      assert results[mode].privacy_safe?
+    end
 
-    assert intact.privacy_safe?
-    assert fallback.privacy_safe?
+    # No hand-appended lifecycle event on any driven leg-B path.
+    for mode <- @arms do
+      refute "eval-matrix" in results[mode].leg_b_actors
+      assert "elf" in results[mode].leg_b_actors
+    end
 
-    # Raw next_actions differ (ablation actually removed the authored text) ...
-    assert intact.next_action == @authored_next_action
-    assert fallback.next_action != @authored_next_action
-    assert byte_size(fallback.next_action) > 0
+    # P3: the prior fallback-vs-authored result reproduces — the normalized
+    # terminal projection state is byte-comparable between the intact
+    # (trajectory-projection) arm and the fallback arm.
+    assert results[:trajectory_projection].next_action != results[:fallback_template].next_action
+    assert byte_size(results[:fallback_template].next_action) > 0
 
-    # ... yet the normalized terminal projection state is byte-comparable.
-    assert :erlang.term_to_binary(intact.normalized) ==
-             :erlang.term_to_binary(fallback.normalized)
+    assert :erlang.term_to_binary(results[:trajectory_projection].normalized) ==
+             :erlang.term_to_binary(results[:fallback_template].normalized)
+
+    # The trajectory-projection arm carries the constraint crisply at the
+    # lowest handoff tax, so it outscores every other arm.
+    trajectory = results[:trajectory_projection].scores
+
+    for mode <- [:worktree_only, :naive_summary, :fallback_template] do
+      assert trajectory.total > results[mode].scores.total,
+             "#{mode} unexpectedly matched the trajectory-projection total"
+    end
+
+    assert trajectory.constraint == 2
+    assert results[:worktree_only].scores.constraint == 0
+    assert results[:fallback_template].scores.constraint == 0
+    assert results[:naive_summary].scores.constraint == 1
+
+    # Handoff tax is genuine and bounded: exactly one fresh start, zero
+    # resumes, and a fixed scripted turn count on every arm.
+    for mode <- @arms do
+      tax = results[mode].tax
+      assert tax.adapter_starts == 1
+      assert tax.adapter_resumes == 0
+      assert tax.harness_events == 3
+    end
+
+    assert results[:trajectory_projection].prompt_bytes <
+             results[:naive_summary].prompt_bytes
   end
 
   # ----------------------------------------------------------------------------
-  # Arm driver
+  # Arm driver (one scripted fixture task; arms differ ONLY in next_action)
   # ----------------------------------------------------------------------------
 
-  defp run_arm(%{mode: mode, command_id: command_id}) do
+  defp run_arm(mode, sup) do
     goal = FakeHelpers.insert_goal(Ecto.UUID.generate())
     task = FakeHelpers.insert_task(goal, Ecto.UUID.generate())
 
@@ -76,70 +124,15 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
         run_id: Ecto.UUID.generate()
       )
 
-    snapshot_id = Ecto.UUID.generate()
-    grant_id = Ecto.UUID.generate()
-    checkpoint_id = Ecto.UUID.generate()
     decision_id = Ecto.UUID.generate()
+    checkpoint_id = Ecto.UUID.generate()
 
-    Eval.append_event!(goal.id, run.id, "run.starting", %{"run_id" => run.id})
-
-    Eval.append_event!(goal.id, run.id, "run.running", %{
-      "run_id" => run.id,
-      "provider_session_id" => @session
-    })
-
-    Eval.append_event!(
-      goal.id,
-      run.id,
-      "capacity.snapshot_observed",
-      %{
-        "snapshot_id" => snapshot_id,
-        "run_id" => run.id,
-        "contract_version" => 2,
-        "capacity_state" => "observed",
-        "windows" => %{
-          "items" => [%{"kind" => "five_hour", "state" => "observed", "used_percent" => 25.0}]
-        },
-        "observed_at" => "2026-08-30T12:00:00Z",
-        "expires_at" => "2026-08-30T12:05:00Z",
-        "freshness" => %{"max_age_seconds" => 300},
-        "source" => %{
-          "adapter_id" => "shoestring.harness.fake",
-          "provider_id" => "fake",
-          "invocation_mode" => "fake",
-          "event" => "explicit_read"
-        },
-        "scope" => "subscription",
-        "confidence" => "high",
-        "support_tier" => "proactive",
-        "compatibility_state" => "compatible",
-        "reason" => nil,
-        "extensions" => %{}
-      },
-      Shoestring.Test.FixedClock.now(),
-      2
-    )
-
-    Eval.append_event!(goal.id, run.id, "lease.proposed", %{
-      "grant_id" => grant_id,
-      "run_id" => run.id,
-      "admitted_snapshot_id" => snapshot_id,
-      "contract_version" => 1,
-      "reserves" => %{"response" => 1, "tool" => 1},
-      "response_budget" => 4,
-      "tool_budget" => 4,
-      "deadline" => "2026-08-30T12:15:00Z",
-      "checkpoint_cadence" => 2,
-      "renewal_state" => "eligible",
-      "extensions" => %{}
-    })
-
-    Eval.append_event!(goal.id, run.id, "lease.granted", %{"grant_id" => grant_id})
-    Eval.append_event!(goal.id, run.id, "lease.active", %{"grant_id" => grant_id})
-
+    # Setup history seeding (not the driven path): admission evidence for the
+    # decision refs the handoff must carry.
     append_admission_event!(goal.id, admission_payload(decision_id: decision_id))
 
-    # Scripted interruption: partial work then quota refusal.
+    # Leg A through the real adapter leg: scripted fixture work, then the
+    # quota refusal terminal.
     {:ok, events} =
       Fake.stream(
         %Shoestring.Harness.RunIdentity{
@@ -148,52 +141,30 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
           process_id: "fake-pid-eval",
           provider_session_id: @session
         },
-        %{scenario: Scenario.sudden_quota_refusal(), clock: Shoestring.Test.FixedClock}
+        %{scenario: Eval.fixture_leg_scenario(), clock: Shoestring.Test.FixedClock}
       )
 
-    assert Enum.map(events, & &1.kind) == [:lifecycle, :output, :error]
+    assert Enum.map(events, & &1.kind) == [
+             :lifecycle,
+             :output,
+             :output,
+             :output,
+             :error
+           ]
 
-    next_action =
-      case mode do
-        :intact ->
-          @authored_next_action
+    refusal = List.last(events)
+    assert refusal.error.category == :quota_refused
 
-        :fallback ->
-          {:ok, template} =
-            CheckpointFallback.build(%{
-              checkpoint_id: checkpoint_id,
-              goal_id: goal.id,
-              run_id: run.id,
-              acceptance_criteria: ["tests pass"],
-              repository_revision: "abc123",
-              stop_reason: "quota_refused"
-            })
+    # Checkpoint through the genuine writer with the arm's next_action input.
+    checkpoint = arm_checkpoint!(mode, goal.id, run.id, checkpoint_id)
 
-          template.next_action
-      end
-
-    Eval.append_event!(goal.id, run.id, "checkpoint.created", %{
-      "checkpoint_id" => checkpoint_id,
-      "run_id" => run.id,
-      "contract_version" => 1,
-      "acceptance_contract" => %{"criteria" => ["tests pass"]},
-      "repository_state" => %{"revision" => "abc123", "dirty" => false},
-      "evidence" => %{"items" => []},
-      "decisions" => %{"items" => ["chose approach A"]},
-      "unresolved_issues" => %{"items" => []},
-      "next_action" => next_action,
-      "provider_session_id" => @session,
-      "stop_reason" => "quota_refused",
-      "artifact_ids" => %{"items" => []},
-      "extensions" => %{}
-    })
-
+    assert {:ok, %{outcome: :recorded}} = Checkpoints.record(goal.id, checkpoint)
     assert {:ok, _} = Projector.project(goal.id, clock: Shoestring.Test.FixedClock)
 
     # Checkpoint projection only (what Elf B receives): never the transcript.
     assert {:ok, continuation} = Continuation.for_goal(goal.id)
     assert continuation.checkpoint_id == checkpoint_id
-    assert continuation.next_action == next_action
+    assert continuation.next_action == checkpoint.next_action
 
     {:ok, log} = RequestLog.start()
     new_run_id = Ecto.UUID.generate()
@@ -204,7 +175,7 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
                adapter_opts: Eval.adapter_opts(log, Scenario.handoff_target()),
                continuation: %{
                  checkpoint_id: checkpoint_id,
-                 next_action: next_action,
+                 next_action: checkpoint.next_action,
                  decision_refs: [decision_id]
                },
                provider_session_id: @session,
@@ -214,24 +185,62 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
                new_dispatch_id: Ecto.UUID.generate()
              )
 
-    # I5 handoff correction (P2): cross-provider transfer starts a FRESH
-    # session via adapter.start/2, never resume.
+    # I5 handoff evidence (genuine): the cross-provider transfer started a
+    # FRESH session via adapter.start/2, never resume, carrying pointer keys
+    # only.
     [recorded] = RequestLog.starts(log)
     assert RequestLog.resumes(log) == []
 
-    scan =
-      Shoestring.Harness.Security.scan_term(
-        Map.new(recorded.continuation, fn {k, v} -> {to_string(k), v} end)
+    recorded_continuation =
+      Map.new(recorded.continuation, fn {k, v} -> {to_string(k), v} end)
+
+    assert Enum.sort(Map.keys(recorded_continuation)) == [
+             "checkpoint_id",
+             "decision_refs",
+             "next_action"
+           ]
+
+    scan = Shoestring.Harness.Security.scan_term(recorded_continuation)
+
+    # Leg B through resumed execution: a real supervised Elf bound to the
+    # handoff run consumes the `handoff_target` RESULT stream and commits
+    # `run.completed` through its production path.
+    leg_b_run = Repo.get!(RunRecord, new_run.id)
+
+    %{terminal: terminal} =
+      Eval.drive_leg_to_terminal!(leg_b_run,
+        scenario: Scenario.handoff_target(),
+        supervisor: sup
       )
 
-    Eval.append_event!(goal.id, new_run.id, "run.starting", %{"run_id" => new_run.id})
+    assert terminal.class == :completed
 
-    Eval.append_event!(goal.id, new_run.id, "run.running", %{
-      "run_id" => new_run.id,
-      "provider_session_id" => "fake-session-handoff-b"
-    })
+    # I3 terminal checkpoint before the terminal, via the Elf's production
+    # path — on every arm.
+    completed_event =
+      Repo.one!(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^goal.id and event.run_id == ^new_run.id and
+              event.type == "run.completed",
+          order_by: [desc: event.sequence],
+          limit: 1
+      )
 
-    Eval.append_event!(goal.id, new_run.id, "run.completed", %{"run_id" => new_run.id})
+    terminal_checkpoint =
+      Repo.one!(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^goal.id and event.run_id == ^new_run.id and
+              event.type == "checkpoint.created",
+          order_by: [asc: event.sequence],
+          limit: 1
+      )
+
+    assert terminal_checkpoint.sequence < completed_event.sequence
+
+    assert terminal_checkpoint.payload["extensions"]["shoestring.elf:checkpoint_kind"] ==
+             "terminal"
 
     assert {:ok, _} = Projector.project(goal.id, clock: Shoestring.Test.FixedClock)
 
@@ -245,24 +254,81 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
           limit: 1
       )
 
-    _ = command_id
+    tax = Eval.leg_tax(goal.id, new_run.id, log)
+    prompt = recorded.prompt
+
+    scores =
+      Eval.score_arm(%{
+        terminal_class: terminal.class,
+        prompt: prompt,
+        next_action: checkpoint.next_action,
+        decision_ref_count: length(handoff_event.payload["decision_refs"]),
+        leg_b_event_count: tax.harness_events,
+        starts: tax.adapter_starts,
+        resumes: tax.adapter_resumes
+      })
 
     %{
-      next_action: next_action,
+      mode: mode,
+      next_action: checkpoint.next_action,
+      terminal_class: terminal.class,
       new_run_status: new_status,
       privacy_scan: scan,
-      privacy_safe?:
-        Shoestring.Harness.Contract.safe_term?(
-          Map.new(recorded.continuation, fn {k, v} -> {to_string(k), v} end)
-        ),
+      privacy_safe?: Shoestring.Harness.Contract.safe_term?(recorded_continuation),
+      leg_b_actors: tax.actors,
+      tax: tax,
+      prompt_bytes: byte_size(prompt),
+      scores: scores,
       normalized: %{
         run_status: new_status,
         decision_ref_count: length(handoff_event.payload["decision_refs"]),
         reason: handoff_event.payload["reason"],
         to_provider: handoff_event.payload["to_provider_id"],
-        next_action_present?: byte_size(next_action) > 0,
+        next_action_present?: byte_size(checkpoint.next_action) > 0,
         stop: "quota_refused"
       }
     }
+  end
+
+  defp arm_checkpoint!(:fallback_template, goal_id, run_id, checkpoint_id) do
+    {:ok, template} =
+      CheckpointFallback.build(%{
+        checkpoint_id: checkpoint_id,
+        goal_id: goal_id,
+        run_id: run_id,
+        acceptance_criteria: ["fixture suite passes"],
+        repository_revision: "abc123",
+        stop_reason: "quota_refused"
+      })
+
+    template
+  end
+
+  defp arm_checkpoint!(mode, goal_id, run_id, checkpoint_id) do
+    {:ok, checkpoint} =
+      Checkpoint.new(%{
+        version: 1,
+        checkpoint_id: checkpoint_id,
+        goal_id: goal_id,
+        run_id: run_id,
+        acceptance_contract: %{criteria: ["fixture suite passes"]},
+        repository_state: %{revision: "abc123", dirty: false},
+        evidence: [
+          "inspected lib/widget.ex (relevant) and lib/unrelated.ex (irrelevant)",
+          "recorded constraint: five-hour reserve",
+          "rejected approach B: in-memory cache (violates the reserve)",
+          "partial implement: widget steps 1-2",
+          "failing test: WidgetTest second case"
+        ],
+        decisions: ["chose approach A", "rejected approach B: in-memory cache"],
+        unresolved_issues: ["WidgetTest second case still failing"],
+        next_action: Eval.arm_next_action(mode),
+        provider_session_id: @session,
+        stop_reason: "quota_refused",
+        artifact_ids: [],
+        extensions: %{}
+      })
+
+    checkpoint
   end
 end
