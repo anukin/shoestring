@@ -350,7 +350,14 @@ defmodule Shoestring.Cobbler.Commands do
   # ----------------------------------------------------------------------------
 
   @doc """
-  Resolves a `needs_user` command with a validated operator response.
+  Resolves a `needs_user` command with a validated, attributed operator response.
+
+  Every new response MUST carry a non-blank `confirmed_by` identity
+  (fail-closed as `{:error, {:confirmation_invalid_responder, detail}}`;
+  automated callers pass an explicit `system:`-prefixed identity such as
+  `"system:wakeup"` — never a silently defaulted human). The optional
+  `intent` confirmation is persisted where carried but matched at the UI
+  boundary, not here.
 
   An identical response replays the recorded resolution without appending
   events; a different response is rejected as a conflict; an unoffered
@@ -428,6 +435,9 @@ defmodule Shoestring.Cobbler.Commands do
       "resolved_by" => "user_response"
     }
 
+    confirmed_by = response["confirmed_by"]
+    confirmed_intent = response["intent"]
+
     run_transaction(repo, fn ->
       events =
         append_events_in_transaction(
@@ -438,15 +448,18 @@ defmodule Shoestring.Cobbler.Commands do
               "type" => "cobbler.command.resolved",
               "idempotency_key" =>
                 "cobbler-command-resolved:#{existing.goal_id}:#{existing.command_id}",
-              "payload" => %{
-                "command_id" => existing.command_id,
-                "command_type" => existing.type,
-                "response" => response,
-                "response_digest" => response_digest,
-                "from_status" => "needs_user",
-                "to_status" => "resolved",
-                "result" => result
-              }
+              "payload" =>
+                %{
+                  "command_id" => existing.command_id,
+                  "command_type" => existing.type,
+                  "response" => response,
+                  "response_digest" => response_digest,
+                  "from_status" => "needs_user",
+                  "to_status" => "resolved",
+                  "result" => result
+                }
+                |> maybe_put("confirmed_by", confirmed_by)
+                |> maybe_put("confirmed_intent", confirmed_intent)
             }
           ],
           now
@@ -454,7 +467,10 @@ defmodule Shoestring.Cobbler.Commands do
 
       command_row =
         existing
-        |> CommandRecord.response_changeset(response, response_digest, "resolved", result, now)
+        |> CommandRecord.response_changeset(response, response_digest, "resolved", result, now, %{
+          "confirmed_by" => confirmed_by,
+          "confirmed_intent" => confirmed_intent
+        })
         |> repo.update()
         |> case do
           {:ok, row} -> row
@@ -473,10 +489,33 @@ defmodule Shoestring.Cobbler.Commands do
     end
   end
 
+  # STRICT (P1): every new response must carry a non-blank confirmed_by
+  # identity. nil/missing/blank is rejected fail-closed BEFORE any write
+  # with {:error, {:confirmation_invalid_responder, detail}} — a reason
+  # distinct from response_conflict, following the confirmation_invalid_*
+  # code family from admission. Attribution rides inside the digest-covered
+  # response map (P4), so the existing response_digest pair semantics
+  # ({response, response_digest} both set together) also cover who
+  # confirmed. Automated callers pass an explicit system:-prefixed identity
+  # (P2); the domain never silently defaults a human identity.
   defp validate_response(response) when is_map(response) do
+    with {:ok, resolution} <- validate_resolution(response),
+         {:ok, confirmed_by} <- validate_confirmed_by(response),
+         {:ok, intent} <- validate_response_intent(response) do
+      normalized =
+        %{"resolution" => resolution, "confirmed_by" => confirmed_by}
+        |> maybe_put("intent", intent)
+
+      {:ok, normalized}
+    end
+  end
+
+  defp validate_response(_response), do: Contract.invalid(:response, "must be an object")
+
+  defp validate_resolution(response) do
     case Contract.fetch(response, :resolution) do
       {:ok, value} when is_binary(value) ->
-        {:ok, %{"resolution" => value}}
+        {:ok, value}
 
       {:ok, _other} ->
         Contract.invalid(:resolution, "must be a string")
@@ -486,7 +525,49 @@ defmodule Shoestring.Cobbler.Commands do
     end
   end
 
-  defp validate_response(_response), do: Contract.invalid(:response, "must be an object")
+  defp validate_confirmed_by(response) do
+    case Contract.fetch(response, :confirmed_by) do
+      {:ok, value} when is_binary(value) ->
+        trimmed = String.trim(value)
+
+        if trimmed == "" do
+          {:error, {:confirmation_invalid_responder, %{"reason" => "unattributed"}}}
+        else
+          {:ok, trimmed}
+        end
+
+      _missing_or_nil ->
+        {:error, {:confirmation_invalid_responder, %{"reason" => "unattributed"}}}
+    end
+  end
+
+  # The intent confirmation is carried, not matched, here: the UI boundary
+  # enforces the match against the command payload intent. Absent or blank
+  # intent persists as nil; only a non-string or overlong value is rejected.
+  defp validate_response_intent(response) do
+    case Contract.fetch(response, :intent) do
+      :error ->
+        {:ok, nil}
+
+      {:ok, nil} ->
+        {:ok, nil}
+
+      {:ok, value} when is_binary(value) ->
+        trimmed = String.trim(value)
+
+        cond do
+          trimmed == "" -> {:ok, nil}
+          String.length(trimmed) > 200 -> invalid_intent()
+          true -> {:ok, trimmed}
+        end
+
+      {:ok, _other} ->
+        invalid_intent()
+    end
+  end
+
+  defp invalid_intent,
+    do: {:error, {:confirmation_invalid_responder, %{"reason" => "invalid_intent"}}}
 
   # ----------------------------------------------------------------------------
   # Inspection
@@ -626,7 +707,9 @@ defmodule Shoestring.Cobbler.Commands do
         "status" => payload["to_status"],
         "result" => payload["result"],
         "response" => nil,
-        "response_digest" => nil
+        "response_digest" => nil,
+        "confirmed_by" => nil,
+        "confirmed_intent" => nil
       }
 
       {:ok, put_in(state, [:commands, payload["command_id"]], command_state)}
@@ -642,12 +725,24 @@ defmodule Shoestring.Cobbler.Commands do
 
     with {:ok, prior} <- rebuilt_command(state, command_id, event),
          :ok <- Command.transition(Command.status_atom(prior["status"]), :respond, :resolved) do
+      # P3: pre-attribution events carry neither top-level attribution nor
+      # response-embedded attribution; both fall back to nil and still
+      # rebuild. New events carry top-level mirrors of the digest-covered
+      # response attribution.
       resolved =
         prior
         |> Map.put("status", payload["to_status"])
         |> Map.put("result", payload["result"])
         |> Map.put("response", payload["response"])
         |> Map.put("response_digest", payload["response_digest"])
+        |> Map.put(
+          "confirmed_by",
+          payload["confirmed_by"] || get_in(payload, ["response", "confirmed_by"])
+        )
+        |> Map.put(
+          "confirmed_intent",
+          payload["confirmed_intent"] || get_in(payload, ["response", "intent"])
+        )
 
       {:ok, put_in(state, [:commands, command_id], resolved)}
     else
@@ -718,7 +813,11 @@ defmodule Shoestring.Cobbler.Commands do
           rebuilt_command ->
             if canonical(row.status) == canonical(rebuilt_command["status"]) and
                  canonical(row.result) == canonical(rebuilt_command["result"]) and
-                 canonical(row.digest) == canonical(rebuilt_command["digest"]) do
+                 canonical(row.digest) == canonical(rebuilt_command["digest"]) and
+                 canonical(row.response) == canonical(rebuilt_command["response"]) and
+                 row.response_digest == rebuilt_command["response_digest"] and
+                 row.confirmed_by == rebuilt_command["confirmed_by"] and
+                 row.confirmed_intent == rebuilt_command["confirmed_intent"] do
               []
             else
               ["command #{row.command_id} diverges from canonical events"]

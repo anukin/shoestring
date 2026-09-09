@@ -226,7 +226,11 @@ defmodule ShoestringWeb.CobblerGoalLive do
          :needs_user <- command_status(command),
          :ok <- require_attribution(confirmed_by),
          :ok <- require_intent_match(command, intent_confirm) do
-      case Cobbler.respond_command(goal.id, command_id, %{"resolution" => resolution}) do
+      case Cobbler.respond_command(goal.id, command_id, %{
+             "resolution" => resolution,
+             "confirmed_by" => confirmed_by,
+             "intent" => intent_confirm
+           }) do
         {:ok, _result} ->
           socket
           |> put_flash(
@@ -247,6 +251,16 @@ defmodule ShoestringWeb.CobblerGoalLive do
 
         {:error, {:illegal_respond, _detail}} ->
           put_flash(socket, :error, "This command can no longer be answered. Nothing changed.")
+
+        {:error, {:confirmation_invalid_responder, _detail}} ->
+          # Defense in depth: the boundary above already rejects blank
+          # identities, but the domain is authoritative — an unattributed
+          # response must never persist even if the boundary is bypassed.
+          put_flash(
+            socket,
+            :error,
+            "Confirmation requires an attributable operator identity (confirmed_by)."
+          )
 
         {:error, reason} ->
           Logger.warning("Cobbler respond failed: #{inspect(reason)}")
