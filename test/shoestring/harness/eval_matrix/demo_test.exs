@@ -177,7 +177,10 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
 
     # Continue sans first transcript: the second leg received pointer keys
     # only, and the first leg's transcript text traveled nowhere.
-    [recorded] = RequestLog.resumes(log_b)
+    # I5 handoff correction (P2): cross-provider transfer starts a FRESH
+    # session via adapter.start/2, never resume.
+    [recorded] = RequestLog.starts(log_b)
+    assert RequestLog.resumes(log_b) == []
 
     assert Enum.sort(Map.keys(recorded.continuation)) == [
              :checkpoint_id,

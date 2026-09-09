@@ -575,8 +575,11 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
       {{:thread_resume, _}, remaining} ->
         state = %{state | pending_requests: remaining}
-        # Resumed! Launch turn
-        prompt = (state.run_request && state.run_request.prompt) || "Continue task."
+        # Resumed! Launch turn with the continuation actually sent: the
+        # original prompt plus the checkpoint pointer, next action, and
+        # decision refs (the 3 continuation keys only; raw transcript
+        # terms never enter).
+        prompt = resume_turn_text(state.run_request)
 
         send_rpc(
           state,
@@ -873,6 +876,48 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       :error -> opts
     end
   end
+
+  # Turn input for a resumed thread (P4): the original prompt plus the
+  # continuation content. Only the three continuation keys
+  # (`checkpoint_id`/`next_action`/`decision_refs`) are read, so raw
+  # transcript terms never enter. Fresh starts keep the plain prompt.
+  defp resume_turn_text(nil), do: "Continue task."
+
+  defp resume_turn_text(%{prompt: prompt, continuation: nil}) when is_binary(prompt),
+    do: prompt
+
+  defp resume_turn_text(%{prompt: prompt, continuation: continuation} = _request)
+       when is_binary(prompt) do
+    case continuation_text(continuation) do
+      nil -> prompt
+      suffix -> prompt <> "\n\n[Resume from checkpoint " <> suffix
+    end
+  end
+
+  defp resume_turn_text(%{prompt: prompt}) when is_binary(prompt), do: prompt
+  defp resume_turn_text(_request), do: "Continue task."
+
+  defp continuation_text(nil), do: nil
+
+  defp continuation_text(continuation) when is_map(continuation) do
+    checkpoint_id = continuation[:checkpoint_id] || continuation["checkpoint_id"]
+    next_action = continuation[:next_action] || continuation["next_action"]
+    refs = continuation[:decision_refs] || continuation["decision_refs"] || []
+
+    if is_binary(checkpoint_id) and is_binary(next_action) do
+      refs_text =
+        case Enum.filter(List.wrap(refs), &is_binary/1) do
+          [] -> "none"
+          list -> Enum.join(list, ", ")
+        end
+
+      "#{checkpoint_id}]\nNext action: #{next_action}\nDecision refs: #{refs_text}"
+    else
+      nil
+    end
+  end
+
+  defp continuation_text(_continuation), do: nil
 
   defp send_rpc(state, method, params, tag) do
     id = state.next_request_id
