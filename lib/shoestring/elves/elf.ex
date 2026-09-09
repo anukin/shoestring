@@ -584,8 +584,21 @@ defmodule Shoestring.Elves.Elf do
 
   defp start_adapter(state) do
     adapter_opts = Map.merge(%{clock: state.clock}, state.adapter_opts)
+    adapter_opts = maybe_mark_elf_owned_group(adapter_opts, state.process_owner)
     state.adapter.start(state.request, adapter_opts)
   end
+
+  # When the adapter owns the OS process (`process_owner: :adapter`), the Elf
+  # adopts that process group after the handshake and reaps it after the
+  # verdict. The adapter session must not tear the group down on its own
+  # success path first: a self-reap between the Elf's identity await and its
+  # group-leader verify fails launch as `group_leader_unverifiable` under
+  # scheduler pressure. Other adapters ignore the unknown key.
+  defp maybe_mark_elf_owned_group(adapter_opts, :adapter) do
+    Map.put_new(adapter_opts, :elf_owned_process_group, true)
+  end
+
+  defp maybe_mark_elf_owned_group(adapter_opts, _process_owner), do: adapter_opts
 
   defp prepare_adapter_workdir(%{process_owner: :runner} = state), do: {:ok, state}
 
