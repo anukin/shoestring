@@ -7,7 +7,10 @@ defmodule ShoestringWeb.CobblerGoalLive do
   single operator confirm/respond form, which delegates to
   `Cobbler.respond_command/4` after enforcing an attributable
   `confirmed_by` identity and a matching intent confirmation at the UI
-  boundary. Unattributed or mismatched confirmations are rejected with an
+  boundary, and `request_recheck`, the manual wake control, which delegates
+  to `Wakeups.request_recheck/2` after enforcing an attributable operator
+  identity (a duplicate recheck replays the queued intent instead of
+  duplicating it). Unattributed or mismatched confirmations are rejected with an
   error flash and change nothing.
   """
 
@@ -17,6 +20,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
 
   alias Shoestring.Cobbler
   alias Shoestring.Cobbler.AdmissionDecision
+  alias Shoestring.Cobbler.{WakeupRecord, Wakeups}
   alias Shoestring.Harness.{CheckpointRecord, ExecutionLeaseRecord}
   alias Shoestring.Repo
   alias Shoestring.Trajectory
@@ -65,6 +69,16 @@ defmodule ShoestringWeb.CobblerGoalLive do
   @impl true
   def handle_event("respond", %{"response" => response_params}, socket) do
     {:noreply, do_respond(socket, response_params)}
+  end
+
+  @impl true
+  def handle_event("request_recheck", %{"recheck" => recheck_params}, socket) do
+    {:noreply, do_recheck(socket, recheck_params)}
+  end
+
+  @impl true
+  def handle_event("request_recheck", _params, socket) do
+    {:noreply, do_recheck(socket, %{})}
   end
 
   @impl true
@@ -172,6 +186,8 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:warnings, [])
     |> assign(:commands_empty?, true)
     |> assign(:respond_forms, %{})
+    |> assign(:recheck_form, to_form(%{"operator_identity" => ""}, as: :recheck))
+    |> assign(:pending_wakeup, nil)
     |> stream(:commands, [], reset: true, dom_id: &command_dom_id/1)
     |> stream(:events, [], reset: true, dom_id: &event_dom_id/1)
   end
@@ -211,6 +227,8 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:warnings, warnings)
     |> assign(:commands_empty?, commands == [])
     |> assign(:respond_forms, respond_forms(commands))
+    |> assign(:recheck_form, to_form(%{"operator_identity" => ""}, as: :recheck))
+    |> assign(:pending_wakeup, pending_wakeup(goal.id))
     |> stream(:commands, commands, reset: true, dom_id: &command_dom_id/1)
     |> stream(:events, sanitized_events, reset: true, dom_id: &event_dom_id/1)
   end
@@ -301,6 +319,79 @@ defmodule ShoestringWeb.CobblerGoalLive do
   end
 
   defp require_intent_match(_command, _intent_confirm), do: :ok
+
+  # Manual wake/recheck control (loop-closure I4, P3): an explicit operator
+  # identity is required (P6 convention — anonymous is rejected and changes
+  # nothing), and the domain's idempotency-key dedupe keeps a duplicate
+  # recheck to a single queued intent. No timers are involved: the control
+  # only schedules a durable wake intent whose Oban delivery re-observes
+  # before acting.
+  defp do_recheck(socket, recheck_params) do
+    operator =
+      recheck_params
+      |> Map.get("operator_identity", "")
+      |> to_string()
+      |> String.trim()
+
+    case socket.assigns[:goal] do
+      %Goal{} = goal ->
+        case Wakeups.request_recheck(goal.id, operator_identity: operator) do
+          {:ok, %{wakeup: wakeup, outcome: :recorded}} ->
+            socket
+            |> put_flash(
+              :info,
+              "Recheck requested by '#{operator}' (wake #{String.slice(wakeup.id, 0, 8)})."
+            )
+            |> reload()
+
+          {:ok, %{outcome: :replayed}} ->
+            socket
+            |> put_flash(
+              :info,
+              "A recheck by '#{operator}' is already queued. Nothing duplicated."
+            )
+            |> reload()
+
+          {:error, :anonymous_operator} ->
+            put_flash(
+              socket,
+              :error,
+              "Recheck requires an attributable operator identity."
+            )
+
+          {:error, {:recheck_rejected, reason}} ->
+            put_flash(
+              socket,
+              :error,
+              "Recheck rejected (#{inspect(reason)}). Nothing changed."
+            )
+
+          {:error, {:wakeup_rejected, :goal_terminal}} ->
+            put_flash(socket, :error, "Goal is terminal. Nothing changed.")
+
+          {:error, reason} ->
+            Logger.warning("Cobbler recheck failed: #{inspect(reason)}")
+            put_flash(socket, :error, "Could not request the recheck. Nothing changed.")
+        end
+
+      _missing ->
+        put_flash(socket, :error, "Goal is no longer available. Please refresh the page.")
+    end
+  end
+
+  # Earliest live (`scheduled`/`due`) durable wake intent for the goal, if
+  # any — the honest countdown source for the sleep card (a persisted row,
+  # never an invented timestamp).
+  defp pending_wakeup(goal_id) do
+    Repo.one(
+      from wakeup in WakeupRecord,
+        where: wakeup.goal_id == ^goal_id and wakeup.status in ["scheduled", "due"],
+        order_by: [asc: wakeup.wake_at, asc: wakeup.id],
+        limit: 1
+    )
+  rescue
+    _error -> nil
+  end
 
   defp respond_forms(commands) do
     commands

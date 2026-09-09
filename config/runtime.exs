@@ -51,6 +51,14 @@ if present_env.("PHX_SERVER") do
 end
 
 if config_env() == :prod do
+  # Production wake probe (loop-closure I4, P1): Oban `wakeup`-queue
+  # deliveries re-observe capacity through the real Observatory ledger via
+  # `Shoestring.Cobbler.WakeupObserve.observe/0`. Stored as an MFA tuple so
+  # config evaluation never captures a fun. Test and dev keep explicit
+  # `:observe` injection; the worker fails closed (`missing_observe_fun`)
+  # when nothing is configured.
+  config :shoestring, :wakeup_observe, {Shoestring.Cobbler.WakeupObserve, :observe, []}
+
   secret_key_base =
     present_env.("SECRET_KEY_BASE") ||
       raise """

@@ -10,10 +10,16 @@ defmodule Shoestring.Cobbler.WakeupWorker do
   `woken`/`cancelled` rows and re-observes before acting.
 
   The fresh-snapshot probe comes from the `:wakeup_observe` application
-  environment (a zero-arity fun returning `{:ok, CapacitySnapshot.t()} |
-  {:error, reason}`); without one the attempt fails retriably and the intent
-  stays due. Hermetic callers invoke `Wakeups.perform_wakeup/2` directly
-  with an explicit `:observe` fun instead of going through Oban.
+  environment: either a zero-arity fun returning
+  `{:ok, CapacitySnapshot.t()} | {:error, reason}` (hermetic callers and
+  tests), or an MFA tuple `{module, fun, args}` applied at perform time.
+  Production config (`config/runtime.exs`, `:prod` only) points at
+  `{Shoestring.Cobbler.WakeupObserve, :observe, []}`, which re-probes
+  through the real Observatory ledger. Without either shape the attempt
+  fails retriably (`{:error, {:observation_failed, :missing_observe_fun}}`)
+  and the intent stays due. Hermetic callers invoke
+  `Wakeups.perform_wakeup/2` directly with an explicit `:observe` fun
+  instead of going through Oban.
   """
 
   use Oban.Worker,
@@ -47,8 +53,15 @@ defmodule Shoestring.Cobbler.WakeupWorker do
 
   defp observe_fun do
     case Application.get_env(:shoestring, :wakeup_observe) do
-      observe_fun when is_function(observe_fun, 0) -> observe_fun
-      _other -> fn -> {:error, :missing_observe_fun} end
+      observe_fun when is_function(observe_fun, 0) ->
+        observe_fun
+
+      {module, fun_name, args}
+      when is_atom(module) and is_atom(fun_name) and is_list(args) ->
+        fn -> apply(module, fun_name, args) end
+
+      _other ->
+        fn -> {:error, :missing_observe_fun} end
     end
   end
 end

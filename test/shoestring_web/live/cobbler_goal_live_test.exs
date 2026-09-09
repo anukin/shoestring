@@ -114,7 +114,9 @@ defmodule ShoestringWeb.CobblerGoalLiveTest do
     {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
 
     assert has_element?(view, "#cobbler-sleep-card")
-    assert has_element?(view, "#cobbler-sleep-card", "T3")
+    assert has_element?(view, "#cobbler-sleep-card", "cobbler_wakeups")
+    assert has_element?(view, "#cobbler-sleep-card", "No wake time is invented here")
+    refute has_element?(view, "#cobbler-sleep-card", "T3")
 
     refute view |> element("#cobbler-sleep-card time") |> has_element?()
   end

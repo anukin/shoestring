@@ -4,7 +4,9 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
 
   - fresh snapshot → admit → renew + resume (lease `renewal_due → renewed`
     chained to the fresh snapshot, run `suspended → starting`, goal
-    `sleeping → evaluating → queued`, dispatch still gated);
+    `sleeping → evaluating → queued`) + one continuation dispatch through
+    the durable `Dispatches.enqueue/3` pipeline (new run of the same
+    goal+task, wakeup-derived dispatch id, one dispatch-queue job);
   - refused snapshot → defer → expire + checkpoint + resleep with a new
     `wake_at` (run stays suspended, checkpoint contents carry the
     no-model-fallback provenance);
@@ -94,7 +96,14 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
     assert summary.lifecycle == :queued
     assert summary.lease == :renewed
     assert summary.run == :starting
-    assert summary.dispatch == :gated
+
+    # Exactly one continuation dispatch through the durable pipeline
+    # (asserted before the summary shape so a missing dispatch fails here
+    # for the behavioural reason, not on map access).
+    assert Repo.aggregate(Shoestring.Harness.DispatchRecord, :count, :dispatch_id) == 1
+
+    assert summary.dispatch.outcome == :dispatched
+    assert summary.dispatch.dispatch_id == wakeup.id
 
     lease = Repo.get!(ExecutionLeaseRecord, grant_id)
     assert lease.status == "renewed"
@@ -104,8 +113,22 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
 
     # No checkpoint is written on the admit path ...
     assert Repo.aggregate(CheckpointRecord, :count, :id) == 0
-    # ... and dispatch stays behind the gate: nothing enqueued for effects.
-    assert Repo.aggregate(from(job in Job, where: job.queue == "dispatch"), :count, :id) == 0
+
+    # ... and the admitted wake dispatches exactly one continuation through
+    # the durable pipeline: a new run of the same goal+task keyed by the
+    # wakeup-derived dispatch id, with one dispatch-queue delivery attempt.
+    assert %{goal_id: goal_id, run_id: cont_run_id, status: "requested"} =
+             Repo.get!(Shoestring.Harness.DispatchRecord, wakeup.id)
+
+    assert goal_id == goal.id
+    assert cont_run_id != run.id
+
+    continuation = Repo.get!(RunRecord, cont_run_id)
+    assert continuation.goal_id == goal.id
+    assert continuation.task_id == run.task_id
+    assert continuation.dispatch_id == wakeup.id
+
+    assert Repo.aggregate(from(job in Job, where: job.queue == "dispatch"), :count, :id) == 1
   end
 
   test "refused snapshot expires the lease, checkpoints, and resleeps", %{
