@@ -261,7 +261,11 @@ defmodule Shoestring.Harness.ContinuationResumeTest do
                "forbidden key #{key} in handoff payload"
       end
 
-      [recorded] = RequestLog.resumes(log)
+      # I5 handoff correction (P2): cross-provider transfer starts a FRESH
+      # session via adapter.start/2, never resume — the sender's session
+      # identity is never presented to the target.
+      [recorded] = RequestLog.starts(log)
+      assert RequestLog.resumes(log) == []
       assert recorded.continuation.checkpoint_id == fixture.checkpoint_id
     end
 

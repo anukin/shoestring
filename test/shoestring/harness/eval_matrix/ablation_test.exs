@@ -214,7 +214,10 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
                new_dispatch_id: Ecto.UUID.generate()
              )
 
-    [recorded] = RequestLog.resumes(log)
+    # I5 handoff correction (P2): cross-provider transfer starts a FRESH
+    # session via adapter.start/2, never resume.
+    [recorded] = RequestLog.starts(log)
+    assert RequestLog.resumes(log) == []
 
     scan =
       Shoestring.Harness.Security.scan_term(
