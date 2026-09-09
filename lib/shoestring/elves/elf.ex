@@ -543,16 +543,19 @@ defmodule Shoestring.Elves.Elf do
   # raising instead of returning `{:error, _}`) still lands exactly one
   # explicit terminal rather than dying silently.
   defp crash_land(state) do
+    terminal = Classifier.launch_failed("elf_launch_crashed")
+    _ = maybe_terminal_checkpoint(state, terminal)
+
     _ =
       try do
-        append_terminal_event(state, Classifier.launch_failed("elf_launch_crashed"))
+        append_terminal_event(state, terminal)
       rescue
         _error -> :ok
       catch
         _kind, _reason -> :ok
       end
 
-    {:stop, :normal, %{state | terminal: Classifier.launch_failed("elf_launch_crashed")}}
+    {:stop, :normal, %{state | terminal: terminal}}
   end
 
   defp append_starting(state) do
@@ -1738,11 +1741,42 @@ defmodule Shoestring.Elves.Elf do
 
       true ->
         _ = persist_log_artifact(state)
+        _ = maybe_terminal_checkpoint(state, terminal)
         _ = append_terminal_event(state, terminal)
         state = %{state | terminal: terminal}
         notify_terminal(state)
         {:terminal, state}
     end
+  end
+
+  # Terminal-path recovery checkpoint (WP D loop-closure I3): on every
+  # terminal, attempt a repo-evidence checkpoint BEFORE the terminal commit.
+  # Checkpoint failure (including fallback build failure) never suppresses
+  # the terminal commit: the error is logged with run/dispatch identity and
+  # the terminal still appends. `run.*` payloads reject unknown keys
+  # (EventRegistry) and no new trajectory event types are admitted, so the
+  # terminal event itself is unchanged: the terminal-to-checkpoint link is
+  # the deterministic checkpoint id
+  # (`TerminalCheckpoint.checkpoint_id(run_id)`) plus the terminal key
+  # carried in the checkpoint extensions.
+  defp maybe_terminal_checkpoint(state, terminal) do
+    case Shoestring.Elves.TerminalCheckpoint.record(state, terminal) do
+      {:ok, _checkpoint_id} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("elf terminal checkpoint failed: #{inspect(reason)}",
+          run_id: state.run_id,
+          dispatch_id: state.dispatch_id,
+          reason: inspect(reason)
+        )
+
+        :ok
+    end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
   end
 
   defp stop_with_terminal(state, terminal) do
