@@ -176,6 +176,8 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:lifecycle_presentation, CobblerPresentation.lifecycle_presentation(:unknown))
     |> assign(:decisions, [])
     |> assign(:latest_decision, nil)
+    |> assign(:handoffs, [])
+    |> assign(:latest_handoff, nil)
     |> assign(:lease, nil)
     |> assign(:checkpoint, nil)
     |> assign(:checkpoint_text, "")
@@ -197,10 +199,9 @@ defmodule ShoestringWeb.CobblerGoalLive do
     decisions = admission_decisions(events)
     latest_decision = List.last(decisions)
     commands = safe_list_commands(goal.id)
-    command_kinds = Enum.map(commands, &command_result_kind/1)
-    decision_results = Enum.map(decisions, & &1.result)
+    handoffs = handoff_displays(events)
 
-    state = CobblerPresentation.derive_goal_state(decision_results, command_kinds)
+    state = CobblerPresentation.derive_goal_state(events)
     claim = safe_active_claim()
     lease = latest_lease(goal.id)
     checkpoint = latest_checkpoint(goal.id)
@@ -218,6 +219,8 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:lifecycle_presentation, CobblerPresentation.lifecycle_presentation(state))
     |> assign(:decisions, decisions)
     |> assign(:latest_decision, latest_decision)
+    |> assign(:handoffs, handoffs)
+    |> assign(:latest_handoff, List.last(handoffs))
     |> assign(:lease, lease_display(lease))
     |> assign(:checkpoint, checkpoint_display(checkpoint))
     |> assign(:claim, claim)
@@ -483,8 +486,35 @@ defmodule ShoestringWeb.CobblerGoalLive do
     }
   end
 
-  defp command_result_kind(%{result: %{"kind" => kind}}), do: kind
-  defp command_result_kind(_command), do: :unknown_kind
+  # Handoff cards derive faithfully from persisted `handoff.created`
+  # trajectory events (read-only). A handoff targets a NEW run of the SAME
+  # goal (I5 contract): the card names the source and receiver providers,
+  # the recorded reason, and the continuation pointers, all redacted for
+  # display. Raw provider output is never canonical state and is not
+  # shown here beyond the recorded pointers.
+  defp handoff_displays(events) do
+    events
+    |> Enum.filter(&(&1.type == "handoff.created"))
+    |> Enum.map(&handoff_display/1)
+  end
+
+  defp handoff_display(%TrajectoryEvent{} = event) do
+    payload = if is_map(event.payload), do: event.payload, else: %{}
+
+    %{
+      event_id: event.id,
+      sequence: event.sequence,
+      occurred_at: event.occurred_at,
+      source: to_string_value(Map.get(payload, "from_provider_id")),
+      receiver: to_string_value(Map.get(payload, "to_provider_id")),
+      reason: RunPresentation.redact_text(to_string_value(Map.get(payload, "reason"))),
+      next_action: RunPresentation.redact_text(to_string_value(Map.get(payload, "next_action"))),
+      prior_run_id: to_string_value(Map.get(payload, "prior_run_id")),
+      run_id: to_string_value(Map.get(payload, "run_id")),
+      checkpoint_id: to_string_value(Map.get(payload, "checkpoint_id")),
+      decision_refs: List.wrap(Map.get(payload, "decision_refs", [])) |> Enum.filter(&is_binary/1)
+    }
+  end
 
   defp latest_lease(goal_id) do
     Repo.one(

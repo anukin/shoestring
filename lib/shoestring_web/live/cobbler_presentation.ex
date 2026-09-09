@@ -9,13 +9,71 @@ defmodule ShoestringWeb.CobblerPresentation do
   rendering: unknown inputs render as "Unknown", never as an invented
   concrete state.
 
-  Lifecycle state derivation (`derive_goal_state/2`) folds admission
-  decision results and persisted command result kinds through the pure
-  `Shoestring.Cobbler.GoalLifecycle` machine. Any unrecognized value or
-  illegal transition yields `:unknown` instead of raising.
+  Lifecycle state derivation folds one sequence-ordered timeline through
+  the pure `Shoestring.Cobbler.GoalLifecycle` machine. The timeline is the
+  goal's canonical trajectory replay: admission decisions, command
+  outcomes, and run progress events interleaved by sequence (so a run
+  finishing after a checkpoint lands in the finished state instead of
+  being folded out of order). Run progress contributes
+  working/checkpointing/sleeping signal as a read-only derivation — no
+  writes. Any unrecognized value or illegal transition yields `:unknown`
+  instead of raising.
   """
 
   alias Shoestring.Cobbler.GoalLifecycle
+
+  @doc """
+  Derives a presentational goal lifecycle state from ONE sequence-ordered
+  timeline (decisions + commands + run progress events interleaved by
+  sequence).
+
+  Each entry may be:
+
+  - a `Shoestring.Trajectory.TrajectoryEvent` struct (mapped by type and
+    payload: `admission.decided`, `cobbler.command.accepted` /
+    `cobbler.command.resolved` / `cobbler.claim.acquired` /
+    `cobbler.claim.released`, `run.*`, `checkpoint.created`,
+    `handoff.created`; lifecycle-irrelevant types such as `lease.*`,
+    `capacity.*`, `task.*`, `goal.*`, `dispatch.*`, `harness.*`, and
+    `elf.*` are skipped as read-only no-ops);
+  - a `%{sequence: integer, kind: :decision | :command | :run, value: term}`
+    map (string keys and string kinds accepted);
+  - a `{sequence, event}` tuple where `event` is already a
+    `GoalLifecycle` event.
+
+  Entries sort by `:sequence` (entries without a sequence keep input
+  order). Run progress maps to lifecycle signal: `run.starting` /
+  `run.running` to `:dispatch_started` (a no-op when already working or
+  checkpointing), `checkpoint.created` to `:checkpoint_started` (a no-op
+  when already checkpointing, or when working it opens the checkpoint),
+  `run.completed` / `run.failed` to outcome-carrying
+  `{:run_terminal, outcome}`, `run.interrupted` / `run.cancelled` /
+  `run.cancelling` to the legacy outcome-less `:run_terminal`,
+  `run.suspended` / `run.pausing` while working or checkpointing to
+  `:sleeping` (read-only suspension signal, no writes),
+  `handoff.created` to `:handoff_requested` (handoff targets a new run of
+  the same goal; the goal itself rests in terminal `handing_off`).
+
+  Unknown values and illegal transitions fold to `:unknown`; this
+  function never raises.
+  """
+  @spec derive_goal_state([term()]) :: atom()
+  def derive_goal_state(timeline) when is_list(timeline) do
+    timeline
+    |> with_order()
+    |> Enum.sort_by(fn {sequence, _entry, index} -> {sequence, index} end)
+    |> Enum.reduce_while(GoalLifecycle.initial(), fn {_sequence, entry, _index}, state ->
+      case timeline_step(state, entry) do
+        {:ok, next} -> {:cont, next}
+        :skip -> {:cont, state}
+        :unknown -> {:halt, :unknown}
+      end
+    end)
+  rescue
+    _error -> :unknown
+  end
+
+  def derive_goal_state(_timeline), do: :unknown
 
   @doc """
   Derives a presentational goal lifecycle state from ordered admission
@@ -23,6 +81,11 @@ defmodule ShoestringWeb.CobblerPresentation do
 
   Both lists accept atoms or strings. Unknown values and illegal
   transitions fold to `:unknown`; this function never raises.
+
+  Deprecated in favor of `derive_goal_state/1` (one sequence-ordered
+  timeline): the grouped fold cannot interleave events and drops run
+  progress. Kept for outcome-less T1/T3 consumers and the wakeups
+  derivation mirror; new call sites should build a timeline.
   """
   @spec derive_goal_state([atom() | String.t()], [atom() | String.t()]) :: atom()
   def derive_goal_state(decision_results, command_kinds)
@@ -132,6 +195,40 @@ defmodule ShoestringWeb.CobblerPresentation do
       badge_class: "bg-zinc-200 text-zinc-800",
       icon: "hero-arrow-right-circle",
       status: "handing-off"
+    }
+  end
+
+  def lifecycle_presentation(:completed) do
+    %{
+      label: "Completed.",
+      detail: "Terminal. A run finished and reported success.",
+      dot_class: "bg-emerald-600",
+      badge_class: "bg-emerald-100 text-emerald-900",
+      icon: "hero-check-badge",
+      status: "completed"
+    }
+  end
+
+  def lifecycle_presentation(:failed) do
+    %{
+      label: "Failed.",
+      detail: "Terminal. A run finished and reported failure.",
+      dot_class: "bg-red-600",
+      badge_class: "bg-red-100 text-red-900",
+      icon: "hero-x-circle",
+      status: "failed"
+    }
+  end
+
+  def lifecycle_presentation(:needs_user) do
+    %{
+      label: "Needs operator.",
+      detail:
+        "A run finished needing an operator decision. Answer the pending command below; the response is attribution-gated.",
+      dot_class: "bg-purple-500",
+      badge_class: "bg-purple-100 text-purple-900",
+      icon: "hero-hand-raised",
+      status: "needs-user"
     }
   end
 
@@ -482,6 +579,321 @@ defmodule ShoestringWeb.CobblerPresentation do
   rescue
     _error -> :unknown
   end
+
+  # -- Sequence-ordered timeline (derive_goal_state/1) --
+
+  # Lifecycle-irrelevant trajectory types: read-only no-ops for the goal
+  # derivation (leases, capacity, tasks, dispatch plumbing, harness Elf
+  # progress owned by the parallel slice). Unknown future types outside
+  # this list fold to :unknown instead of being silently skipped.
+  @skipped_timeline_prefixes [
+    "lease.",
+    "capacity.",
+    "task.",
+    "goal.",
+    "dispatch.",
+    "harness.",
+    "elf.",
+    "decision."
+  ]
+
+  defp with_order(timeline) do
+    timeline
+    |> Enum.with_index()
+    |> Enum.map(fn {entry, index} -> {timeline_sequence(entry, index), entry, index} end)
+  end
+
+  defp timeline_sequence({sequence, _event}, _index) when is_integer(sequence), do: sequence
+  defp timeline_sequence(%{sequence: sequence}, _index) when is_integer(sequence), do: sequence
+
+  defp timeline_sequence(%{"sequence" => sequence}, _index) when is_integer(sequence),
+    do: sequence
+
+  defp timeline_sequence(%{sequence: _other}, index), do: index
+  defp timeline_sequence(%{"sequence" => _other}, index), do: index
+  defp timeline_sequence(_entry, index), do: index
+
+  defp timeline_step(state, {sequence, event}) when is_integer(sequence) do
+    case event do
+      {:admission_decision, _} -> safe_transition(state, event)
+      {:command_outcome, _} -> safe_transition(state, event)
+      {:run_terminal, _} -> run_terminal_step(state, event)
+      {:run_progress, code} -> run_progress_step(state, code)
+      :run_terminal -> run_signal_step(state, :run_terminal)
+      :dispatch_started -> run_signal_step(state, :dispatch_started)
+      :dispatch_blocked -> run_signal_step(state, :dispatch_blocked)
+      :checkpoint_started -> run_signal_step(state, :checkpoint_started)
+      :checkpoint_done -> run_signal_step(state, :checkpoint_done)
+      :recheck_due -> run_signal_step(state, :recheck_due)
+      :handoff_requested -> run_signal_step(state, :handoff_requested)
+      _other -> :unknown
+    end
+  rescue
+    _error -> :unknown
+  end
+
+  defp timeline_step(state, %{kind: kind, value: value}) do
+    timeline_step(state, {0, timeline_kind_event(kind, value)})
+  rescue
+    _error -> :unknown
+  end
+
+  defp timeline_step(state, %{"kind" => kind, "value" => value}) do
+    timeline_step(state, %{kind: kind, value: value})
+  end
+
+  defp timeline_step(state, %{__struct__: struct} = event)
+       when struct in [
+              Shoestring.Trajectory.TrajectoryEvent
+            ] do
+    case trajectory_timeline_event(event) do
+      {:event, lifecycle_event} -> machine_step(state, lifecycle_event)
+      :skip -> :skip
+      :unknown -> :unknown
+    end
+  rescue
+    _error -> :unknown
+  end
+
+  defp timeline_step(_state, _entry), do: :unknown
+
+  defp timeline_kind_event(kind, value) when kind in [:decision, "decision"] do
+    {:admission_decision, value}
+  end
+
+  defp timeline_kind_event(kind, value) when kind in [:command, "command"] do
+    {:command_outcome, value}
+  end
+
+  defp timeline_kind_event(kind, value) when kind in [:run, "run"] do
+    {:run_progress, value}
+  end
+
+  defp timeline_kind_event(_kind, _value), do: :__unknown_kind__
+
+  # Already-shaped lifecycle events go through the machine with tolerant
+  # run-signal no-ops (duplicate run.running / checkpoint.created replays
+  # keep the signaled state instead of halting to :unknown) and idempotent
+  # claim signals (a `cobbler.claim.acquired` replayed beside its
+  # `cobbler.command.accepted` keeps `:dispatching`; a release observed
+  # while already `:evaluating` keeps `:evaluating`).
+  defp machine_step(state, {:admission_decision, _} = event), do: safe_transition(state, event)
+  defp machine_step(state, {:command_outcome, _} = event), do: tolerant_command(state, event)
+  defp machine_step(state, {:run_terminal, _} = event), do: run_terminal_step(state, event)
+  defp machine_step(state, event) when is_atom(event), do: run_signal_step(state, event)
+  defp machine_step(_state, _event), do: :unknown
+
+  defp tolerant_command(state, {:command_outcome, _} = event) do
+    case safe_transition(state, event) do
+      {:ok, next} ->
+        {:ok, next}
+
+      :unknown ->
+        case {state, event} do
+          {:dispatching, {:command_outcome, :claimed}} -> {:ok, :dispatching}
+          {:evaluating, {:command_outcome, :released}} -> {:ok, :evaluating}
+          _other -> :unknown
+        end
+    end
+  rescue
+    _error -> :unknown
+  end
+
+  defp run_terminal_step(state, {:run_terminal, outcome}) do
+    with {:ok, normalized} <- normalize_run_outcome(outcome),
+         {:ok, next} <- GoalLifecycle.transition(state, {:run_terminal, normalized}) do
+      {:ok, next}
+    else
+      _error -> :unknown
+    end
+  rescue
+    _error -> :unknown
+  end
+
+  # Raw run-progress codes (trajectory type strings or signal atoms) map
+  # to lifecycle signal before folding. Unknown codes fold to :unknown,
+  # never raise.
+  defp run_progress_step(state, code) do
+    case normalize_run_progress(code) do
+      {:event, lifecycle_event} -> machine_step(state, lifecycle_event)
+      :unknown -> :unknown
+    end
+  rescue
+    _error -> :unknown
+  end
+
+  defp normalize_run_progress(code)
+       when code in ["run.starting", "run.running", :run_starting, :run_running, :working],
+       do: {:event, :dispatch_started}
+
+  defp normalize_run_progress(code)
+       when code in ["checkpoint.created", :checkpoint_created, :checkpointing, "checkpointing"],
+       do: {:event, :checkpoint_started}
+
+  defp normalize_run_progress(code)
+       when code in ["run.completed", :run_completed, :completed, "completed"],
+       do: {:event, {:run_terminal, :completed}}
+
+  defp normalize_run_progress(code)
+       when code in ["run.failed", :run_failed, :failed, "failed"],
+       do: {:event, {:run_terminal, :failed}}
+
+  defp normalize_run_progress(code)
+       when code in [:needs_user, "needs_user"],
+       do: {:event, {:run_terminal, :needs_user}}
+
+  defp normalize_run_progress(code)
+       when code in ["run.interrupted", "run.cancelled", "run.cancelling", :terminal, "terminal"],
+       do: {:event, :run_terminal}
+
+  defp normalize_run_progress(code)
+       when code in ["run.suspended", "run.pausing", :suspended, "suspended", :sleeping],
+       do: {:event, :run_suspended}
+
+  defp normalize_run_progress(code)
+       when code in ["handoff.created", :handoff, "handoff"],
+       do: {:event, :handoff_requested}
+
+  # Already-shaped lifecycle signal atoms pass through untouched.
+  defp normalize_run_progress(code)
+       when code in [
+              :dispatch_started,
+              :dispatch_blocked,
+              :checkpoint_started,
+              :checkpoint_done,
+              :run_terminal,
+              :run_suspended,
+              :recheck_due,
+              :handoff_requested
+            ],
+       do: {:event, code}
+
+  defp normalize_run_progress(_code), do: :unknown
+
+  defp run_signal_step(state, event) do
+    case GoalLifecycle.transition(state, event) do
+      {:ok, next} ->
+        {:ok, next}
+
+      {:error, _reason} ->
+        case {state, event} do
+          {:working, :dispatch_started} -> {:ok, :working}
+          {:checkpointing, :dispatch_started} -> {:ok, :checkpointing}
+          {:checkpointing, :checkpoint_started} -> {:ok, :checkpointing}
+          {:working, :checkpoint_done} -> {:ok, :working}
+          {:working, :run_suspended} -> {:ok, :sleeping}
+          {:checkpointing, :run_suspended} -> {:ok, :sleeping}
+          _other -> :unknown
+        end
+    end
+  rescue
+    _error -> :unknown
+  end
+
+  defp trajectory_timeline_event(%{type: type, payload: payload}) do
+    cond do
+      type == "admission.decided" ->
+        {:event, {:admission_decision, payload_value(payload, "result")}}
+
+      type in ["cobbler.command.accepted", "cobbler.command.resolved"] ->
+        {:event, {:command_outcome, command_kind_from_payload(payload)}}
+
+      type == "cobbler.claim.acquired" ->
+        {:event, {:command_outcome, :claimed}}
+
+      type == "cobbler.claim.released" ->
+        {:event, {:command_outcome, :released}}
+
+      type in ["run.starting", "run.running"] ->
+        {:event, :dispatch_started}
+
+      type == "checkpoint.created" ->
+        {:event, :checkpoint_started}
+
+      type == "run.completed" ->
+        {:event, {:run_terminal, :completed}}
+
+      type == "run.failed" ->
+        {:event, {:run_terminal, :failed}}
+
+      type in ["run.interrupted", "run.cancelled", "run.cancelling"] ->
+        {:event, :run_terminal}
+
+      type in ["run.suspended", "run.pausing"] ->
+        {:event, :run_suspended}
+
+      type == "handoff.created" ->
+        {:event, :handoff_requested}
+
+      skipped_timeline_type?(type) ->
+        :skip
+
+      true ->
+        :unknown
+    end
+  rescue
+    _error -> :unknown
+  end
+
+  defp skipped_timeline_type?(type) when is_binary(type) do
+    Enum.any?(@skipped_timeline_prefixes, &String.starts_with?(type, &1))
+  end
+
+  defp skipped_timeline_type?(_type), do: false
+
+  defp payload_value(payload, key) when is_map(payload) do
+    Map.get(payload, key, Map.get(payload, String.to_atom(key)))
+  rescue
+    _error -> :unknown_value
+  end
+
+  defp payload_value(_payload, _key), do: :unknown_value
+
+  defp command_kind_from_payload(payload) when is_map(payload) do
+    result = Map.get(payload, "result", Map.get(payload, :result))
+
+    cond do
+      is_map(result) and
+          (is_binary(result["kind"]) or is_atom(result[:kind]) or
+             is_binary(result[:kind])) ->
+        result["kind"] || result[:kind]
+
+      is_binary(payload["to_status"]) or is_atom(payload["to_status"]) ->
+        command_kind_from_status(payload["to_status"])
+
+      true ->
+        :unknown_kind
+    end
+  end
+
+  defp command_kind_from_payload(_payload), do: :unknown_kind
+
+  # Accepted events carry a status (`needs_user` for held claims) rather
+  # than a result kind: a held claim waits recoverably, anything else is
+  # unknown and folds honestly.
+  defp command_kind_from_status(status) when status in ["needs_user", :needs_user],
+    do: :needs_user
+
+  defp command_kind_from_status(status) when status in ["claimed", :claimed], do: :claimed
+  defp command_kind_from_status(_status), do: :unknown_kind
+
+  defp normalize_run_outcome(outcome) when is_atom(outcome) do
+    if outcome in [:completed, :failed, :needs_user] do
+      {:ok, outcome}
+    else
+      :error
+    end
+  end
+
+  defp normalize_run_outcome(outcome) when is_binary(outcome) do
+    try do
+      normalize_run_outcome(String.to_existing_atom(outcome))
+    rescue
+      ArgumentError -> :error
+    end
+  end
+
+  defp normalize_run_outcome(_outcome), do: :error
 
   defp normalize_admission_result(result) when is_atom(result) do
     if result in [:admit, :defer_until, :require_confirmation, :reject] do

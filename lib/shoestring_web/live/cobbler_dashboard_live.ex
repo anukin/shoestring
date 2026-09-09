@@ -91,11 +91,11 @@ defmodule ShoestringWeb.CobblerDashboardLive do
   defp scope_owner_id(_scope), do: :error
 
   defp goal_summary(%Goal{} = goal, claim) do
-    decision_results = admission_results(goal.id)
+    events = replay_events(goal.id)
+    decision_results = admission_results(events)
     commands = safe_list_commands(goal.id)
-    command_kinds = Enum.map(commands, &command_result_kind/1)
 
-    state = CobblerPresentation.derive_goal_state(decision_results, command_kinds)
+    state = CobblerPresentation.derive_goal_state(events)
 
     %{
       id: goal.id,
@@ -110,15 +110,16 @@ defmodule ShoestringWeb.CobblerDashboardLive do
     }
   end
 
-  defp admission_results(goal_id) do
-    case Trajectory.replay(goal_id) do
-      {:ok, events} ->
-        events
-        |> Enum.filter(&(&1.type == "admission.decided"))
-        |> Enum.map(&decision_result/1)
+  defp admission_results(events) when is_list(events) do
+    events
+    |> Enum.filter(&(&1.type == "admission.decided"))
+    |> Enum.map(&decision_result/1)
+  end
 
-      {:error, _reason} ->
-        []
+  defp replay_events(goal_id) do
+    case Trajectory.replay(goal_id) do
+      {:ok, events} -> events
+      {:error, _reason} -> []
     end
   rescue
     _error -> []
@@ -126,9 +127,6 @@ defmodule ShoestringWeb.CobblerDashboardLive do
 
   defp decision_result(%{payload: %{"result" => result}}), do: result
   defp decision_result(_event), do: :unknown_result
-
-  defp command_result_kind(%{result: %{"kind" => kind}}), do: kind
-  defp command_result_kind(_command), do: :unknown_kind
 
   defp safe_list_commands(goal_id) do
     Cobbler.list_commands(goal_id)
