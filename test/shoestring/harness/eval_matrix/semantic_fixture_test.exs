@@ -1,46 +1,47 @@
 defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
   @moduledoc """
-  Genuine fixture-task semantic eval (loop-closure W7): a real two-Elf task
-  over real files with mechanical acceptance — no hand-appended terminals on
-  the driven path, no scripted completions.
+  Genuine fixture-task semantic eval (loop-closure W7, revised): real
+  execution end to end with mechanical acceptance — no hand-appended
+  terminals on the driven path, no scripted completions, no shared-state
+  resets between arms.
 
-  Fixture: a tiny git project (`service.txt` broken, `forbidden.txt`
-  must-not-touch, `check.sh` asserting both). Leg A is a real Elf whose
-  command partially implements then fails the check (exit 1 → terminal
-  failed, mechanical); its checkpoint carries repo evidence collected for
-  real (`git rev-parse`, `git status`, `git diff --stat`, the durable
-  terminal event). Semantic strings (constraint, rejected approach,
-  next-action instruction) are fixture-authored through the real writer —
-  exactly what a model authors in production — and labeled as such below.
-  Leg B per arm is a real Elf running the deterministic applier
-  (`test/fixtures/fixture_applier.py`, python3 stdlib only) on that arm's
-  prompt; the terminal class comes from the applier's real exit code fused
-  with real progress events. Acceptance is re-verified independently by
-  this test (fresh `check.sh` run + byte comparisons), never trusted from
-  the applier.
+  Per arm, an independent goal runs the same fixture task:
 
-  Arms (same leg A, same applier, only the leg-B input differs):
+  - leg A is a real Elf whose failing check yields a real failed terminal;
+    its checkpoint carries real repo evidence (`git rev-parse`, dirty diff
+    stat, the durable terminal event) plus fixture-authored semantic
+    strings (constraint, rejected approach, next-action instruction) —
+    exactly what a model authors in production;
+  - leg B routes through the REAL handoff request path
+    (`Elves.resume_run/2` → intent → composed request → Fake session
+    start), except the worktree arm, which has no checkpoint and therefore
+    cannot handoff by design (asserted);
+  - the applier (`test/fixtures/fixture_applier.py`, python3 stdlib only)
+    executes the RECORDED handoff prompt in a second real Elf; terminal
+    classes come from real exit codes fused with real progress events;
+  - acceptance is re-verified independently (fresh `check.sh` run + byte
+    comparisons), never trusted from the applier.
 
-  - worktree-only: bare file listing (no instruction → nothing fixed).
-  - naive-summary: flat prose naming every file with the fix instruction
-    but no constraint.
-  - trajectory-projection: the real composed handoff prompt (fix +
-    constraint + minimal refs) via `Continuation`.
+  Arms differ ONLY in checkpoint content (same task, same applier):
 
-  Locking note (standing contract): every producer here is merged, so
-  these tests PASS on the pre-fix commit too — they document genuine loop
-  behavior (mechanical terminals, file states, exit codes), not a behavior
-  change. The locks they carry are internal: cross-arm invariants that fail
-  if any arm's mechanics regress (e.g. trajectory acceptance dropping to
-  anything but 2, or the worktree arm completing).
+  - worktree-only: no checkpoint → handoff refused → direct Elf on a bare
+    listing (no instruction → nothing fixed).
+  - naive-summary: flat checkpoint (fix instruction present, every file
+    named, no constraint).
+  - trajectory-projection: full checkpoint (fix + constraint + minimal
+    refs + admission decision history).
+
+  Locking status: all producers are merged, so these tests PASS on the
+  pre-fix tree too — documentation of genuine loop behavior, not behavior
+  locks. Cross-arm invariants (trajectory acceptance/constraint, worktree
+  failure, read-count ordering) fail on regressed mechanics.
   """
   use Shoestring.DataCase, async: false
 
   alias Shoestring.Elves
   alias Shoestring.Harness.{Checkpoints, Continuation}
-  alias Shoestring.Harness.Fake.Scenario
-  alias Shoestring.Trajectory
-
+  alias Shoestring.Harness.Fake
+  alias Shoestring.Harness.Fake.{RequestLog, Scenario}
   alias Shoestring.Test.ElvesHelpers
 
   @terminal_timeout 30_000
@@ -50,111 +51,142 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
 
   setup do
     sup = start_supervised!({Shoestring.Elves.Supervisor, name: nil})
-    %{goal: goal, task: task} = ElvesHelpers.insert_goal_task()
-    dir = Path.join(System.tmp_dir!(), "shoestring-w7-#{Ecto.UUID.generate()}")
-    File.mkdir_p!(dir)
-    on_exit(fn -> File.rm_rf!(dir) end)
-    %{sup: sup, goal: goal, task: task, dir: dir}
+    %{sup: sup}
   end
 
-  test "three arms: genuine execution, mechanical acceptance, measured tax", %{
-    sup: sup,
-    goal: goal,
-    task: task,
-    dir: dir
-  } do
+  test "trajectory arm: full recovery through the real handoff path", %{sup: sup} do
+    %{goal: goal, task: task, dir: dir, leg_a_run: leg_a_run} = leg_a_fixture!(sup, :trajectory)
+
+    {prompt, _triple} = drive_handoff!(sup, goal, leg_a_run, dir)
+
+    assert prompt =~ @constraint
+    assert prompt =~ "status: fixed"
+
+    terminal = drive_applier!(sup, goal, task, dir, prompt)
+    assert terminal == :completed
+
+    scores = score_arm(dir, prompt)
+    assert scores.acceptance == 2
+    assert scores.constraint == 2
+    assert scores.total == 11
+    assert scores.extra_reads == 1
+  end
+
+  test "naive arm: fix without constraint, noisier reads", %{sup: sup} do
+    %{goal: goal, task: task, dir: dir, leg_a_run: leg_a_run} = leg_a_fixture!(sup, :naive)
+    {prompt, _triple} = drive_handoff!(sup, goal, leg_a_run, dir)
+
+    refute prompt =~ @constraint
+    assert prompt =~ "status: fixed"
+
+    terminal = drive_applier!(sup, goal, task, dir, prompt)
+    assert terminal == :completed
+
+    scores = score_arm(dir, prompt)
+    assert scores.acceptance == 2
+    assert scores.constraint == 0
+    assert scores.total == 9
+    assert scores.extra_reads == 2
+  end
+
+  test "worktree arm: no checkpoint means no handoff and no fix", %{sup: sup} do
+    %{goal: goal, task: task, dir: dir, leg_a_run: leg_a_run} = leg_a_fixture!(sup, :none)
+
+    # No checkpoint was authored: the handoff path refuses.
+    assert {:error, _} = Elves.resume_run(leg_a_run, to_provider_id: "fake-harness-b")
+
+    prompt = "Files in workdir: service.txt, forbidden.txt, check.sh, prompt.txt."
+    terminal = drive_applier!(sup, goal, task, dir, prompt)
+    assert terminal == :failed
+
+    scores = score_arm(dir, prompt)
+    assert scores.acceptance == 0
+    assert scores.constraint == 0
+    assert scores.total == 3
+  end
+
+  # ----------------------------------------------------------------------------
+  # Leg A: genuine failing execution + authored checkpoint with real evidence
+  # ----------------------------------------------------------------------------
+
+  defp leg_a_fixture!(sup, arm) do
+    %{goal: goal, task: task} = ElvesHelpers.insert_goal_task()
+    dir = fresh_dir!()
     write_fixture!(dir)
     git!(dir, ["init"])
     git!(dir, ["add", "-A"])
-
     git!(dir, ["-c", "user.email=w7@test", "-c", "user.name=w7", "commit", "-m", "baseline"])
-
-    revision = git!(dir, ["rev-parse", "HEAD"]) |> String.trim()
+    revision = dir |> git!(["rev-parse", "HEAD"]) |> String.trim()
     assert byte_size(revision) > 0
 
     leg_a_run = run_leg_a!(sup, goal, task, dir)
-
     checkpoint_id = Ecto.UUID.generate()
 
-    {:ok, checkpoint} =
-      Shoestring.Harness.Checkpoint.new(%{
-        version: Shoestring.Harness.Checkpoint.version(),
-        checkpoint_id: checkpoint_id,
-        goal_id: goal.id,
-        run_id: leg_a_run,
-        acceptance_contract: %{criteria: ["service reaches status fixed with forbidden pristine"]},
-        repository_state: %{revision: revision, dirty: true},
-        evidence: [
-          "leg-a terminal failed: check.sh exit 1 on the partial implementation",
-          "git diff --stat: " <> (git!(dir, ["diff", "--stat"]) |> String.trim())
-        ],
-        decisions: ["constraint: #{@constraint}", "rejected: rewrite the service from scratch"],
-        unresolved_issues: ["service fix pending leg B"],
-        next_action: "#{@fix_instruction} and #{@check_instruction}; constraint: #{@constraint}",
-        stop_reason: "leg-a check failed (exit 1)",
-        provider_session_id: "fake-session-leg-a",
-        extensions: %{}
-      })
+    checkpoint_attrs =
+      case arm do
+        :none ->
+          nil
 
-    {:ok, %{checkpoint_id: ^checkpoint_id}} =
-      Checkpoints.record(
-        goal.id,
-        checkpoint,
-        repo: Shoestring.Repo,
-        now: DateTime.utc_now(),
-        actor: "w7-fixture",
-        writer_opts: []
-      )
+        :naive ->
+          %{
+            decisions: ["saw service.txt", "saw forbidden.txt", "saw check.sh"],
+            unresolved_issues: [],
+            next_action:
+              "The service is broken. Repair instruction: #{@fix_instruction} " <>
+                "then #{@check_instruction} to verify. Files seen: service.txt, " <>
+                "forbidden.txt, check.sh, leg_a.sh, prompt.txt."
+          }
 
-    assert {:ok, _} = Shoestring.Harness.Projector.project(goal.id)
+        :trajectory ->
+          %{
+            decisions: [
+              "constraint: #{@constraint}",
+              "rejected: rewrite the service from scratch"
+            ],
+            unresolved_issues: ["service fix pending leg B"],
+            next_action:
+              "#{@fix_instruction} and #{@check_instruction}; constraint: #{@constraint}"
+          }
+      end
 
-    {:ok, cont} =
-      Continuation.for_goal(goal.id, repo: Shoestring.Repo, run_id: leg_a_run)
+    if checkpoint_attrs do
+      diff_stat = dir |> git!(["diff", "--stat"]) |> String.trim()
 
-    record = Shoestring.Repo.get!(Shoestring.Harness.CheckpointRecord, checkpoint_id)
+      {:ok, checkpoint} =
+        Shoestring.Harness.Checkpoint.new(%{
+          version: Shoestring.Harness.Checkpoint.version(),
+          checkpoint_id: checkpoint_id,
+          goal_id: goal.id,
+          run_id: leg_a_run,
+          acceptance_contract: %{
+            criteria: ["service reaches status fixed with forbidden pristine"]
+          },
+          repository_state: %{revision: revision, dirty: true},
+          evidence: [
+            "leg-a terminal failed: check.sh exit 1 on the partial implementation",
+            "git diff --stat: #{diff_stat}"
+          ],
+          decisions: checkpoint_attrs.decisions,
+          unresolved_issues: checkpoint_attrs.unresolved_issues,
+          next_action: checkpoint_attrs.next_action,
+          stop_reason: "leg-a check failed (exit 1)",
+          provider_session_id: "fake-session-leg-a",
+          extensions: %{}
+        })
 
-    prompts = %{
-      worktree_only: "Files in workdir: service.txt, forbidden.txt, check.sh, prompt.txt.",
-      naive_summary:
-        "Summary of prior work. Files seen: service.txt, forbidden.txt, " <>
-          "check.sh, leg_a.sh, prompt.txt, actions.log. The service is broken. " <>
-          "Repair instruction: #{@fix_instruction} then #{@check_instruction} to verify.",
-      trajectory_projection: Continuation.compose_handoff_prompt(cont, checkpoint_record: record)
-    }
+      {:ok, %{checkpoint_id: ^checkpoint_id}} =
+        Checkpoints.record(goal.id, checkpoint,
+          repo: Shoestring.Repo,
+          now: DateTime.utc_now(),
+          actor: "w7-fixture",
+          writer_opts: []
+        )
 
-    # Trajectory prompt genuinely carries the constraint and the fix.
-    assert prompts.trajectory_projection =~ @constraint
-    assert prompts.trajectory_projection =~ "status: fixed"
+      assert {:ok, _} = Shoestring.Harness.Projector.project(goal.id)
+    end
 
-    results =
-      Enum.map([:worktree_only, :naive_summary, :trajectory_projection], fn arm ->
-        reset_fixture!(dir)
-        File.write!(Path.join(dir, "prompt.txt"), prompts[arm])
-        terminal = run_leg_b!(sup, goal, task, dir)
-        score_arm(dir, prompts[arm]) |> Map.put(:terminal, terminal)
-      end)
-      |> Enum.zip([:worktree_only, :naive_summary, :trajectory_projection])
-      |> Map.new(fn {result, arm} -> {arm, result} end)
-
-    # Mechanical invariants (each would fail on regressed mechanics):
-    assert results.trajectory_projection.acceptance == 2
-    assert results.trajectory_projection.constraint == 2
-    assert results.trajectory_projection.terminal == :completed
-    assert results.naive_summary.acceptance == 2
-    assert results.naive_summary.constraint == 0
-    assert results.worktree_only.acceptance == 0
-    assert results.worktree_only.terminal == :failed
-    # The naive summary names every file, so its investigation set is
-    # strictly larger than the trajectory prompt's by construction.
-    assert results.naive_summary.extra_reads > results.trajectory_projection.extra_reads
-    # Trajectory wins outright.
-    assert results.trajectory_projection.total > results.naive_summary.total
-    assert results.naive_summary.total > results.worktree_only.total
+    %{goal: goal, task: task, dir: dir, checkpoint_id: checkpoint_id, leg_a_run: leg_a_run}
   end
-
-  # ----------------------------------------------------------------------------
-  # Legs
-  # ----------------------------------------------------------------------------
 
   defp run_leg_a!(sup, goal, task, dir) do
     run_id = Ecto.UUID.generate()
@@ -170,7 +202,7 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                run_id: run_id,
-               adapter: Shoestring.Harness.Fake,
+               adapter: Fake,
                adapter_opts: %{scenario: scenario},
                command: ["./leg_a.sh"],
                runner_opts: [cd: dir, kill_grace_ms: 200, reap_timeout_ms: 2_000],
@@ -181,14 +213,52 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
     run_id
   end
 
-  defp run_leg_b!(sup, goal, task, dir) do
+  # ----------------------------------------------------------------------------
+  # Leg B: real handoff path, then a real applier Elf on the recorded prompt
+  # ----------------------------------------------------------------------------
+
+  defp drive_handoff!(sup, goal, leg_a_run, dir) do
+    {:ok, cont} = Continuation.for_goal(goal.id, repo: Shoestring.Repo, run_id: leg_a_run)
+
+    triple = %{
+      checkpoint_id: cont.checkpoint_id,
+      next_action: cont.next_action,
+      decision_refs: cont.decision_refs
+    }
+
+    {:ok, log} = RequestLog.start()
+
+    scenario =
+      ElvesHelpers.custom_scenario(:w7_handoff_effect, [
+        Scenario.lifecycle_event(source_event_id: "evt-life")
+      ])
+
+    assert {:ok, %{run: _new_run}} =
+             Elves.resume_run(leg_a_run,
+               adapter: Fake,
+               adapter_opts: %{scenario: scenario, request_log: log},
+               continuation: triple,
+               to_provider_id: "fake-harness-b",
+               reason: "w7 fixture handoff",
+               handoff_id: Ecto.UUID.generate(),
+               new_run_id: Ecto.UUID.generate(),
+               new_dispatch_id: Ecto.UUID.generate()
+             )
+
+    [recorded] = RequestLog.starts(log)
+    assert recorded.continuation.checkpoint_id == triple.checkpoint_id
+    {recorded.prompt, triple}
+  end
+
+  defp drive_applier!(sup, goal, task, dir, prompt) do
+    File.write!(Path.join(dir, "prompt.txt"), prompt)
     run_id = Ecto.UUID.generate()
     request = ElvesHelpers.run_request(goal, task, dispatch_id: run_id)
 
     scenario =
-      ElvesHelpers.custom_scenario(:w7_leg_b, [
+      ElvesHelpers.custom_scenario(:w7_applier, [
         Scenario.lifecycle_event(source_event_id: "evt-life"),
-        Scenario.output_event("leg-b working", source_event_id: "evt-out")
+        Scenario.output_event("applier working", source_event_id: "evt-out")
       ])
 
     applier = Path.join([File.cwd!(), "test", "fixtures", "fixture_applier.py"])
@@ -197,7 +267,7 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                run_id: run_id,
-               adapter: Shoestring.Harness.Fake,
+               adapter: Fake,
                adapter_opts: %{scenario: scenario},
                command: ["python3", applier, dir],
                runner_opts: [cd: dir, kill_grace_ms: 200, reap_timeout_ms: 2_000],
@@ -211,6 +281,13 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
   # ----------------------------------------------------------------------------
   # Fixture project
   # ----------------------------------------------------------------------------
+
+  defp fresh_dir! do
+    dir = Path.join(System.tmp_dir!(), "shoestring-w7-#{Ecto.UUID.generate()}")
+    File.mkdir_p!(dir)
+    ExUnit.Callbacks.on_exit(fn -> File.rm_rf!(dir) end)
+    dir
+  end
 
   defp write_fixture!(dir) do
     File.write!(Path.join(dir, "service.txt"), "status: broken\n")
@@ -232,12 +309,6 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
     File.chmod!(Path.join(dir, "check.sh"), 0o755)
     File.chmod!(Path.join(dir, "leg_a.sh"), 0o755)
     File.write!(Path.join(dir, "forbidden.orig"), "do not touch\n")
-    :ok
-  end
-
-  defp reset_fixture!(dir) do
-    git!(dir, ["checkout", "--", "service.txt"])
-    File.rm(Path.join(dir, "actions.log"))
     :ok
   end
 
@@ -314,7 +385,6 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
       extra_reads: reads,
       check_runs: checks,
       prompt_bytes: byte_size(prompt),
-      terminal: nil,
       total: acceptance + constraint + recognition + repeated + turns + capacity
     }
   end
