@@ -16,6 +16,8 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   | current revision, dirty flag | `git rev-parse HEAD` + `git status --porcelain` in the worktree (local `git` only, never the network) |
   | dirty diff STAT + changed-file list | `git diff HEAD --stat` + porcelain list, bounded (50 files, 32 KiB); overflow hard-fails to the floor template, never truncated silently |
   | verification evidence | the run's durable `harness.event_recorded` trajectory events (command/tool/result/error identities + exact statuses/codes) plus the in-memory OS exit status; absent input is stated explicitly as `"no verification recorded"` |
+  | decisions | the goal's recent `admission.decided` history (decision_id + reason_code + admission source event id, newest last, at most `@max_decision_entries`); empty history is honestly `[]`, never invented |
+  | artifact ids | the run's recorded `harness.event_recorded` kind-`"artifact"` payload `artifact_id`s (the run link — `artifacts` rows are goal-scoped with no run column), filtered to goal-owned rows so the `Checkpoints` writer pre-check cannot fail, at most `@max_artifact_ids`; see the artifact inventory below |
   | last completed safe boundary | latest durable `run.*` / `checkpoint.created` / `lease.*` event for the run (the same boundary rule as `Shoestring.Elves.Staleness`), plus the in-memory reactive lease checkpoint id when set |
   | outcome class + stop reason | the terminal map under commit |
   | lease snapshot | the Elf's in-memory lease bounds/grant/deadline fields |
@@ -41,12 +43,28 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   the terminal idempotency key (`"elf-terminal:<dispatch_id>"`) and outcome.
 
   No timers, no lease accounting changes, no ingest changes.
+
+  ## Artifact inventory (why event references, not an artifact pipeline)
+
+  `artifacts` rows are goal-scoped (`goal_id`, optional `task_id`) with no
+  run column, so there is no cheap "artifacts of this run" row query. The
+  run linkage that does exist is the durable `harness.event_recorded`
+  kind-`"artifact"` payload (`artifact_id`, `run_id`) — including the Elf's
+  own terminal log artifact, whose `persist_log_artifact/1` runs
+  synchronously *before* the checkpoint attempt in `commit_terminal/2`, so
+  it is visible to this collection. This slice therefore populates
+  `artifact_ids` from those recorded references only (latest 32, goal
+  ownership re-checked in one query), and deliberately builds no artifact
+  discovery pipeline: content hashing, media-type filtering, and
+  cross-goal joins are out of scope. The deterministic floor template keeps
+  `artifact_ids: []` so the writer ownership pre-check cannot fail when the
+  artifact linkage itself is what failed.
   """
 
   import Ecto.Query
 
   alias Shoestring.Harness.{CheckpointFallback, Checkpoints, Clock}
-  alias Shoestring.Trajectory.{Redaction, TrajectoryEvent}
+  alias Shoestring.Trajectory.{Artifact, Redaction, TrajectoryEvent}
 
   @max_changed_files 50
   @max_diff_bytes 32 * 1024
@@ -54,8 +72,18 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   @chunk_bytes 1_900
   @max_verification_lines 40
   @max_events_scanned 500
+  @max_decision_entries 8
+  @max_artifact_ids 32
 
   @default_criteria "complete the supervised task per the goal acceptance contract"
+
+  @doc "Maximum `admission.decided` history entries carried as checkpoint decisions."
+  @spec max_decision_entries() :: 8
+  def max_decision_entries, do: @max_decision_entries
+
+  @doc "Maximum recorded artifact references carried as checkpoint `artifact_ids`."
+  @spec max_artifact_ids() :: 32
+  def max_artifact_ids, do: @max_artifact_ids
 
   @doc """
   Deterministic checkpoint id for a run's terminal checkpoint.
@@ -107,7 +135,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
           build_and_write(state, Map.put(inputs, :checkpoint_id, id), opts, nil)
 
         {:error, reason} ->
-          build_and_write(state, fallback_inputs(state, terminal, reason), opts, nil)
+          build_and_write(state, fallback_inputs(state, terminal, reason, opts), opts, nil)
       end
 
     case result do
@@ -162,12 +190,12 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
            repository_revision: revision,
            repository_dirty: dirty?,
            evidence: evidence,
-           decisions: [],
+           decisions: terminal_decisions(state, opts),
            unresolved_issues: unresolved_issues(terminal, state),
            next_action: next_action(terminal, state, revision, verification),
            stop_reason: stop,
            provider_session_id: state.provider_session_id,
-           artifact_ids: [],
+           artifact_ids: terminal_artifact_ids(state, opts),
            extensions: terminal_extensions(state, terminal, nil)
          }}
       end
@@ -184,8 +212,8 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   `"unknown"`, the last failure is pointed at precisely, and a rerun
   verification command is named. No certainty is invented.
   """
-  @spec fallback_inputs(map(), map(), term()) :: map()
-  def fallback_inputs(state, terminal, reason) do
+  @spec fallback_inputs(map(), map(), term(), keyword()) :: map()
+  def fallback_inputs(state, terminal, reason, opts \\ []) do
     anchor = last_event_anchor(state)
 
     %{
@@ -204,7 +232,10 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
             "(terminal key #{terminal_key(state)})",
           "last durable event: #{anchor}"
         ]),
-      decisions: [],
+      # The floor still attempts the durable admission history (honestly []
+      # when absent) but keeps artifact_ids [] so the writer ownership
+      # pre-check cannot fail on the retry path.
+      decisions: terminal_decisions(state, opts),
       unresolved_issues: unresolved_issues(terminal, state),
       next_action: next_action(terminal, state, "unknown", %{lines: [], total: 0, shown: 0}),
       stop_reason: stop_reason(terminal, state),
@@ -234,7 +265,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
           nil ->
             # One floor retry so a full-inputs failure still lands durable
             # evidence (carrying the first error) instead of nothing.
-            floor = fallback_inputs(state, terminal_of(inputs), reason)
+            floor = fallback_inputs(state, terminal_of(inputs), reason, opts)
             build_and_write(state, floor, opts, reason)
 
           _already_floored ->
@@ -391,6 +422,95 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   end
 
   # -- Trajectory evidence --
+
+  # Recent admission history as checkpoint decisions: `decision_id` +
+  # `reason_code` with the admission source event id, oldest first. Empty
+  # history is honestly [] — nothing is invented. Query failure degrades to
+  # [] (enrichment must never fail the checkpoint); callers that need a
+  # hard failure use the evidence-budget path instead.
+  defp terminal_decisions(state, opts) do
+    repo = Keyword.get(opts, :repo, state.repo)
+
+    rows =
+      repo.all(
+        from event in TrajectoryEvent,
+          where: event.goal_id == ^state.goal_id and event.type == "admission.decided",
+          order_by: [desc: event.sequence],
+          limit: ^@max_decision_entries,
+          select: {event.id, event.payload}
+      )
+
+    rows
+    |> Enum.reverse()
+    |> Enum.map(&decision_line/1)
+    |> Enum.filter(&is_binary/1)
+    |> Redaction.redact()
+  rescue
+    _error -> []
+  catch
+    _kind, _reason -> []
+  end
+
+  defp decision_line({event_id, %{"decision_id" => decision_id} = payload})
+       when is_binary(decision_id) do
+    reason_code = Map.get(payload, "reason_code")
+
+    reason_text =
+      if is_binary(reason_code) and reason_code != "", do: reason_code, else: "unknown"
+
+    "decision #{decision_id} (#{reason_text}; admission event #{event_id})"
+  end
+
+  defp decision_line(_other), do: nil
+
+  # Recorded artifact references for the run (see the artifact inventory in
+  # the module doc): `harness.event_recorded` kind-`"artifact"` payloads
+  # carry the only run-scoped artifact linkage. Candidates are re-checked
+  # against goal-owned artifact rows in one query so the `Checkpoints`
+  # writer ownership pre-check cannot fail; anything unowned or
+  # unqueryable is dropped, never invented.
+  defp terminal_artifact_ids(state, opts) do
+    repo = Keyword.get(opts, :repo, state.repo)
+
+    candidates =
+      repo.all(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^state.goal_id and event.run_id == ^state.run_id and
+              event.type == "harness.event_recorded",
+          order_by: [asc: event.sequence],
+          select: event.payload
+      )
+      |> Enum.map(&artifact_candidate/1)
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+      |> Enum.take(-@max_artifact_ids)
+
+    case candidates do
+      [] ->
+        []
+
+      _candidates ->
+        owned =
+          MapSet.new(
+            repo.all(
+              from artifact in Artifact,
+                where: artifact.goal_id == ^state.goal_id and artifact.id in ^candidates,
+                select: artifact.id
+            )
+          )
+
+        Enum.filter(candidates, &MapSet.member?(owned, &1))
+    end
+  rescue
+    _error -> []
+  catch
+    _kind, _reason -> []
+  end
+
+  defp artifact_candidate(%{"kind" => "artifact", "artifact_id" => artifact_id}), do: artifact_id
+  defp artifact_candidate(%{kind: "artifact", artifact_id: artifact_id}), do: artifact_id
+  defp artifact_candidate(_payload), do: nil
 
   defp verification_evidence(state, opts) do
     repo = Keyword.get(opts, :repo, state.repo)

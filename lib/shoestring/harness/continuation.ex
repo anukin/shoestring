@@ -47,6 +47,43 @@ defmodule Shoestring.Harness.Continuation do
   A missing lease row (`:no_lease`) constrains nothing: the allowlist
   governs known lease statuses, and runs without a lease predate lease
   enforcement.
+
+  ## Handoff prompt content (projection state, not just a pointer)
+
+  `compose_handoff_prompt/2` without options preserves the W5 pointer-only
+  shape byte-for-byte (checkpoint pointer + `next_action` + decision refs +
+  generic constraints summary). With a checkpoint record it additionally
+  carries the projection state WP F demands:
+
+  - completed work from the checkpoint `decisions` items;
+  - current failure from `stop_reason` plus the `unresolved_issues` items;
+  - constraints from the `unresolved_issues` items;
+  - verification from the `evidence` items;
+  - the next checkpoint condition is the base `next_action` + checkpoint
+    pointer, already present.
+
+  Options (all additive; no `RunRequest`/continuation struct change):
+
+  - `:checkpoint_record` — an explicit `CheckpointRecord` struct (or a
+    plain map with the same atom/string keys). Precedence: explicit
+    record > `:repo` load > generic default.
+  - `:repo` — when no explicit record is passed, the record is loaded
+    itself via `repo.get(CheckpointRecord, checkpoint_id)` from the
+    continuation's checkpoint id (this path exists so callers that must
+    not change their call shape, e.g. W5-owned `Elves.handoff_request/3`,
+    still get content without passing the record). Missing row, unknown
+    id, or load failure falls back to the generic default.
+  - `:constraints` — overrides the generic constraints summary in the
+    base text (unchanged behaviour).
+
+  Only checkpoint content fields (`decisions`, `unresolved_issues`,
+  `evidence`, `stop_reason`) are ever read: transcript-scale terms never
+  enter the prompt. Section lists keep at most `@max_handoff_section_items`
+  items and `@max_handoff_section_chars` characters each (with `…[+N more]`
+  / `…[truncated]` markers); the whole prompt stays within
+  `@handoff_prompt_max_chars` characters with the `…[truncated]` marker on
+  overall truncation. Without a record the output is byte-identical to the
+  W5 behaviour (overall slice without marker, preserved exactly).
   """
 
   import Ecto.Query
@@ -295,10 +332,20 @@ defmodule Shoestring.Harness.Continuation do
   def handoff_payload(_params), do: {:error, {:invalid_handoff, :must_be_a_map}}
 
   @handoff_prompt_max_chars 4_000
+  @max_handoff_section_items 8
+  @max_handoff_section_chars 800
 
   @doc "Maximum characters for a composed handoff prompt (transcript-free, bounded)."
   @spec handoff_prompt_max_chars() :: 4_000
   def handoff_prompt_max_chars, do: @handoff_prompt_max_chars
+
+  @doc "Maximum checkpoint items carried per handoff-prompt section."
+  @spec max_handoff_section_items() :: 8
+  def max_handoff_section_items, do: @max_handoff_section_items
+
+  @doc "Maximum characters carried per handoff-prompt section."
+  @spec max_handoff_section_chars() :: 800
+  def max_handoff_section_chars, do: @max_handoff_section_chars
 
   @doc """
   Composes a bounded, transcript-free handoff prompt from a continuation.
@@ -307,6 +354,12 @@ defmodule Shoestring.Harness.Continuation do
   constraints summary. Never includes raw transcript terms: only the three
   continuation keys are read. Output is truncated to
   `handoff_prompt_max_chars/0` characters.
+
+  With `:checkpoint_record` (or `:repo` for self-load by checkpoint id),
+  appends bounded Completed work / Failure / Constraints / Verification
+  sections from the checkpoint content (see the module doc for precedence
+  and caps). Without either option the output is byte-identical to the
+  pointer-only shape.
   """
   @spec compose_handoff_prompt(map(), keyword()) :: String.t()
   def compose_handoff_prompt(continuation, opts \\ []) when is_map(continuation) do
@@ -332,17 +385,140 @@ defmodule Shoestring.Harness.Continuation do
         list -> Enum.join(list, ", ")
       end
 
-    text =
+    base =
       "Continue from checkpoint #{checkpoint_id}. " <>
         "Next action: #{next_action}. " <>
         "Decision refs: #{refs_text}. " <>
         "Constraints: #{constraints}."
 
-    if String.length(text) > @handoff_prompt_max_chars do
-      String.slice(text, 0, @handoff_prompt_max_chars)
+    case resolve_checkpoint_record(continuation, opts) do
+      nil ->
+        if String.length(base) > @handoff_prompt_max_chars do
+          String.slice(base, 0, @handoff_prompt_max_chars)
+        else
+          base
+        end
+
+      record ->
+        full = base <> record_sections(record)
+
+        if String.length(full) > @handoff_prompt_max_chars do
+          String.slice(full, 0, @handoff_prompt_max_chars - String.length(@truncation_marker)) <>
+            @truncation_marker
+        else
+          full
+        end
+    end
+  end
+
+  # -- Checkpoint-record prompt sections (P2/P3) --
+
+  # Precedence: explicit :checkpoint_record > :repo self-load by
+  # checkpoint_id > generic default (nil). Never raises: load failure
+  # degrades to the pointer-only shape.
+  defp resolve_checkpoint_record(continuation, opts) do
+    case Keyword.get(opts, :checkpoint_record) do
+      nil ->
+        case Keyword.get(opts, :repo) do
+          nil -> nil
+          repo -> load_checkpoint_record(repo, continuation)
+        end
+
+      record when is_map(record) ->
+        record
+
+      _other ->
+        nil
+    end
+  rescue
+    _error -> nil
+  catch
+    _kind, _reason -> nil
+  end
+
+  defp load_checkpoint_record(repo, continuation) do
+    checkpoint_id =
+      continuation[:checkpoint_id] || continuation["checkpoint_id"]
+
+    if is_binary(checkpoint_id) do
+      case repo.get(CheckpointRecord, checkpoint_id) do
+        %CheckpointRecord{} = record -> record
+        _other -> nil
+      end
+    else
+      nil
+    end
+  rescue
+    _error -> nil
+  catch
+    _kind, _reason -> nil
+  end
+
+  defp record_sections(record) do
+    completed = section_text(record_items(record, :decisions), "none recorded")
+    failure = failure_text(record)
+    constraints = section_text(record_items(record, :unresolved_issues), "none recorded")
+    verification = section_text(record_items(record, :evidence), "no verification recorded")
+
+    " Completed work: #{completed}." <>
+      " Failure: #{failure}." <>
+      " Constraints: #{constraints}." <>
+      " Verification: #{verification}."
+  end
+
+  defp failure_text(record) do
+    stop = record_field(record, :stop_reason)
+    issues = record_items(record, :unresolved_issues)
+
+    stop_text = if is_binary(stop) and stop != "", do: stop, else: "unknown"
+
+    case issues do
+      [] -> stop_text
+      _issues -> "#{stop_text}; #{section_text(issues, "none recorded")}"
+    end
+  end
+
+  defp section_text([], empty_text), do: empty_text
+
+  defp section_text(items, _empty_text) do
+    shown = Enum.take(items, @max_handoff_section_items)
+    hidden = length(items) - length(shown)
+
+    text = Enum.join(shown, "; ")
+
+    text =
+      if hidden > 0 do
+        "#{text} …[+#{hidden} more]"
+      else
+        text
+      end
+
+    if String.length(text) > @max_handoff_section_chars do
+      String.slice(text, 0, @max_handoff_section_chars - String.length(@truncation_marker)) <>
+        @truncation_marker
     else
       text
     end
+  end
+
+  defp record_items(record, field) do
+    case record_field(record, field) do
+      value when is_map(value) ->
+        items = Map.get(value, "items", Map.get(value, :items, []))
+        items |> List.wrap() |> Enum.filter(&is_binary/1)
+
+      value when is_list(value) ->
+        Enum.filter(value, &is_binary/1)
+
+      _other ->
+        []
+    end
+  end
+
+  defp record_field(%CheckpointRecord{} = record, field), do: Map.get(record, field)
+
+  defp record_field(record, field) when is_map(record) do
+    Map.get(record, field, Map.get(record, Atom.to_string(field)))
   end
 
   # -- Pure projection helpers --
