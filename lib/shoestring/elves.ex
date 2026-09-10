@@ -480,11 +480,11 @@ defmodule Shoestring.Elves do
   # Intent-first handoff (P1): validate -> handoff.created intent ->
   # run.requested -> adapter.start (fresh session, P2). Re-performing with
   # the same handoff_id replays instead of duplicating: the idempotency-key
-  # guard runs before any side effect, so a crash between intent and effect
-  # yields exactly one effect on replay, and a replay after success performs
-  # zero new adapter calls (the stored run is returned with a
-  # durable-derived identity; the uncertain external effect is never
-  # duplicated).
+  # guard runs before any side effect, and the replay decision tree in
+  # `replay_stored_receiver/6` decides between success-replay (terminal or
+  # live-session evidence) and re-attempt with the same ids (at-least-once
+  # with idempotent convergence: the run row, handoff.created, and
+  # run.requested all deduplicate by idempotency keys).
   #
   # Writer constraint (recorded deviation from the brief's literal order):
   # the trajectory writer requires a trusted `run_id` to already exist as a
@@ -522,15 +522,10 @@ defmodule Shoestring.Elves do
         {:replay, event} ->
           case repo.get(RunRecord, event.payload["run_id"] || event.run_id) do
             %RunRecord{} = stored_run ->
-              {:ok,
-               %{
-                 handoff_id: handoff_id,
-                 run: stored_run,
-                 run_identity: replay_identity(stored_run)
-               }}
+              replay_stored_receiver(run, fresh_cont, payload, handoff_id, stored_run, opts)
 
             nil ->
-              # Crash between intent and effect: continue to exactly one
+              # Crash between intent and row insert: continue to exactly one
               # effect, reusing the stored run_id pointer.
               handoff_effect(run, fresh_cont, payload, handoff_id,
                 run_id: event.payload["run_id"] || event.run_id,
@@ -568,6 +563,103 @@ defmodule Shoestring.Elves do
     end
   end
 
+  # Replay decision tree (round-2 finding 5): the receiver run row existing
+  # is NOT success. The row is inserted before the adapter effect, so a
+  # crash (or failed start) between row insert and adapter start would
+  # otherwise replay to success with the receiver never started. On replay
+  # with the receiver row present:
+  #
+  #   1. terminal/result evidence for the new run -> success-replay, zero
+  #      new calls (the effect demonstrably completed downstream);
+  #   2. else a live receiver session observable via the adapter's
+  #      `lookup_session/1` (where supported, e.g. CodexAppServer) ->
+  #      success with that identity, zero new calls;
+  #   3. else re-attempt the effect with the SAME handoff/run/dispatch ids
+  #      (at-least-once with idempotent convergence: first genuine success
+  #      wins; duplicates impossible by idempotency keys).
+  #
+  # Fake exposes no `lookup_session/1`, so Fake replays re-attempt whenever
+  # no terminal/result evidence exists.
+  defp replay_stored_receiver(run, fresh_cont, payload, handoff_id, stored_run, opts) do
+    adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
+    repo = Keyword.get(opts, :repo, Repo)
+
+    cond do
+      receiver_terminal?(repo, stored_run) ->
+        {:ok,
+         %{
+           handoff_id: handoff_id,
+           run: stored_run,
+           run_identity: replay_identity(stored_run)
+         }}
+
+      live_receiver_session?(adapter, stored_run) ->
+        {:ok,
+         %{
+           handoff_id: handoff_id,
+           run: stored_run,
+           run_identity: replay_identity(stored_run)
+         }}
+
+      true ->
+        # No evidence the effect ever ran: re-attempt it with the SAME
+        # handoff/run/dispatch ids. The receiver row already exists, so the
+        # re-attempt converges through the idempotent event appends plus a
+        # fresh adapter.start (a blind row re-insert would collide on the
+        # primary key instead of converging).
+        adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
+
+        with {:ok, request} <- handoff_request(run, fresh_cont, stored_run.dispatch_id),
+             {:ok, identity} <- adapter_identity(adapter) do
+          run_handoff_effect(run, stored_run, request, identity, payload, handoff_id, opts)
+        end
+    end
+  end
+
+  # Terminal/result evidence for the receiver run: a run terminal
+  # (`run.completed` / `run.failed` / `run.interrupted` / `run.cancelled`)
+  # or a recorded harness result (`harness.event_recorded` with kind
+  # `result`). `run.requested` deliberately does NOT count: it is appended
+  # before the adapter effect, so it cannot prove the effect ran.
+  defp receiver_terminal?(repo, %RunRecord{} = stored_run) do
+    terminal? =
+      repo.exists?(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^stored_run.goal_id and event.run_id == ^stored_run.id and
+              event.type in ["run.completed", "run.failed", "run.interrupted", "run.cancelled"]
+      )
+
+    result? =
+      repo.exists?(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^stored_run.goal_id and event.run_id == ^stored_run.id and
+              event.type == "harness.event_recorded" and
+              fragment("(? ->> ?) = ?", event.payload, "kind", "result")
+      )
+
+    terminal? or result?
+  end
+
+  # Live-session read only: never starts, probes, or mutates session state,
+  # and never touches session turn logic. Adapters without
+  # `lookup_session/1` (e.g. Fake) report no live session.
+  defp live_receiver_session?(adapter, %RunRecord{} = stored_run) do
+    if adapter_exports?(adapter, :lookup_session, 1) do
+      case apply(adapter, :lookup_session, [stored_run.id]) do
+        {:ok, pid} when is_pid(pid) -> Process.alive?(pid)
+        _other -> false
+      end
+    else
+      false
+    end
+  rescue
+    _error -> false
+  catch
+    _kind, _reason -> false
+  end
+
   # Single effect path: bare run row (writer trusted-reference requirement)
   # -> handoff.created intent -> run.requested durable effect ->
   # adapter.start fresh session. The sender's session identity is never
@@ -580,7 +672,6 @@ defmodule Shoestring.Elves do
     repo = Keyword.get(opts, :repo, Repo)
     clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
     adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
-    adapter_opts = Keyword.get(opts, :adapter_opts, %{})
 
     with {:ok, request} <- handoff_request(run, fresh_cont, dispatch_id),
          {:ok, identity} <- adapter_identity(adapter),
@@ -590,8 +681,23 @@ defmodule Shoestring.Elves do
              clock: clock,
              run_id: run_id
            ),
-         {:ok, new_run} <- Shoestring.Harness.Runs.insert_or_recover(repo, changeset),
-         {:ok, _event} <- append_handoff_created(run, new_run.id, payload, handoff_id, opts),
+         {:ok, new_run} <- Shoestring.Harness.Runs.insert_or_recover(repo, changeset) do
+      run_handoff_effect(run, new_run, request, identity, payload, handoff_id, opts)
+    end
+  end
+
+  # Effect tail for an already-persisted receiver row: idempotent
+  # handoff.created + run.requested appends (duplicates converge by
+  # idempotency key), then the adapter.start fresh session. Used by
+  # `handoff_effect/6` after the row insert and directly by replay
+  # re-attempts, where the row already exists.
+  defp run_handoff_effect(run, new_run, request, identity, payload, handoff_id, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+    clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
+    adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
+    adapter_opts = Keyword.get(opts, :adapter_opts, %{})
+
+    with {:ok, _event} <- append_handoff_created(run, new_run.id, payload, handoff_id, opts),
          :ok <-
            Shoestring.Harness.Runs.ensure_requested_event(new_run, request, identity,
              repo: repo,

@@ -1,11 +1,16 @@
 defmodule Shoestring.Harness.HandoffCorrectionTest do
   @moduledoc """
-  Hermetic regression locks for the handoff loop-closure correction (I5):
+  Hermetic regression locks for the handoff loop-closure correction (I5),
+  plus the round-2 finding-5 replay honesty fix:
 
     * P1 intent-first: `handoff.created` precedes `run.requested` precedes
-      the adapter effect; replaying with the same `handoff_id` converges
-      (one effect after a crash-between, zero duplicate adapter calls
-      after success).
+      the adapter effect.
+    * Replay honesty (finding 5): a present receiver row is NOT success.
+      On replay the receiver is returned with zero new calls only with
+      terminal/result evidence or an observably live session; otherwise
+      the effect is re-attempted with the same handoff/run/dispatch ids
+      (at-least-once, idempotent convergence). Fake exposes no sessions,
+      so Fake replays re-attempt whenever no terminal evidence exists.
     * P2 cross-provider = fresh session: the target receives
       `adapter.start/2` (never resume) with a continuation-composed prompt;
       the sender's session identity appears nowhere in the recorded request.
@@ -16,10 +21,13 @@ defmodule Shoestring.Harness.HandoffCorrectionTest do
       Claude goes through the fresh-start path.
     * Privacy sweeps both directions: sensitive gone AND required present.
 
-  Every lock below FAILS on the base commit `85437ed` for the right
-  behavioural reason (effect-before-intent ordering, original-prompt turn,
-  generic `resume_unsupported`), except the same-provider matrix test,
-  which is explicitly labeled DOCUMENTATION (it passes on base).
+  Lock-vs-documentation ledger (base commit `4d2df5a`): the failed-start,
+  crash-before-start, no-terminal re-attempt, and dead-session tests are
+  TRUE locks — they FAIL on base, which replays any present receiver row
+  to success with zero new calls. The post-terminal and live-session
+  tests are DOCUMENTATION: they pass on base (base also returned success
+  with zero calls there) and pin the preserved success path. The
+  same-provider matrix test is DOCUMENTATION (passes on base).
   """
 
   use Shoestring.DataCase, async: false
@@ -102,6 +110,79 @@ defmodule Shoestring.Harness.HandoffCorrectionTest do
 
     defp reply(%{owner: owner}, resp) do
       send(owner, {:codex_transport_frame, self(), Jason.encode!(resp)})
+    end
+  end
+
+  defmodule SilentStartFailureAdapter do
+    @moduledoc false
+    @behaviour Shoestring.Harness.Adapter
+
+    alias Shoestring.Harness.{Error, Fake}
+
+    @impl true
+    def identity, do: Fake.identity()
+    @impl true
+    def capabilities, do: Fake.capabilities()
+    @impl true
+    def probe(opts), do: Fake.probe(opts)
+
+    @impl true
+    def start(_request, _opts) do
+      # Crash between row insert and adapter start: durable state persists,
+      # but zero attempts are recorded in the RequestLog.
+      {:error, Error.new(:transport, "process_launch_failed", "silent start failure")}
+    end
+
+    @impl true
+    def resume(prior, request, opts), do: Fake.resume(prior, request, opts)
+    @impl true
+    def send(identity, message, opts), do: Fake.send(identity, message, opts)
+    @impl true
+    def cancel(identity, opts), do: Fake.cancel(identity, opts)
+    @impl true
+    def status(identity, opts), do: Fake.status(identity, opts)
+    @impl true
+    def stream(identity, opts), do: Fake.stream(identity, opts)
+  end
+
+  defmodule LiveSessionStubAdapter do
+    @moduledoc false
+    @behaviour Shoestring.Harness.Adapter
+
+    alias Shoestring.Harness.Fake
+
+    @impl true
+    def identity, do: Fake.identity()
+    @impl true
+    def capabilities, do: Fake.capabilities()
+    @impl true
+    def probe(opts), do: Fake.probe(opts)
+    @impl true
+    def start(request, opts), do: Fake.start(request, opts)
+    @impl true
+    def resume(prior, request, opts), do: Fake.resume(prior, request, opts)
+    @impl true
+    def send(identity, message, opts), do: Fake.send(identity, message, opts)
+    @impl true
+    def cancel(identity, opts), do: Fake.cancel(identity, opts)
+    @impl true
+    def status(identity, opts), do: Fake.status(identity, opts)
+    @impl true
+    def stream(identity, opts), do: Fake.stream(identity, opts)
+
+    @doc "Marks a receiver run id as having a live session (test process registry)."
+    def mark_live(run_id, pid \\ self()) do
+      live = Process.get(:live_session_stub_live, %{})
+      Process.put(:live_session_stub_live, Map.put(live, run_id, pid))
+      :ok
+    end
+
+    @doc "Session liveness read, mirroring CodexAppServer.lookup_session/1."
+    def lookup_session(run_id) do
+      case Process.get(:live_session_stub_live, %{}) do
+        %{^run_id => pid} when is_pid(pid) -> {:ok, pid}
+        _ -> {:error, :not_found}
+      end
     end
   end
 
@@ -193,7 +274,7 @@ defmodule Shoestring.Harness.HandoffCorrectionTest do
       assert :ok = Continuation.validate_attrs(new_run.continuation)
     end
 
-    test "crash between intent and effect: replay yields one effect, no duplicates" do
+    test "failed start replays to a re-attempt: same run, one new effect, no duplicates" do
       fixture = handoff_fixture()
       {:ok, log} = RequestLog.start()
       handoff_id = Ecto.UUID.generate()
@@ -226,9 +307,11 @@ defmodule Shoestring.Harness.HandoffCorrectionTest do
       assert handoff_count(fixture.goal.id, handoff_id) == 1
       assert RequestLog.count(log) == 1
 
-      # Replay with the same handoff_id converges: same run, zero new
-      # adapter calls.
-      assert {:ok, %{handoff_id: ^handoff_id, run: replayed}} =
+      # Replay with the same handoff_id re-attempts the effect: the failed
+      # start left no terminal/result evidence and Fake exposes no live
+      # sessions, so replaying to success here would report an effect that
+      # never ran (round-2 finding 5).
+      assert {:ok, %{handoff_id: ^handoff_id, run: replayed, run_identity: identity}} =
                Elves.resume_run(
                  fixture.run.id,
                  Keyword.put(
@@ -239,13 +322,65 @@ defmodule Shoestring.Harness.HandoffCorrectionTest do
                )
 
       assert replayed.id == new_run_id
+      assert identity.provider_session_id == "fake-session-handoff-b"
+
+      # At-least-once: exactly one NEW adapter call (failed attempt + success).
+      assert RequestLog.count(log) == 2
+      assert RequestLog.resumes(log) == []
+
+      # Idempotent convergence: still exactly one of each durable effect.
+      assert handoff_count(fixture.goal.id, handoff_id) == 1
+      assert requested_count(fixture.goal.id, new_dispatch_id) == 1
+    end
+
+    test "crash before adapter start (row exists, zero logged attempts): replay performs the effect once" do
+      fixture = handoff_fixture()
+      {:ok, log} = RequestLog.start()
+      handoff_id = Ecto.UUID.generate()
+      new_run_id = Ecto.UUID.generate()
+      new_dispatch_id = Ecto.UUID.generate()
+
+      base_opts = [
+        continuation: fixture.presented,
+        provider_session_id: @sender_session,
+        to_provider_id: "fake-harness-b",
+        reason: "quota handoff",
+        handoff_id: handoff_id,
+        new_run_id: new_run_id,
+        new_dispatch_id: new_dispatch_id
+      ]
+
+      # Attempt 1: crash between row insert and adapter start — the receiver
+      # row and intent are durable, but the adapter records zero attempts.
+      assert {:error, _} =
+               Elves.resume_run(
+                 fixture.run.id,
+                 base_opts
+                 |> Keyword.put(:adapter, SilentStartFailureAdapter)
+                 |> Keyword.put(:adapter_opts, adapter_opts(log, Scenario.handoff_target()))
+               )
+
+      assert handoff_count(fixture.goal.id, handoff_id) == 1
+      assert RequestLog.count(log) == 0
+
+      # Replay performs the effect exactly once with the same ids.
+      assert {:ok, %{handoff_id: ^handoff_id, run: replayed, run_identity: identity}} =
+               Elves.resume_run(
+                 fixture.run.id,
+                 base_opts
+                 |> Keyword.put(:adapter, Fake)
+                 |> Keyword.put(:adapter_opts, adapter_opts(log, Scenario.handoff_target()))
+               )
+
+      assert replayed.id == new_run_id
+      assert identity.provider_session_id == "fake-session-handoff-b"
       assert RequestLog.count(log) == 1
       assert RequestLog.resumes(log) == []
       assert handoff_count(fixture.goal.id, handoff_id) == 1
       assert requested_count(fixture.goal.id, new_dispatch_id) == 1
     end
 
-    test "replay after success performs zero new adapter calls" do
+    test "replay without terminal evidence re-attempts the effect (Fake exposes no live sessions)" do
       fixture = handoff_fixture()
       {:ok, log} = RequestLog.start()
       handoff_id = Ecto.UUID.generate()
@@ -267,6 +402,45 @@ defmodule Shoestring.Harness.HandoffCorrectionTest do
       assert {:ok, %{run: first}} = Elves.resume_run(fixture.run.id, opts)
       assert RequestLog.count(log) == 1
 
+      # No terminal/result evidence exists for the receiver and Fake has no
+      # session lookup, so an immediate replay must re-attempt rather than
+      # report the unexecuted effect as a success.
+      assert {:ok, %{handoff_id: ^handoff_id, run: second, run_identity: identity}} =
+               Elves.resume_run(fixture.run.id, opts)
+
+      assert second.id == first.id
+      assert identity.provider_session_id == "fake-session-handoff-b"
+      assert RequestLog.count(log) == 2
+      assert RequestLog.resumes(log) == []
+      assert handoff_count(fixture.goal.id, handoff_id) == 1
+      assert requested_count(fixture.goal.id, new_dispatch_id) == 1
+    end
+
+    test "replay after terminal evidence performs zero new adapter calls" do
+      fixture = handoff_fixture()
+      {:ok, log} = RequestLog.start()
+      handoff_id = Ecto.UUID.generate()
+      new_run_id = Ecto.UUID.generate()
+      new_dispatch_id = Ecto.UUID.generate()
+
+      opts = [
+        adapter: Fake,
+        adapter_opts: adapter_opts(log, Scenario.handoff_target()),
+        continuation: fixture.presented,
+        provider_session_id: @sender_session,
+        to_provider_id: "fake-harness-b",
+        reason: "quota handoff",
+        handoff_id: handoff_id,
+        new_run_id: new_run_id,
+        new_dispatch_id: new_dispatch_id
+      ]
+
+      assert {:ok, %{run: first}} = Elves.resume_run(fixture.run.id, opts)
+      assert RequestLog.count(log) == 1
+
+      # Downstream completion: terminal evidence for the receiver run.
+      :ok = FakeHelpers.append_run_completed(fixture.goal, first)
+
       assert {:ok, %{handoff_id: ^handoff_id, run: second}} =
                Elves.resume_run(fixture.run.id, opts)
 
@@ -274,6 +448,79 @@ defmodule Shoestring.Harness.HandoffCorrectionTest do
       assert RequestLog.count(log) == 1
       assert RequestLog.resumes(log) == []
       assert handoff_count(fixture.goal.id, handoff_id) == 1
+    end
+
+    test "live receiver session replays to success with zero new calls (DOCUMENTATION)" do
+      fixture = handoff_fixture()
+      {:ok, log} = RequestLog.start()
+      handoff_id = Ecto.UUID.generate()
+      new_run_id = Ecto.UUID.generate()
+      new_dispatch_id = Ecto.UUID.generate()
+
+      opts = [
+        adapter: LiveSessionStubAdapter,
+        adapter_opts: adapter_opts(log, Scenario.handoff_target()),
+        continuation: fixture.presented,
+        provider_session_id: @sender_session,
+        to_provider_id: "fake-harness-b",
+        reason: "quota handoff",
+        handoff_id: handoff_id,
+        new_run_id: new_run_id,
+        new_dispatch_id: new_dispatch_id
+      ]
+
+      assert {:ok, %{run: first}} = Elves.resume_run(fixture.run.id, opts)
+      assert RequestLog.count(log) == 1
+
+      # The receiver session is observably live: replay succeeds without a
+      # new adapter call. This documents the preserved success path — it
+      # passes on base too, since base also returned success here.
+      :ok = LiveSessionStubAdapter.mark_live(first.id)
+
+      assert {:ok, %{handoff_id: ^handoff_id, run: second}} =
+               Elves.resume_run(fixture.run.id, opts)
+
+      assert second.id == first.id
+      assert RequestLog.count(log) == 1
+      assert RequestLog.resumes(log) == []
+      assert handoff_count(fixture.goal.id, handoff_id) == 1
+    end
+
+    test "dead receiver session does not mask: replay re-attempts" do
+      fixture = handoff_fixture()
+      {:ok, log} = RequestLog.start()
+      handoff_id = Ecto.UUID.generate()
+      new_run_id = Ecto.UUID.generate()
+      new_dispatch_id = Ecto.UUID.generate()
+
+      opts = [
+        adapter: LiveSessionStubAdapter,
+        adapter_opts: adapter_opts(log, Scenario.handoff_target()),
+        continuation: fixture.presented,
+        provider_session_id: @sender_session,
+        to_provider_id: "fake-harness-b",
+        reason: "quota handoff",
+        handoff_id: handoff_id,
+        new_run_id: new_run_id,
+        new_dispatch_id: new_dispatch_id
+      ]
+
+      assert {:ok, %{run: first}} = Elves.resume_run(fixture.run.id, opts)
+      assert RequestLog.count(log) == 1
+
+      # A registry entry pointing at a dead pid is not a live session.
+      {:ok, dead} = Agent.start(fn -> :ok end)
+      :ok = Agent.stop(dead)
+      :ok = LiveSessionStubAdapter.mark_live(first.id, dead)
+
+      assert {:ok, %{handoff_id: ^handoff_id, run: second, run_identity: identity}} =
+               Elves.resume_run(fixture.run.id, opts)
+
+      assert second.id == first.id
+      assert identity.provider_session_id == "fake-session-handoff-b"
+      assert RequestLog.count(log) == 2
+      assert handoff_count(fixture.goal.id, handoff_id) == 1
+      assert requested_count(fixture.goal.id, new_dispatch_id) == 1
     end
   end
 
