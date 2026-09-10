@@ -23,6 +23,14 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   cadence reached (`responses >= checkpoint_cadence`). The `:renewal_due`
   marker is edge-triggered: it is emitted once, on the transition into due.
 
+  Multi-epoch renewals (Elf lease re-loop): after a `:renewed` outcome the
+  Elf starts a new spend epoch from the renewed grant via `new_epoch/1`.
+  Counters and the due latch reset while budgets, identity, and the
+  already-seen set are kept, so a later exhaustion re-fires the full
+  due → stop → re-evaluate sequence against fresh observations without ever
+  double-spending an already-counted event. The grant deadline is unchanged,
+  so deadlines still bound total renewals (expiry wins eventually).
+
   Wiring: `drain/3` folds the live normalized-event buffer for one `run_id`
   (events for other runs are ignored). Only normalized `HarnessEvent`
   structs are consumed — never raw provider output. Redelivered events (same
@@ -48,6 +56,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
     :response_reserve,
     :tool_reserve,
     :checkpoint_cadence,
+    epoch: 0,
     responses: 0,
     tools: 0,
     due: false,
@@ -67,6 +76,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
           response_reserve: non_neg_integer(),
           tool_reserve: non_neg_integer(),
           checkpoint_cadence: pos_integer(),
+          epoch: non_neg_integer(),
           responses: non_neg_integer(),
           tools: non_neg_integer(),
           due: boolean(),
@@ -99,6 +109,28 @@ defmodule Shoestring.Cobbler.LeaseBounds do
       response_reserve: Map.fetch!(attrs, :response_reserve),
       tool_reserve: Map.fetch!(attrs, :tool_reserve),
       checkpoint_cadence: Map.fetch!(attrs, :checkpoint_cadence)
+    }
+  end
+
+  @doc """
+  Starts a new spend epoch from a renewed grant (Elf lease re-loop).
+
+  Resets the spend counters and the due latch so a later exhaustion
+  re-fires the edge-triggered `:renewal_due` effect and the full
+  due → stop → re-evaluate sequence. Budgets, grant/run identity, and the
+  already-seen set are kept: events counted in an earlier epoch are never
+  double-spent, and command correlation (`pending_starts`,
+  `counted_commands`) carries over because item ids are unique per call.
+  """
+  @spec new_epoch(t()) :: t()
+  def new_epoch(%__MODULE__{} = state) do
+    %{
+      state
+      | epoch: state.epoch + 1,
+        responses: 0,
+        tools: 0,
+        due: false,
+        quota_refused: false
     }
   end
 
