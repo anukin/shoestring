@@ -333,6 +333,52 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
   end
 
   # ----------------------------------------------------------------------------
+  # New spend epoch after a renewal (lease re-loop P1)
+  #
+  # Locking note: `LeaseBounds.new_epoch/1` does not exist on the base
+  # commit, so these tests error there with `UndefinedFunctionError` —
+  # documentation of the new surface, not behavior-change locks.
+  # ----------------------------------------------------------------------------
+
+  test "new_epoch resets spend and the due latch, keeping identity and seen" do
+    state = bounds()
+    assert state.epoch == 0
+
+    events = Enum.map(1..9, &output/1)
+    {state, effects} = LeaseBounds.drain(state, @run_id, events)
+
+    # response_budget 10, reserve 1 → due at the 9th completion.
+    assert state.responses == 9
+    assert state.due == true
+    assert :renewal_due in effects
+
+    renewed = LeaseBounds.new_epoch(state)
+
+    assert renewed.epoch == 1
+    assert renewed.responses == 0
+    assert renewed.tools == 0
+    assert renewed.due == false
+    assert renewed.quota_refused == false
+    assert renewed.grant_id == state.grant_id
+    assert renewed.run_id == state.run_id
+    assert renewed.response_budget == state.response_budget
+    assert renewed.tool_budget == state.tool_budget
+
+    # Already-counted events never double-spend across the epoch boundary.
+    {replayed, replay_effects} = LeaseBounds.drain(renewed, @run_id, events)
+    assert replayed.responses == 0
+    assert replay_effects == []
+
+    # Fresh spend re-fires the edge-triggered due exactly once.
+    fresh = Enum.map(1..9, &output(100 + &1))
+    {epoch2, epoch2_effects} = LeaseBounds.drain(replayed, @run_id, fresh)
+
+    assert epoch2.responses == 9
+    assert epoch2.due == true
+    assert :renewal_due in epoch2_effects
+  end
+
+  # ----------------------------------------------------------------------------
   # Helpers
   # ----------------------------------------------------------------------------
 

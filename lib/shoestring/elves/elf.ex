@@ -895,7 +895,16 @@ defmodule Shoestring.Elves.Elf do
   #   appended, a safe stop is ensured through the existing `LeaseBoundary`
   #   (exactly once — never restopped), and at the item.completed boundary the
   #   T2 renewal sequence runs (fresh snapshot + re-evaluate → renewed, or
-  #   expired → checkpoint_required plus checkpoint contents).
+  #   expired → decline: checkpoint contents plus `run.pausing` /
+  #   `run.suspended` plus a durable sleep wake, see `decline_lease/2`).
+  # - Renewal re-arms (re-loop P1): a `:renewed` outcome resets the spend
+  #   baseline (`LeaseBounds.new_epoch/1`) and clears the settled/stop
+  #   latches, so a later exhaustion re-fires the full sequence repeatedly
+  #   (fresh snapshot + re-evaluate each time) until the unchanged deadline
+  #   bounds total renewals. Stop hygiene (re-loop P3): the stop flag is set
+  #   only on an actual `:stop_requested`, and the boundary sequence runs
+  #   when a stop was requested OR none is required (budget-due renews with
+  #   no session stop; only the deadline path stops first).
   # - On in-flight exhaustion the reactive checkpoint path builds checkpoint
   #   contents through the T3 `Checkpoints` writer (used as-is) and stops at
   #   the safe boundary; a mutation is never interrupted mid-item — every
@@ -1165,6 +1174,12 @@ defmodule Shoestring.Elves.Elf do
   # exactly once. With no live session (hermetic Fake runs) the stop is
   # recorded virtually: ingestion still runs every in-flight item to its own
   # completion, so nothing is ever interrupted mid-item either way.
+  #
+  # Stop hygiene (lease re-loop): the stop-requested flag is set ONLY on an
+  # actual `:stop_requested` from `LeaseBoundary.enforce/3`. A `:within_lease`
+  # answer (budget-due with a live deadline — no session stop needed) leaves
+  # the flag clear; the budget path renews at the boundary through
+  # `stop_satisfied?/1` instead of through a stop that never happened.
   defp stop_path(%{lease_stop_requested?: true} = state), do: state
 
   defp stop_path(state) do
@@ -1183,7 +1198,8 @@ defmodule Shoestring.Elves.Elf do
                  state.lease_deadline || now,
                  now: now
                ) do
-            {:ok, _effect} -> %{state | lease_stop_requested?: true}
+            {:ok, :stop_requested} -> %{state | lease_stop_requested?: true}
+            {:ok, :within_lease} -> state
             {:error, _reason} -> state
           end
       end
@@ -1209,9 +1225,14 @@ defmodule Shoestring.Elves.Elf do
   end
 
   # Runs the T2 renewal sequence at the item.completed boundary only: fresh
-  # snapshot + re-evaluate → renewed, or expired → checkpoint_required plus
-  # reactive checkpoint contents. Anything else (mid-item, no stop yet,
-  # already settled) waits without appending.
+  # snapshot + re-evaluate → renewed, or expired → decline (checkpoint +
+  # suspend + sleep wake, see `decline_lease/2`). Anything else (mid-item,
+  # stop still required, already settled) waits without appending.
+  #
+  # Re-loop gating: boundary + (due or deadline-passed) + (stop requested OR
+  # no stop required). Budget-due with a live deadline needs no session stop
+  # and renews at the boundary; only the expired-deadline path stops the
+  # session first.
   defp renew_path(%{lease_settled?: true} = state, _boundary?), do: state
 
   defp renew_path(state, boundary?) do
@@ -1220,13 +1241,20 @@ defmodule Shoestring.Elves.Elf do
       state.lease_grant_id == nil -> state
       not (due_level?(state) or deadline_passed?(state)) -> state
       not boundary? -> state
-      not state.lease_stop_requested? -> state
+      not stop_satisfied?(state) -> state
       true -> run_renewal(state)
     end
   rescue
     _error -> state
   catch
     _kind, _reason -> state
+  end
+
+  # The stop precondition for the renewal sequence: an actual requested
+  # session stop, or none required because the deadline has not passed
+  # (budget-due renews at the boundary with no session stop).
+  defp stop_satisfied?(state) do
+    state.lease_stop_requested? or not deadline_passed?(state)
   end
 
   defp run_renewal(state) do
@@ -1240,12 +1268,10 @@ defmodule Shoestring.Elves.Elf do
 
     case Shoestring.Cobbler.LeaseRenewal.maybe_renew(state.goal_id, state.lease_grant_id, opts) do
       {:ok, %{outcome: :renewed}} ->
-        %{state | lease_settled?: true}
+        rearm_epoch(state)
 
       {:ok, %{outcome: :expired}} ->
-        state
-        |> write_reactive_checkpoint("lease_exhausted")
-        |> settle_on_checkpoint()
+        decline_lease(state, "lease_exhausted")
 
       {:ok, :awaiting_boundary} ->
         state
@@ -1271,6 +1297,92 @@ defmodule Shoestring.Elves.Elf do
     _kind, _reason -> state
   end
 
+  # Multi-renewal re-arm (lease re-loop P1): on a `:renewed` outcome the
+  # spend baseline restarts as a new epoch from the renewed grant (same
+  # budgets and deadline — deadlines still bound total renewals) and both
+  # latches clear, so a later due/deadline re-fires the full sequence with
+  # a fresh snapshot + re-evaluation each time. The stop latch clears too:
+  # each epoch earns its own stop decision (virtual with no session, a fresh
+  # idempotent `request_safe_stop` past the deadline, none when budget-due).
+  defp rearm_epoch(state) do
+    bounds =
+      case state.lease_bounds do
+        %Shoestring.Cobbler.LeaseBounds{} = bounds ->
+          Shoestring.Cobbler.LeaseBounds.new_epoch(bounds)
+
+        _other ->
+          state.lease_bounds
+      end
+
+    %{state | lease_bounds: bounds, lease_settled?: false, lease_stop_requested?: false}
+  end
+
+  # The decline path (lease re-loop P2): checkpoint contents through the T3
+  # writer (existing, used as-is), then the run sleeps — `run.pausing` /
+  # `run.suspended` through the Elf's existing run-event helper — then a
+  # durable sleep wake for the delayed recheck, then settle. Every step is
+  # idempotent (checkpoint id, run-event keys, wakeup key are all stable per
+  # dispatch), so a retry between steps replays instead of duplicating.
+  defp decline_lease(state, reason) do
+    state
+    |> write_reactive_checkpoint(reason)
+    |> suspend_run_for_decline()
+    |> schedule_decline_wakeup()
+    |> settle_on_checkpoint()
+  end
+
+  defp suspend_run_for_decline(state) do
+    with :ok <-
+           append_run_event(
+             state,
+             "run.pausing",
+             %{"run_id" => state.run_id},
+             "elf-pausing:"
+           ),
+         :ok <-
+           append_run_event(
+             state,
+             "run.suspended",
+             %{"run_id" => state.run_id},
+             "elf-suspended:"
+           ) do
+      state
+    else
+      _error -> state
+    end
+  end
+
+  # Schedules the decline sleep wake: a durable `cobbler_wakeups` row plus
+  # an Oban `wakeup`-queue delivery attempt (durable delivery, never a
+  # timer). The wake fires at the admission delayed-recheck default past
+  # now; the command id is synthetic and stable per dispatch
+  # (`"elf-lease-decline:<dispatch_id>"`), so the wakeup key makes repeat
+  # declines replay instead of duplicating. Best-effort: a scheduling
+  # failure never blocks the checkpoint + suspend + settle.
+  defp schedule_decline_wakeup(state) do
+    now = Clock.now(state.clock)
+
+    wake_at =
+      DateTime.add(
+        now,
+        Shoestring.Cobbler.AdmissionPolicy.default().delayed_recheck_seconds,
+        :second
+      )
+
+    _ =
+      Shoestring.Cobbler.Wakeups.schedule(state.goal_id,
+        repo: state.repo,
+        now: now,
+        clock: state.clock,
+        run_id: state.run_id,
+        command_id: "elf-lease-decline:#{state.dispatch_id}",
+        wake_at: wake_at,
+        reason: "lease_decline_recheck"
+      )
+
+    state
+  end
+
   # Immediate re-observe + re-evaluate on the Codex quota fast path (the
   # provider already halted the turn, so no stop/boundary wait): zero spend
   # here, spend accounting lives in `LeaseBounds`.
@@ -1289,13 +1401,15 @@ defmodule Shoestring.Elves.Elf do
              state.lease_grant_id,
              opts
            ) do
+        # Twin note (P4: quota path gating unchanged): unlike boundary
+        # renewals, a quota renewal settles without starting a new spend
+        # epoch — the refusal is zero-spend, so the live counters still
+        # describe the grant's remaining allowance and must not be forgiven.
         {:ok, %{outcome: :renewed}} ->
           %{state | lease_settled?: true}
 
         {:ok, %{outcome: :expired}} ->
-          state
-          |> write_reactive_checkpoint("lease_exhausted")
-          |> settle_on_checkpoint()
+          decline_lease(state, "lease_exhausted")
 
         {:error, _reason} ->
           state
