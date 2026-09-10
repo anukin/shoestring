@@ -290,6 +290,29 @@ defmodule Shoestring.Harness.Dispatch.ElfEffectTest do
     ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id))
   end
 
+  test "live transport selection: missing binary fails spawn, default simulates", %{
+    goal: goal,
+    task: task
+  } do
+    # Pins the mechanism R3.3 depends on without launching any provider:
+    # `live: true` attempts a real spawn (missing binary fails fast and
+    # deterministically), while the flag's absence returns the simulated
+    # os-pid identity that the Elf rejects. An Elf-level live launch is
+    # deliberately NOT tested here: dispatch `env:` reaches the runner
+    # port only, never the adapter session spawn, so no test can sandbox
+    # a real provider CLI through this path — production smoke covers it.
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:error, %Shoestring.Harness.Error{category: :transport}} =
+             Shoestring.Harness.CodexAppServer.start(
+               request,
+               %{live: true, command: "definitely-missing-binary-w7", handshake_timeout_ms: 100}
+             )
+
+    assert {:ok, %{process_id: "os-pid-" <> _}} =
+             Shoestring.Harness.CodexAppServer.start(request, %{})
+  end
+
   defp elf_supervisor do
     Application.get_env(:shoestring, :elf_dispatch_opts, []) |> Keyword.fetch!(:supervisor)
   end

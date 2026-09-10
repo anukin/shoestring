@@ -95,7 +95,8 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
      [
        adapter: CodexAppServer,
        process_owner: :adapter,
-       command: ["codex", "app-server", "--stdio"]
+       command: ["codex", "app-server", "--stdio"],
+       adapter_opts: %{live: true}
      ]}
   end
 
@@ -104,7 +105,8 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
      [
        adapter: ClaudeHeadless,
        process_owner: :adapter,
-       command: ["claude", "--print", "--verbose", "--output-format", "stream-json"]
+       command: ["claude", "--print", "--verbose", "--output-format", "stream-json"],
+       adapter_opts: %{live: true}
      ]}
   end
 

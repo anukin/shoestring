@@ -522,12 +522,20 @@ defmodule Shoestring.Elves do
         {:replay, event} ->
           case repo.get(RunRecord, event.payload["run_id"] || event.run_id) do
             %RunRecord{} = stored_run ->
-              replay_stored_receiver(run, fresh_cont, payload, handoff_id, stored_run, opts)
+              replay_stored_receiver(
+                run,
+                fresh_cont,
+                fresh_record,
+                payload,
+                handoff_id,
+                stored_run,
+                opts
+              )
 
             nil ->
               # Crash between intent and row insert: continue to exactly one
               # effect, reusing the stored run_id pointer.
-              handoff_effect(run, fresh_cont, payload, handoff_id,
+              handoff_effect(run, fresh_cont, fresh_record, payload, handoff_id,
                 run_id: event.payload["run_id"] || event.run_id,
                 dispatch_id: new_dispatch_id,
                 opts: opts
@@ -535,7 +543,7 @@ defmodule Shoestring.Elves do
           end
 
         :fresh ->
-          handoff_effect(run, fresh_cont, payload, handoff_id,
+          handoff_effect(run, fresh_cont, fresh_record, payload, handoff_id,
             run_id: new_run_id,
             dispatch_id: new_dispatch_id,
             opts: opts
@@ -580,7 +588,15 @@ defmodule Shoestring.Elves do
   #
   # Fake exposes no `lookup_session/1`, so Fake replays re-attempt whenever
   # no terminal/result evidence exists.
-  defp replay_stored_receiver(run, fresh_cont, payload, handoff_id, stored_run, opts) do
+  defp replay_stored_receiver(
+         run,
+         fresh_cont,
+         fresh_record,
+         payload,
+         handoff_id,
+         stored_run,
+         opts
+       ) do
     adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
     repo = Keyword.get(opts, :repo, Repo)
 
@@ -609,7 +625,8 @@ defmodule Shoestring.Elves do
         # primary key instead of converging).
         adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
 
-        with {:ok, request} <- handoff_request(run, fresh_cont, stored_run.dispatch_id),
+        with {:ok, request} <-
+               handoff_request(run, fresh_cont, stored_run.dispatch_id, fresh_record),
              {:ok, identity} <- adapter_identity(adapter) do
           run_handoff_effect(run, stored_run, request, identity, payload, handoff_id, opts)
         end
@@ -664,7 +681,7 @@ defmodule Shoestring.Elves do
   # -> handoff.created intent -> run.requested durable effect ->
   # adapter.start fresh session. The sender's session identity is never
   # presented to the target.
-  defp handoff_effect(run, fresh_cont, payload, handoff_id,
+  defp handoff_effect(run, fresh_cont, fresh_record, payload, handoff_id,
          run_id: run_id,
          dispatch_id: dispatch_id,
          opts: opts
@@ -673,7 +690,7 @@ defmodule Shoestring.Elves do
     clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
     adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
 
-    with {:ok, request} <- handoff_request(run, fresh_cont, dispatch_id),
+    with {:ok, request} <- handoff_request(run, fresh_cont, dispatch_id, fresh_record),
          {:ok, identity} <- adapter_identity(adapter),
          {:ok, changeset} <-
            Shoestring.Harness.Runs.build_intent_changeset(request, identity,
@@ -751,13 +768,19 @@ defmodule Shoestring.Elves do
   # composed from the continuation (checkpoint pointer + next_action +
   # decision refs + constraints summary, bounded, transcript-free). The
   # sender's original prompt and session identity are never carried over.
-  defp handoff_request(run, fresh_cont, dispatch_id) do
+  # `record` (a CheckpointRecord, when the caller has one) feeds the
+  # composed prompt the checkpoint's constraints/failures/verification;
+  # without it the prompt stays the pointer-only shape (same-provider
+  # resume path and legacy callers).
+  defp handoff_request(run, fresh_cont, dispatch_id, record) do
+    prompt_opts = if record, do: [checkpoint_record: record], else: []
+
     attrs = %{
       version: 1,
       goal_id: run.goal_id,
       task_id: run.task_id,
       workspace_ref: run.workspace_ref,
-      prompt: Continuation.compose_handoff_prompt(fresh_cont),
+      prompt: Continuation.compose_handoff_prompt(fresh_cont, prompt_opts),
       continuation: %{
         checkpoint_id: fresh_cont.checkpoint_id,
         next_action: fresh_cont.next_action,

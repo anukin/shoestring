@@ -274,6 +274,32 @@ defmodule Shoestring.Harness.HandoffCorrectionTest do
       assert :ok = Continuation.validate_attrs(new_run.continuation)
     end
 
+    test "handoff prompt carries checkpoint content sections, not just the pointer" do
+      # The production handoff path threads the checkpoint record into prompt
+      # composition, so completed work / failure / constraints / verification
+      # travel with the pointer. (Base: pointer-only prompt.)
+      fixture = handoff_fixture()
+      {:ok, log} = RequestLog.start()
+
+      assert {:ok, %{run: _new_run}} =
+               Elves.resume_run(fixture.run.id,
+                 adapter: Fake,
+                 adapter_opts: adapter_opts(log, Scenario.handoff_target()),
+                 continuation: fixture.presented,
+                 provider_session_id: @sender_session,
+                 to_provider_id: "fake-harness-b",
+                 reason: "quota handoff",
+                 handoff_id: Ecto.UUID.generate(),
+                 new_run_id: Ecto.UUID.generate(),
+                 new_dispatch_id: Ecto.UUID.generate()
+               )
+
+      [recorded] = RequestLog.starts(log)
+      assert recorded.prompt =~ @next_action_marker
+      assert recorded.prompt =~ "chose approach A"
+      assert recorded.prompt =~ "quota_refused"
+    end
+
     test "failed start replays to a re-attempt: same run, one new effect, no duplicates" do
       fixture = handoff_fixture()
       {:ok, log} = RequestLog.start()
