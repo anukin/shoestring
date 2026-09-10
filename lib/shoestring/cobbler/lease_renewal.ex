@@ -47,7 +47,7 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   alias Shoestring.Repo
   alias Shoestring.Trajectory.TrajectoryEvent
 
-  @renewable_statuses ["active", "renewal_due"]
+  @renewable_statuses ["active", "renewal_due", "renewed"]
 
   @type renew_result :: %{
           required(:outcome) => :renewed | :expired,
@@ -256,7 +256,8 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
 
   defp ensure_due(_goal_id, %ExecutionLeaseRecord{status: "renewal_due"}, _opts), do: {:ok, []}
 
-  defp ensure_due(goal_id, %ExecutionLeaseRecord{status: "active"} = lease, opts) do
+  defp ensure_due(goal_id, %ExecutionLeaseRecord{status: status} = lease, opts)
+       when status in ["active", "renewed"] do
     case Leases.transition(goal_id, lease.id, :renewal_due, opts) do
       {:ok, %{event: event}} -> {:ok, [event]}
       {:error, reason} -> {:error, reason}

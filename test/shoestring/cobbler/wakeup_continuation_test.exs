@@ -24,7 +24,7 @@ defmodule Shoestring.Cobbler.WakeupContinuationTest do
   import Shoestring.Test.CobblerHelpers
 
   alias Oban.Job
-  alias Shoestring.Cobbler.{Dispatcher, TaskClaimRecord, Wakeups, WakeupRecord}
+  alias Shoestring.Cobbler.{Dispatcher, Leases, TaskClaimRecord, Wakeups, WakeupRecord}
 
   alias Shoestring.Harness.{
     CheckpointRecord,
@@ -36,6 +36,7 @@ defmodule Shoestring.Cobbler.WakeupContinuationTest do
   alias Shoestring.Test.ManualClock
   alias Shoestring.Test.Fixtures.FakeHelpers
   alias Shoestring.Trajectory
+  alias Shoestring.Trajectory.TrajectoryEvent
 
   @t0 ~U[2026-09-07 12:00:00.000000Z]
 
@@ -181,6 +182,75 @@ defmodule Shoestring.Cobbler.WakeupContinuationTest do
            ) == 1
 
     assert Repo.aggregate(Shoestring.Harness.DispatchRecord, :count, :dispatch_id) == 2
+  end
+
+  test "wake persists its re-evaluation as admission.decided and converges retries" do
+    %{goal: goal, run: run} = wake_fixture("cmd-wake-decision")
+    snapshot = eligible_snapshot!()
+    wakeup = schedule_wake!(goal, run, "cmd-wake-decision")
+    opts = [now: ManualClock.now(), clock: ManualClock, observe: fn -> {:ok, snapshot} end]
+
+    assert {:ok, first} = Wakeups.perform_wakeup(wakeup.id, opts)
+
+    # The fixture setup appended one decision; the wake persists exactly one
+    # more under its own idempotency key.
+    decided =
+      TrajectoryEvent
+      |> where([e], e.goal_id == ^goal.id and e.type == "admission.decided")
+      |> Repo.all()
+
+    assert length(decided) == 2
+    wake_decision = Enum.find(decided, &(&1.payload["decision_id"] == first.decision_id))
+    assert wake_decision.payload["result"] == "admit"
+
+    # A retry replays the same decision instead of minting a second one.
+    Repo.update_all(
+      from(w in WakeupRecord, where: w.id == ^wakeup.id),
+      set: [status: "due"]
+    )
+
+    assert {:ok, second} = Wakeups.perform_wakeup(wakeup.id, opts)
+    assert second.decision_id == first.decision_id
+
+    assert TrajectoryEvent
+           |> where([e], e.goal_id == ^goal.id and e.type == "admission.decided")
+           |> Repo.aggregate(:count, :id) == 2
+  end
+
+  test "decline-produced sleep recovers on restored capacity" do
+    %{goal: goal, run: run, grant_id: grant_id} = wake_fixture("cmd-wake-decline")
+    snapshot = eligible_snapshot!()
+    wakeup = schedule_wake!(goal, run, "cmd-wake-decline")
+
+    # Drive the old lease to checkpoint_required the way a decline would
+    # (transitions append events; rows advance on projection).
+    assert {:ok, _} = Leases.transition(goal.id, grant_id, :renewal_due, repo: Repo)
+    assert {:ok, _} = Projector.project(goal.id)
+    assert {:ok, _} = Leases.transition(goal.id, grant_id, :expire, repo: Repo)
+    assert {:ok, _} = Projector.project(goal.id)
+
+    assert {:ok, _} =
+             Leases.transition(goal.id, grant_id, :require_checkpoint, repo: Repo)
+
+    assert {:ok, _} = Projector.project(goal.id)
+
+    assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "checkpoint_required"
+
+    assert {:ok, summary} =
+             Wakeups.perform_wakeup(wakeup.id,
+               now: ManualClock.now(),
+               clock: ManualClock,
+               observe: fn -> {:ok, snapshot} end
+             )
+
+    assert summary.branch == :admitted
+    assert summary.lease == :superseded
+    # Old allowance rests terminal; the new run carries the fresh grant.
+    assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "checkpoint_required"
+
+    new_grant = Repo.get_by!(ExecutionLeaseRecord, run_id: summary.dispatch.run_id)
+    assert new_grant.status == "active"
+    assert new_grant.admitted_snapshot_id == snapshot.snapshot_id
   end
 
   # ----------------------------------------------------------------------------

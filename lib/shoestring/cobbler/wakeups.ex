@@ -556,8 +556,10 @@ defmodule Shoestring.Cobbler.Wakeups do
          {:ok, snapshot} <- observe(opts, candidate),
          {:ok, _snapshot_event} <- persist_snapshot(wakeup, goal, run, snapshot, now, opts),
          {:ok, _position} <- Projector.project(goal.id, clock: clock(opts)),
-         {:ok, evaluation} <- evaluate(repo, goal, snapshot, request, candidate, now, opts) do
-      branch(repo, wakeup, goal, run, lease, snapshot, evaluation, now, opts)
+         {:ok, evaluation} <- evaluate(repo, goal, snapshot, request, candidate, now, opts),
+         {:ok, decision_event, decision} <-
+           record_decision(repo, goal, run, evaluation, wakeup, now, opts) do
+      branch(repo, wakeup, goal, run, lease, snapshot, decision_event, decision, now, opts)
     else
       {:noop, summary} -> {:ok, summary}
       {:terminal, summary} -> {:ok, summary}
@@ -694,6 +696,51 @@ defmodule Shoestring.Cobbler.Wakeups do
     end
   end
 
+  # Durable re-evaluation record: every wake that reaches evaluation persists
+  # its decision as `admission.decided` v1, so re-observation is auditable
+  # ("every decision explainable from persisted inputs") and downstream
+  # grants chain to a persisted event, never a transient struct. Idempotent
+  # per wakeup: a retry replays the first decision under the same key, so
+  # the whole wake converges instead of minting a second decision + grant.
+  # Consumers MUST use the returned durable decision, not the ephemeral
+  # evaluation — on replay the two differ.
+  defp record_decision(_repo, goal, run, evaluation, wakeup, now, opts) do
+    payload =
+      evaluation
+      |> AdmissionDecision.to_payload()
+      |> maybe_put_run_id(run)
+
+    attrs = %{
+      "type" => "admission.decided",
+      "schema_version" => 1,
+      "actor" => Keyword.get(opts, :actor, @actor),
+      "occurred_at" => now,
+      "idempotency_key" => "wakeup-decision:#{wakeup.id}",
+      "payload" => payload
+    }
+
+    trusted = if run, do: [run_id: run.id], else: []
+
+    with {:ok, event} <-
+           Trajectory.append(goal.id, attrs,
+             trusted: trusted,
+             writer_opts: Keyword.get(opts, :writer_opts, [])
+           ),
+         {:ok, decision} <- AdmissionDecision.from_payload(event.payload) do
+      {:ok, event, decision}
+    else
+      {:error, reason} -> {:error, {:wakeup_decision_failed, reason}}
+    end
+  end
+
+  defp maybe_put_run_id(payload, nil), do: payload
+
+  defp maybe_put_run_id(payload, run) do
+    if Map.has_key?(payload, "run_id"),
+      do: payload,
+      else: Map.put(payload, "run_id", run.id)
+  end
+
   defp admission_context(repo, wakeup, goal, run, opts) do
     request = Keyword.get(opts, :request)
     candidate = Keyword.get(opts, :candidate)
@@ -783,29 +830,60 @@ defmodule Shoestring.Cobbler.Wakeups do
   # Branches
   # ----------------------------------------------------------------------------
 
-  defp branch(repo, wakeup, goal, run, lease, snapshot, evaluation, now, opts) do
-    case evaluation.result do
+  defp branch(repo, wakeup, goal, run, lease, snapshot, decision_event, decision, now, opts) do
+    case decision.result do
       :admit ->
-        admit_branch(repo, wakeup, goal, run, lease, snapshot, evaluation, now, opts)
+        admit_branch(
+          repo,
+          wakeup,
+          goal,
+          run,
+          lease,
+          snapshot,
+          decision_event,
+          decision,
+          now,
+          opts
+        )
 
       :defer_until ->
-        defer_branch(repo, wakeup, goal, run, lease, snapshot, evaluation, now, opts)
+        defer_branch(
+          repo,
+          wakeup,
+          goal,
+          run,
+          lease,
+          snapshot,
+          decision_event,
+          decision,
+          now,
+          opts
+        )
 
       :require_confirmation ->
-        confirm_branch(repo, wakeup, goal, evaluation, now)
+        confirm_branch(repo, wakeup, goal, decision_event, decision, now)
 
       :reject ->
-        reject_branch(repo, wakeup, goal, run, evaluation, now, opts)
+        reject_branch(repo, wakeup, goal, run, decision_event, decision, now, opts)
     end
   end
 
-  defp admit_branch(repo, wakeup, goal, run, lease, snapshot, evaluation, now, opts) do
+  defp admit_branch(repo, wakeup, goal, run, lease, snapshot, decision_event, decision, now, opts) do
     with {:ok, :evaluating} <- GoalLifecycle.transition(:sleeping, :recheck_due),
          {:ok, :queued} <- GoalLifecycle.apply_decision(:evaluating, :admit),
          {:ok, lease_state} <- renew_lease(repo, goal, lease, snapshot, opts),
          {:ok, run_state} <- resume_run(repo, goal, run, wakeup, now, opts),
          {:ok, dispatch_state} <-
-           dispatch_continuation(repo, goal, run, wakeup, evaluation, snapshot, opts),
+           dispatch_continuation(
+             repo,
+             goal,
+             run,
+             wakeup,
+             decision_event,
+             decision,
+             snapshot,
+             opts
+           ),
          {:ok, _position} <- Projector.project(goal.id, clock: clock(opts)),
          {:ok, wakeup} <- mark_status(repo, wakeup, "woken", now) do
       {:ok,
@@ -814,7 +892,7 @@ defmodule Shoestring.Cobbler.Wakeups do
          branch: :admitted,
          wakeup_id: wakeup.id,
          lifecycle: :queued,
-         decision_id: evaluation.decision_id,
+         decision_id: decision.decision_id,
          lease: lease_state,
          run: run_state,
          dispatch: dispatch_state
@@ -844,6 +922,14 @@ defmodule Shoestring.Cobbler.Wakeups do
       {:error, reason} -> {:error, {:lease_rechain_failed, goal_id, reason}}
     end
   end
+
+  # A lease already terminal (expired/awaiting checkpoint, or checkpointed)
+  # has nothing to renew: the new continuation run gets its own grant below,
+  # so the old allowance rests untouched instead of failing the wake. This
+  # is what lets restored capacity recover a decline-produced sleep.
+  defp renew_lease(_repo, _goal, %ExecutionLeaseRecord{status: status}, _snapshot, _opts)
+       when status in ["expired", "checkpoint_required"],
+       do: {:ok, :superseded}
 
   defp renew_lease(repo, goal, %ExecutionLeaseRecord{status: status} = lease, snapshot, opts)
        when status in @renewable_lease_statuses do
@@ -913,19 +999,46 @@ defmodule Shoestring.Cobbler.Wakeups do
   # dispatch pipeline's own recovery (one dispatch record, one job), never
   # into `Elves.start_run/3` directly. With no run there is nothing to
   # continue and dispatch stays `:gated`.
-  defp dispatch_continuation(_repo, _goal, nil, _wakeup, _evaluation, _snapshot, _opts),
-    do: {:ok, :gated}
+  defp dispatch_continuation(
+         _repo,
+         _goal,
+         nil,
+         _wakeup,
+         _decision_event,
+         _decision,
+         _snapshot,
+         _opts
+       ),
+       do: {:ok, :gated}
 
-  defp dispatch_continuation(repo, goal, %RunRecord{} = run, wakeup, evaluation, snapshot, opts) do
+  defp dispatch_continuation(
+         repo,
+         goal,
+         %RunRecord{} = run,
+         wakeup,
+         decision_event,
+         decision,
+         snapshot,
+         opts
+       ) do
     new_run_id = Ecto.UUID.generate()
 
-    with {:ok, continuation} <- ensure_continuation(repo, goal, run, wakeup, evaluation, opts),
+    with {:ok, continuation} <- ensure_continuation(repo, goal, run, wakeup, decision, opts),
          {:ok, request} <- continuation_request(run, wakeup, continuation),
          {:ok, identity} <- resolve_identity(run, opts),
-         :ok <- authorize_claim(goal, evaluation, opts),
+         :ok <- authorize_claim(goal, opts),
          {:ok, new_run} <- request_run(repo, request, identity, new_run_id, opts),
          {:ok, _grant} <-
-           grant_continuation_lease(repo, goal, new_run, evaluation, snapshot, wakeup, opts),
+           grant_continuation_lease(
+             repo,
+             goal,
+             new_run,
+             decision_event,
+             decision,
+             snapshot,
+             wakeup,
+             opts
+           ),
          {:ok, dispatch, job} <- Dispatches.enqueue_for_run(new_run, dispatch_opts(repo, opts)) do
       {:ok,
        %{
@@ -956,7 +1069,7 @@ defmodule Shoestring.Cobbler.Wakeups do
       policy: run.policy || %{mode: "supervised"},
       requested_capabilities: wake_capabilities(run),
       dispatch_id: wakeup.id,
-      extensions: run.extensions || %{}
+      extensions: resume_extensions(run)
     }
 
     case RunRequest.new(attrs) do
@@ -964,6 +1077,17 @@ defmodule Shoestring.Cobbler.Wakeups do
       {:error, changeset} -> {:error, {:wakeup_dispatch_invalid, changeset}}
     end
   end
+
+  # Same-provider session continuity: when the suspended run has a recorded
+  # provider session, the dispatched request carries it so the Elf prefers
+  # adapter.resume over a fresh start (see start_adapter/1). Absent session
+  # means a fresh start — never an invented identity.
+  defp resume_extensions(%RunRecord{provider_session_id: session_id} = run)
+       when is_binary(session_id) do
+    Map.put(run.extensions || %{}, "wakeup:resume_prior_session_id", session_id)
+  end
+
+  defp resume_extensions(%RunRecord{} = run), do: run.extensions || %{}
 
   # Project the continuation for the suspended run, writing a deterministic
   # fallback checkpoint first when the run (and goal) has none. Fail-closed:
@@ -1041,7 +1165,7 @@ defmodule Shoestring.Cobbler.Wakeups do
   # The wake path dispatches behind the same exclusive-claim gate as every
   # other entrypoint: a lost claim fails the wake instead of dispatching
   # unleased work.
-  defp authorize_claim(goal, _evaluation, opts) do
+  defp authorize_claim(goal, opts) do
     case Shoestring.Cobbler.DispatchGate.authorize(goal.id, opts) do
       :ok -> :ok
       {:error, reason} -> {:error, {:wakeup_claim_lost, reason}}
@@ -1069,8 +1193,17 @@ defmodule Shoestring.Cobbler.Wakeups do
   # decision-scoped, because each wake perform mints a fresh evaluation.
   # Idempotent across retries: an existing grant for the new run row is
   # reused instead of minting a second grant.
-  defp grant_continuation_lease(repo, goal, new_run, evaluation, snapshot, wakeup, opts) do
-    with {:ok, lease} <- continuation_lease(new_run, evaluation, snapshot, wakeup),
+  defp grant_continuation_lease(
+         repo,
+         goal,
+         new_run,
+         decision_event,
+         decision,
+         snapshot,
+         wakeup,
+         opts
+       ) do
+    with {:ok, lease} <- continuation_lease(new_run, decision_event, decision, snapshot, wakeup),
          {:ok, _grant} <- grant_unless_exists(repo, goal, new_run, lease, opts) do
       {:ok, :granted}
     end
@@ -1089,8 +1222,8 @@ defmodule Shoestring.Cobbler.Wakeups do
     end
   end
 
-  defp continuation_lease(new_run, evaluation, snapshot, wakeup) do
-    bounds = evaluation.proposed_bounds || %{}
+  defp continuation_lease(new_run, decision_event, decision, snapshot, wakeup) do
+    bounds = decision.proposed_bounds || %{}
 
     with {:ok, deadline} <- continuation_deadline(bounds["deadline"]),
          {:ok, reserves} <- continuation_reserves(bounds["reserves"]) do
@@ -1106,7 +1239,8 @@ defmodule Shoestring.Cobbler.Wakeups do
         checkpoint_cadence: bounds["checkpoint_cadence"],
         renewal_state: :none,
         extensions: %{
-          "cobbler.lease:admission_decision_id" => evaluation.decision_id,
+          "cobbler.lease:admission_decision_id" => decision.decision_id,
+          "cobbler.lease:admission_event_id" => decision_event.id,
           "cobbler.lease:wakeup_id" => wakeup.id
         }
       })
@@ -1153,7 +1287,18 @@ defmodule Shoestring.Cobbler.Wakeups do
 
   defp wake_capabilities(_run), do: []
 
-  defp defer_branch(repo, wakeup, goal, run, lease, _snapshot, evaluation, now, opts) do
+  defp defer_branch(
+         repo,
+         wakeup,
+         goal,
+         run,
+         lease,
+         _snapshot,
+         _decision_event,
+         evaluation,
+         now,
+         opts
+       ) do
     with {:ok, wake_at} <- defer_wake_at(evaluation),
          {:ok, :sleeping} <-
            GoalLifecycle.transition(:sleeping, {:admission_decision, :defer_until}),
@@ -1259,7 +1404,7 @@ defmodule Shoestring.Cobbler.Wakeups do
     end
   end
 
-  defp confirm_branch(repo, wakeup, goal, evaluation, now) do
+  defp confirm_branch(repo, wakeup, goal, _decision_event, evaluation, now) do
     with {:ok, :sleeping} <-
            GoalLifecycle.transition(:sleeping, {:admission_decision, :require_confirmation}),
          {:ok, wakeup} <- mark_status(repo, wakeup, "woken", now) do
@@ -1286,7 +1431,7 @@ defmodule Shoestring.Cobbler.Wakeups do
     )
   end
 
-  defp reject_branch(repo, wakeup, goal, run, evaluation, now, opts) do
+  defp reject_branch(repo, wakeup, goal, run, _decision_event, evaluation, now, opts) do
     with {:ok, :handing_off} <-
            GoalLifecycle.transition(:sleeping, {:admission_decision, :reject}),
          {:ok, cancelled} <- cancel_siblings(repo, wakeup, now),
