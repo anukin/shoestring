@@ -116,8 +116,16 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
     assert Repo.get!(RunRecord, run.id).status == "starting"
     assert Repo.get!(WakeupRecord, wakeup.id).status == "woken"
 
-    # No checkpoint is written on the admit path ...
-    assert Repo.aggregate(CheckpointRecord, :count, :id) == 0
+    # Exactly one checkpoint is written on the admit path: the wake
+    # continuation checkpoint for the suspended run (no-model fallback,
+    # wakeup-derived id), which the dispatched continuation references.
+    assert Repo.aggregate(CheckpointRecord, :count, :id) == 1
+
+    wake_checkpoint = Repo.get_by!(CheckpointRecord, run_id: run.id)
+    assert wake_checkpoint.goal_id == goal.id
+
+    assert wake_checkpoint.extensions["shoestring:synthesized_without_model"] ==
+             "checkpoint-fallback-v1"
 
     # ... and the admitted wake dispatches exactly one continuation through
     # the durable pipeline: a new run of the same goal+task keyed by the

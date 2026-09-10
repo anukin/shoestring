@@ -79,9 +79,13 @@ defmodule Shoestring.Cobbler.Wakeups do
     CapacitySnapshot,
     CheckpointFallback,
     Checkpoints,
+    ClaudeHeadless,
     Clock,
+    CodexAppServer,
+    Continuation,
     Dispatches,
     EventPayload,
+    ExecutionLease,
     ExecutionLeaseRecord,
     Fake,
     Projector,
@@ -532,9 +536,10 @@ defmodule Shoestring.Cobbler.Wakeups do
   arity 0 legacy whose result is still binding-checked downstream),
   `:occupancy` (default: derived from the live global claim), `:policy`,
   `:request`, `:candidate`, `:decision_event_id`, `:actor` (default
-  `"cobbler"`), `:identity` (dispatch identity for the admitted
-  continuation; default `Fake.identity/0`, mirroring `Leases`),
-  `:writer_opts`, `:checkpoint_criteria`, `:repository_revision`.
+  `"cobbler"`), `:identity` (explicit dispatch-identity override; default
+  resolves from the suspended run's provider — production wakes never fall
+  back to a Fake identity), `:writer_opts`, `:checkpoint_criteria`,
+  `:repository_revision`.
   """
   @spec perform_wakeup(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def perform_wakeup(wakeup_id, opts \\ []) do
@@ -799,7 +804,8 @@ defmodule Shoestring.Cobbler.Wakeups do
          {:ok, :queued} <- GoalLifecycle.apply_decision(:evaluating, :admit),
          {:ok, lease_state} <- renew_lease(repo, goal, lease, snapshot, opts),
          {:ok, run_state} <- resume_run(repo, goal, run, wakeup, now, opts),
-         {:ok, dispatch_state} <- dispatch_continuation(repo, goal, run, wakeup, opts),
+         {:ok, dispatch_state} <-
+           dispatch_continuation(repo, goal, run, wakeup, evaluation, snapshot, opts),
          {:ok, _position} <- Projector.project(goal.id, clock: clock(opts)),
          {:ok, wakeup} <- mark_status(repo, wakeup, "woken", now) do
       {:ok,
@@ -822,6 +828,22 @@ defmodule Shoestring.Cobbler.Wakeups do
   # non-renewable lease fails closed — resuming work under a dead lease
   # would break the checkpoint-before-grant ordering.
   defp renew_lease(_repo, _goal, nil, _snapshot, _opts), do: {:ok, :none}
+
+  # Retry convergence: a lease already renewed (e.g. crash between renewal
+  # and the woken mark) is recognized instead of re-driven — the machine has
+  # no renewed→renewal_due edge, so re-running ensure_due would fail a retry
+  # that has nothing left to do. Re-chain to the current fresh snapshot so a
+  # retry on newer observations converges forward, then report renewed.
+  defp renew_lease(repo, goal, %ExecutionLeaseRecord{status: "renewed"} = lease, snapshot, opts) do
+    goal_id = goal.id
+    opts = Keyword.put(opts, :repo, repo)
+
+    with {:ok, _record} <- Leases.chain_snapshot(lease.id, snapshot.snapshot_id, opts) do
+      {:ok, :renewed}
+    else
+      {:error, reason} -> {:error, {:lease_rechain_failed, goal_id, reason}}
+    end
+  end
 
   defp renew_lease(repo, goal, %ExecutionLeaseRecord{status: status} = lease, snapshot, opts)
        when status in @renewable_lease_statuses do
@@ -891,11 +913,20 @@ defmodule Shoestring.Cobbler.Wakeups do
   # dispatch pipeline's own recovery (one dispatch record, one job), never
   # into `Elves.start_run/3` directly. With no run there is nothing to
   # continue and dispatch stays `:gated`.
-  defp dispatch_continuation(_repo, _goal, nil, _wakeup, _opts), do: {:ok, :gated}
+  defp dispatch_continuation(_repo, _goal, nil, _wakeup, _evaluation, _snapshot, _opts),
+    do: {:ok, :gated}
 
-  defp dispatch_continuation(repo, _goal, %RunRecord{} = run, wakeup, opts) do
-    with {:ok, request} <- continuation_request(run, wakeup),
-         {:ok, dispatch, job} <- enqueue_continuation(request, repo, opts) do
+  defp dispatch_continuation(repo, goal, %RunRecord{} = run, wakeup, evaluation, snapshot, opts) do
+    new_run_id = Ecto.UUID.generate()
+
+    with {:ok, continuation} <- ensure_continuation(repo, goal, run, wakeup, evaluation, opts),
+         {:ok, request} <- continuation_request(run, wakeup, continuation),
+         {:ok, identity} <- resolve_identity(run, opts),
+         :ok <- authorize_claim(goal, evaluation, opts),
+         {:ok, new_run} <- request_run(repo, request, identity, new_run_id, opts),
+         {:ok, _grant} <-
+           grant_continuation_lease(repo, goal, new_run, evaluation, snapshot, wakeup, opts),
+         {:ok, dispatch, job} <- Dispatches.enqueue_for_run(new_run, dispatch_opts(repo, opts)) do
       {:ok,
        %{
          outcome: :dispatched,
@@ -906,14 +937,22 @@ defmodule Shoestring.Cobbler.Wakeups do
     end
   end
 
-  defp continuation_request(%RunRecord{} = run, wakeup) do
+  # The dispatched continuation carries the projected recovery context, not a
+  # nil placeholder: the checkpoint projected (or just written) for the
+  # suspended run. Same-provider resume reconciles against it; a later
+  # handoff forwards it instead of the raw transcript.
+  defp continuation_request(%RunRecord{} = run, wakeup, continuation) do
     attrs = %{
       version: run.request_version,
       goal_id: run.goal_id,
       task_id: run.task_id,
       workspace_ref: run.workspace_ref,
       prompt: run.prompt,
-      continuation: nil,
+      continuation: %{
+        checkpoint_id: continuation.checkpoint_id,
+        next_action: continuation.next_action,
+        decision_refs: continuation.decision_refs
+      },
       policy: run.policy || %{mode: "supervised"},
       requested_capabilities: wake_capabilities(run),
       dispatch_id: wakeup.id,
@@ -926,19 +965,176 @@ defmodule Shoestring.Cobbler.Wakeups do
     end
   end
 
-  defp enqueue_continuation(request, repo, opts) do
-    dispatch_opts =
-      opts
-      |> Keyword.take([:clock, :writer_opts])
-      |> Keyword.put(:repo, repo)
-      |> Keyword.put(:require_cobbler_command, true)
+  # Project the continuation for the suspended run, writing a deterministic
+  # fallback checkpoint first when the run (and goal) has none. Fail-closed:
+  # a wake that cannot establish recovery context does not dispatch.
+  defp ensure_continuation(repo, goal, run, wakeup, evaluation, opts) do
+    case Continuation.for_goal(goal.id, repo: repo, run_id: run.id) do
+      {:ok, continuation} ->
+        {:ok, continuation}
 
-    identity = Keyword.get(opts, :identity, Fake.identity())
-
-    case Dispatches.enqueue(request, identity, dispatch_opts) do
-      {:ok, dispatch, job} -> {:ok, dispatch, job}
-      {:error, reason} -> {:error, {:wakeup_dispatch_failed, reason}}
+      {:error, :no_checkpoint} ->
+        with {:ok, _record} <- write_wake_checkpoint(repo, goal, run, wakeup, evaluation, opts),
+             {:ok, _position} <- Projector.project(goal.id, clock: clock(opts)) do
+          Continuation.for_goal(goal.id, repo: repo, run_id: run.id)
+        end
     end
+  end
+
+  defp write_wake_checkpoint(repo, goal, run, wakeup, evaluation, opts) do
+    inputs = %{
+      checkpoint_id: wakeup.id,
+      goal_id: goal.id,
+      run_id: run.id,
+      acceptance_criteria: Keyword.get(opts, :checkpoint_criteria, [default_criterion()]),
+      repository_revision: Keyword.get(opts, :repository_revision, "unknown"),
+      evidence: [
+        "admitted wake #{wakeup.id} dispatches a continuation for suspended run #{run.id}",
+        "admission decision #{evaluation.decision_id} (#{evaluation.reason_code}) on a fresh snapshot"
+      ],
+      decisions: [],
+      unresolved_issues: [],
+      stop_reason: "wake_continuation:#{wakeup.id}",
+      provider_session_id: run.provider_session_id,
+      extensions: %{}
+    }
+
+    with {:ok, now} <- resolve_now(opts),
+         {:ok, checkpoint} <- CheckpointFallback.build(inputs) do
+      case Checkpoints.record(goal.id, checkpoint,
+             repo: repo,
+             now: now,
+             actor: "wakeup",
+             writer_opts: Keyword.get(opts, :writer_opts, [])
+           ) do
+        {:ok, %{checkpoint: _record}} -> {:ok, :written}
+        {:error, reason} -> {:error, {:wakeup_checkpoint_failed, reason}}
+      end
+    else
+      {:error, %Ecto.Changeset{}} = error -> {:error, {:wakeup_checkpoint_failed, error}}
+      {:error, reason} -> {:error, {:wakeup_checkpoint_failed, reason}}
+    end
+  end
+
+  # Dispatch identity comes from the suspended run's provider, never from a
+  # blanket default: a production wake for a Codex run must not record a Fake
+  # identity. An explicit :identity opt still wins (tests pinning Fake).
+  defp resolve_identity(run, opts) do
+    case Keyword.fetch(opts, :identity) do
+      {:ok, identity} -> {:ok, identity}
+      :error -> identity_for_provider(run.provider_id)
+    end
+  end
+
+  # Runs record the adapter id (`RunRecord.provider_id` carries values like
+  # "codex_app_server_stdio"); match both adapter ids and short provider
+  # names so ledger history from either convention resolves. Unknown →
+  # fail-closed, never a default identity.
+  defp identity_for_provider("codex"), do: {:ok, CodexAppServer.identity()}
+  defp identity_for_provider("codex_app_server_stdio"), do: {:ok, CodexAppServer.identity()}
+  defp identity_for_provider("claude"), do: {:ok, ClaudeHeadless.identity()}
+  defp identity_for_provider("claude_headless_stream_json"), do: {:ok, ClaudeHeadless.identity()}
+  defp identity_for_provider("fake"), do: {:ok, Fake.identity()}
+  defp identity_for_provider("shoestring.harness.fake"), do: {:ok, Fake.identity()}
+  defp identity_for_provider(other), do: {:error, {:unknown_provider, other}}
+
+  # The wake path dispatches behind the same exclusive-claim gate as every
+  # other entrypoint: a lost claim fails the wake instead of dispatching
+  # unleased work.
+  defp authorize_claim(goal, _evaluation, opts) do
+    case Shoestring.Cobbler.DispatchGate.authorize(goal.id, opts) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:wakeup_claim_lost, reason}}
+    end
+  end
+
+  defp request_run(repo, request, identity, new_run_id, opts) do
+    run_opts =
+      opts
+      |> Keyword.take([:clock, :writer_opts, :identifier])
+      |> Keyword.put(:repo, repo)
+      |> Keyword.put(:run_id, new_run_id)
+
+    case Shoestring.Harness.Runs.request(request, identity, run_opts) do
+      {:ok, run} -> {:ok, run}
+      {:error, reason} -> {:error, {:wakeup_run_failed, reason}}
+    end
+  end
+
+  # The new continuation run gets its own lease from the fresh admit
+  # decision, chained to the fresh snapshot: a resumed run never executes
+  # on the old run's allowance. Bounds mapping mirrors
+  # `Shoestring.Cobbler.LeaseGrant` (string-keyed proposed bounds, ISO8601
+  # deadline); the replay guard is run-scoped (see below), not
+  # decision-scoped, because each wake perform mints a fresh evaluation.
+  # Idempotent across retries: an existing grant for the new run row is
+  # reused instead of minting a second grant.
+  defp grant_continuation_lease(repo, goal, new_run, evaluation, snapshot, wakeup, opts) do
+    with {:ok, lease} <- continuation_lease(new_run, evaluation, snapshot, wakeup),
+         {:ok, _grant} <- grant_unless_exists(repo, goal, new_run, lease, opts) do
+      {:ok, :granted}
+    end
+  end
+
+  defp grant_unless_exists(repo, goal, new_run, lease, opts) do
+    case repo.get_by(ExecutionLeaseRecord, run_id: new_run.id) do
+      %ExecutionLeaseRecord{} ->
+        {:ok, :reused}
+
+      nil ->
+        case Shoestring.Cobbler.Leases.grant(goal.id, lease, Keyword.put(opts, :repo, repo)) do
+          {:ok, _result} -> {:ok, :granted}
+          {:error, reason} -> {:error, {:wakeup_grant_failed, reason}}
+        end
+    end
+  end
+
+  defp continuation_lease(new_run, evaluation, snapshot, wakeup) do
+    bounds = evaluation.proposed_bounds || %{}
+
+    with {:ok, deadline} <- continuation_deadline(bounds["deadline"]),
+         {:ok, reserves} <- continuation_reserves(bounds["reserves"]) do
+      ExecutionLease.new(%{
+        version: ExecutionLease.version(),
+        grant_id: Ecto.UUID.generate(),
+        run_id: new_run.id,
+        admitted_snapshot_id: snapshot.snapshot_id,
+        reserves: reserves,
+        response_budget: bounds["response_budget"],
+        tool_budget: bounds["tool_budget"],
+        deadline: deadline,
+        checkpoint_cadence: bounds["checkpoint_cadence"],
+        renewal_state: :none,
+        extensions: %{
+          "cobbler.lease:admission_decision_id" => evaluation.decision_id,
+          "cobbler.lease:wakeup_id" => wakeup.id
+        }
+      })
+    else
+      {:error, reason} -> {:error, {:wakeup_grant_failed, reason}}
+    end
+  end
+
+  defp continuation_deadline(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, deadline, _offset} -> {:ok, DateTime.truncate(deadline, :microsecond)}
+      _error -> {:error, {:deadline, value}}
+    end
+  end
+
+  defp continuation_deadline(value), do: {:error, {:deadline, value}}
+
+  defp continuation_reserves(%{"response" => response, "tool" => tool})
+       when is_integer(response) and is_integer(tool) do
+    {:ok, %{response: response, tool: tool}}
+  end
+
+  defp continuation_reserves(value), do: {:error, {:reserves, value}}
+
+  defp dispatch_opts(repo, opts) do
+    opts
+    |> Keyword.take([:clock, :writer_opts])
+    |> Keyword.put(:repo, repo)
   end
 
   # Twin of `Shoestring.Elves.resume_capabilities/1` (I5 owns that file; the
