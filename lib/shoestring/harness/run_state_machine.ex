@@ -66,6 +66,13 @@ defmodule Shoestring.Harness.RunStateMachine do
   defp target(:pausing, :suspend), do: {:ok, :suspended}
   defp target(:suspended, :resume), do: {:ok, :starting}
   defp target(:suspended, :begin), do: {:ok, :starting}
+  # A suspended run may still reach a terminal outcome: resumed work can
+  # complete or fail, and a suspension itself can be closed out as failed.
+  # Without these edges the projector halts the goal's position on the
+  # first post-suspend terminal (e.g. decline-suspend followed by the Elf's
+  # own terminal, or a wake-resumed run finishing).
+  defp target(:suspended, :complete), do: {:ok, :completed}
+  defp target(:suspended, :fail), do: {:ok, :failed}
   defp target(:running, :complete), do: {:ok, :completed}
   defp target(:running, :fail), do: {:ok, :failed}
   defp target(:starting, :fail), do: {:ok, :failed}

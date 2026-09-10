@@ -26,7 +26,15 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
   alias Shoestring.Cobbler.Leases
   alias Shoestring.Elves
-  alias Shoestring.Harness.{CapacitySnapshot, ExecutionLease, ExecutionLeaseRecord, Projector}
+
+  alias Shoestring.Harness.{
+    CapacitySnapshot,
+    ExecutionLease,
+    ExecutionLeaseRecord,
+    Projector,
+    RunRecord
+  }
+
   alias Shoestring.Harness.Fake.Scenario
   alias Shoestring.Repo
   alias Shoestring.Test.CobblerHelpers
@@ -347,12 +355,10 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     # Intended re-loop change (round-2 finding 4, P2): decline now suspends
     # the run (`run.pausing`/`run.suspended`) before the verdict's terminal
-    # lands, so harness projection halts at the post-suspend terminal
-    # (`suspended → complete` is not a legal `RunStateMachine` edge — known
-    # load-bearing limitation, see `plans/evidence/05-quota-aware-mvp/
-    # lease-reloop.md`). The lease/checkpoint rows below the terminal still
-    # apply, and the trajectory keeps the terminal as durable evidence.
-    assert {:error, _} = Projector.project(goal.id, clock: FixedClock)
+    # lands. `suspended → complete` is a legal `RunStateMachine` edge, so
+    # harness projection advances through the terminal instead of halting.
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+    assert Repo.get_by!(RunRecord, id: run_id).status == "completed"
     assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status == "checkpoint_required"
   end
 

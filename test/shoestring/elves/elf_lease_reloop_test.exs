@@ -225,13 +225,11 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
            ) == :eq
 
     # Projection applies the suspend (the run row reads suspended, which is
-    # what the wakeup resume path requires) and then halts at the
-    # post-suspend terminal: `suspended → complete` is not a legal
-    # `RunStateMachine` edge. That halt is a known load-bearing limitation
-    # for the projector-owning track (see the evidence note) — asserted
-    # here explicitly rather than smuggled in as a green `{:ok, _}`.
-    assert {:error, _} = Projector.project(goal.id, clock: FixedClock)
-    assert Repo.get_by!(RunRecord, id: run_id).status == "suspended"
+    # what the wakeup resume path requires) and then the post-suspend
+    # terminal: `suspended → complete` is a legal `RunStateMachine` edge, so
+    # the goal's position advances instead of halting.
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+    assert Repo.get_by!(RunRecord, id: run_id).status == "completed"
 
     assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status ==
              "checkpoint_required"
