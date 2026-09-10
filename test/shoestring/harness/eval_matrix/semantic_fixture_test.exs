@@ -34,7 +34,10 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
   Locking status: all producers are merged, so these tests PASS on the
   pre-fix tree too — documentation of genuine loop behavior, not behavior
   locks. Cross-arm invariants (trajectory acceptance/constraint, worktree
-  failure, read-count ordering) fail on regressed mechanics.
+  failure, read-count ordering) fail on regressed mechanics. Recognition
+  still scores prompt-text presence (the one non-mechanical dimension);
+  semantic strings remain fixture-authored (labeled); cross-provider LIVE
+  stays UNVERIFIED (no budget authorized).
   """
   use Shoestring.DataCase, async: false
 

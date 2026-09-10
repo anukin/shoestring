@@ -298,13 +298,22 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
         run_id: run_id,
         acceptance_criteria: ["fixture suite passes"],
         repository_revision: "abc123",
-        stop_reason: "quota_refused"
+        stop_reason: "quota_refused",
+        evidence: ["fallback context only"],
+        decisions: [],
+        unresolved_issues: []
       })
 
     template
   end
 
+  # Arms differ in checkpoint BODY (the milestone's input variants), not
+  # just next_action: now that prompts faithfully forward checkpoint
+  # content, a shared rich body would make every arm score identically and
+  # prove nothing about input quality.
   defp arm_checkpoint!(mode, goal_id, run_id, checkpoint_id) do
+    {evidence, decisions, unresolved} = arm_body(mode)
+
     {:ok, checkpoint} =
       Checkpoint.new(%{
         version: 1,
@@ -313,15 +322,9 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
         run_id: run_id,
         acceptance_contract: %{criteria: ["fixture suite passes"]},
         repository_state: %{revision: "abc123", dirty: false},
-        evidence: [
-          "inspected lib/widget.ex (relevant) and lib/unrelated.ex (irrelevant)",
-          "recorded constraint: five-hour reserve",
-          "rejected approach B: in-memory cache (violates the reserve)",
-          "partial implement: widget steps 1-2",
-          "failing test: WidgetTest second case"
-        ],
-        decisions: ["chose approach A", "rejected approach B: in-memory cache"],
-        unresolved_issues: ["WidgetTest second case still failing"],
+        evidence: evidence,
+        decisions: decisions,
+        unresolved_issues: unresolved,
         next_action: Eval.arm_next_action(mode),
         provider_session_id: @session,
         stop_reason: "quota_refused",
@@ -330,5 +333,31 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
       })
 
     checkpoint
+  end
+
+  defp arm_body(:worktree_only) do
+    {["inspected lib/widget.ex"], ["chose approach A"], []}
+  end
+
+  defp arm_body(:naive_summary) do
+    {[
+       "inspected lib/widget.ex and lib/unrelated.ex and config and docs",
+       "recorded constraint: five-hour reserve after re-reading everything twice",
+       "rejected approach B after a long thread debating caches at length",
+       "partial implement: widget steps 1-2 with several reverts",
+       "failing test: WidgetTest second case with full output pasted twice"
+     ], ["chose approach A", "rejected approach B: in-memory cache"],
+     ["WidgetTest second case still failing"]}
+  end
+
+  defp arm_body(:trajectory_projection) do
+    {[
+       "inspected lib/widget.ex (relevant) and lib/unrelated.ex (irrelevant)",
+       "recorded constraint: five-hour reserve",
+       "rejected approach B: in-memory cache (violates the reserve)",
+       "partial implement: widget steps 1-2",
+       "failing test: WidgetTest second case"
+     ], ["chose approach A", "rejected approach B: in-memory cache"],
+     ["WidgetTest second case still failing"]}
   end
 end

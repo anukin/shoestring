@@ -14,7 +14,11 @@ defmodule Shoestring.Test.EvalMatrixHelpers do
   production commit path (I1 dispatch, I2 lease loop, I3 terminal checkpoint)
   and are never hand-appended in the eval tests. `fixture_leg_scenario/0`,
   `arm_next_action/1`, and `score_arm/1` drive the milestone's three ablation
-  arms plus the retained fallback arm.
+  arms plus the retained fallback arm. Arms differ in checkpoint BODY
+  (evidence/decisions/next_action per arm — see `ablation_test.exs`
+  `arm_body/1`); sharing one rich body would make every arm score
+  identically now that handoff prompts faithfully forward checkpoint
+  content.
 
   Scoring normalization (documented here and in
   `plans/evidence/05-quota-aware-mvp/ablation.md`): scripted Fake legs always

@@ -35,6 +35,7 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
 
   alias Shoestring.Harness.{
     CheckpointFallback,
+    CheckpointRecord,
     Checkpoints,
     Continuation,
     ExecutionLeaseRecord,
@@ -170,7 +171,9 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
     new_run_id = Ecto.UUID.generate()
     decision_id = admission.payload["decision_id"]
 
-    assert {:ok, %{run: new_run}} =
+    # The wake persisted a newer admission decision above, so the pre-wake
+    # triple is genuinely stale and must be refused (not silently reused).
+    assert {:error, :decision_superseded} =
              Shoestring.Elves.resume_run(run.id,
                adapter: Fake,
                adapter_opts: Eval.adapter_opts(log_b, Scenario.handoff_target()),
@@ -178,6 +181,27 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
                  checkpoint_id: checkpoint_id,
                  next_action: continuation.next_action,
                  decision_refs: [decision_id]
+               },
+               provider_session_id: @session,
+               to_provider_id: "fake-harness-b",
+               reason: "quota handoff",
+               new_run_id: Ecto.UUID.generate(),
+               new_dispatch_id: Ecto.UUID.generate()
+             )
+
+    # Re-project after the wake: the fresh triple carries the wake decision.
+    assert {:ok, fresh_cont} = Continuation.for_goal(goal.id)
+    assert fresh_cont.checkpoint_id == checkpoint_id
+    refute fresh_cont.decision_refs == [decision_id]
+
+    assert {:ok, %{run: new_run}} =
+             Shoestring.Elves.resume_run(run.id,
+               adapter: Fake,
+               adapter_opts: Eval.adapter_opts(log_b, Scenario.handoff_target()),
+               continuation: %{
+                 checkpoint_id: checkpoint_id,
+                 next_action: fresh_cont.next_action,
+                 decision_refs: fresh_cont.decision_refs
                },
                provider_session_id: @session,
                to_provider_id: "fake-harness-b",
@@ -211,12 +235,20 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
 
     assert {:ok, handoff_request} = Elves.request_from_run(leg_b_run)
 
+    # The recorded prompt is exactly what the production handoff path
+    # composes from the fresh triple plus the checkpoint record (sections
+    # included) — reconstructed here with the same inputs.
+    record = Repo.get!(CheckpointRecord, checkpoint_id)
+
     assert handoff_request.prompt ==
-             Continuation.compose_handoff_prompt(%{
-               checkpoint_id: continuation.checkpoint_id,
-               next_action: continuation.next_action,
-               decision_refs: continuation.decision_refs
-             })
+             Continuation.compose_handoff_prompt(
+               %{
+                 checkpoint_id: fresh_cont.checkpoint_id,
+                 next_action: fresh_cont.next_action,
+                 decision_refs: fresh_cont.decision_refs
+               },
+               checkpoint_record: record
+             )
 
     refute handoff_request.prompt =~ @first_transcript_text
 
