@@ -84,24 +84,26 @@ stacked on `cc116f4`): the milestone's three arms plus the retained fallback
 arm, every leg-B terminal driven through a real supervised Elf. Tests + test
 support + these docs only; no production code changed.
 
-### 4.1 Arms (one scripted fixture task, arms differ ONLY in `next_action`)
+### 4.1 Arms (one scripted fixture task, arms differ in checkpoint BODY)
 
 Leg A (identical all arms): `fixture_leg_scenario/0` — lifecycle, three
 outputs (relevant `lib/widget.ex` + irrelevant `lib/unrelated.ex`
 inspection; constraint `five-hour reserve` + rejected approach B in-memory
-cache; partial implement steps 1–2 with `WidgetTest` second case FAILING),
-then scripted `quota_refused/rate_limit_exceeded`. Checkpoint through the
-genuine `Checkpoints` writer (arm `next_action`; shared evidence/decisions),
-projection, `Elves.resume_run/3` handoff to `fake-harness-b`, then leg B
+cache; partial implement steps 1-2 with `WidgetTest` second case FAILING),
+then scripted `quota_refused/rate_limit_exceeded`. Per-arm checkpoint
+bodies through the genuine `Checkpoints` writer (the milestone's input
+variants — arms sharing one rich body would be indistinguishable now that
+prompts faithfully forward checkpoint content, see §4.5), projection,
+`Elves.resume_run/3` handoff to `fake-harness-b`, then leg B
 (`handoff_target` RESULT) consumed by a real Elf bound via
 `Dispatches.enqueue_for_run/1` + `Elves.start_elf/3`.
 
-| Arm | `next_action` input (bytes) | Composed prompt (bytes) |
-| :--- | ---: | ---: |
-| worktree-only | 43 (generic: no constraint, no step) | 244 |
-| naive-summary | 747 (constraint buried in transcript noise) | 948 |
-| trajectory-projection | 130 (crisp: step + constraint + rejection) | 331 |
-| fallback-template | 244 (deterministic resume template) | 445 |
+| Arm | Checkpoint body |
+| :--- | :--- |
+| worktree-only | minimal, marker-free (pointer next_action, one neutral evidence item) |
+| naive-summary | verbose flat dump (marker present, everything named) + verbose next_action |
+| trajectory-projection | full compact body (marker, constraint, rejection) + crisp next_action |
+| fallback-template | deterministic template next_action + minimal marker-free body |
 
 ### 4.2 Rubric scores (deterministic normalization, `VERIFIED`)
 
@@ -126,7 +128,8 @@ Every arm: terminal class `completed` via Elf; `RunRecord` status
 `completed`; privacy sweep green (`scan_term == []`, `safe_term? == true`);
 3 scripted leg-B turns; exactly 1 fresh adapter `start`, 0 `resume`s; the
 `eval-matrix` actor appears nowhere on the driven runs. Tax delta is the
-input: 244–948 prompt bytes for the same completed outcome.
+input: concise trajectory prompts vs verbose naive dumps for the same
+completed outcome (byte budgets in §4.2).
 
 ### 4.4 Prior result reproduced (P3, `VERIFIED`)
 
@@ -172,3 +175,13 @@ Trajectory wins outright at 264 prompt bytes vs naive's 351.
 Residual honesty: recognition still scores prompt text presence (the only
 non-mechanical dimension); semantic strings remain fixture-authored
 (labeled); cross-provider LIVE stays UNVERIFIED (no budget authorized).
+
+### 4.5 Round-3 revision note (faithful forwarding exposed shared bodies)
+
+The §4.1 design above originally shared one rich checkpoint body across
+arms, varying only `next_action` — sound while prompts were pointer-only,
+degenerate once handoff prompts faithfully forward checkpoint content
+(sections visible to every arm's score). The arms were re-cut to vary
+bodies per the milestone's input variants; totals re-verified green with
+no threshold tuning (ranking trajectory > naive, trajectory > worktree,
+trajectory > fallback holds as asserted in-test).
