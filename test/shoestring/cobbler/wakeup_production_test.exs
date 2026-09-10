@@ -222,23 +222,38 @@ defmodule Shoestring.Cobbler.WakeupProductionTest do
     assert Repo.aggregate(DispatchRecord, :count, :dispatch_id) == 1
   end
 
-  test "production observe reads the freshest ledger observation" do
-    assert {:error, :no_observation} = WakeupObserve.observe()
+  test "production observe returns the newest ledger observation for the run provider/scope" do
+    scoping = %{provider_id: "codex", scope: "account:codex"}
+    assert {:error, :no_observation} = WakeupObserve.observe(scoping)
 
     now = ManualClock.now()
     earlier = DateTime.add(now, -600, :second)
+    recent = DateTime.add(now, -60, :second)
 
     {:ok, older} =
       CapacitySnapshot.new(snapshot_attrs(Ecto.UUID.generate(), earlier), now: earlier)
 
-    {:ok, fresh} = CapacitySnapshot.new(snapshot_attrs(Ecto.UUID.generate(), now), now: now)
+    {:ok, fresh} = CapacitySnapshot.new(snapshot_attrs(Ecto.UUID.generate(), recent), now: recent)
 
-    for snapshot <- [older, fresh] do
+    # A foreign provider's snapshot is globally newest, but must never leak
+    # into this provider's wake decision.
+    {:ok, foreign} =
+      CapacitySnapshot.new(foreign_snapshot_attrs(Ecto.UUID.generate(), now), now: now)
+
+    for snapshot <- [older, fresh, foreign] do
       {:ok, :persisted, _} = Shoestring.Harness.Observatory.ingest(snapshot)
     end
 
-    assert {:ok, %CapacitySnapshot{snapshot_id: snapshot_id}} = WakeupObserve.observe()
+    assert {:ok, %CapacitySnapshot{snapshot_id: snapshot_id}} = WakeupObserve.observe(scoping)
     assert snapshot_id == fresh.snapshot_id
+
+    assert {:ok, %CapacitySnapshot{snapshot_id: foreign_id}} =
+             WakeupObserve.observe(%{provider_id: "other", scope: "account:other"})
+
+    assert foreign_id == foreign.snapshot_id
+
+    assert {:error, :no_observation_for_provider} =
+             WakeupObserve.observe(%{provider_id: "missing", scope: "account:missing"})
   end
 
   test "production config wires the MFA observe tuple" do
@@ -412,6 +427,29 @@ defmodule Shoestring.Cobbler.WakeupProductionTest do
 
     {:ok, snapshot} = CapacitySnapshot.new(attrs, now: now)
     snapshot
+  end
+
+  defp foreign_snapshot_attrs(snapshot_id, observed_at) do
+    %{
+      version: 2,
+      snapshot_id: snapshot_id,
+      capacity_state: :observed,
+      windows: observed_windows(DateTime.add(observed_at, 7_200, :second)),
+      observed_at: observed_at,
+      freshness: %{max_age_seconds: 300},
+      source: %{
+        adapter_id: "shoestring.harness.fake",
+        provider_id: "other",
+        invocation_mode: "headless",
+        event: :explicit_read
+      },
+      scope: "account:other",
+      confidence: :high,
+      support_tier: :proactive,
+      compatibility_state: :compatible,
+      reason: nil,
+      extensions: %{}
+    }
   end
 
   defp snapshot_attrs(snapshot_id, observed_at) do

@@ -20,9 +20,10 @@ defmodule Shoestring.Cobbler.Wakeups do
   already holding the base key), never from wall-clock time or randomness.
 
   Wake-to-reobserve (§P4, `perform_wakeup/2`) runs a fixed order: fresh
-  snapshot (persisted as `capacity.snapshot_observed`; a probe failure leaves
-  the intent due and stops) → `AdmissionEvaluation.evaluate/5` with an
-  explicit `now` plus claim occupancy → branch:
+  snapshot scoped to the run/decision provider/scope (persisted as
+  `capacity.snapshot_observed`; a probe failure leaves the intent due and
+  stops) → `AdmissionEvaluation.evaluate/5` with an explicit `now` plus
+  claim occupancy → branch:
 
   - `:admit` → renew (when a renewable lease exists) + resume
     (`GoalLifecycle` sleeping → evaluating → queued; lease
@@ -525,8 +526,10 @@ defmodule Shoestring.Cobbler.Wakeups do
   `:already_woken`, or `:already_cancelled`. Observation or evaluation
   failures return `{:error, reason}` and leave the intent due.
 
-  Options: `:repo`, `:now`, `:clock`, `:observe` (required zero-arity fun
-  returning `{:ok, CapacitySnapshot.t()} | {:error, reason}`),
+  Options: `:repo`, `:now`, `:clock`, `:observe` (required fun returning
+  `{:ok, CapacitySnapshot.t()} | {:error, reason}` — arity 1 scoped, called
+  with `%{provider_id:, scope:}` derived from the run/decision candidate, or
+  arity 0 legacy whose result is still binding-checked downstream),
   `:occupancy` (default: derived from the live global claim), `:policy`,
   `:request`, `:candidate`, `:decision_event_id`, `:actor` (default
   `"cobbler"`), `:identity` (dispatch identity for the admitted
@@ -544,10 +547,11 @@ defmodule Shoestring.Cobbler.Wakeups do
          :ok <- live_wakeup_goal(repo, wakeup, goal, now),
          {:ok, run} <- fetch_run(repo, wakeup),
          {:ok, lease} <- latest_lease(repo, run),
-         {:ok, snapshot} <- observe(opts),
+         {:ok, {request, candidate}} <- admission_context(repo, wakeup, goal, run, opts),
+         {:ok, snapshot} <- observe(opts, candidate),
          {:ok, _snapshot_event} <- persist_snapshot(wakeup, goal, run, snapshot, now, opts),
          {:ok, _position} <- Projector.project(goal.id, clock: clock(opts)),
-         {:ok, evaluation} <- evaluate(repo, wakeup, goal, run, snapshot, now, opts) do
+         {:ok, evaluation} <- evaluate(repo, goal, snapshot, request, candidate, now, opts) do
       branch(repo, wakeup, goal, run, lease, snapshot, evaluation, now, opts)
     else
       {:noop, summary} -> {:ok, summary}
@@ -614,19 +618,34 @@ defmodule Shoestring.Cobbler.Wakeups do
     {:ok, lease}
   end
 
-  defp observe(opts) do
-    case Keyword.fetch(opts, :observe) do
-      {:ok, observe_fun} when is_function(observe_fun, 0) ->
-        case observe_fun.() do
-          {:ok, %CapacitySnapshot{} = snapshot} -> {:ok, snapshot}
-          {:error, reason} -> {:error, {:observation_failed, reason}}
-          _other -> {:error, {:observation_failed, :unexpected_observe_result}}
-        end
+  # Admission context resolves BEFORE the fresh observation so the probe
+  # is scoped to the run/decision provider/scope (W1): a wake admission for
+  # one provider must never be decided on another provider's allowance.
+  defp observe(opts, candidate) do
+    scoping = observe_scoping(candidate)
 
-      _missing ->
-        {:error, {:observation_failed, :missing_observe_fun}}
+    result =
+      case Keyword.fetch(opts, :observe) do
+        {:ok, observe_fun} when is_function(observe_fun, 1) -> observe_fun.(scoping)
+        {:ok, observe_fun} when is_function(observe_fun, 0) -> observe_fun.()
+        _missing -> {:error, :missing_observe_fun}
+      end
+
+    case result do
+      {:ok, %CapacitySnapshot{} = snapshot} -> {:ok, snapshot}
+      {:error, reason} -> {:error, {:observation_failed, reason}}
+      _other -> {:error, {:observation_failed, :unexpected_observe_result}}
     end
   end
+
+  defp observe_scoping(candidate) when is_map(candidate) do
+    %{
+      provider_id: Map.get(candidate, :provider_id, Map.get(candidate, "provider_id")),
+      scope: Map.get(candidate, :scope, Map.get(candidate, "scope"))
+    }
+  end
+
+  defp observe_scoping(_candidate), do: %{provider_id: nil, scope: nil}
 
   defp persist_snapshot(wakeup, goal, run, snapshot, now, opts) do
     run_id = if run, do: run.id, else: nil
@@ -656,11 +675,10 @@ defmodule Shoestring.Cobbler.Wakeups do
     end
   end
 
-  defp evaluate(repo, wakeup, goal, run, snapshot, now, opts) do
+  defp evaluate(repo, goal, snapshot, request, candidate, now, opts) do
     policy = Keyword.get(opts, :policy, AdmissionPolicy.default())
 
-    with {:ok, {request, candidate}} <- admission_context(repo, wakeup, goal, run, opts),
-         {:ok, occupancy} <- occupancy(repo, goal, opts) do
+    with {:ok, occupancy} <- occupancy(repo, goal, opts) do
       case AdmissionEvaluation.evaluate(request, candidate, snapshot, policy,
              now: now,
              occupancy: occupancy
