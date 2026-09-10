@@ -10,12 +10,15 @@ defmodule Shoestring.Cobbler.WakeupWorker do
   `woken`/`cancelled` rows and re-observes before acting.
 
   The fresh-snapshot probe comes from the `:wakeup_observe` application
-  environment: either a zero-arity fun returning
+  environment: either a fun returning
   `{:ok, CapacitySnapshot.t()} | {:error, reason}` (hermetic callers and
-  tests), or an MFA tuple `{module, fun, args}` applied at perform time.
+  tests; arity 1 scoped or arity 0 legacy), or an MFA tuple
+  `{module, fun, args}` applied at perform time with the run/decision-derived
+  `%{provider_id:, scope:}` scoping map appended to `args`.
   Production config (`config/runtime.exs`, `:prod` only) points at
   `{Shoestring.Cobbler.WakeupObserve, :observe, []}`, which re-probes
-  through the real Observatory ledger. Without either shape the attempt
+  through the real Observatory ledger scoped to the wake's provider/scope
+  (never another provider's snapshot). Without either shape the attempt
   fails retriably (`{:error, {:observation_failed, :missing_observe_fun}}`)
   and the intent stays due. Hermetic callers invoke
   `Wakeups.perform_wakeup/2` directly with an explicit `:observe` fun
@@ -56,12 +59,15 @@ defmodule Shoestring.Cobbler.WakeupWorker do
       observe_fun when is_function(observe_fun, 0) ->
         observe_fun
 
+      observe_fun when is_function(observe_fun, 1) ->
+        observe_fun
+
       {module, fun_name, args}
       when is_atom(module) and is_atom(fun_name) and is_list(args) ->
-        fn -> apply(module, fun_name, args) end
+        fn scoping -> apply(module, fun_name, args ++ [scoping]) end
 
       _other ->
-        fn -> {:error, :missing_observe_fun} end
+        fn _scoping -> {:error, :missing_observe_fun} end
     end
   end
 end

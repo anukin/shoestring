@@ -11,7 +11,8 @@ defmodule Shoestring.Cobbler.AdmissionEvaluation do
   - Missing evidence stays unknown; never manufactures 0 usage.
   - Refuses automatic admission at reserve breaches (>= 80% five-hour, >= 90% weekly).
   - Hard boundaries (unsupported capability, incompatible CLI, hard quota block,
-    reserve breach, scope mismatch, active occupancy) CANNOT be bypassed by manual confirmation.
+    reserve breach, scope mismatch, snapshot provider/scope binding, active
+    occupancy) CANNOT be bypassed by manual confirmation.
   - Validates attributable single-decision confirmations against candidate, scope, and intent.
   - Never describes manual execution as automatically safe.
   - Prevents immediate retry loops on past reset timestamps via explicit delayed recheck.
@@ -171,6 +172,25 @@ defmodule Shoestring.Cobbler.AdmissionEvaluation do
       request.scope != nil and request.scope != candidate.scope ->
         {:hard_stop, :reject, "scope_mismatch",
          "Requested scope '#{request.scope}' does not match candidate scope '#{candidate.scope}' (cannot be bypassed by confirmation)",
+         nil, false}
+
+      # 4b. Snapshot provider/scope binding (defense in depth, W1).
+      #
+      # Identity compared (exact string equality):
+      #
+      #   - snapshot `source.provider_id` vs candidate `provider_id`;
+      #   - snapshot `scope` vs candidate `scope`.
+      #
+      # `source.adapter_id` / `source.invocation_mode` are probe provenance,
+      # not quota identity, and are deliberately NOT compared: a CLI upgrade
+      # or mode rotation must not reject an otherwise bound snapshot. A nil
+      # snapshot keeps the historical path (missing evidence requires
+      # confirmation downstream); a non-nil snapshot whose identity fields
+      # are absent is treated as unknown downstream, not as bound — only a
+      # present-but-disagreeing identity hard-stops.
+      snapshot_provider_mismatch?(snapshot, candidate) ->
+        {:hard_stop, :reject, "snapshot_provider_mismatch",
+         "Capacity snapshot '#{snapshot_identity_label(snapshot)}' records provider '#{snapshot_identity_provider(snapshot)}' / scope '#{snapshot_identity_scope(snapshot)}' but the candidate is provider '#{candidate.provider_id}' / scope '#{candidate.scope}' (cannot be bypassed by confirmation)",
          nil, false}
 
       # 5. Active occupancy
@@ -404,6 +424,65 @@ defmodule Shoestring.Cobbler.AdmissionEvaluation do
   defp is_refused?(%CapacitySnapshot{capacity_state: :refused}), do: true
   defp is_refused?(%{"capacity_state" => "refused"}), do: true
   defp is_refused?(_), do: false
+
+  # Snapshot-vs-candidate binding (W1 defense in depth). Nil snapshots are
+  # not mismatches (P3: still require confirmation downstream). Identity
+  # fields absent on a non-nil snapshot are unknown, not bound — only a
+  # present-but-disagreeing provider/scope hard-stops.
+  defp snapshot_provider_mismatch?(nil, _candidate), do: false
+
+  defp snapshot_provider_mismatch?(snapshot, candidate) do
+    provider = snapshot_identity_provider(snapshot)
+    scope = snapshot_identity_scope(snapshot)
+
+    (provider != nil and provider != candidate.provider_id) or
+      (scope != nil and scope != candidate.scope)
+  end
+
+  defp snapshot_identity_provider(%CapacitySnapshot{source: %{provider_id: provider_id}})
+       when not is_nil(provider_id),
+       do: to_string(provider_id)
+
+  defp snapshot_identity_provider(%CapacitySnapshot{source: %{"provider_id" => provider_id}})
+       when not is_nil(provider_id),
+       do: to_string(provider_id)
+
+  defp snapshot_identity_provider(%{"source" => %{"provider_id" => provider_id}})
+       when not is_nil(provider_id),
+       do: to_string(provider_id)
+
+  defp snapshot_identity_provider(%{source: %{provider_id: provider_id}})
+       when not is_nil(provider_id),
+       do: to_string(provider_id)
+
+  defp snapshot_identity_provider(%{"source" => %{provider_id: provider_id}})
+       when not is_nil(provider_id),
+       do: to_string(provider_id)
+
+  defp snapshot_identity_provider(_snapshot), do: nil
+
+  defp snapshot_identity_scope(%CapacitySnapshot{scope: scope}) when not is_nil(scope),
+    do: to_string(scope)
+
+  defp snapshot_identity_scope(%{"scope" => scope}) when not is_nil(scope),
+    do: to_string(scope)
+
+  defp snapshot_identity_scope(%{scope: scope}) when not is_nil(scope),
+    do: to_string(scope)
+
+  defp snapshot_identity_scope(_snapshot), do: nil
+
+  defp snapshot_identity_label(%CapacitySnapshot{snapshot_id: snapshot_id})
+       when not is_nil(snapshot_id),
+       do: to_string(snapshot_id)
+
+  defp snapshot_identity_label(%{"snapshot_id" => snapshot_id}) when not is_nil(snapshot_id),
+    do: to_string(snapshot_id)
+
+  defp snapshot_identity_label(%{snapshot_id: snapshot_id}) when not is_nil(snapshot_id),
+    do: to_string(snapshot_id)
+
+  defp snapshot_identity_label(_snapshot), do: "unknown"
 
   defp compute_refusal_deferral(snapshot, policy, now) do
     reset_at = extract_snapshot_reset_at(snapshot)
