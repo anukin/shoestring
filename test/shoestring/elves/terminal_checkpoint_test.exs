@@ -12,8 +12,12 @@ defmodule Shoestring.Elves.TerminalCheckpointTest do
   use Shoestring.DataCase, async: false
 
   alias Shoestring.Elves.TerminalCheckpoint
+  alias Shoestring.Test.CobblerHelpers
   alias Shoestring.Test.ElfWorktreeFixture
   alias Shoestring.Test.FixedClock
+  alias Shoestring.Test.Fixtures.FakeHelpers
+  alias Shoestring.Trajectory
+  alias Shoestring.Trajectory.ArtifactStore
 
   test "checkpoint_id/1 is deterministic, UUID-shaped, and distinct per run" do
     run_a = Ecto.UUID.generate()
@@ -144,7 +148,169 @@ defmodule Shoestring.Elves.TerminalCheckpointTest do
     assert first_id == TerminalCheckpoint.checkpoint_id(state.run_id)
   end
 
+  describe "terminal decisions from admission history (round-2 finding 6, P1)" do
+    test "collect/3 fills decisions from recent admission.decided history" do
+      goal = FakeHelpers.insert_goal()
+      run_id = Ecto.UUID.generate()
+      fixture = ElfWorktreeFixture.create!(run_id)
+      on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+      d1 = Ecto.UUID.generate()
+      d2 = Ecto.UUID.generate()
+
+      CobblerHelpers.append_admission_event!(
+        goal.id,
+        CobblerHelpers.admission_payload(decision_id: d1)
+        |> Map.put("reason_code", "automatic_admission_eligible")
+      )
+
+      CobblerHelpers.append_admission_event!(
+        goal.id,
+        CobblerHelpers.admission_payload(decision_id: d2)
+        |> Map.put("reason_code", "operator_confirmed_manual")
+      )
+
+      state = elf_state_for(goal.id, run_id, fixture.worktree.workspace_ref)
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :completed})
+      assert length(inputs.decisions) == 2
+
+      # Oldest first; each entry carries the decision id, the reason code,
+      # and the admission source event pointer.
+      assert Enum.at(inputs.decisions, 0) =~ d1
+      assert Enum.at(inputs.decisions, 0) =~ "automatic_admission_eligible"
+      assert Enum.at(inputs.decisions, 0) =~ "admission event"
+      assert Enum.at(inputs.decisions, 1) =~ d2
+      assert Enum.at(inputs.decisions, 1) =~ "operator_confirmed_manual"
+    end
+
+    test "collect/3 caps decisions at the newest 8 entries" do
+      goal = FakeHelpers.insert_goal()
+      run_id = Ecto.UUID.generate()
+      fixture = ElfWorktreeFixture.create!(run_id)
+      on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+      # Bound literal (mirrors TerminalCheckpoint.max_decision_entries/0):
+      # on the base commit collect/3 always returns decisions [], so the
+      # length assertion below fails there for the right behavioural reason.
+
+      ids =
+        Enum.map(1..10, fn _ ->
+          id = Ecto.UUID.generate()
+
+          CobblerHelpers.append_admission_event!(
+            goal.id,
+            CobblerHelpers.admission_payload(decision_id: id)
+          )
+
+          id
+        end)
+
+      state = elf_state_for(goal.id, run_id, fixture.worktree.workspace_ref)
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :completed})
+      assert length(inputs.decisions) == 8
+
+      # Newest 8, oldest first.
+      for id <- Enum.take(ids, -8) do
+        assert Enum.any?(inputs.decisions, &String.contains?(&1, id)),
+               "expected decision #{id} in #{inspect(inputs.decisions)}"
+      end
+
+      for id <- Enum.take(ids, 2) do
+        refute Enum.any?(inputs.decisions, &String.contains?(&1, id)),
+               "expected decision #{id} to be capped away"
+      end
+    end
+
+    test "collect/3 leaves decisions honestly [] when no admission history exists" do
+      # DOCUMENTATION (standing-contract label): passes on the base commit
+      # too (decisions were always []). Locks that empty history is never
+      # papered over with invented entries.
+      run_id = Ecto.UUID.generate()
+      fixture = ElfWorktreeFixture.create!(run_id)
+      on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+      state = elf_state(fixture.worktree.workspace_ref)
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :completed})
+      assert inputs.decisions == []
+    end
+
+    test "collect/3 populates artifact_ids from the run's recorded artifact references" do
+      goal = FakeHelpers.insert_goal()
+      task = FakeHelpers.insert_task(goal)
+      dispatch_id = Ecto.UUID.generate()
+      run = FakeHelpers.insert_run_record(goal, task, dispatch_id)
+      fixture = ElfWorktreeFixture.create!(run.id)
+      on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+      {:ok, artifact} =
+        ArtifactStore.put(goal.id, "terminal log bytes", %{"media_type" => "text/plain"},
+          task_id: task.id
+        )
+
+      assert {:ok, _event} =
+               Trajectory.append(
+                 goal.id,
+                 %{
+                   "type" => "harness.event_recorded",
+                   "schema_version" => 1,
+                   "actor" => "elf",
+                   "occurred_at" => CobblerHelpers.now(),
+                   "idempotency_key" => "elf-log:#{dispatch_id}",
+                   "payload" => %{
+                     "run_id" => run.id,
+                     "source_event_id" => "elf-log:#{dispatch_id}",
+                     "ordinal" => 1,
+                     "occurred_at" => DateTime.to_iso8601(CobblerHelpers.now()),
+                     "kind" => "artifact",
+                     "artifact_id" => artifact.id
+                   }
+                 },
+                 trusted: [task_id: task.id, run_id: run.id]
+               )
+
+      state = elf_state_for(goal.id, run.id, fixture.worktree.workspace_ref, dispatch_id)
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :completed})
+      assert inputs.artifact_ids == [artifact.id]
+    end
+
+    test "collect/3 keeps artifact_ids [] when the run recorded no artifacts" do
+      # DOCUMENTATION (standing-contract label): passes on base too.
+      # Locks the honest-empty side of the artifact inventory.
+      goal = FakeHelpers.insert_goal()
+      run_id = Ecto.UUID.generate()
+      fixture = ElfWorktreeFixture.create!(run_id)
+      on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+      state = elf_state_for(goal.id, run_id, fixture.worktree.workspace_ref)
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :completed})
+      assert inputs.artifact_ids == []
+    end
+  end
+
   # -- Helpers --
+
+  defp elf_state_for(goal_id, run_id, workspace_ref, dispatch_id \\ nil) do
+    %{
+      goal_id: goal_id,
+      run_id: run_id,
+      dispatch_id: dispatch_id || Ecto.UUID.generate(),
+      request: %{workspace_ref: workspace_ref},
+      provider_session_id: nil,
+      lease_bounds: nil,
+      lease_grant_id: nil,
+      lease_deadline: nil,
+      lease_checkpoint_id: nil,
+      lease_checkpointed?: false,
+      os_exit: :unknown,
+      repo: Shoestring.Repo,
+      clock: FixedClock
+    }
+  end
 
   defp elf_state(workspace_ref) do
     %{

@@ -9,9 +9,16 @@ defmodule Shoestring.Harness.ContinuationTest do
   documentation: it records intended behaviour without claiming to lock a
   pre-existing defect.
   """
+
+  # NOTE (round-2 finding 6, base 4d2df5a): the
+  # "compose_handoff_prompt/2 projection content" and ":repo self-load"
+  # describes below carry per-test lock-vs-documentation labels against
+  # 4d2df5a, where this module already exists. The DOCUMENTATION note above
+  # still applies to the older describes (written against d3ca088).
   use Shoestring.DataCase, async: false
 
-  alias Shoestring.Harness.{CheckpointRecord, Continuation, RunRequest}
+  alias Shoestring.Harness.{CheckpointRecord, Continuation, Contract, RunRequest}
+  alias Shoestring.Harness.Security
   alias Shoestring.Repo
   alias Shoestring.Test.CobblerHelpers
   alias Shoestring.Test.Fixtures.FakeHelpers
@@ -269,6 +276,205 @@ defmodule Shoestring.Harness.ContinuationTest do
 
       assert {:ok, cont} = Continuation.for_goal(goal.id)
       assert cont.decision_refs == Enum.take(ids, -32)
+    end
+  end
+
+  describe "compose_handoff_prompt/2 projection content (round-2 finding 6, P2/P3)" do
+    test "without record opts the output is byte-identical to the pointer-only shape" do
+      # DOCUMENTATION (standing-contract label): this shape is preserved by
+      # design, so it passes on the base commit 4d2df5a too. It locks the
+      # default against accidental drift, it does not lock a fixed defect.
+      cid = Ecto.UUID.generate()
+      d1 = Ecto.UUID.generate()
+
+      cont = %{
+        checkpoint_id: cid,
+        next_action: "advance to step seven",
+        decision_refs: [d1]
+      }
+
+      expected =
+        "Continue from checkpoint #{cid}. " <>
+          "Next action: advance to step seven. " <>
+          "Decision refs: #{d1}. " <>
+          "Constraints: supervised, fresh session; no prior transcript available."
+
+      assert Continuation.compose_handoff_prompt(cont) == expected
+      assert Continuation.compose_handoff_prompt(cont, []) == expected
+
+      # A :repo with no matching row also falls back to the default shape.
+      assert Continuation.compose_handoff_prompt(cont, repo: Repo) == expected
+    end
+
+    test "explicit record adds completed/failure/constraint/verification sections within cap" do
+      cid = Ecto.UUID.generate()
+      d1 = Ecto.UUID.generate()
+
+      cont = %{
+        checkpoint_id: cid,
+        next_action: "advance to step seven",
+        decision_refs: [d1]
+      }
+
+      record = %{
+        id: cid,
+        next_action: "advance to step seven",
+        stop_reason: "run.failed:process_timeout",
+        decisions: %{
+          "items" => ["decision #{d1} (automatic_admission_eligible; admission event evt-1)"]
+        },
+        unresolved_issues: %{
+          "items" => [
+            "run.failed error transport/process_timeout: inspect and rerun verification"
+          ]
+        },
+        evidence: %{
+          "items" => ["command cmd-verify-1 ordinal 1", "result cmd-verify-1 status ok"]
+        }
+      }
+
+      prompt = Continuation.compose_handoff_prompt(cont, checkpoint_record: record)
+
+      # Base pointer triple still present.
+      assert prompt =~ cid
+      assert prompt =~ "advance to step seven"
+      assert prompt =~ d1
+
+      # Projection state sections (WP F): completed work, current failure,
+      # constraints, verification.
+      assert prompt =~ "Completed work:"
+      assert prompt =~ d1
+      assert prompt =~ "automatic_admission_eligible"
+      assert prompt =~ "Failure:"
+      assert prompt =~ "run.failed:process_timeout"
+      assert prompt =~ "Constraints:"
+      assert prompt =~ "inspect and rerun verification"
+      assert prompt =~ "Verification:"
+      assert prompt =~ "cmd-verify-1"
+
+      assert String.length(prompt) <= Continuation.handoff_prompt_max_chars()
+    end
+
+    test "overlong record sections truncate with a marker inside the cap" do
+      cid = Ecto.UUID.generate()
+
+      cont = %{checkpoint_id: cid, next_action: "go", decision_refs: []}
+
+      record = %{
+        id: cid,
+        stop_reason: "run.failed:timeout",
+        decisions: %{"items" => Enum.map(1..20, &"decision choice #{&1}")},
+        unresolved_issues: %{"items" => []},
+        evidence: %{"items" => [String.duplicate("v", 5_000)]}
+      }
+
+      prompt = Continuation.compose_handoff_prompt(cont, checkpoint_record: record)
+
+      assert String.length(prompt) <= Continuation.handoff_prompt_max_chars()
+      assert prompt =~ "…[+12 more]"
+      assert prompt =~ Continuation.truncation_marker()
+    end
+
+    test "privacy sweep: required content present, transcript terms absent (both directions)" do
+      cid = Ecto.UUID.generate()
+
+      cont = %{checkpoint_id: cid, next_action: "advance to step seven", decision_refs: []}
+
+      record = %{
+        "transcript" => "SECRET-TRANSCRIPT-SHOESTRING7 must never appear",
+        id: cid,
+        stop_reason: "run.failed:timeout",
+        decisions: %{"items" => ["decision logged-choice (automatic_admission_eligible)"]},
+        unresolved_issues: %{"items" => ["inspect the failed terminal event before retry"]},
+        evidence: %{"items" => ["command cmd-verify-9 ordinal 3"]}
+      }
+
+      prompt = Continuation.compose_handoff_prompt(cont, checkpoint_record: record)
+
+      # Sensitive gone: transcript-scale keys on the record are never read,
+      # so the smuggled value cannot leak through the new sections. (The
+      # pre-existing W5 default constraints text itself contains the word
+      # "transcript", so key-name sweeping applies to the smuggled value
+      # and the secret scanners, not to substrings of the locked default.)
+      refute prompt =~ "SECRET-TRANSCRIPT-SHOESTRING7"
+
+      assert Security.scan_term(prompt) == []
+      assert Contract.safe_term?(prompt)
+
+      # Required present: the projection state survived.
+      assert prompt =~ "decision logged-choice"
+      assert prompt =~ "inspect the failed terminal event"
+      assert prompt =~ "cmd-verify-9"
+      assert prompt =~ cid
+    end
+  end
+
+  describe "compose_handoff_prompt/2 :repo self-load (P3)" do
+    setup do
+      goal = FakeHelpers.insert_goal(@goal_id)
+      task = FakeHelpers.insert_task(goal, @task_id)
+      FakeHelpers.insert_run_record(goal, task, Ecto.UUID.generate(), run_id: @run_a)
+      %{goal: goal, task: task}
+    end
+
+    test "repo loads the record by checkpoint id when no explicit record is passed", %{
+      goal: goal
+    } do
+      insert_checkpoint!(@run_a, 1, "advance to step seven", goal.id)
+      assert {:ok, record} = Continuation.latest_checkpoint(Repo, goal.id)
+
+      cont = %{
+        checkpoint_id: record.id,
+        next_action: "advance to step seven",
+        decision_refs: []
+      }
+
+      prompt = Continuation.compose_handoff_prompt(cont, repo: Repo)
+
+      assert prompt =~ "Completed work:"
+      assert prompt =~ "free text, never an id"
+      assert String.length(prompt) <= Continuation.handoff_prompt_max_chars()
+    end
+
+    test "explicit record wins over the repo-loaded row", %{goal: goal} do
+      insert_checkpoint!(@run_a, 1, "advance to step seven", goal.id)
+      assert {:ok, record} = Continuation.latest_checkpoint(Repo, goal.id)
+
+      cont = %{
+        checkpoint_id: record.id,
+        next_action: "advance to step seven",
+        decision_refs: []
+      }
+
+      explicit = %{
+        id: record.id,
+        stop_reason: "run.completed",
+        decisions: %{"items" => ["explicit-record-choice"]},
+        unresolved_issues: %{"items" => []},
+        evidence: %{"items" => []}
+      }
+
+      prompt =
+        Continuation.compose_handoff_prompt(cont,
+          checkpoint_record: explicit,
+          repo: Repo
+        )
+
+      assert prompt =~ "explicit-record-choice"
+      refute prompt =~ "free text, never an id"
+    end
+
+    test "unknown checkpoint id via repo falls back to the pointer-only default", %{
+      goal: _goal
+    } do
+      # DOCUMENTATION (standing-contract label): passes on base too (opts
+      # ignored there). Locks that an unresolvable id degrades to the
+      # default shape instead of raising or leaking.
+      cid = Ecto.UUID.generate()
+      cont = %{checkpoint_id: cid, next_action: "go", decision_refs: []}
+
+      assert Continuation.compose_handoff_prompt(cont, repo: Repo) ==
+               Continuation.compose_handoff_prompt(cont)
     end
   end
 
