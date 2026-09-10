@@ -141,27 +141,34 @@ honestly, not softened.
 checkpoint writer → projection → handoff → dispatch pipeline → supervised
 Elf terminal); no producer seam was missing and none was added.
 
-## 5. W7 addendum: genuine fixture-task arms (mechanical acceptance)
+## 5. W7 addendum: genuine fixture-task arms, v2 (real handoff path)
 
 The §1–§4 arms run scripted-success receivers; this section records the
 genuine follow-up (`semantic_fixture_test.exs`, deterministic receiver
-`test/fixtures/fixture_applier.py`, python3 stdlib only): a real git
-fixture project, a real leg-A Elf whose failing check yields a real
-failed terminal, a checkpoint with real repo evidence (revision, dirty
-diff, terminal event) plus fixture-authored semantic strings (constraint,
-rejected approach, next-action instruction — exactly what a model authors
-in production), and per-arm real leg-B Elves whose terminal class comes
-from the applier's real exit code fused with real progress events.
-Acceptance is re-verified independently (fresh `check.sh` run + byte
-comparisons), never trusted from the applier.
+`test/fixtures/fixture_applier.py`, python3 stdlib only), revised to answer
+the round-2 finding-7 review:
 
-Arm inputs (same leg A, same applier, only the prompt differs):
-worktree-only (bare listing), naive-summary (fix instruction, no
-constraint, noisy file list), trajectory-projection (real composed
-handoff prompt: fix + constraint + minimal refs).
+- one shared leg-A Elf per arm goal genuinely fails a fixture check
+  (mechanical `failed` terminal); its checkpoint carries real repo evidence
+  (`git rev-parse`, dirty diff stat, the durable terminal event) plus
+  fixture-authored semantic strings (constraint, rejected approach,
+  next-action instruction — exactly what a model authors in production);
+- leg B routes through the REAL handoff request path
+  (`Elves.resume_run/2` → intent → composed request → Fake session start),
+  except the worktree arm, which has no checkpoint and therefore cannot
+  handoff by design (refusal asserted — a genuine finding, not a gap);
+- the applier executes the RECORDED handoff prompt in a second real Elf;
+  terminal classes come from real exit codes fused with real progress
+  events; acceptance is re-verified independently (fresh `check.sh` run +
+  byte comparisons), never trusted from the applier;
+- each arm owns its goal, fixture dir, and leg-A history — no resets
+  between arms, so leg B genuinely continues leg-A dirty state.
 
-Locking status: all producers are merged, so these tests pass on the
-pre-fix tree too — documentation of genuine loop behavior (mechanical
-terminals, file bytes, exit codes), not behavior-change locks. Internal
-invariants (trajectory acceptance/constraint, worktree failure,
-read-count ordering) fail on regressed mechanics.
+Measured totals (mechanical, pinned in-test): trajectory 11
+(accept 2, constraint 2, recognition 2, repeated 1, turns 2, capacity 2),
+naive 9 (2, 0, 2, 1, 2, 2), worktree 3 (0, 0, 0, 1, 0, 2).
+Trajectory wins outright at 264 prompt bytes vs naive's 351.
+
+Residual honesty: recognition still scores prompt text presence (the only
+non-mechanical dimension); semantic strings remain fixture-authored
+(labeled); cross-provider LIVE stays UNVERIFIED (no budget authorized).
