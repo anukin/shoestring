@@ -59,6 +59,15 @@ if config_env() == :prod do
   # when nothing is configured.
   config :shoestring, :wakeup_observe, {Shoestring.Cobbler.WakeupObserve, :observe, []}
 
+  # Production dispatch-worker effect (loop-closure W2): Oban `dispatch`-queue
+  # deliveries (wakeup continuations, crash-recovery requeues) start the
+  # supervising Elf through `Shoestring.Harness.Dispatch.ElfEffect`, which
+  # rebuilds the RunRequest from the persisted dispatch/run rows and calls
+  # `Shoestring.Elves.start_elf/3`. Test keeps its explicit per-test
+  # `:dispatch_effect` injection; unconfigured environments keep the
+  # fail-closed `UnconfiguredEffect` default in `DispatchWorker`.
+  config :shoestring, :dispatch_effect, Shoestring.Harness.Dispatch.ElfEffect
+
   secret_key_base =
     present_env.("SECRET_KEY_BASE") ||
       raise """
