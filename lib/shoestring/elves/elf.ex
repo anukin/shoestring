@@ -106,7 +106,8 @@ defmodule Shoestring.Elves.Elf do
           lease_stop_requested?: boolean(),
           lease_settled?: boolean(),
           lease_checkpointed?: boolean(),
-          lease_checkpoint_id: Ecto.UUID.t() | nil
+          lease_checkpoint_id: Ecto.UUID.t() | nil,
+          lease_declined?: boolean()
         }
 
   defstruct [
@@ -150,7 +151,8 @@ defmodule Shoestring.Elves.Elf do
     lease_stop_requested?: false,
     lease_settled?: false,
     lease_checkpointed?: false,
-    lease_checkpoint_id: nil
+    lease_checkpoint_id: nil,
+    lease_declined?: false
   ]
 
   @doc """
@@ -602,8 +604,60 @@ defmodule Shoestring.Elves.Elf do
   defp start_adapter(state) do
     adapter_opts = Map.merge(%{clock: state.clock}, state.adapter_opts)
     adapter_opts = maybe_mark_elf_owned_group(adapter_opts, state.process_owner)
-    state.adapter.start(state.request, adapter_opts)
+
+    # Same-provider continuations resume the prior session when the adapter
+    # supports it: the request carries `wakeup:resume_prior_session_id`
+    # (set by the wake dispatch for the suspended run's session). A failed
+    # resume falls back to a fresh start — a dead session must not fail a
+    # wake that fresh capacity just admitted.
+    case resume_prior(state) do
+      {:resume, prior} ->
+        case state.adapter.resume(prior, state.request, adapter_opts) do
+          {:ok, _identity} = ok ->
+            ok
+
+          {:error, reason} ->
+            Logger.warning("elf adapter resume failed, falling back to fresh start",
+              run_id: state.run_id,
+              dispatch_id: state.dispatch_id,
+              reason: inspect(reason)
+            )
+
+            state.adapter.start(state.request, adapter_opts)
+        end
+
+      :fresh ->
+        state.adapter.start(state.request, adapter_opts)
+    end
   end
+
+  defp resume_prior(state) do
+    with session_id when is_binary(session_id) <-
+           get_in(state.request.extensions, ["wakeup:resume_prior_session_id"]),
+         true <- adapter_resumes?(state.adapter) do
+      {:resume,
+       %Shoestring.Harness.RunIdentity{
+         run_id: state.run_id,
+         harness_id: to_string(state.adapter),
+         process_id: nil,
+         provider_session_id: session_id
+       }}
+    else
+      _ -> :fresh
+    end
+  end
+
+  # `function_exported?/3` reports false for unloaded modules, which would
+  # make resume support seed-dependent in a fresh VM — ensure load first
+  # (same latent issue fixed for handoff dispatch).
+  defp adapter_resumes?(adapter) when is_atom(adapter) do
+    case Code.ensure_loaded(adapter) do
+      {:module, _} -> function_exported?(adapter, :resume, 3)
+      {:error, _} -> false
+    end
+  end
+
+  defp adapter_resumes?(_adapter), do: false
 
   # When the adapter owns the OS process (`process_owner: :adapter`), the Elf
   # adopts that process group after the handshake and reaps it after the
@@ -1276,9 +1330,15 @@ defmodule Shoestring.Elves.Elf do
       {:ok, :awaiting_boundary} ->
         state
 
-      {:error, {:lease_not_renewable, _status}} ->
+      {:error, {:lease_not_renewable, status}} ->
         # Already terminal elsewhere: still ensure checkpoint contents when
         # the allowance is exhausted, then settle so later items stay quiet.
+        Logger.warning("elf lease not renewable at boundary",
+          run_id: state.run_id,
+          dispatch_id: state.dispatch_id,
+          lease_status: status
+        )
+
         state =
           if exhausted?(state) do
             write_reactive_checkpoint(state, "lease_exhausted")
@@ -1288,7 +1348,13 @@ defmodule Shoestring.Elves.Elf do
 
         %{state | lease_settled?: true}
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        Logger.warning("elf lease renewal failed at boundary",
+          run_id: state.run_id,
+          dispatch_id: state.dispatch_id,
+          reason: inspect(reason)
+        )
+
         state
     end
   rescue
@@ -1329,6 +1395,34 @@ defmodule Shoestring.Elves.Elf do
     |> suspend_run_for_decline()
     |> schedule_decline_wakeup()
     |> settle_on_checkpoint()
+    |> request_decline_stop()
+    |> Map.put(:lease_declined?, true)
+  end
+
+  # A declined run sleeps durably — no further execution may start. Ask a
+  # live session to stop at its next safe boundary (the in-flight item
+  # already completed, so nothing is interrupted). Virtual when no live
+  # session is resolvable (Fake/test legs): there is nothing to stop, and
+  # the quiet-exit below ends supervision once the buffer drains.
+  defp request_decline_stop(state) do
+    case resolve_session(state) do
+      nil ->
+        state
+
+      pid ->
+        _ =
+          try do
+            Shoestring.Harness.CodexAppServer.Session.request_safe_stop(pid)
+          catch
+            :exit, _reason -> {:error, :session_unavailable}
+          end
+
+        state
+    end
+  rescue
+    _error -> state
+  catch
+    _kind, _reason -> state
   end
 
   defp suspend_run_for_decline(state) do
@@ -1401,17 +1495,25 @@ defmodule Shoestring.Elves.Elf do
              state.lease_grant_id,
              opts
            ) do
-        # Twin note (P4: quota path gating unchanged): unlike boundary
-        # renewals, a quota renewal settles without starting a new spend
-        # epoch — the refusal is zero-spend, so the live counters still
-        # describe the grant's remaining allowance and must not be forgiven.
+        # Twin note: unlike boundary renewals, a quota renewal does not start
+        # a new spend epoch — the refusal is zero-spend, so the live counters
+        # still describe the grant's remaining allowance and must not be
+        # forgiven. The settled latch still clears so a later due re-fires
+        # with a fresh snapshot (a latched quota renewal could never renew
+        # again, stranding the lease exactly like the single-shot loop did).
         {:ok, %{outcome: :renewed}} ->
-          %{state | lease_settled?: true}
+          %{state | lease_settled?: false}
 
         {:ok, %{outcome: :expired}} ->
           decline_lease(state, "lease_exhausted")
 
-        {:error, _reason} ->
+        {:error, reason} ->
+          Logger.warning("elf lease quota renewal failed",
+            run_id: state.run_id,
+            dispatch_id: state.dispatch_id,
+            reason: inspect(reason)
+          )
+
           state
       end
     end
@@ -1671,6 +1773,16 @@ defmodule Shoestring.Elves.Elf do
     cond do
       state.terminal != nil ->
         {:noreply, state}
+
+      # Declined runs sleep durably: once the buffer drains and no live
+      # session remains, stop supervising quietly — no terminal, the run is
+      # suspended (not over) and the scheduled wake owns its future. The
+      # runner group is reaped (the boundary item already completed, so
+      # nothing in flight is interrupted). A live session keeps the existing
+      # supervision paths until it winds down.
+      state.lease_declined? and resolve_session(state) == nil ->
+        _ = terminate_owned_group(state)
+        {:stop, :normal, state}
 
       state.events_overflow? or state.output_overflowed? ->
         overflow_shutdown(state)

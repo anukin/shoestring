@@ -63,6 +63,7 @@ defmodule Shoestring.Harness.StateMachineTest do
     {:granted, :activate} => :active,
     {:active, :renewal_due} => :renewal_due,
     {:renewal_due, :renew} => :renewed,
+    {:renewed, :renewal_due} => :renewal_due,
     {:renewed, :continue} => :active,
     {:renewed, :activate} => :active,
     {:granted, :expire} => :expired,

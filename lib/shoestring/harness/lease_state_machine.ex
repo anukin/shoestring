@@ -68,6 +68,12 @@ defmodule Shoestring.Harness.LeaseStateMachine do
   defp target(:granted, :activate), do: {:ok, :active, false}
   defp target(:active, :renewal_due), do: {:ok, :renewal_due, false}
   defp target(:renewal_due, :renew), do: {:ok, :renewed, false}
+  # A renewed lease may become due again: each exhaustion re-fires the full
+  # sequence (fresh snapshot + re-evaluation) until the unchanged deadline
+  # bounds total renewals. Without this edge, renewal works exactly once and
+  # every later cycle is rejected, stranding in-run leases after their first
+  # outcome.
+  defp target(:renewed, :renewal_due), do: {:ok, :renewal_due, false}
   defp target(:renewed, :continue), do: {:ok, :active, false}
   defp target(:renewed, :activate), do: {:ok, :active, false}
 

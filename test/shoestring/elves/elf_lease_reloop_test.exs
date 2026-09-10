@@ -235,6 +235,116 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
              "checkpoint_required"
   end
 
+  test "decline requests a session stop when a live session exists", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    # Same decline shape as above, but with a live session double: the
+    # decline must ask the session to stop at its next safe boundary.
+    # (Base: never asks — no stop call exists on the decline path.)
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:decline_stop, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.output_event("one", source_event_id: "evt-out-1"),
+        Scenario.output_event("two", source_event_id: "evt-out-2"),
+        Scenario.output_event("three", source_event_id: "evt-out-3"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 2,
+      tool_budget: 25,
+      reserves: %{response: 0, tool: 0},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), 3_600, :second)
+    )
+
+    register_session_double(run_id)
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
+    assert_received :safe_stop_requested
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+    assert Repo.get_by!(WakeupRecord, run_id: run_id).status == "scheduled"
+  end
+
+  test "declined run with no live session exits quietly without a terminal", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    # Verdict-free stream + no session double: after the decline suspends
+    # the run and schedules its wake, the Elf stops supervising instead of
+    # lingering — no terminal is recorded (the run sleeps; it is not over).
+    # (Base: the Elf never exits on its own here.)
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:decline_quiet, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.output_event("one", source_event_id: "evt-out-1"),
+        Scenario.output_event("two", source_event_id: "evt-out-2"),
+        Scenario.output_event("three", source_event_id: "evt-out-3")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, elf_pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 2,
+      tool_budget: 25,
+      reserves: %{response: 0, tool: 0},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), 3_600, :second)
+    )
+
+    ref = Process.monitor(elf_pid)
+    assert_receive {:DOWN, ^ref, :process, ^elf_pid, :normal}, 15_000
+    refute_received {:elf_terminal, ^run_id, _terminal}
+
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+    assert count_types(goal.id, run_id, ["run.completed"]) == 0
+    assert count_types(goal.id, run_id, ["run.failed"]) == 0
+    assert Repo.get_by!(WakeupRecord, run_id: run_id).status == "scheduled"
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+    assert Repo.get_by!(RunRecord, id: run_id).status == "suspended"
+  end
+
   test "quota refusal decline suspends and schedules a sleep wake", %{
     sup: sup,
     goal: goal,
