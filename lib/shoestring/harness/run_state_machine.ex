@@ -66,6 +66,12 @@ defmodule Shoestring.Harness.RunStateMachine do
   defp target(:pausing, :suspend), do: {:ok, :suspended}
   defp target(:suspended, :resume), do: {:ok, :starting}
   defp target(:suspended, :begin), do: {:ok, :starting}
+  # An interrupted run (safe stop honored at a boundary) may resume like a
+  # suspended one: the interruption paused work cleanly rather than ending
+  # it. Without these edges a decline → interrupted provider response could
+  # never restart, stranding the sleep wake it scheduled.
+  defp target(:interrupted, :resume), do: {:ok, :starting}
+  defp target(:interrupted, :begin), do: {:ok, :starting}
   # A suspended run may still reach a terminal outcome: resumed work can
   # complete or fail, and a suspension itself can be closed out as failed.
   # Without these edges the projector halts the goal's position on the

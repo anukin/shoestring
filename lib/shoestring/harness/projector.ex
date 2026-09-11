@@ -601,6 +601,7 @@ defmodule Shoestring.Harness.Projector do
   defp status_atom("suspended"), do: :suspended
   defp status_atom("completed"), do: :completed
   defp status_atom("failed"), do: :failed
+  defp status_atom("interrupted"), do: :interrupted
   defp status_atom("cancelling"), do: :cancelling
   defp status_atom("cancelled"), do: :cancelled
   defp status_atom("proposed"), do: :proposed

@@ -109,6 +109,14 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     GenServer.call(server, :stream_events)
   end
 
+  @doc "Requests stopping at the next safe boundary (in-flight tools report first)."
+  @spec request_safe_stop(GenServer.server()) :: {:ok, :stop_requested} | {:error, term()}
+  def request_safe_stop(server) do
+    GenServer.call(server, :request_safe_stop)
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
   @doc """
   Blocks until the one-shot run reaches a terminal state
   (`:completed`, `:failed`, or `:cancelled`), or the timeout elapses.
@@ -279,6 +287,19 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
       {:reply, {:ok, terminal_summary(state)}, state}
     else
       {:noreply, %{state | terminal_waiters: [from | state.terminal_waiters]}}
+    end
+  end
+
+  # Safe-boundary stop: in-flight tools report first (deferred kill, same
+  # as a safe cancel); with nothing in flight the group is reaped now.
+  # Replies mirror `CodexAppServer.Session.request_safe_stop/1` so either
+  # provider's session answers the Elf's stop request identically.
+  def handle_call(:request_safe_stop, _from, state) do
+    if MapSet.size(state.in_flight) > 0 do
+      {:reply, {:ok, :stop_requested}, %{state | stop_requested: :safe_boundary}}
+    else
+      state = do_kill(state)
+      {:reply, {:ok, :stop_requested}, state}
     end
   end
 

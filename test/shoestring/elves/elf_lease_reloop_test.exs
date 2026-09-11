@@ -32,7 +32,8 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
 
   import Ecto.Query
 
-  alias Shoestring.Cobbler.{Leases, WakeupRecord}
+  alias Shoestring.Cobbler.{Leases, WakeupRecord, Wakeups}
+  alias Shoestring.Cobbler
   alias Shoestring.Elves
 
   alias Shoestring.Harness.{
@@ -129,10 +130,24 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     assert ScriptedProbeFake.calls(agent) == 2
     assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).admitted_snapshot_id == fresh_s2
 
-    # Lease events stay idempotent per grant key: exactly one durable
-    # renewal_due / renewed pair across both epochs (replays, not dupes).
-    assert count_types(goal.id, run_id, ["lease.renewal_due"]) == 1
-    assert count_types(goal.id, run_id, ["lease.renewed"]) == 1
+    # Lease events stay idempotent per epoch key: the Elf's legacy
+    # observed-due marker plus one due/renewed pair per renewal epoch (each
+    # fresh snapshot mints its own). The first epoch reuses the legacy
+    # marker via the ensure_due passthrough, so two renewals yield exactly
+    # two due markers and two renewed markers here — genuine per-epoch
+    # evidence, never a collapsed replay.
+    assert count_types(goal.id, run_id, ["lease.renewal_due"]) == 2
+    assert count_types(goal.id, run_id, ["lease.renewed"]) == 2
+    # Each epoch persists its own re-evaluation decision (plus the fixture
+    # admission, which carries no run id): auditability per epoch, not
+    # just markers.
+    assert Repo.aggregate(
+             from(ev in TrajectoryEvent,
+               where: ev.goal_id == ^goal.id and ev.type == "admission.decided"
+             ),
+             :count
+           ) == 3
+
     assert reactive_checkpoint_count(goal.id, run_id) == 0
     assert terminal_checkpoint_count(goal.id, run_id) == 1
 
@@ -286,6 +301,203 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     assert_received :safe_stop_requested
     assert count_types(goal.id, run_id, ["run.suspended"]) == 1
     assert Repo.get_by!(WakeupRecord, run_id: run_id).status == "scheduled"
+  end
+
+  test "decline requests stop for a dispatch-keyed session", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    # Sessions register under request.dispatch_id, which differs from the
+    # run row id on dispatched continuation runs: the lookup must try the
+    # dispatch id first. (Base: run-id-only lookup misses.)
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:decline_dispatch_key, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.output_event("one", source_event_id: "evt-out-1"),
+        Scenario.output_event("two", source_event_id: "evt-out-2"),
+        Scenario.output_event("three", source_event_id: "evt-out-3"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 2,
+      tool_budget: 25,
+      reserves: %{response: 0, tool: 0},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), 3_600, :second)
+    )
+
+    register_session_double(
+      @session_table,
+      request.dispatch_id,
+      &Shoestring.Harness.CodexAppServer.lookup_session/1
+    )
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
+    assert_received :safe_stop_requested
+  end
+
+  test "decline requests stop for a Claude session", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    # Claude owns a separate session table with its own safe-stop protocol;
+    # the decline path must reach it, not just Codex sessions. (Base: the
+    # Codex-only lookup misses and no stop is ever requested.)
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:decline_claude, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.output_event("one", source_event_id: "evt-out-1"),
+        Scenario.output_event("two", source_event_id: "evt-out-2"),
+        Scenario.output_event("three", source_event_id: "evt-out-3"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 2,
+      tool_budget: 25,
+      reserves: %{response: 0, tool: 0},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), 3_600, :second)
+    )
+
+    register_session_double(
+      :claude_headless_sessions,
+      request.dispatch_id,
+      &Shoestring.Harness.ClaudeHeadless.lookup_session/1
+    )
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
+    assert_received :safe_stop_requested
+  end
+
+  test "decline interrupted provider response restarts through the wake", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    # Complete decline → interrupted → restart → wake sequence in one run:
+    # budget decline with a live session double, whose safe stop the
+    # scripted provider honors by interrupting the turn; the interrupted
+    # terminal is durable evidence (not a dead end); the scheduled wake
+    # then admits on fresh capacity and dispatches the continuation.
+    # (Base: the wake rejects the interrupted run as unexpected state.)
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:decline_interrupted, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.output_event("one", source_event_id: "evt-out-1"),
+        Scenario.output_event("two", source_event_id: "evt-out-2"),
+        Scenario.result_event("interrupted", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 2,
+      tool_budget: 25,
+      reserves: %{response: 0, tool: 0},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), 3_600, :second)
+    )
+
+    # The wake dispatch runs behind the exclusive claim gate, so hold a
+    # claim the way production entry does (admission + resolved claim).
+    admission_event =
+      Repo.one!(
+        from event in TrajectoryEvent,
+          where: event.goal_id == ^goal.id and event.type == "admission.decided",
+          order_by: [desc: event.sequence],
+          limit: 1
+      )
+
+    assert {:ok, %{command: %{status: "resolved"}}} =
+             Cobbler.submit_command(
+               goal.id,
+               CobblerHelpers.claim_command(admission_event, command_id: "cmd-seq-claim")
+             )
+
+    register_session_double(run_id)
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :interrupted}}, 15_000
+    assert_received :safe_stop_requested
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+
+    wakeup = Repo.get_by!(WakeupRecord, run_id: run_id)
+    assert wakeup.status == "scheduled"
+
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+    assert Repo.get_by!(RunRecord, id: run_id).status == "interrupted"
+
+    assert {:ok, summary} =
+             Wakeups.perform_wakeup(wakeup.id,
+               now: FixedClock.now(),
+               clock: FixedClock,
+               observe: fn -> {:ok, codex_snapshot(Ecto.UUID.generate(), 10.0)} end
+             )
+
+    assert summary.branch == :admitted
+    assert summary.run == :starting
+    assert Repo.get!(RunRecord, run_id).status == "starting"
   end
 
   test "declined run with no live session exits quietly without a terminal", %{
@@ -484,7 +696,11 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     # Renewed at the boundary with the session untouched: no safe-stop was
     # ever requested (passes on base too — documentation of the no-stop
     # intent).
-    assert count_types(goal.id, run_id, ["lease.renewal_due"]) == 1
+    # Due markers are epoch-keyed: the Elf's legacy observed-due marker plus
+    # one per renewal epoch (each fresh snapshot mints its own). The first
+    # epoch reuses the legacy marker via the ensure_due passthrough, so two
+    # renewals yield exactly two due markers here, never a collapsed one.
+    assert count_types(goal.id, run_id, ["lease.renewal_due"]) == 2
     assert count_types(goal.id, run_id, ["lease.renewed"]) == 1
     refute_received :safe_stop_requested
   end
@@ -540,7 +756,11 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
     assert_received :safe_stop_requested
-    assert count_types(goal.id, run_id, ["lease.renewal_due"]) == 1
+    # Due markers are epoch-keyed: the Elf's legacy observed-due marker plus
+    # one per renewal epoch (each fresh snapshot mints its own). The first
+    # epoch reuses the legacy marker via the ensure_due passthrough, so two
+    # renewals yield exactly two due markers here, never a collapsed one.
+    assert count_types(goal.id, run_id, ["lease.renewal_due"]) == 2
     assert count_types(goal.id, run_id, ["lease.renewed"]) == 1
     assert reactive_checkpoint_count(goal.id, run_id) == 0
   end
@@ -574,18 +794,29 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
   # notifies the test, so stop/no-stop behavior is observable without a
   # provider process. Hermetic and deterministic; cleaned up on exit.
   defp register_session_double(run_id) do
-    _ = Shoestring.Harness.CodexAppServer.lookup_session(Ecto.UUID.generate())
+    register_session_double(
+      @session_table,
+      run_id,
+      &Shoestring.Harness.CodexAppServer.lookup_session/1
+    )
+  end
+
+  # Same double in an explicit table: sessions register under
+  # request.dispatch_id, which differs from the run row id on dispatched
+  # continuation runs, and Claude owns a separate table.
+  defp register_session_double(table, id, ensure_lookup) do
+    _ = ensure_lookup.(Ecto.UUID.generate())
 
     test = self()
     double = spawn(fn -> session_double_loop(test) end)
 
-    :ets.insert(@session_table, {run_id, double})
+    :ets.insert(table, {id, double})
 
     on_exit(fn ->
       # The table is owned by whichever process created it first (test or
       # Elf); a dead owner destroys it, so the delete must tolerate absence.
-      if :ets.info(@session_table) != :undefined do
-        :ets.delete(@session_table, run_id)
+      if :ets.info(table) != :undefined do
+        :ets.delete(table, id)
       end
 
       if Process.alive?(double), do: Process.exit(double, :kill)

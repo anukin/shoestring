@@ -71,7 +71,18 @@ defmodule Shoestring.Elves.ElfResumeStartTest do
   } do
     {:ok, log} = RequestLog.start()
     run_id = Ecto.UUID.generate()
-    request = resume_request(goal, task, run_id)
+
+    base_request = resume_request(goal, task, run_id)
+
+    request = %{
+      base_request
+      | extensions: %{"wakeup:resume_prior_session_id" => "fake-session-dead-9"},
+        continuation: %{
+          checkpoint_id: Ecto.UUID.generate(),
+          next_action: "FALLBACK-NEXT-77 finish the widget",
+          decision_refs: []
+        }
+    }
 
     base_scenario =
       ElvesHelpers.custom_scenario(:resume_fallback, [
@@ -97,6 +108,12 @@ defmodule Shoestring.Elves.ElfResumeStartTest do
 
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, @terminal_timeout
     assert RequestLog.starts(log) != []
+
+    # The fallback replacement carries the checkpoint context, not the
+    # stale original prompt. (Base: original prompt verbatim.)
+    [started] = RequestLog.starts(log)
+    assert started.prompt =~ "FALLBACK-NEXT-77"
+    refute started.prompt == "Do the deterministic thing."
   end
 
   test "no resume extension starts fresh without attempting resume", %{

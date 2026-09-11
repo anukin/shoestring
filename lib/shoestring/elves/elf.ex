@@ -623,12 +623,54 @@ defmodule Shoestring.Elves.Elf do
               reason: inspect(reason)
             )
 
-            state.adapter.start(state.request, adapter_opts)
+            state.adapter.start(fallback_request(state), adapter_opts)
         end
 
       :fresh ->
         state.adapter.start(state.request, adapter_opts)
     end
+  end
+
+  # A fresh start after a failed resume still carries recovery context:
+  # when the request holds a continuation triple, the replacement prompt is
+  # composed from it (checkpoint sections when the record loads, pointer +
+  # next action otherwise) instead of the stale original prompt. Without a
+  # continuation the original prompt stands (non-wake runs).
+  defp fallback_request(state) do
+    case state.request.continuation do
+      %{checkpoint_id: checkpoint_id} = continuation
+      when is_binary(checkpoint_id) ->
+        record_opt =
+          case checkpoint_record(state, checkpoint_id) do
+            nil -> []
+            record -> [checkpoint_record: record]
+          end
+
+        prompt = Shoestring.Harness.Continuation.compose_handoff_prompt(continuation, record_opt)
+        %{state.request | prompt: prompt}
+
+      _other ->
+        state.request
+    end
+  rescue
+    _error -> state.request
+  catch
+    _kind, _reason -> state.request
+  end
+
+  defp checkpoint_record(state, checkpoint_id) do
+    case state.repo.get(Shoestring.Harness.CheckpointRecord, checkpoint_id) do
+      %Shoestring.Harness.CheckpointRecord{goal_id: goal_id} = record
+      when goal_id == state.goal_id ->
+        record
+
+      _other ->
+        nil
+    end
+  rescue
+    _error -> nil
+  catch
+    _kind, _reason -> nil
   end
 
   defp resume_prior(state) do
@@ -1242,7 +1284,17 @@ defmodule Shoestring.Elves.Elf do
     else
       case resolve_session(state) do
         nil ->
-          %{state | lease_stop_requested?: true}
+          # No Codex session: a live Claude session gets a direct safe-stop
+          # request (the Codex-typed LeaseBoundary cannot carry it); with
+          # neither, the stop stays virtual as before (Fake/test legs).
+          case resolve_live_session(state) do
+            {:claude, pid} ->
+              _ = safe_session_stop(Shoestring.Harness.ClaudeHeadless.Session, pid)
+              %{state | lease_stop_requested?: true}
+
+            _other ->
+              %{state | lease_stop_requested?: true}
+          end
 
         session ->
           now = Clock.now(state.clock)
@@ -1264,18 +1316,47 @@ defmodule Shoestring.Elves.Elf do
     _kind, _reason -> state
   end
 
+  # Sessions register under request.dispatch_id, which differs from the run
+  # row id on dispatched continuation runs — so look up dispatch first,
+  # run id second. Codex only: the deadline path feeds the pid to the
+  # Codex-typed `LeaseBoundary`. See `resolve_live_session/1` for the
+  # adapter-covering variant used where either provider may own the run.
   defp resolve_session(state) do
-    case Shoestring.Harness.CodexAppServer.lookup_session(state.run_id) do
-      {:ok, pid} when is_pid(pid) ->
-        if Process.alive?(pid), do: pid, else: nil
+    lookup_session_ids(state, &Shoestring.Harness.CodexAppServer.lookup_session/1)
+  end
 
-      _other ->
+  defp lookup_session_ids(state, lookup) do
+    [state.dispatch_id, state.run_id]
+    |> Enum.find_value(fn
+      nil ->
         nil
-    end
+
+      id ->
+        case lookup.(id) do
+          {:ok, pid} when is_pid(pid) -> if Process.alive?(pid), do: pid, else: nil
+          _other -> nil
+        end
+    end)
   rescue
     _error -> nil
   catch
     _kind, _reason -> nil
+  end
+
+  # Adapter-covering session resolution for paths that stop either
+  # provider's session directly (decline, quiet-exit liveness): Codex
+  # first, then Claude, dispatch id before run id within each.
+  defp resolve_live_session(state) do
+    cond do
+      pid = lookup_session_ids(state, &Shoestring.Harness.CodexAppServer.lookup_session/1) ->
+        {:codex, pid}
+
+      pid = lookup_session_ids(state, &Shoestring.Harness.ClaudeHeadless.lookup_session/1) ->
+        {:claude, pid}
+
+      true ->
+        :none
+    end
   end
 
   # Runs the T2 renewal sequence at the item.completed boundary only: fresh
@@ -1401,28 +1482,33 @@ defmodule Shoestring.Elves.Elf do
 
   # A declined run sleeps durably — no further execution may start. Ask a
   # live session to stop at its next safe boundary (the in-flight item
-  # already completed, so nothing is interrupted). Virtual when no live
-  # session is resolvable (Fake/test legs): there is nothing to stop, and
-  # the quiet-exit below ends supervision once the buffer drains.
+  # already completed, so nothing is interrupted). Either provider (Codex
+  # or Claude); virtual when no live session is resolvable (Fake/test
+  # legs): there is nothing to stop, and the quiet-exit below ends
+  # supervision once the buffer drains.
   defp request_decline_stop(state) do
-    case resolve_session(state) do
-      nil ->
+    case resolve_live_session(state) do
+      {:codex, pid} ->
+        _ = safe_session_stop(Shoestring.Harness.CodexAppServer.Session, pid)
         state
 
-      pid ->
-        _ =
-          try do
-            Shoestring.Harness.CodexAppServer.Session.request_safe_stop(pid)
-          catch
-            :exit, _reason -> {:error, :session_unavailable}
-          end
+      {:claude, pid} ->
+        _ = safe_session_stop(Shoestring.Harness.ClaudeHeadless.Session, pid)
+        state
 
+      :none ->
         state
     end
   rescue
     _error -> state
   catch
     _kind, _reason -> state
+  end
+
+  defp safe_session_stop(module, pid) do
+    module.request_safe_stop(pid)
+  catch
+    :exit, _reason -> {:error, :session_unavailable}
   end
 
   defp suspend_run_for_decline(state) do
@@ -1775,12 +1861,12 @@ defmodule Shoestring.Elves.Elf do
         {:noreply, state}
 
       # Declined runs sleep durably: once the buffer drains and no live
-      # session remains, stop supervising quietly — no terminal, the run is
-      # suspended (not over) and the scheduled wake owns its future. The
-      # runner group is reaped (the boundary item already completed, so
-      # nothing in flight is interrupted). A live session keeps the existing
-      # supervision paths until it winds down.
-      state.lease_declined? and resolve_session(state) == nil ->
+      # session of either provider remains, stop supervising quietly — no
+      # terminal, the run is suspended (not over) and the scheduled wake
+      # owns its future. The runner group is reaped (the boundary item
+      # already completed, so nothing in flight is interrupted). A live
+      # session keeps the existing supervision paths until it winds down.
+      state.lease_declined? and resolve_live_session(state) == :none ->
         _ = terminate_owned_group(state)
         {:stop, :normal, state}
 

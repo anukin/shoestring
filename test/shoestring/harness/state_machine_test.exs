@@ -43,6 +43,8 @@ defmodule Shoestring.Harness.StateMachineTest do
     {:pausing, :cancel} => :cancelling,
     {:suspended, :resume} => :starting,
     {:suspended, :begin} => :starting,
+    {:interrupted, :resume} => :starting,
+    {:interrupted, :begin} => :starting,
     {:suspended, :complete} => :completed,
     {:suspended, :fail} => :failed,
     {:suspended, :cancel} => :cancelling,
