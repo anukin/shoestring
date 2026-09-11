@@ -84,6 +84,7 @@ defmodule Shoestring.Cobbler.Wakeups do
     CodexAppServer,
     Continuation,
     Dispatches,
+    DispatchRecord,
     EventPayload,
     ExecutionLease,
     ExecutionLeaseRecord,
@@ -558,7 +559,7 @@ defmodule Shoestring.Cobbler.Wakeups do
          {:ok, _position} <- Projector.project(goal.id, clock: clock(opts)),
          {:ok, evaluation} <- evaluate(repo, goal, snapshot, request, candidate, now, opts),
          {:ok, decision_event, decision} <-
-           record_decision(repo, goal, run, evaluation, wakeup, now, opts) do
+           record_decision(repo, goal, run, evaluation, wakeup, snapshot, now, opts) do
       branch(repo, wakeup, goal, run, lease, snapshot, decision_event, decision, now, opts)
     else
       {:noop, summary} -> {:ok, summary}
@@ -700,11 +701,13 @@ defmodule Shoestring.Cobbler.Wakeups do
   # its decision as `admission.decided` v1, so re-observation is auditable
   # ("every decision explainable from persisted inputs") and downstream
   # grants chain to a persisted event, never a transient struct. Idempotent
-  # per wakeup: a retry replays the first decision under the same key, so
-  # the whole wake converges instead of minting a second decision + grant.
-  # Consumers MUST use the returned durable decision, not the ephemeral
-  # evaluation — on replay the two differ.
-  defp record_decision(_repo, goal, run, evaluation, wakeup, now, opts) do
+  # per (wakeup, snapshot): a retry observing the SAME snapshot replays the
+  # first decision, but a retry with FRESH observations mints a new decision
+  # — fresh safety evidence always wins over a stale admission, so execution
+  # that failed after an admit can never be revived by replaying that admit
+  # past a newer refusal. Consumers MUST use the returned durable decision,
+  # not the ephemeral evaluation.
+  defp record_decision(_repo, goal, run, evaluation, wakeup, snapshot, now, opts) do
     payload =
       evaluation
       |> AdmissionDecision.to_payload()
@@ -715,7 +718,7 @@ defmodule Shoestring.Cobbler.Wakeups do
       "schema_version" => 1,
       "actor" => Keyword.get(opts, :actor, @actor),
       "occurred_at" => now,
-      "idempotency_key" => "wakeup-decision:#{wakeup.id}",
+      "idempotency_key" => "wakeup-decision:#{wakeup.id}:#{snapshot.snapshot_id}",
       "payload" => payload
     }
 
@@ -957,7 +960,12 @@ defmodule Shoestring.Cobbler.Wakeups do
 
   defp resume_run(_repo, _goal, nil, _wakeup, _now, _opts), do: {:ok, :none}
 
-  defp resume_run(_repo, goal, %RunRecord{status: "suspended"} = run, wakeup, now, opts) do
+  # An interrupted run (safe stop honored at a boundary) resumes like a
+  # suspended one: the interruption paused work cleanly rather than ending
+  # it, so the wake re-marks it starting (the projector maps run.starting
+  # to :begin, legal from interrupted).
+  defp resume_run(_repo, goal, %RunRecord{status: status} = run, wakeup, now, opts)
+       when status in ["suspended", "interrupted"] do
     attrs = %{
       "type" => "run.starting",
       "schema_version" => @schema_version,
@@ -1306,6 +1314,8 @@ defmodule Shoestring.Cobbler.Wakeups do
          {:ok, checkpoint} <-
            defer_checkpoint(repo, goal, run, wakeup, evaluation, wake_at, now, opts),
          {:ok, resleep} <- resleep(repo, goal, run, evaluation, wake_at, now, opts),
+         {:ok, _neutralized} <-
+           neutralize_pending_continuation(repo, wakeup, "effect_deferred", now, opts),
          {:ok, _position} <- Projector.project(goal.id, clock: clock(opts)),
          {:ok, wakeup} <- mark_status(repo, wakeup, "woken", now) do
       {:ok,
@@ -1331,8 +1341,12 @@ defmodule Shoestring.Cobbler.Wakeups do
 
   defp expire_lease(_repo, _goal, nil, _opts), do: {:ok, :none}
 
+  # Mirrors the machine's expire-from set (granted/active/renewal_due/
+  # renewed) rather than the narrower renewable list: a renewed lease from
+  # an earlier admitted attempt must still be expirable when a retry
+  # observes refused capacity, or defer-after-admit can never complete.
   defp expire_lease(_repo, goal, %ExecutionLeaseRecord{status: status} = lease, opts)
-       when status in @renewable_lease_statuses do
+       when status in ["granted", "active", "renewal_due", "renewed"] do
     goal_id = goal.id
 
     with {:ok, %{state: :expired}} <- Leases.transition(goal_id, lease.id, :expire, opts),
@@ -1436,6 +1450,8 @@ defmodule Shoestring.Cobbler.Wakeups do
            GoalLifecycle.transition(:sleeping, {:admission_decision, :reject}),
          {:ok, cancelled} <- cancel_siblings(repo, wakeup, now),
          {:ok, run_state} <- cancel_run(repo, goal, run, wakeup, now, opts),
+         {:ok, _neutralized} <-
+           neutralize_pending_continuation(repo, wakeup, "effect_failed", now, opts),
          {:ok, _position} <- Projector.project(goal.id, clock: clock(opts)),
          {:ok, wakeup} <- mark_status(repo, wakeup, "woken", now) do
       {:ok,
@@ -1481,6 +1497,27 @@ defmodule Shoestring.Cobbler.Wakeups do
 
   defp cancel_siblings(repo, wakeup, now) do
     cancel_pending(wakeup.goal_id, repo: repo, except: wakeup.id, now: now)
+  end
+
+  # A fresh refusal wins over a previously admitted attempt: if this wakeup
+  # already enqueued a continuation dispatch (an earlier attempt admitted,
+  # then crashed before the woken mark), a retry observing refused capacity
+  # neutralizes that still-pending dispatch instead of leaving unadmitted
+  # work executable. Terminal rows (already executed/completed/failed) are
+  # left untouched — an executed effect cannot be un-executed (documented
+  # residual). The fresh refusal decision event itself is the audit trail;
+  # this flip is bookkeeping, mirroring `cancel_unstarted_dispatch`.
+  defp neutralize_pending_continuation(repo, wakeup, outcome, now, _opts) do
+    case repo.get(DispatchRecord, wakeup.id) do
+      %DispatchRecord{status: "requested"} = dispatch ->
+        case repo.update(DispatchRecord.status_changeset(dispatch, outcome, now)) do
+          {:ok, _dispatch} -> {:ok, :neutralized}
+          {:error, changeset} -> {:error, {:neutralize_failed, changeset}}
+        end
+
+      _other ->
+        {:ok, :none}
+    end
   end
 
   defp cancel_run(_repo, _goal, nil, _wakeup, _now, _opts), do: {:ok, :none}

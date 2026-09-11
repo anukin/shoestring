@@ -156,6 +156,44 @@ defmodule Shoestring.Cobbler.WakeupContinuationTest do
     assert Repo.get!(WakeupRecord, wakeup.id).status != "woken"
   end
 
+  test "retry with fresh refused capacity defers and neutralizes the prior dispatch" do
+    %{goal: goal, run: run} = wake_fixture("cmd-wake-freshrefuse")
+    admitted = eligible_snapshot!()
+    refused = refused_snapshot!()
+    wakeup = schedule_wake!(goal, run, "cmd-wake-freshrefuse")
+
+    assert {:ok, first} =
+             Wakeups.perform_wakeup(wakeup.id,
+               now: ManualClock.now(),
+               clock: ManualClock,
+               observe: fn -> {:ok, admitted} end
+             )
+
+    assert first.branch == :admitted
+    assert Repo.get!(Shoestring.Harness.DispatchRecord, wakeup.id).status == "requested"
+
+    # Crash between dispatch and the woken mark: retry re-observes refused
+    # capacity and must NOT revive the old admission.
+    Repo.update_all(
+      from(w in WakeupRecord, where: w.id == ^wakeup.id),
+      set: [status: "due"]
+    )
+
+    assert {:ok, second} =
+             Wakeups.perform_wakeup(wakeup.id,
+               now: ManualClock.now(),
+               clock: ManualClock,
+               observe: fn -> {:ok, refused} end
+             )
+
+    assert second.branch == :deferred
+    assert second.decision_id != first.decision_id
+
+    # The prior continuation dispatch is neutralized, not left executable.
+    assert Repo.get!(Shoestring.Harness.DispatchRecord, wakeup.id).status ==
+             "effect_deferred"
+  end
+
   test "retry after grant reuses the run and the grant" do
     %{goal: goal, run: run} = wake_fixture("cmd-wake-retry")
     snapshot = eligible_snapshot!()
@@ -440,6 +478,37 @@ defmodule Shoestring.Cobbler.WakeupContinuationTest do
       support_tier: :proactive,
       compatibility_state: :compatible,
       reason: nil,
+      extensions: %{}
+    }
+
+    {:ok, snapshot} = Shoestring.Harness.CapacitySnapshot.new(attrs, now: now)
+    snapshot
+  end
+
+  defp refused_snapshot! do
+    now = ManualClock.now()
+
+    attrs = %{
+      version: 2,
+      snapshot_id: Ecto.UUID.generate(),
+      capacity_state: :refused,
+      windows: [
+        %{kind: "five_hour", state: :unknown, reason: "quota refused by provider"},
+        %{kind: "weekly", state: :unknown, reason: "quota refused by provider"}
+      ],
+      observed_at: now,
+      freshness: %{max_age_seconds: 300},
+      source: %{
+        adapter_id: "shoestring.harness.fake",
+        provider_id: "codex",
+        invocation_mode: "headless",
+        event: :explicit_read
+      },
+      scope: "account:codex",
+      confidence: :medium,
+      support_tier: :proactive,
+      compatibility_state: :compatible,
+      reason: "provider reported quota refusal",
       extensions: %{}
     }
 
