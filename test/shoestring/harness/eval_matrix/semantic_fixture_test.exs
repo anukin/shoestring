@@ -45,7 +45,10 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
   alias Shoestring.Harness.{Checkpoints, Continuation}
   alias Shoestring.Harness.Fake
   alias Shoestring.Harness.Fake.{RequestLog, Scenario}
+  alias Shoestring.Repo
   alias Shoestring.Test.ElvesHelpers
+  alias Shoestring.Trajectory.TrajectoryEvent
+  import Ecto.Query, only: [from: 2]
 
   @terminal_timeout 30_000
   @constraint "never modify forbidden.txt"
@@ -166,13 +169,13 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
           },
           repository_state: %{revision: revision, dirty: true},
           evidence: [
-            "leg-a terminal failed: check.sh exit 1 on the partial implementation",
+            "leg-a interrupted by scripted quota refusal after partial implementation",
             "git diff --stat: #{diff_stat}"
           ],
           decisions: checkpoint_attrs.decisions,
           unresolved_issues: checkpoint_attrs.unresolved_issues,
           next_action: checkpoint_attrs.next_action,
-          stop_reason: "leg-a check failed (exit 1)",
+          stop_reason: "leg-a quota_refused with partial work in the dirty diff",
           provider_session_id: "fake-session-leg-a",
           extensions: %{}
         })
@@ -198,7 +201,15 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
     scenario =
       ElvesHelpers.custom_scenario(:w7_leg_a, [
         Scenario.lifecycle_event(source_event_id: "evt-life"),
-        Scenario.output_event("leg-a partial work", source_event_id: "evt-out")
+        Scenario.output_event("leg-a partial work", source_event_id: "evt-out"),
+        Scenario.error_event(
+          Shoestring.Harness.Error.new(
+            :quota_refused,
+            "rate_limit_exceeded",
+            "subscription limit reached"
+          ),
+          source_event_id: "evt-quota"
+        )
       ])
 
     assert {:ok, _pid} =
@@ -207,12 +218,13 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
                run_id: run_id,
                adapter: Fake,
                adapter_opts: %{scenario: scenario},
-               command: ["./leg_a.sh"],
+               command: [Path.join(dir, "leg_a.sh")],
                runner_opts: [cd: dir, kill_grace_ms: 200, reap_timeout_ms: 2_000],
                notify: self()
              )
 
     assert_receive {:elf_terminal, ^run_id, %{class: :failed}}, @terminal_timeout
+
     run_id
   end
 

@@ -497,7 +497,7 @@ defmodule Shoestring.Cobbler.Leases do
         policy: Keyword.get(opts, :policy, %{mode: "supervised"}),
         requested_capabilities: Keyword.get(opts, :requested_capabilities, []),
         dispatch_id: Keyword.get(opts, :dispatch_id, Ecto.UUID.generate()),
-        extensions: %{}
+        extensions: Keyword.get(opts, :extensions, %{})
       }
 
       case RunRequest.new(attrs) do

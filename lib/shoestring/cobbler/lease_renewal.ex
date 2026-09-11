@@ -43,8 +43,10 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   """
 
   alias Shoestring.Cobbler.{AdmissionDecision, AdmissionEvaluation, AdmissionPolicy, Leases}
-  alias Shoestring.Harness.{CapacitySnapshot, ExecutionLeaseRecord, RunRecord}
+  alias Shoestring.Harness.{CapacitySnapshot, EventPayload, ExecutionLeaseRecord, RunRecord}
+  alias Shoestring.Harness.Projector
   alias Shoestring.Repo
+  alias Shoestring.Trajectory
   alias Shoestring.Trajectory.TrajectoryEvent
 
   @renewable_statuses ["active", "renewal_due", "renewed"]
@@ -140,8 +142,14 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
     with {:ok, decision_event} <- admission_event(repo, lease),
          {:ok, decision} <- admission_decision(decision_event),
          {:ok, snapshot} <- observe(opts),
-         {:ok, evaluation} <- evaluate(goal_id, lease, run, decision, snapshot, opts) do
-      settle(goal_id, lease, evaluation, snapshot, opts)
+         {:ok, evaluation} <- evaluate(goal_id, lease, run, decision, snapshot, opts),
+         {:ok, _snapshot_event} <- persist_renewal_snapshot(repo, goal_id, lease, snapshot, opts),
+         {:ok, _position} <- Projector.project(goal_id, clock: renewal_clock(opts)),
+         {:ok, _fresh_event, fresh_decision} <-
+           persist_renewal_decision(repo, goal_id, lease, evaluation, snapshot, opts),
+         {:ok, lease} <- reread_lease(repo, goal_id, lease) do
+      opts = Keyword.put(opts, :epoch_snapshot_id, snapshot.snapshot_id)
+      settle(goal_id, lease, fresh_decision, snapshot, opts)
     else
       {:error, {:observation_failed, _reason} = reason} ->
         expire_closed(goal_id, lease, nil, reason, opts)
@@ -167,6 +175,85 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
     case AdmissionDecision.from_payload(event.payload) do
       {:ok, decision} -> {:ok, decision}
       {:error, changeset} -> {:error, {:lease_invalid, changeset}}
+    end
+  end
+
+  # Durable renewal inputs: the fresh snapshot is persisted (snapshot_observed
+  # + projection, so the snapshot chain FK that `chain_snapshot/3` enforces
+  # can resolve) and the fresh evaluation is persisted as `admission.decided`
+  # (so every renewal's inputs and outcome are auditable, not just its
+  # marker events). Both keyed per (grant, snapshot): the same snapshot
+  # replays, a fresh snapshot mints a new epoch.
+  defp persist_renewal_snapshot(_repo, goal_id, lease, snapshot, opts) do
+    now = Keyword.fetch!(opts, :now)
+
+    attrs = %{
+      "type" => "capacity.snapshot_observed",
+      "schema_version" => 2,
+      "actor" => "cobbler",
+      "occurred_at" => snapshot.observed_at || now,
+      "idempotency_key" => "lease-renewal-snapshot:#{lease.id}:#{snapshot.snapshot_id}",
+      "payload" => EventPayload.capacity_snapshot(snapshot, lease.run_id)
+    }
+
+    case Trajectory.append(goal_id, attrs,
+           trusted: [run_id: lease.run_id],
+           writer_opts: Keyword.get(opts, :writer_opts, [])
+         ) do
+      {:ok, event} -> {:ok, event}
+      {:error, reason} -> {:error, {:renewal_snapshot_failed, reason}}
+    end
+  end
+
+  defp persist_renewal_decision(_repo, goal_id, lease, evaluation, snapshot, opts) do
+    now = Keyword.fetch!(opts, :now)
+
+    attrs = %{
+      "type" => "admission.decided",
+      "schema_version" => 1,
+      "actor" => "cobbler",
+      "occurred_at" => now,
+      "idempotency_key" => "lease-renewal-decision:#{lease.id}:#{snapshot.snapshot_id}",
+      "payload" => AdmissionDecision.to_payload(evaluation)
+    }
+
+    with {:ok, event} <-
+           Trajectory.append(goal_id, attrs,
+             trusted: [run_id: lease.run_id],
+             writer_opts: Keyword.get(opts, :writer_opts, [])
+           ),
+         {:ok, decision} <- AdmissionDecision.from_payload(event.payload) do
+      {:ok, event, decision}
+    else
+      {:error, reason} -> {:error, {:renewal_decision_failed, reason}}
+    end
+  end
+
+  defp renewal_clock(opts), do: Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
+
+  # Projecting mid-flow advances derived rows (e.g. a prior due marker
+  # flips the lease row to renewal_due), so downstream steps must read the
+  # fresh row instead of the pre-projection struct — otherwise a repeated
+  # marker transition validates against stale state and fails.
+  defp reread_lease(repo, goal_id, lease) do
+    case repo.get(ExecutionLeaseRecord, lease.id) do
+      %ExecutionLeaseRecord{goal_id: ^goal_id} = fresh -> {:ok, fresh}
+      _other -> {:error, {:lease_not_found, lease.id}}
+    end
+  end
+
+  # Epoch-scoped idempotency: markers key on (grant, snapshot) so each fresh
+  # observation mints a genuinely new epoch while a retried observation
+  # replays. Without the snapshot discriminator every renewal after the
+  # first replays the first epoch's markers and its decision, making
+  # repeated renewal unobservable and unauditable.
+  defp epoch_opts(opts, type, grant_id) do
+    case Keyword.fetch(opts, :epoch_snapshot_id) do
+      {:ok, snapshot_id} when is_binary(snapshot_id) ->
+        Keyword.put(opts, :idempotency_key, "#{type}:#{grant_id}:#{snapshot_id}")
+
+      _other ->
+        opts
     end
   end
 
@@ -232,7 +319,10 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   end
 
   defp settle(goal_id, lease, %AdmissionDecision{result: :admit} = evaluation, snapshot, opts) do
-    renew_opts = Keyword.put(opts, :from, :renewal_due)
+    renew_opts =
+      opts
+      |> Keyword.put(:from, :renewal_due)
+      |> epoch_opts("lease-renewed", lease.id)
 
     with {:ok, due_events} <- ensure_due(goal_id, lease, opts),
          {:ok, %{event: renewed}} <- Leases.transition(goal_id, lease.id, :renew, renew_opts),
@@ -258,7 +348,12 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
 
   defp ensure_due(goal_id, %ExecutionLeaseRecord{status: status} = lease, opts)
        when status in ["active", "renewed"] do
-    case Leases.transition(goal_id, lease.id, :renewal_due, opts) do
+    case Leases.transition(
+           goal_id,
+           lease.id,
+           :renewal_due,
+           epoch_opts(opts, "lease-renewal-due", lease.id)
+         ) do
       {:ok, %{event: event}} -> {:ok, [event]}
       {:error, reason} -> {:error, reason}
     end
@@ -267,9 +362,22 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   defp expire_closed(goal_id, lease, evaluation, reason, opts) do
     checkpoint_opts = Keyword.put(opts, :from, :expired)
 
-    with {:ok, %{event: expired}} <- Leases.transition(goal_id, lease.id, :expire, opts),
+    with {:ok, %{event: expired}} <-
+           Leases.transition(
+             goal_id,
+             lease.id,
+             :expire,
+             epoch_opts(opts, "lease-expired", lease.id)
+           ),
          {:ok, %{event: checkpoint}} <-
-           Leases.transition(goal_id, lease.id, :require_checkpoint, checkpoint_opts) do
+           Leases.transition(
+             goal_id,
+             lease.id,
+             :require_checkpoint,
+             checkpoint_opts
+             |> Keyword.put(:from, :expired)
+             |> epoch_opts("lease-checkpoint-required", lease.id)
+           ) do
       {:ok,
        %{
          outcome: :expired,
