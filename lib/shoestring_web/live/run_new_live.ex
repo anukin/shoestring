@@ -3,7 +3,8 @@ defmodule ShoestringWeb.RunNewLive do
 
   alias Shoestring.Cobbler
   alias Shoestring.Elves
-  alias Shoestring.Harness.Dispatches
+  alias Shoestring.Harness.{CapacitySnapshot, EventPayload}
+  alias Shoestring.Harness.Projector
   alias Shoestring.Harness.RunRequest
   alias Shoestring.Repo
   alias Shoestring.State
@@ -262,16 +263,45 @@ defmodule ShoestringWeb.RunNewLive do
     end
   end
 
-  # Gated path: admission → claim → gated dispatch → Elf for persisted intent.
+  # Gated path: admission → claim → lease grant → gated dispatch → Elf.
+  # One `claim_and_gate` call performs submit, exclusive claim, grant
+  # persistence, and durable delivery: ordinary manual execution cannot
+  # run without a persisted execution lease. `run_id:`/`dispatch_id:`
+  # keep the run row on the identity the UI navigates to.
   defp gated_start_run(socket, goal, candidate, bounds, request, identity, elf_opts, run_id) do
-    with {:ok, admission} <- append_manual_admission(goal, candidate, bounds),
-         {:ok, %{command: command}} <-
-           Cobbler.submit_command(goal.id, claim_attrs(candidate, admission, run_id)) do
-      case command.status do
-        "resolved" ->
-          gated_dispatch(socket, request, identity, elf_opts, run_id)
+    with {:ok, snapshot} <- record_manual_observation(goal, identity),
+         {:ok, admission} <-
+           append_manual_admission(goal, candidate, bounds, snapshot.snapshot_id),
+         {:ok, gated} <-
+           Cobbler.claim_and_gate(goal.id, claim_attrs(candidate, admission, run_id),
+             grant_lease: [
+               task_id: request.task_id,
+               prompt: request.prompt,
+               workspace_ref: request.workspace_ref,
+               policy: request.policy,
+               requested_capabilities: request.requested_capabilities,
+               dispatch_id: request.dispatch_id,
+               run_id: run_id,
+               identity: identity,
+               extensions: request.extensions
+             ]
+           ) do
+      case gated do
+        %{disposition: :leased, run: run, dispatch: dispatch}
+        when not is_nil(run) and not is_nil(dispatch) ->
+          gated_start_elf(socket, request, dispatch, elf_opts)
 
-        "needs_user" ->
+        %{disposition: :leased} ->
+          # Identical replay: run + delivery already exist from the first
+          # submit, so navigate without starting anything twice.
+          Logger.warning("Manual run replayed identically for goal #{goal.id}; navigating.")
+
+          {:noreply,
+           socket
+           |> put_flash(:info, "This run was already submitted.")
+           |> push_navigate(to: ~p"/runs/#{request.dispatch_id}")}
+
+        %{disposition: :awaiting_operator, command: command} ->
           hold = hold_details(command)
           Logger.warning("Manual run refused: execution claim held (#{hold.reason})")
 
@@ -284,8 +314,8 @@ defmodule ShoestringWeb.RunNewLive do
            )
            |> assign(:claim_held, hold)}
 
-        "rejected" ->
-          Logger.warning("Manual run claim rejected: #{inspect(command.result)}")
+        %{disposition: :command_rejected, detail: detail} ->
+          Logger.warning("Manual run claim rejected: #{inspect(detail)}")
 
           {:noreply,
            socket
@@ -294,7 +324,7 @@ defmodule ShoestringWeb.RunNewLive do
       end
     else
       {:error, reason} ->
-        Logger.warning("Manual run admission/claim failed: #{inspect(reason)}")
+        Logger.warning("Manual run admission/claim/grant failed: #{inspect(reason)}")
 
         {:noreply,
          socket
@@ -303,59 +333,25 @@ defmodule ShoestringWeb.RunNewLive do
     end
   end
 
-  # The single durable entry for manual execution: gated enqueue refuses goals
-  # without a live owned claim instead of bypassing commands. `run_id:` keeps
-  # the run row on the worktree/dispatch identity the UI navigates to.
-  defp gated_dispatch(socket, request, identity, elf_opts, run_id) do
-    case Dispatches.enqueue(request, identity, require_cobbler_command: true, run_id: run_id) do
-      {:ok, dispatch, _job} ->
-        case Elves.start_elf(request, dispatch, elf_opts) do
-          {:ok, _pid} ->
-            {:noreply, push_navigate(socket, to: ~p"/runs/#{request.dispatch_id}")}
+  # Starts the supervising Elf for granted+dispatched intent, then navigates
+  # to the run page. Delivery + Elf start stay separate steps so a start
+  # failure is reported honestly instead of recorded as success.
+  defp gated_start_elf(socket, request, dispatch, elf_opts) do
+    case Elves.start_elf(request, dispatch, elf_opts) do
+      {:ok, _pid} ->
+        {:noreply, push_navigate(socket, to: ~p"/runs/#{request.dispatch_id}")}
 
-          {:ok, :already_running, _pid} ->
-            {:noreply, push_navigate(socket, to: ~p"/runs/#{request.dispatch_id}")}
-
-          {:error, reason} ->
-            Logger.warning("Failed to start Elf for gated run: #{inspect(reason)}")
-
-            {:noreply,
-             socket
-             |> put_flash(
-               :error,
-               "Dispatch was recorded but the Elf failed to start. Check server logs."
-             )
-             |> assign(:form, to_form(socket.assigns.form.params, as: :run))}
-        end
-
-      {:error, {:no_claimed_command, detail}} ->
-        Logger.warning("Manual run dispatch refused without claim: #{inspect(detail)}")
-
-        {:noreply,
-         socket
-         |> put_flash(
-           :error,
-           "Cobbler claim lost before dispatch (#{detail.reason}). This run was not started."
-         )
-         |> assign(
-           :claim_held,
-           %{
-             goal_id: request.goal_id,
-             command_id: nil,
-             reason: to_string(detail.reason),
-             holder_goal_id: Map.get(detail, :holder),
-             options: []
-           }
-         )}
+      {:ok, :already_running, _pid} ->
+        {:noreply, push_navigate(socket, to: ~p"/runs/#{request.dispatch_id}")}
 
       {:error, reason} ->
-        Logger.warning("Failed to dispatch gated run: #{inspect(reason)}")
+        Logger.warning("Failed to start Elf for gated run: #{inspect(reason)}")
 
         {:noreply,
          socket
          |> put_flash(
            :error,
-           "Failed to dispatch run. Please retry; if the problem persists, check server logs."
+           "Dispatch was recorded but the Elf failed to start. Check server logs."
          )
          |> assign(:form, to_form(socket.assigns.form.params, as: :run))}
     end
@@ -433,7 +429,58 @@ defmodule ShoestringWeb.RunNewLive do
     }
   end
 
-  defp append_manual_admission(goal, candidate, bounds) do
+  # Operator-declared capacity observation: manual execution consults no
+  # provider quota (the banner contract), so the lease's admitted-snapshot
+  # link points at an explicit unknown-state observation carrying the
+  # operator's bounds — never a fabricated provider reading. Unknown state
+  # with none-confidence is fail-closed everywhere except the
+  # operator-confirmed manual path that recorded it.
+  defp record_manual_observation(goal, identity) do
+    now = DateTime.utc_now()
+
+    attrs = %{
+      version: 2,
+      snapshot_id: Ecto.UUID.generate(),
+      capacity_state: :unknown,
+      windows: [],
+      observed_at: now,
+      freshness: %{max_age_seconds: 300},
+      source: %{
+        adapter_id: identity.adapter_id,
+        provider_id: identity.provider,
+        invocation_mode: "manual",
+        event: :explicit_read
+      },
+      scope: @claim_scope,
+      confidence: :none,
+      support_tier: :reactive_only,
+      compatibility_state: :compatible,
+      reason: "operator-declared manual bounds; no provider observation consulted",
+      extensions: %{}
+    }
+
+    with {:ok, snapshot} <- CapacitySnapshot.new(attrs, now: now),
+         {:ok, _event} <-
+           Trajectory.append(
+             goal.id,
+             %{
+               "type" => "capacity.snapshot_observed",
+               "schema_version" => 2,
+               "actor" => "operator",
+               "occurred_at" => now,
+               "idempotency_key" => "manual-snapshot:#{snapshot.snapshot_id}",
+               "payload" => EventPayload.capacity_snapshot(snapshot, nil)
+             },
+             trusted: []
+           ),
+         {:ok, _position} <- Projector.project(goal.id) do
+      {:ok, snapshot}
+    else
+      {:error, reason} -> {:error, {:manual_observation_failed, reason}}
+    end
+  end
+
+  defp append_manual_admission(goal, candidate, bounds, snapshot_id) do
     Trajectory.append(
       goal.id,
       %{
@@ -445,6 +492,7 @@ defmodule ShoestringWeb.RunNewLive do
           manual_admission_payload(
             candidate,
             bounds,
+            snapshot_id,
             "admit",
             "operator_confirmed_manual",
             "Operator-confirmed manual bounded run; local timeout/max-events/lease bounds " <>
@@ -466,6 +514,7 @@ defmodule ShoestringWeb.RunNewLive do
           manual_admission_payload(
             candidate,
             bounds,
+            nil,
             "require_confirmation",
             "operator_confirmed_expert_bypass",
             "Expert/test escape hatch used by #{confirmed_by}: direct start without a " <>
@@ -475,7 +524,13 @@ defmodule ShoestringWeb.RunNewLive do
     )
   end
 
-  defp manual_admission_payload(candidate, bounds, result, reason_code, explanation) do
+  # Manual bounds mapped onto the lease contract: the operator's stated
+  # work envelope (`max_events`) applies to both budgets, the lease
+  # duration (`lease_seconds`) becomes the grant deadline, and reserves are
+  # explicitly zero (the operator accepts no margin in manual mode — never
+  # a fabricated provider reading). Informational `manual_*` keys ride
+  # along for explanation; the grant reads only the contract keys.
+  defp manual_admission_payload(candidate, bounds, snapshot_id, result, reason_code, explanation) do
     %{
       "decision_id" => Ecto.UUID.generate(),
       "result" => result,
@@ -489,17 +544,21 @@ defmodule ShoestringWeb.RunNewLive do
         }),
       "scope" => @claim_scope,
       "observation" => %{
-        "snapshot_id" => nil,
-        "confidence" => "unknown",
-        "freshness" => "unknown",
+        "snapshot_id" => snapshot_id,
+        "confidence" => "none",
+        "freshness" => "fresh",
         "note" =>
-          "Manual execution: no capacity observation consulted; operator-confirmed local bounds apply."
+          "Manual execution: operator-declared bounds apply; capacity observation " <>
+            "is an explicit operator record, not a provider reading."
       },
       "policy" => %{"version" => 1},
       "proposed_bounds" => %{
         "response_budget" => bounds.max_events,
-        "tool_budget" => 0,
+        "tool_budget" => bounds.max_events,
         "checkpoint_cadence" => 1,
+        "deadline" =>
+          DateTime.to_iso8601(DateTime.add(DateTime.utc_now(), bounds.lease_seconds, :second)),
+        "reserves" => %{"response" => 0, "tool" => 0},
         "manual_timeout_seconds" => bounds.timeout_seconds,
         "manual_max_events" => bounds.max_events,
         "manual_lease_seconds" => bounds.lease_seconds

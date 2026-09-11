@@ -1,9 +1,12 @@
 defmodule ShoestringWeb.RunLiveTest do
   use ShoestringWeb.ConnCase, async: false
   import Phoenix.LiveViewTest
+  import Ecto.Query
 
   alias Shoestring.Harness.CapacityObservatory
   alias Shoestring.Harness.CapacitySnapshot
+  alias Shoestring.Harness.CapacitySnapshotRecord
+  alias Shoestring.Harness.ExecutionLeaseRecord
   alias Shoestring.Harness.RunRecord
   alias Shoestring.Repo
   alias Shoestring.Test.ElvesHelpers
@@ -153,6 +156,62 @@ defmodule ShoestringWeb.RunLiveTest do
       assert {:ok, %Worktree{} = wt} = Worktrees.get(run_id)
       assert File.dir?(wt.path)
       assert wt.branch == "shoestring/run-#{run_id}"
+    end
+
+    test "admitted manual submit persists a lease grant for the run", %{
+      conn: conn,
+      repo_path: repo_path
+    } do
+      # Ordinary (non-hatch) manual execution cannot run without a persisted
+      # execution lease: the grant is issued from the operator-confirmed
+      # admission and chained to the explicit manual observation snapshot.
+      # (Pre-fix: claim-gated dispatch with no lease row anywhere.)
+      {:ok, view, _html} = live(conn, ~p"/runs/new")
+
+      submit_payload = %{
+        "run" => %{
+          "repo_path" => repo_path,
+          "base_revision" => "HEAD",
+          "provider" => "fake",
+          "prompt" => "Leased manual test prompt",
+          "timeout_seconds" => "60",
+          "max_events" => "100",
+          "lease_seconds" => "30",
+          "scenario" => "success"
+        }
+      }
+
+      {:error, {:live_redirect, %{to: target_path}}} =
+        view
+        |> form("#manual-run-form", submit_payload)
+        |> render_submit()
+
+      run_id = String.replace(target_path, "/runs/", "")
+      run = Repo.get!(RunRecord, run_id)
+      assert {:ok, _} = Shoestring.Harness.Projector.project(run.goal_id)
+
+      assert %ExecutionLeaseRecord{status: "active"} =
+               grant = Repo.get_by(ExecutionLeaseRecord, run_id: run_id)
+
+      assert grant.response_budget == 100
+      assert grant.tool_budget == 100
+      assert grant.extensions["cobbler.lease:wakeup_id"] == nil
+
+      snapshot_id = grant.admitted_snapshot_id
+      assert is_binary(snapshot_id)
+      snapshot = Repo.get!(CapacitySnapshotRecord, snapshot_id)
+      assert snapshot.scope == "account:manual"
+
+      [decision] =
+        Repo.all(
+          from e in TrajectoryEvent,
+            where:
+              e.goal_id == ^grant.goal_id and e.type == "admission.decided" and
+                e.payload["reason_code"] == "operator_confirmed_manual",
+            select: e.payload
+        )
+
+      assert decision["decision_id"] == grant.extensions["cobbler.lease:admission_decision_id"]
     end
 
     test "ignores posted custom command (B6 capability removed, not restricted)", %{
