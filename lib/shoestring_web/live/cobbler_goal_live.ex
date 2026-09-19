@@ -1,7 +1,17 @@
 defmodule ShoestringWeb.CobblerGoalLive do
   @moduledoc """
   Per-goal Cobbler explanation page: admission decision, lease, checkpoint,
-  claim, sleep honesty, commands, and events.
+  claim, execution provider, isolated worktree, sleep honesty, commands, and
+  events.
+
+  The execution-provider and worktree cards answer two questions that must
+  never be conflated: which provider currently owns a live turn (a
+  `harness_runs` row in an executing state), and which provider admission
+  merely evaluated as a candidate (the `candidate` block of the latest
+  persisted `admission.decided` payload). Worktree identity comes from the
+  durable worktree record keyed by run id. Every value is read from a
+  persisted row; absent data renders as an explicit "not recorded" rather
+  than a placeholder, no provider is contacted, and nothing is inferred.
 
   Every event is read-only (`refresh`, `rebuild`) except `respond`, the
   single operator confirm/respond form, which delegates to
@@ -21,16 +31,23 @@ defmodule ShoestringWeb.CobblerGoalLive do
   alias Shoestring.Cobbler
   alias Shoestring.Cobbler.AdmissionDecision
   alias Shoestring.Cobbler.{WakeupRecord, Wakeups}
-  alias Shoestring.Harness.{CheckpointRecord, ExecutionLeaseRecord}
+  alias Shoestring.Harness.{CheckpointRecord, ExecutionLeaseRecord, RunRecord}
   alias Shoestring.Repo
   alias Shoestring.Trajectory
   alias Shoestring.Trajectory.{Goal, ProjectorPosition, TrajectoryEvent}
+  alias Shoestring.Worktrees
+  alias Shoestring.Worktrees.Worktree
   alias ShoestringWeb.CobblerPresentation
   alias ShoestringWeb.RunPresentation
 
   require Logger
 
   @projector "goal_task"
+
+  # A provider only "owns a live turn" in these run states. `requested` is a
+  # dispatched intent that is not executing yet, and every suspended or
+  # terminal state has stopped. Nothing here is inferred from timing.
+  @executing_run_statuses ["starting", "running", "pausing", "cancelling"]
 
   @impl true
   def mount(%{"goal_id" => raw_goal_id}, _session, socket) do
@@ -183,6 +200,8 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:checkpoint_text, "")
     |> assign(:claim, nil)
     |> assign(:claim_mine?, false)
+    |> assign(:execution, empty_execution())
+    |> assign(:worktree, %{state: :no_run, run_id: nil, workspace_ref: nil, record: nil})
     |> assign(:projection, %{status: "not_projected", error_detail: nil})
     |> assign(:rebuild, %{consistent?: true, divergences: [], error: nil})
     |> assign(:warnings, [])
@@ -208,6 +227,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
     position = Repo.get_by(ProjectorPosition, goal_id: goal.id, projector: @projector)
     projection = projection_state(position)
     rebuild = safe_rebuild(goal.id)
+    execution = execution_display(goal.id, latest_decision)
     warnings = build_warnings(latest_decision, projection, rebuild)
     sanitized_events = Enum.map(events, &RunPresentation.sanitize_event/1)
 
@@ -225,6 +245,8 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:checkpoint, checkpoint_display(checkpoint))
     |> assign(:claim, claim)
     |> assign(:claim_mine?, is_map(claim) and claim.goal_id == goal.id)
+    |> assign(:execution, execution)
+    |> assign(:worktree, worktree_display(execution.worktree_run))
     |> assign(:projection, projection)
     |> assign(:rebuild, rebuild)
     |> assign(:warnings, warnings)
@@ -476,6 +498,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
       result: result,
       presentation: CobblerPresentation.decision_presentation(result),
       decision: decision,
+      candidate: candidate_display(Map.get(payload, "candidate")),
       reason_code: Map.get(payload, "reason_code"),
       explanation: RunPresentation.redact_text(Map.get(payload, "explanation") || ""),
       reserves: Map.get(payload, "proposed_bounds") || %{},
@@ -515,6 +538,156 @@ defmodule ShoestringWeb.CobblerGoalLive do
       decision_refs: List.wrap(Map.get(payload, "decision_refs", [])) |> Enum.filter(&is_binary/1)
     }
   end
+
+  # -- Execution provider + isolated worktree (read-only, durable evidence) --
+  #
+  # Two distinct questions are answered separately and never merged:
+  #
+  #   * WHICH PROVIDER IS EXECUTING NOW - the newest `harness_runs` row for
+  #     this goal whose status is in `@executing_run_statuses`. Absent such a
+  #     row, no provider is executing and the card says exactly that rather
+  #     than promoting the latest run's provider.
+  #   * WHICH PROVIDER WAS EVALUATED AS A CANDIDATE - the `candidate` block of
+  #     the latest persisted `admission.decided` payload. A candidate records
+  #     what admission weighed; it is never evidence that anything ran.
+  #
+  # Both come from persisted rows. Nothing is inferred, no provider is
+  # contacted, and a field the records do not carry renders as an explicit
+  # unknown instead of a placeholder value.
+  defp execution_display(goal_id, latest_decision) do
+    latest = latest_run(goal_id)
+    executing = executing_run(goal_id)
+
+    %{
+      latest_run: run_display(latest),
+      executing_run: run_display(executing),
+      candidate: candidate_of(latest_decision),
+      # The worktree is keyed by run id, so an executing run names the live
+      # worktree and otherwise the latest run names the most recent one.
+      worktree_run: executing || latest
+    }
+  end
+
+  defp empty_execution do
+    %{latest_run: nil, executing_run: nil, candidate: nil, worktree_run: nil}
+  end
+
+  defp latest_run(goal_id) do
+    Repo.one(
+      from run in RunRecord,
+        where: run.goal_id == ^goal_id,
+        order_by: [desc: run.inserted_at, desc: run.id],
+        limit: 1
+    )
+  rescue
+    _error -> nil
+  end
+
+  defp executing_run(goal_id) do
+    Repo.one(
+      from run in RunRecord,
+        where: run.goal_id == ^goal_id and run.status in @executing_run_statuses,
+        order_by: [desc: run.inserted_at, desc: run.id],
+        limit: 1
+    )
+  rescue
+    _error -> nil
+  end
+
+  defp run_display(nil), do: nil
+
+  defp run_display(%RunRecord{} = run) do
+    %{
+      id: run.id,
+      status: run.status,
+      presentation: CobblerPresentation.run_provider_presentation(run.status || :unknown),
+      provider_id: recorded_value(run.provider_id),
+      workspace_ref: recorded_value(run.workspace_ref),
+      # Provider-reported, therefore diagnostic evidence only: it is the
+      # provider's own identifier for its session, never canonical domain
+      # state, and it is redacted like any other provider-sourced text.
+      provider_session_id: run.provider_session_id |> recorded_value() |> redact_recorded()
+    }
+  end
+
+  defp candidate_of(%{candidate: candidate}) when is_map(candidate), do: candidate
+  defp candidate_of(_decision), do: nil
+
+  defp candidate_display(candidate) when is_map(candidate) do
+    display = %{
+      provider_id: recorded_value(Map.get(candidate, "provider_id")),
+      adapter_id: recorded_value(Map.get(candidate, "adapter_id")),
+      support_tier: recorded_value(Map.get(candidate, "support_tier")),
+      compatibility_state: recorded_value(Map.get(candidate, "compatibility_state"))
+    }
+
+    if Enum.all?(Map.values(display), &is_nil/1), do: nil, else: display
+  end
+
+  defp candidate_display(_candidate), do: nil
+
+  # The durable worktree record is the authority for worktree identity. It is
+  # read through `Shoestring.Worktrees` exactly as the run page reads it, and
+  # every failure mode keeps its own honest state: a run with no registered
+  # record is not the same as a record that could not be read, and neither is
+  # the same as a goal that has never had a run.
+  defp worktree_display(nil) do
+    %{state: :no_run, run_id: nil, workspace_ref: nil, record: nil}
+  end
+
+  defp worktree_display(%RunRecord{} = run) do
+    base = %{run_id: run.id, workspace_ref: recorded_value(run.workspace_ref)}
+
+    case safe_worktree(run.id) do
+      {:ok, %Worktree{} = worktree} ->
+        Map.merge(base, %{state: :registered, record: worktree_record(worktree)})
+
+      {:error, :not_found} ->
+        Map.merge(base, %{state: :not_registered, record: nil})
+
+      {:error, {:record_diverged, _detail}} ->
+        Map.merge(base, %{state: :diverged, record: nil})
+
+      _other ->
+        Map.merge(base, %{state: :unavailable, record: nil})
+    end
+  end
+
+  defp safe_worktree(run_id) do
+    Worktrees.get(run_id)
+  rescue
+    error -> {:error, error}
+  catch
+    _kind, reason -> {:error, reason}
+  end
+
+  defp worktree_record(%Worktree{} = worktree) do
+    %{
+      path: RunPresentation.redact_text(worktree.path),
+      repo_path: RunPresentation.redact_text(worktree.repo_path),
+      repo_id: recorded_value(worktree.repo_id),
+      branch: recorded_value(worktree.branch),
+      base_commit: recorded_value(worktree.base_commit),
+      workspace_ref: recorded_value(worktree.workspace_ref),
+      created_at: worktree.created_at,
+      presentation: CobblerPresentation.worktree_presentation(worktree.status || :unknown)
+    }
+  end
+
+  # A value is "recorded" only when the row actually carries it. Blank strings
+  # are absent data, not empty data, and become an explicit unknown in the UI.
+  defp recorded_value(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp recorded_value(value) when is_atom(value) and not is_nil(value), do: Atom.to_string(value)
+  defp recorded_value(_value), do: nil
+
+  defp redact_recorded(nil), do: nil
+  defp redact_recorded(value), do: RunPresentation.redact_text(value)
 
   defp latest_lease(goal_id) do
     Repo.one(
@@ -730,4 +903,35 @@ defmodule ShoestringWeb.CobblerGoalLive do
 
   defp intent_of(%{payload: %{"intent" => intent}}) when is_binary(intent), do: intent
   defp intent_of(_command), do: ""
+
+  # An absent value renders as an explicit, visually distinct "not recorded"
+  # rather than as a blank cell that could be mistaken for a real value.
+  defp recorded_or(nil, fallback), do: fallback
+  defp recorded_or(value, _fallback), do: value
+
+  defp value_class(nil), do: "text-sm italic text-zinc-500"
+  defp value_class(_value), do: "text-sm font-medium text-zinc-900"
+
+  defp mono_value_class(nil), do: "text-xs italic text-zinc-500"
+  defp mono_value_class(_value), do: "text-xs font-mono text-zinc-900 break-all"
+
+  defp worktree_unknown_text(:no_run),
+    do:
+      "No harness run is recorded for this goal, so no worktree has been provisioned. " <>
+        "A worktree is keyed by run id and appears once a run is recorded."
+
+  defp worktree_unknown_text(:not_registered),
+    do:
+      "No durable worktree record is registered for this run. The workspace reference " <>
+        "above is what the run row records; no path, branch, or base commit is known."
+
+  defp worktree_unknown_text(:diverged),
+    do:
+      "The durable worktree record and the copy stored in the worktree's Git directory " <>
+        "disagree, so no worktree identity is shown. Nothing is guessed from either copy."
+
+  defp worktree_unknown_text(_state),
+    do:
+      "The durable worktree record could not be read, so worktree identity is unknown " <>
+        "on this page. No path or branch is inferred."
 end

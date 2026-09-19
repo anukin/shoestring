@@ -68,6 +68,60 @@ defmodule ShoestringWeb.CobblerPresentationTest do
       assert CobblerPresentation.renewal_presentation(nil).status == "unknown"
     end
 
+    test "run statuses keep distinct tags and only live turns count as executing" do
+      run_statuses =
+        [
+          "requested",
+          "starting",
+          "running",
+          "pausing",
+          "suspended",
+          "completed",
+          "failed",
+          "interrupted",
+          "cancelling",
+          "cancelled"
+        ]
+        |> Enum.map(&CobblerPresentation.run_provider_presentation(&1).status)
+
+      assert length(Enum.uniq(run_statuses)) == length(run_statuses)
+
+      for status <- ["starting", "running", "pausing", "cancelling"] do
+        assert CobblerPresentation.run_provider_presentation(status).executing?,
+               "#{status} must count as executing"
+      end
+
+      for status <- [
+            "requested",
+            "suspended",
+            "completed",
+            "failed",
+            "interrupted",
+            "cancelled"
+          ] do
+        refute CobblerPresentation.run_provider_presentation(status).executing?,
+               "#{status} must not count as executing"
+      end
+    end
+
+    test "unrecognized run and worktree values render unknown and never executing" do
+      assert CobblerPresentation.run_provider_presentation("future_status").status == "unknown"
+      assert CobblerPresentation.run_provider_presentation(nil).status == "unknown"
+      refute CobblerPresentation.run_provider_presentation("future_status").executing?
+      refute CobblerPresentation.run_provider_presentation(nil).executing?
+      assert CobblerPresentation.worktree_presentation("future_status").status == "unknown"
+      assert CobblerPresentation.worktree_presentation(nil).status == "unknown"
+    end
+
+    test "known worktree statuses keep distinct tags" do
+      worktree_statuses =
+        ["active", "completed", "failed", "suspended", "cancelled"]
+        |> Enum.map(&CobblerPresentation.worktree_presentation(&1).status)
+
+      assert length(Enum.uniq(worktree_statuses)) == length(worktree_statuses)
+      assert CobblerPresentation.worktree_presentation(:active).status == "active"
+    end
+
     test "known lease statuses and renewal states keep distinct tags" do
       lease_statuses =
         [
