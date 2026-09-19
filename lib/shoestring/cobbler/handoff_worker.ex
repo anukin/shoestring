@@ -20,12 +20,20 @@ defmodule Shoestring.Cobbler.HandoffWorker do
       provider and re-decide behind the operator's back, so the attempt
       ends here and the intent is settled; a new explicit command is how a
       refused transfer is retried.
-    * `{:error, reason}` → `{:error, reason}`, a retriable attempt. This
-      covers the genuinely transient cases — a sender Elf still running, a
-      claim momentarily held elsewhere, an unreachable probe. The intent
-      stays unsettled, so after Oban's attempts are spent
-      `Shoestring.Cobbler.Handoffs.reconcile/1` still re-enqueues it at the
-      next boot.
+    * `{:error, reason}` where `Handoffs.permanent_error?/1` is true →
+      `{:cancel, reason}`. No retry can clear a moved boundary, a
+      superseded authorization or an unnameable receiver, so the attempt is
+      discarded rather than burning five of them. `perform/3` has already
+      recorded the durable `handoff.failed` event, so `reconcile/1` will not
+      resurrect the intent at the next boot either — cancelling the job
+      alone would not be enough, because reconcile reads the trajectory, not
+      the job table.
+    * `{:error, reason}` otherwise → `{:error, reason}`, a retriable
+      attempt. This covers the genuinely transient cases — a sender Elf
+      still running, a claim momentarily held elsewhere, an unreachable
+      probe, a failed write. The intent stays unsettled, so after Oban's
+      attempts are spent `reconcile/1` still re-enqueues it at the next
+      boot.
 
   The receiver capacity probe comes from the `:handoff_observe` application
   environment, in the same shapes `WakeupWorker` accepts: a 1-arity fun
@@ -48,11 +56,19 @@ defmodule Shoestring.Cobbler.HandoffWorker do
     case Handoffs.perform(goal_id, command_id, worker_opts()) do
       {:ok, %{outcome: outcome}} when outcome in [:dispatched, :converged, :refused] -> :ok
       {:ok, _other} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:error, reason} -> classify(reason)
     end
   end
 
   def perform(_job), do: {:error, :invalid_handoff_job}
+
+  defp classify(reason) do
+    if Handoffs.permanent_error?(reason) do
+      {:cancel, reason}
+    else
+      {:error, reason}
+    end
+  end
 
   defp worker_opts do
     [
