@@ -22,9 +22,11 @@ defmodule Shoestring.Elves.ElfResumeStartTest do
   wake); without the extension the Elf starts as before.
 
   Fail-on-base: without the resume branch the Elf always starts — the
-  resume-preferred test fails (starts non-empty where empty asserted). The
-  fallback and fresh-start tests pass on base too (they pin preserved
-  start behavior, not the new branch) — documentation, stated honestly.
+  resume-preferred test fails (starts non-empty where empty asserted),
+  and the native-resume and no-resume-adapter prompt assertions fail with
+  the original prompt verbatim. The failed-resume fallback assertions
+  pass on base too (R4.4 already composed that path — documentation of
+  preserved behavior), as does the no-extension fresh-start prompt pin.
   """
   use Shoestring.DataCase, async: false
 
@@ -48,7 +50,21 @@ defmodule Shoestring.Elves.ElfResumeStartTest do
   } do
     {:ok, log} = RequestLog.start()
     run_id = Ecto.UUID.generate()
-    request = resume_request(goal, task, run_id)
+
+    # A wake-style request: prior session plus a continuation triple. The
+    # native resume must receive the composed bounded projection (not the
+    # bare original prompt, never a transcript) with resume-truthful
+    # constraints. (Base: resume receives the original prompt verbatim.)
+    base = resume_request(goal, task, run_id)
+
+    request = %{
+      base
+      | continuation: %{
+          checkpoint_id: Ecto.UUID.generate(),
+          next_action: "RESUME-NEXT-11 finish the widget",
+          decision_refs: []
+        }
+    }
 
     scenario =
       ElvesHelpers.custom_scenario(:resume_preferred, [
@@ -76,6 +92,17 @@ defmodule Shoestring.Elves.ElfResumeStartTest do
     assert RequestLog.starts(log) == []
     # Resumed, streamed, and terminated normally on the fast lifecycle.
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, @terminal_timeout
+
+    # The native resume received the composed projection: checkpoint
+    # pointer + next action with resume-truthful constraints (retained
+    # session context acknowledged, checkpoint authoritative) — never the
+    # bare original prompt, never a transcript.
+    [resumed] = RequestLog.resumes(log)
+    assert resumed.prompt =~ "RESUME-NEXT-11"
+    assert resumed.prompt =~ "Continue from checkpoint"
+    assert resumed.prompt =~ "authoritative"
+    refute resumed.prompt == "Do the deterministic thing."
+    refute resumed.prompt =~ "no prior transcript available"
   end
 
   test "failed resume falls back to a fresh start", %{
@@ -124,9 +151,13 @@ defmodule Shoestring.Elves.ElfResumeStartTest do
     assert RequestLog.starts(log) != []
 
     # The fallback replacement carries the checkpoint context, not the
-    # stale original prompt. (Base: original prompt verbatim.)
+    # stale original prompt — and truthfully describes a NEW session with
+    # no retained transcript (the resume failed). (Base: original prompt
+    # verbatim.)
     [started] = RequestLog.starts(log)
     assert started.prompt =~ "FALLBACK-NEXT-77"
+    assert started.prompt =~ "Continue from checkpoint"
+    assert started.prompt =~ "no prior transcript available"
     refute started.prompt == "Do the deterministic thing."
   end
 
@@ -159,6 +190,12 @@ defmodule Shoestring.Elves.ElfResumeStartTest do
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, @terminal_timeout
     assert RequestLog.starts(log) != []
     assert RequestLog.resumes(log) == []
+
+    # No continuation, no prior session: the original prompt stands
+    # verbatim. (Passes on base too — documentation of the preserved
+    # non-continuation path.)
+    [started] = RequestLog.starts(log)
+    assert started.prompt == "Do the deterministic thing."
   end
 
   test "fresh start without resume support still carries the continuation", %{
@@ -204,6 +241,8 @@ defmodule Shoestring.Elves.ElfResumeStartTest do
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, @terminal_timeout
     [started] = RequestLog.starts(log)
     assert started.prompt =~ "FRESH-NEXT-42"
+    assert started.prompt =~ "Continue from checkpoint"
+    assert started.prompt =~ "no prior transcript available"
     refute started.prompt == "Do the deterministic thing."
   end
 
