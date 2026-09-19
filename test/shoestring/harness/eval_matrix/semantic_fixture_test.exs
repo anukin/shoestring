@@ -41,14 +41,14 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
   """
   use Shoestring.DataCase, async: false
 
+  alias Shoestring.Cobbler.Handoffs
   alias Shoestring.Elves
-  alias Shoestring.Harness.{Checkpoints, Continuation}
+  alias Shoestring.Harness.{Checkpoints, Continuation, RunRecord}
   alias Shoestring.Harness.Fake
-  alias Shoestring.Harness.Fake.{RequestLog, Scenario}
+  alias Shoestring.Harness.Fake.Scenario
   alias Shoestring.Repo
   alias Shoestring.Test.ElvesHelpers
-  alias Shoestring.Trajectory.TrajectoryEvent
-  import Ecto.Query, only: [from: 2]
+  alias Shoestring.Test.EvalMatrixHelpers, as: Eval
 
   @terminal_timeout 30_000
   @constraint "never modify forbidden.txt"
@@ -98,8 +98,35 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
   test "worktree arm: no checkpoint means no handoff and no fix", %{sup: sup} do
     %{goal: goal, task: task, dir: dir, leg_a_run: leg_a_run} = leg_a_fixture!(sup, :none)
 
-    # No checkpoint was authored: the handoff path refuses.
-    assert {:error, _} = Elves.resume_run(leg_a_run, to_provider_id: "fake-harness-b")
+    # No checkpoint was authored, so there is no boundary to transfer at and
+    # the production handoff refuses. (The direct API refuses cross-provider
+    # outright — asserted in `Shoestring.Harness.HandoffCorrectionTest` —
+    # so this arm exercises the production refusal instead.)
+    Eval.ensure_claim!(goal)
+    sender = Repo.get!(RunRecord, leg_a_run)
+
+    attrs = %{
+      "command_id" => "cmd-handoff-" <> Ecto.UUID.generate(),
+      "payload" => %{
+        "run_id" => sender.id,
+        "checkpoint_id" => Ecto.UUID.generate(),
+        "decision_refs" => [],
+        "to_provider_id" => "fake-harness-b",
+        "to_adapter_id" => "shoestring.harness.fake",
+        "scope" => "account:fake-harness-b",
+        "reason" => "w7 fixture handoff",
+        "requested_by" => "user:eval-operator"
+      }
+    }
+
+    assert {:ok, %{command: command}} = Handoffs.request(goal.id, attrs)
+    assert command.status == "rejected"
+    assert command.result["reason"] == "handoff_checkpoint_not_found"
+
+    assert {:error, {:handoff_not_requested, _}} =
+             Handoffs.perform(goal.id, command.command_id,
+               observe: fn _ -> flunk("a rejected intent must never observe a provider") end
+             )
 
     prompt = "Files in workdir: service.txt, forbidden.txt, check.sh, prompt.txt."
     terminal = drive_applier!(sup, goal, task, dir, prompt)
@@ -232,7 +259,12 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
   # Leg B: real handoff path, then a real applier Elf on the recorded prompt
   # ----------------------------------------------------------------------------
 
-  defp drive_handoff!(sup, goal, leg_a_run, dir) do
+  # Leg B travels the PRODUCTION handoff: a durable `run.handoff` command, a
+  # fresh receiver observation, a persisted admission decision, the
+  # receiver's own lease, and a durable dispatch. `Elves.resume_run/2`
+  # refuses cross-provider, so the fixture would not be exercising a real
+  # path if it still called it.
+  defp drive_handoff!(_sup, goal, leg_a_run, _dir) do
     {:ok, cont} = Continuation.for_goal(goal.id, repo: Shoestring.Repo, run_id: leg_a_run)
 
     triple = %{
@@ -241,28 +273,17 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
       decision_refs: cont.decision_refs
     }
 
-    {:ok, log} = RequestLog.start()
+    sender = Repo.get!(RunRecord, leg_a_run)
 
-    scenario =
-      ElvesHelpers.custom_scenario(:w7_handoff_effect, [
-        Scenario.lifecycle_event(source_event_id: "evt-life")
-      ])
-
-    assert {:ok, %{run: _new_run}} =
-             Elves.resume_run(leg_a_run,
-               adapter: Fake,
-               adapter_opts: %{scenario: scenario, request_log: log},
-               continuation: triple,
-               to_provider_id: "fake-harness-b",
-               reason: "w7 fixture handoff",
-               handoff_id: Ecto.UUID.generate(),
-               new_run_id: Ecto.UUID.generate(),
-               new_dispatch_id: Ecto.UUID.generate()
+    assert %{outcome: :dispatched, run: new_run} =
+             Eval.production_handoff!(goal, sender, triple.checkpoint_id,
+               reason: "w7 fixture handoff"
              )
 
-    [recorded] = RequestLog.starts(log)
-    assert recorded.continuation.checkpoint_id == triple.checkpoint_id
-    {recorded.prompt, triple}
+    # The prompt the receiver is actually handed is the PERSISTED one.
+    persisted = Repo.get!(RunRecord, new_run.id)
+    assert persisted.continuation["checkpoint_id"] == triple.checkpoint_id
+    {persisted.prompt, triple}
   end
 
   defp drive_applier!(sup, goal, task, dir, prompt) do

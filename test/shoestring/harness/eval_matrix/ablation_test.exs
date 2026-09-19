@@ -167,38 +167,30 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
     assert continuation.next_action == checkpoint.next_action
 
     {:ok, log} = RequestLog.start()
-    new_run_id = Ecto.UUID.generate()
 
-    assert {:ok, %{run: new_run}} =
-             Shoestring.Elves.resume_run(run.id,
-               adapter: Fake,
-               adapter_opts: Eval.adapter_opts(log, Scenario.handoff_target()),
-               continuation: %{
-                 checkpoint_id: checkpoint_id,
-                 next_action: checkpoint.next_action,
-                 decision_refs: [decision_id]
-               },
-               provider_session_id: @session,
-               to_provider_id: "fake-harness-b",
-               reason: "quota handoff",
-               new_run_id: new_run_id,
-               new_dispatch_id: Ecto.UUID.generate()
-             )
+    # I5 handoff evidence, through the PRODUCTION path: a durable
+    # `run.handoff` command, a fresh receiver observation, a persisted
+    # admission decision, the receiver's own lease, and a durable dispatch.
+    # `Elves.resume_run/2` refuses cross-provider, so this is the real thing
+    # rather than an inline adapter start.
+    assert %{outcome: :dispatched, run: new_run} =
+             Eval.production_handoff!(goal, run, checkpoint_id)
 
-    # I5 handoff evidence (genuine): the cross-provider transfer started a
-    # FRESH session via adapter.start/2, never resume, carrying pointer keys
-    # only.
-    [recorded] = RequestLog.starts(log)
-    assert RequestLog.resumes(log) == []
+    # What Elf B is handed is the PERSISTED request: a clean 3-key pointer,
+    # never the transcript.
+    persisted = Repo.get!(RunRecord, new_run.id)
 
     recorded_continuation =
-      Map.new(recorded.continuation, fn {k, v} -> {to_string(k), v} end)
+      Map.new(persisted.continuation, fn {k, v} -> {to_string(k), v} end)
 
     assert Enum.sort(Map.keys(recorded_continuation)) == [
              "checkpoint_id",
              "decision_refs",
              "next_action"
            ]
+
+    assert recorded_continuation["checkpoint_id"] == checkpoint_id
+    assert decision_id in recorded_continuation["decision_refs"]
 
     scan = Shoestring.Harness.Security.scan_term(recorded_continuation)
 
@@ -210,7 +202,8 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
     %{terminal: terminal} =
       Eval.drive_leg_to_terminal!(leg_b_run,
         scenario: Scenario.handoff_target(),
-        supervisor: sup
+        supervisor: sup,
+        request_log: log
       )
 
     assert terminal.class == :completed
@@ -227,15 +220,24 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
           limit: 1
       )
 
+    # Selected by KIND, not by position. The receiver now holds its OWN
+    # execution lease (the production handoff grants one), so the Elf also
+    # writes a lease-boundary checkpoint ahead of the terminal one. Taking
+    # "the first checkpoint for this run" would silently assert against that
+    # instead.
     terminal_checkpoint =
-      Repo.one!(
+      Repo.all(
         from event in TrajectoryEvent,
           where:
             event.goal_id == ^goal.id and event.run_id == ^new_run.id and
               event.type == "checkpoint.created",
-          order_by: [asc: event.sequence],
-          limit: 1
+          order_by: [asc: event.sequence]
       )
+      |> Enum.find(
+        &(get_in(&1.payload, ["extensions", "shoestring.elf:checkpoint_kind"]) == "terminal")
+      )
+
+    assert terminal_checkpoint
 
     assert terminal_checkpoint.sequence < completed_event.sequence
 
@@ -255,7 +257,7 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
       )
 
     tax = Eval.leg_tax(goal.id, new_run.id, log)
-    prompt = recorded.prompt
+    prompt = persisted.prompt
 
     scores =
       Eval.score_arm(%{

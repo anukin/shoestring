@@ -196,7 +196,7 @@ defmodule Shoestring.Elves do
     session =
       Keyword.get(opts, :session) ||
         Keyword.get(opts, :session_pid) ||
-        resolve_session(run.id, opts)
+        resolve_session(run, opts)
 
     case session do
       nil ->
@@ -211,19 +211,45 @@ defmodule Shoestring.Elves do
     end
   end
 
-  defp resolve_session(run_id, opts) do
-    case Keyword.get(opts, :session_resolver) do
-      resolver when is_function(resolver, 1) ->
-        resolver.(run_id)
+  # Sessions register under `RunIdentity.run_id`, which both real adapters set
+  # from `request.dispatch_id` — NOT the run row id (see
+  # `Shoestring.Elves.Elf.lookup_session_ids/2`, which already documents this).
+  # On a dispatched continuation run the two differ, so probing the row id
+  # alone found nothing and a safe stop reported `:session_not_found` for a
+  # session that was alive. Dispatch id first, run row id second.
+  #
+  # `:session_resolver` REPLACES the registry lookup, not the id list: it is
+  # called once per candidate id, in the same dispatch-first order, and
+  # stops at the first live pid — so a supplied registry behaves like the
+  # real one rather than like a single-key lookup. It must therefore be a
+  # pure lookup returning a pid or nil, safe to call more than once per
+  # `request_stop/2`; it is not a place to hang side effects. (Before this
+  # change it happened to be called exactly once, which was an accident of
+  # the single-id bug, not a contract.) Nothing else calls it: `resolve_session/2`
+  # is reached only from `dispatch_safe_stop/2`, and only when neither
+  # `:session` nor `:session_pid` was supplied.
+  defp resolve_session(%RunRecord{} = run, opts) do
+    lookup =
+      case Keyword.get(opts, :session_resolver) do
+        resolver when is_function(resolver, 1) -> resolver
+        _ -> &codex_session/1
+      end
 
-      _ ->
-        case Shoestring.Harness.CodexAppServer.lookup_session(run_id) do
-          {:ok, pid} when is_pid(pid) -> if Process.alive?(pid), do: pid, else: nil
-          _ -> nil
-        end
-    end
+    Enum.find_value(session_ids(run), fn id ->
+      case lookup.(id) do
+        pid when is_pid(pid) -> if Process.alive?(pid), do: pid, else: nil
+        _other -> nil
+      end
+    end)
   rescue
     _ -> nil
+  end
+
+  defp codex_session(id) do
+    case Shoestring.Harness.CodexAppServer.lookup_session(id) do
+      {:ok, pid} when is_pid(pid) -> pid
+      _other -> nil
+    end
   end
 
   @doc """
@@ -315,7 +341,7 @@ defmodule Shoestring.Elves do
   end
 
   @doc """
-  Resumes a run from its latest checkpoint, or hands it to another provider.
+  Resumes a run **on its own provider** from its latest checkpoint.
 
   Pipeline (fail-fast, all refusals happen before any adapter call):
 
@@ -327,27 +353,27 @@ defmodule Shoestring.Elves do
     3. when `require_cobbler_command: true` is explicitly passed, authorize
        through `Shoestring.Cobbler.DispatchGate` (read-only; the flag is
        plumbed, never defaulted);
-     4. same provider (`opts[:to_provider_id]` defaults to the run's own) →
-        `adapter.resume/3` with a rebuilt `RunRequest` carrying the fresh
-        continuation (adapters without `resume/3`, e.g. Claude, return
-        `:resume_unsupported_for_provider`);
-     5. different provider → verify `GoalLifecycle` accepts
-        `:handoff_requested` from `opts[:goal_state]` (default `:working`),
-        then intent-first: append the `handoff.created` pointer event
-        (idempotency key `handoff:<handoff_id>`; replays converge without
-        duplicating), create a NEW run of the SAME goal via `Runs.request`,
-        and start the target adapter FRESH via `adapter.start/2` with a
-        continuation-composed prompt (the sender's session identity is
-        never presented to the target).
+    4. same provider (`opts[:to_provider_id]` defaults to the run's own) →
+       `adapter.resume/3` with a rebuilt `RunRequest` carrying the fresh
+       continuation (adapters without `resume/3`, e.g. Claude, return
+       `:resume_unsupported_for_provider`).
 
-  Resume is strictly same-run; handoff targets a new run of the same goal
-  (cross-goal handoff is out of scope). Live cross-provider handoff is
-  UNVERIFIED: hermetic tests cover the Fake-to-Fake path only.
+  Resume is strictly same-run.
+
+  ## Cross-provider handoff is refused here
+
+  Passing a `:to_provider_id` that differs from the run's own provider
+  returns `{:error, {:handoff_requires_cobbler_command, detail}}` — after the
+  same continuation validation, so a stale or superseded continuation still
+  reports its own precise reason first.
+
+  This function cannot hand a run to another provider. Doing so needs a
+  receiver capacity observation, an admission decision, a lease granted to
+  the receiver, and a supervised dispatch; none of that belongs to a direct
+  adapter call. `Shoestring.Cobbler.Handoffs` owns it.
   """
   @spec resume_run(Ecto.UUID.t(), keyword()) ::
-          {:ok, RunIdentity.t()}
-          | {:ok, %{handoff_id: Ecto.UUID.t(), run: RunRecord.t(), run_identity: RunIdentity.t()}}
-          | {:error, term()}
+          {:ok, RunIdentity.t()} | {:error, term()}
   def resume_run(run_id, opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
@@ -367,7 +393,7 @@ defmodule Shoestring.Elves do
          :ok <- maybe_authorize_gate(run.goal_id, opts) do
       case resume_mode(run, opts) do
         :resume -> resume_same_run(run, fresh_cont, opts)
-        :handoff -> resume_handoff(run, fresh_cont, fresh_record, opts)
+        :handoff -> refuse_handoff(run, opts)
       end
     end
   end
@@ -449,17 +475,6 @@ defmodule Shoestring.Elves do
     end
   end
 
-  defp latest_lease_id(repo, run_id) do
-    query =
-      from lease in ExecutionLeaseRecord,
-        where: lease.run_id == ^run_id,
-        order_by: [desc: lease.projection_sequence, asc: lease.id],
-        limit: 1,
-        select: lease.id
-
-    repo.one(query)
-  end
-
   defp maybe_authorize_gate(goal_id, opts) do
     if Keyword.get(opts, :require_cobbler_command, false) do
       Shoestring.Cobbler.DispatchGate.authorize(goal_id, repo: Keyword.get(opts, :repo, Repo))
@@ -477,352 +492,43 @@ defmodule Shoestring.Elves do
     end
   end
 
-  # Intent-first handoff (P1): validate -> handoff.created intent ->
-  # run.requested -> adapter.start (fresh session, P2). Re-performing with
-  # the same handoff_id replays instead of duplicating: the idempotency-key
-  # guard runs before any side effect, and the replay decision tree in
-  # `replay_stored_receiver/6` decides between success-replay (terminal or
-  # live-session evidence) and re-attempt with the same ids (at-least-once
-  # with idempotent convergence: the run row, handoff.created, and
-  # run.requested all deduplicate by idempotency keys).
+  # B2 FAIL CLOSED. Cross-provider handoff is NOT performed here any more.
   #
-  # Writer constraint (recorded deviation from the brief's literal order):
-  # the trajectory writer requires a trusted `run_id` to already exist as a
-  # goal-owned run row, so the bare run row is inserted just before the
-  # handoff.created append. The observable event order is still
-  # handoff.created < run.requested < adapter effect, and the guard still
-  # precedes everything.
-  defp resume_handoff(run, fresh_cont, fresh_record, opts) do
-    repo = Keyword.get(opts, :repo, Repo)
-    to_provider_id = Keyword.get(opts, :to_provider_id)
-    goal_state = Keyword.get(opts, :goal_state, :working)
-    handoff_id = Keyword.get(opts, :handoff_id, Ecto.UUID.generate())
-    new_dispatch_id = Keyword.get(opts, :new_dispatch_id, Ecto.UUID.generate())
-    new_run_id = Keyword.get(opts, :new_run_id, Ecto.UUID.generate())
-    reason = Keyword.get(opts, :reason, "provider_handoff")
-
-    with {:ok, :handing_off} <- handoff_transition(goal_state),
-         {:ok, payload} <-
-           Continuation.handoff_payload(%{
-             handoff_id: handoff_id,
-             run_id: new_run_id,
-             checkpoint_id: fresh_record.id,
-             from_provider_id: run.provider_id,
-             to_provider_id: to_provider_id,
-             contract_version: 1,
-             next_action: fresh_cont.next_action,
-             decision_refs: fresh_cont.decision_refs,
-             reason: reason,
-             extensions: %{},
-             prior_run_id: run.id,
-             lease_grant_id: latest_lease_id(repo, run.id)
-           }),
-         {:ok, intent} <- check_handoff_intent(repo, run.goal_id, handoff_id) do
-      case intent do
-        {:replay, event} ->
-          case repo.get(RunRecord, event.payload["run_id"] || event.run_id) do
-            %RunRecord{} = stored_run ->
-              replay_stored_receiver(
-                run,
-                fresh_cont,
-                fresh_record,
-                payload,
-                handoff_id,
-                stored_run,
-                opts
-              )
-
-            nil ->
-              # Crash between intent and row insert: continue to exactly one
-              # effect, reusing the stored run_id pointer.
-              handoff_effect(run, fresh_cont, fresh_record, payload, handoff_id,
-                run_id: event.payload["run_id"] || event.run_id,
-                dispatch_id: new_dispatch_id,
-                opts: opts
-              )
-          end
-
-        :fresh ->
-          handoff_effect(run, fresh_cont, fresh_record, payload, handoff_id,
-            run_id: new_run_id,
-            dispatch_id: new_dispatch_id,
-            opts: opts
-          )
-      end
-    end
-  end
-
-  # Idempotency-key guard before any side effect: reports whether a
-  # handoff.created intent already exists for this handoff_id. Never
-  # appends, inserts, or calls the adapter.
-  defp check_handoff_intent(repo, goal_id, handoff_id) do
-    key = "handoff:" <> handoff_id
-
-    case repo.one(
-           from event in TrajectoryEvent,
-             where:
-               event.goal_id == ^goal_id and event.type == "handoff.created" and
-                 event.idempotency_key == ^key,
-             order_by: [asc: event.sequence],
-             limit: 1
-         ) do
-      %TrajectoryEvent{} = event -> {:ok, {:replay, event}}
-      nil -> {:ok, :fresh}
-    end
-  end
-
-  # Replay decision tree (round-2 finding 5): the receiver run row existing
-  # is NOT success. The row is inserted before the adapter effect, so a
-  # crash (or failed start) between row insert and adapter start would
-  # otherwise replay to success with the receiver never started. On replay
-  # with the receiver row present:
+  # What used to live at this call site inserted a bare receiver run, appended
+  # `handoff.created`, and called `adapter.start/2` inline — with no capacity
+  # observation for the receiver, no admission decision, no lease of its own
+  # (the pointer carried the SENDER's grant id), and outside the durable
+  # dispatch pipeline that owns supervision, process groups and cancellation.
+  # It was a public, unsupervised way to start a provider session, so it is
+  # gone rather than gated: a flag would have left the same bypass one
+  # keyword away.
   #
-  #   1. terminal/result evidence for the new run -> success-replay, zero
-  #      new calls (the effect demonstrably completed downstream);
-  #   2. else a live receiver session observable via the adapter's
-  #      `lookup_session/1` (where supported, e.g. CodexAppServer) ->
-  #      success with that identity, zero new calls;
-  #   3. else re-attempt the effect with the SAME handoff/run/dispatch ids
-  #      (at-least-once with idempotent convergence: first genuine success
-  #      wins; duplicates impossible by idempotency keys).
+  # The production path is an explicit durable Cobbler command:
   #
-  # Fake exposes no `lookup_session/1`, so Fake replays re-attempt whenever
-  # no terminal/result evidence exists.
-  defp replay_stored_receiver(
-         run,
-         fresh_cont,
-         fresh_record,
-         payload,
-         handoff_id,
-         stored_run,
-         opts
-       ) do
-    adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
-    repo = Keyword.get(opts, :repo, Repo)
-
-    cond do
-      receiver_terminal?(repo, stored_run) ->
-        {:ok,
-         %{
-           handoff_id: handoff_id,
-           run: stored_run,
-           run_identity: replay_identity(stored_run)
-         }}
-
-      live_receiver_session?(adapter, stored_run) ->
-        {:ok,
-         %{
-           handoff_id: handoff_id,
-           run: stored_run,
-           run_identity: replay_identity(stored_run)
-         }}
-
-      true ->
-        # No evidence the effect ever ran: re-attempt it with the SAME
-        # handoff/run/dispatch ids. The receiver row already exists, so the
-        # re-attempt converges through the idempotent event appends plus a
-        # fresh adapter.start (a blind row re-insert would collide on the
-        # primary key instead of converging).
-        adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
-
-        with {:ok, request} <-
-               handoff_request(run, fresh_cont, stored_run.dispatch_id, fresh_record),
-             {:ok, identity} <- adapter_identity(adapter) do
-          run_handoff_effect(run, stored_run, request, identity, payload, handoff_id, opts)
-        end
-    end
-  end
-
-  # Terminal/result evidence for the receiver run: a run terminal
-  # (`run.completed` / `run.failed` / `run.interrupted` / `run.cancelled`)
-  # or a recorded harness result (`harness.event_recorded` with kind
-  # `result`). `run.requested` deliberately does NOT count: it is appended
-  # before the adapter effect, so it cannot prove the effect ran.
-  defp receiver_terminal?(repo, %RunRecord{} = stored_run) do
-    terminal? =
-      repo.exists?(
-        from event in TrajectoryEvent,
-          where:
-            event.goal_id == ^stored_run.goal_id and event.run_id == ^stored_run.id and
-              event.type in ["run.completed", "run.failed", "run.interrupted", "run.cancelled"]
-      )
-
-    result? =
-      repo.exists?(
-        from event in TrajectoryEvent,
-          where:
-            event.goal_id == ^stored_run.goal_id and event.run_id == ^stored_run.id and
-              event.type == "harness.event_recorded" and
-              fragment("(? ->> ?) = ?", event.payload, "kind", "result")
-      )
-
-    terminal? or result?
-  end
-
-  # Live-session read only: never starts, probes, or mutates session state,
-  # and never touches session turn logic. Adapters without
-  # `lookup_session/1` (e.g. Fake) report no live session.
-  defp live_receiver_session?(adapter, %RunRecord{} = stored_run) do
-    if adapter_exports?(adapter, :lookup_session, 1) do
-      case apply(adapter, :lookup_session, [stored_run.id]) do
-        {:ok, pid} when is_pid(pid) -> Process.alive?(pid)
-        _other -> false
-      end
-    else
-      false
-    end
-  rescue
-    _error -> false
-  catch
-    _kind, _reason -> false
-  end
-
-  # Single effect path: bare run row (writer trusted-reference requirement)
-  # -> handoff.created intent -> run.requested durable effect ->
-  # adapter.start fresh session. The sender's session identity is never
-  # presented to the target.
-  defp handoff_effect(run, fresh_cont, fresh_record, payload, handoff_id,
-         run_id: run_id,
-         dispatch_id: dispatch_id,
-         opts: opts
-       ) do
-    repo = Keyword.get(opts, :repo, Repo)
-    clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
-    adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
-
-    with {:ok, request} <- handoff_request(run, fresh_cont, dispatch_id, fresh_record),
-         {:ok, identity} <- adapter_identity(adapter),
-         {:ok, changeset} <-
-           Shoestring.Harness.Runs.build_intent_changeset(request, identity,
-             repo: repo,
-             clock: clock,
-             run_id: run_id
-           ),
-         {:ok, new_run} <- Shoestring.Harness.Runs.insert_or_recover(repo, changeset) do
-      run_handoff_effect(run, new_run, request, identity, payload, handoff_id, opts)
-    end
-  end
-
-  # Effect tail for an already-persisted receiver row: idempotent
-  # handoff.created + run.requested appends (duplicates converge by
-  # idempotency key), then the adapter.start fresh session. Used by
-  # `handoff_effect/6` after the row insert and directly by replay
-  # re-attempts, where the row already exists.
-  defp run_handoff_effect(run, new_run, request, identity, payload, handoff_id, opts) do
-    repo = Keyword.get(opts, :repo, Repo)
-    clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
-    adapter = Keyword.get(opts, :adapter, Shoestring.Harness.Fake)
-    adapter_opts = Keyword.get(opts, :adapter_opts, %{})
-
-    with {:ok, _event} <- append_handoff_created(run, new_run.id, payload, handoff_id, opts),
-         :ok <-
-           Shoestring.Harness.Runs.ensure_requested_event(new_run, request, identity,
-             repo: repo,
-             clock: clock,
-             writer_opts: Keyword.get(opts, :writer_opts, [])
-           ),
-         {:ok, run_identity} <- invoke_start(adapter, request, adapter_opts) do
-      {:ok, %{handoff_id: handoff_id, run: new_run, run_identity: run_identity}}
-    end
-  end
-
-  defp append_handoff_created(run, new_run_id, payload, handoff_id, opts) do
-    clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
-
-    Trajectory.append(
-      run.goal_id,
+  #     Shoestring.Cobbler.Handoffs.request/3   (intent)
+  #     Shoestring.Cobbler.HandoffWorker        (delivery)
+  #     Shoestring.Cobbler.Handoffs.perform/3   (observe -> admit -> grant ->
+  #                                              dispatch -> supervised Elf)
+  #
+  # Same-provider resume is untouched and still runs through
+  # `resume_same_run/3` above.
+  defp refuse_handoff(run, opts) do
+    {:error,
+     {:handoff_requires_cobbler_command,
       %{
-        "type" => "handoff.created",
-        "schema_version" => 1,
-        "actor" => "elf",
-        "occurred_at" => Clock.now(clock),
-        "idempotency_key" => "handoff:" <> handoff_id,
-        "payload" => payload
-      },
-      trusted: [task_id: run.task_id, run_id: new_run_id],
-      writer_opts: Keyword.get(opts, :writer_opts, [])
-    )
+        "run_id" => run.id,
+        "from_provider_id" => run.provider_id,
+        "to_provider_id" => Keyword.get(opts, :to_provider_id),
+        "use" => "Shoestring.Cobbler.Handoffs.request/3"
+      }}}
   end
 
-  defp replay_identity(%RunRecord{} = stored_run) do
-    case RunIdentity.new(%{
-           run_id: stored_run.id,
-           harness_id: stored_run.provider_id,
-           process_id: nil,
-           provider_session_id: stored_run.provider_session_id
-         }) do
-      {:ok, identity} ->
-        identity
-
-      {:error, _} ->
-        %RunIdentity{
-          run_id: stored_run.id,
-          harness_id: stored_run.provider_id,
-          process_id: nil,
-          provider_session_id: stored_run.provider_session_id
-        }
-    end
-  end
-
-  # Cross-provider handoff request (P2): a FRESH session whose prompt is
-  # composed from the continuation (checkpoint pointer + next_action +
-  # decision refs + constraints summary, bounded, transcript-free). The
-  # sender's original prompt and session identity are never carried over.
-  # `record` (a CheckpointRecord, when the caller has one) feeds the
-  # composed prompt the checkpoint's constraints/failures/verification;
-  # without it the prompt stays the pointer-only shape (same-provider
-  # resume path and legacy callers).
-  defp handoff_request(run, fresh_cont, dispatch_id, record) do
-    prompt_opts = if record, do: [checkpoint_record: record], else: []
-
-    attrs = %{
-      version: 1,
-      goal_id: run.goal_id,
-      task_id: run.task_id,
-      workspace_ref: run.workspace_ref,
-      prompt: Continuation.compose_handoff_prompt(fresh_cont, prompt_opts),
-      continuation: %{
-        checkpoint_id: fresh_cont.checkpoint_id,
-        next_action: fresh_cont.next_action,
-        decision_refs: fresh_cont.decision_refs
-      },
-      policy: run.policy || %{mode: "supervised"},
-      requested_capabilities: resume_capabilities(run),
-      dispatch_id: dispatch_id,
-      extensions: run.extensions || %{}
-    }
-
-    case RunRequest.new(attrs) do
-      {:ok, request} -> {:ok, request}
-      {:error, changeset} -> {:error, {:invalid_resume_request, changeset}}
-    end
-  end
-
-  # Fresh-session effect for handoff targets (P2): adapter.start, never
-  # resume. The sender's RunIdentity is never constructed for the target.
-  defp invoke_start(adapter, request, adapter_opts) do
-    if adapter_exports?(adapter, :start, 2) do
-      adapter.start(request, adapter_opts)
-    else
-      {:error, :handoff_start_unsupported}
-    end
-  end
-
-  defp handoff_transition(goal_state) do
-    case Shoestring.Cobbler.GoalLifecycle.transition(goal_state, :handoff_requested) do
-      {:ok, :handing_off} -> {:ok, :handing_off}
-      {:error, reason} -> {:error, {:handoff_not_allowed, reason}}
-    end
-  end
-
-  defp adapter_identity(adapter) do
-    case adapter.identity() do
-      %Identity{} = identity -> {:ok, identity}
-      {:ok, %Identity{} = identity} -> {:ok, identity}
-      _other -> {:error, :adapter_identity_unavailable}
-    end
-  rescue
-    _error -> {:error, :adapter_identity_unavailable}
+  # Session registration ids for a run row, most specific first. Deduplicated
+  # so a run whose dispatch id equals its row id is probed once.
+  defp session_ids(%RunRecord{} = run) do
+    [run.dispatch_id, run.id]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
   end
 
   # Same-provider resume without a resume/3 (e.g. Claude) is impossible

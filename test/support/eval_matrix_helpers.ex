@@ -37,12 +37,16 @@ defmodule Shoestring.Test.EvalMatrixHelpers do
 
   alias Shoestring.Elves
   alias Shoestring.Harness.CapacitySnapshot
+  alias Shoestring.Cobbler.{AdmissionPolicy, Commands, Handoffs}
+  alias Shoestring.Harness.CapacitySnapshot
+  alias Shoestring.Harness.Continuation
   alias Shoestring.Harness.Dispatches
   alias Shoestring.Harness.Error
   alias Shoestring.Harness.Fake
   alias Shoestring.Harness.Fake.Scenario
   alias Shoestring.Harness.RunRecord
   alias Shoestring.Repo
+  alias Shoestring.Test.CobblerHelpers
   alias Shoestring.Trajectory
   alias Shoestring.Trajectory.TrajectoryEvent
 
@@ -404,7 +408,10 @@ defmodule Shoestring.Test.EvalMatrixHelpers do
   Options: `:scenario` (required), `:supervisor` (a supervised
   `Shoestring.Elves.Supervisor` pid; one is started when absent — pass an
   explicit supervisor when driving several legs in one test, since the test
-  supervisor starts each child id only once), `:timeout` (default 10s).
+  supervisor starts each child id only once), `:timeout` (default 10s),
+  `:request_log` (a `Fake.RequestLog` the leg's adapter calls are recorded
+  into — the adapter start now happens INSIDE the Elf, so this is where
+  leg-B start/resume tax is observed).
   """
   @spec drive_leg_to_terminal!(RunRecord.t(), keyword()) :: %{
           dispatch: map(),
@@ -423,11 +430,17 @@ defmodule Shoestring.Test.EvalMatrixHelpers do
     assert {:ok, dispatch, _job} = Dispatches.enqueue_for_run(run)
     assert {:ok, request} = Elves.request_from_run(run)
 
+    adapter_opts =
+      case Keyword.get(opts, :request_log) do
+        nil -> %{scenario: scenario, clock: Shoestring.Test.FixedClock}
+        log -> %{scenario: scenario, clock: Shoestring.Test.FixedClock, request_log: log}
+      end
+
     assert {:ok, _pid} =
              Elves.start_elf(request, dispatch,
                supervisor: sup,
                adapter: Fake,
-               adapter_opts: %{scenario: scenario, clock: Shoestring.Test.FixedClock},
+               adapter_opts: adapter_opts,
                command: ["python3", "-c", "pass"],
                event_interval_ms: 0,
                notify: self(),
@@ -438,6 +451,165 @@ defmodule Shoestring.Test.EvalMatrixHelpers do
     assert_receive {:elf_terminal, ^run_id, terminal}, timeout
 
     %{dispatch: dispatch, terminal: terminal}
+  end
+
+  @doc """
+  Drives a cross-provider handoff through the PRODUCTION path and returns the
+  perform result.
+
+  `Shoestring.Elves.resume_run/2` refuses cross-provider transfers, so evals
+  exercise the real thing: a durable `run.handoff` Cobbler command, a fresh
+  receiver capacity observation, a persisted `admission.decided`, the
+  receiver's own lease grant, and a durable dispatch. The receiver run this
+  returns is the one an Elf then executes (see `drive_leg_to_terminal!/2`),
+  so leg-B evidence stays genuine rather than adapter-recorded.
+
+  The exclusive task claim is acquired first when the goal does not already
+  hold it, because every dispatch entrypoint is gated on it. Decision refs
+  are read from projection AFTER that, so the authorization matches what the
+  goal's history actually says at request time.
+  """
+  @spec production_handoff!(map(), RunRecord.t(), String.t(), keyword()) :: map()
+  def production_handoff!(goal, %RunRecord{} = sender, checkpoint_id, opts \\ []) do
+    ensure_claim!(goal)
+
+    clock = Keyword.get(opts, :clock, Shoestring.Test.FixedClock)
+    handoff_now = Keyword.get(opts, :now, clock.now())
+    to_provider_id = Keyword.get(opts, :to_provider_id, "fake-harness-b")
+    scope = Keyword.get(opts, :scope, "account:#{to_provider_id}")
+
+    attrs = %{
+      "command_id" => "cmd-handoff-" <> Ecto.UUID.generate(),
+      "payload" => %{
+        "run_id" => sender.id,
+        "checkpoint_id" => checkpoint_id,
+        "decision_refs" => Continuation.decision_refs(Repo, goal.id),
+        "to_provider_id" => to_provider_id,
+        "to_adapter_id" => Keyword.get(opts, :to_adapter_id, "shoestring.harness.fake"),
+        "scope" => scope,
+        "reason" => Keyword.get(opts, :reason, "quota handoff"),
+        "requested_by" => Keyword.get(opts, :requested_by, "user:eval-operator")
+      }
+    }
+
+    {:ok, %{command: command}} = Handoffs.request(goal.id, attrs)
+
+    {:ok, result} =
+      Handoffs.perform(goal.id, command.command_id,
+        clock: clock,
+        now: handoff_now,
+        policy: Keyword.get(opts, :policy, eval_lease_policy()),
+        observe: fn _scoping ->
+          {:ok, receiver_snapshot!(to_provider_id, scope, handoff_now)}
+        end
+      )
+
+    result
+  end
+
+  # The receiver's lease bounds. The default policy's `checkpoint_cadence: 1`
+  # makes the Elf attempt a lease renewal at every response boundary, which
+  # is correct production behaviour but is not what these evals measure —
+  # they measure what context the receiver is handed. A budget the scripted
+  # leg cannot exhaust keeps the renewal machinery out of the measurement
+  # without disabling it: the lease is still granted, still bound to the
+  # receiver run, and still carried on `handoff.created`.
+  defp eval_lease_policy do
+    {:ok, policy} =
+      AdmissionPolicy.new(%{
+        response_budget: 500,
+        tool_budget: 500,
+        checkpoint_cadence: 500
+      })
+
+    policy
+  end
+
+  @doc """
+  Acquires the exclusive task claim for a goal when it does not hold it.
+
+  The MVP claim is a single global slot, so an eval that runs several
+  independent arms (each its own goal) has to hand the slot over explicitly
+  between them — exactly as an operator would, through a `task.release`
+  command against the holding goal. Nothing here expires or steals a claim.
+  """
+  @spec ensure_claim!(map()) :: :ok
+  def ensure_claim!(goal) do
+    goal_id = goal.id
+
+    case Commands.active_claim() do
+      %{goal_id: ^goal_id} ->
+        :ok
+
+      %{goal_id: holder} ->
+        {:ok, %{command: released}} =
+          Commands.submit(holder, CobblerHelpers.release_command("eval arm finished"))
+
+        "resolved" = released.status
+        acquire_claim!(goal_id)
+
+      nil ->
+        acquire_claim!(goal_id)
+    end
+  end
+
+  # Claims against the admission decision the goal ALREADY has, appending one
+  # only when it has none. Minting a fresh decision here would add a decision
+  # ref the scenario never made, which would then travel to the receiver and
+  # show up as handoff tax that no production path would have paid.
+  defp acquire_claim!(goal_id) do
+    admission = latest_admission(goal_id) || CobblerHelpers.append_admission_event!(goal_id)
+
+    {:ok, %{command: claim}} =
+      Commands.submit(goal_id, CobblerHelpers.claim_command(admission))
+
+    "resolved" = claim.status
+    :ok
+  end
+
+  defp latest_admission(goal_id) do
+    Repo.one(
+      from event in TrajectoryEvent,
+        where: event.goal_id == ^goal_id and event.type == "admission.decided",
+        order_by: [desc: event.sequence],
+        limit: 1
+    )
+  end
+
+  @doc "A compatible, observed receiver snapshot for the handoff admission step."
+  @spec receiver_snapshot!(String.t(), String.t(), DateTime.t()) :: CapacitySnapshot.t()
+  def receiver_snapshot!(provider_id, scope, observed_at) do
+    reset_at = DateTime.add(observed_at, 7_200, :second)
+
+    {:ok, snapshot} =
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: Ecto.UUID.generate(),
+          capacity_state: :observed,
+          windows: [
+            %{kind: "five_hour", state: :observed, used_percent: 10.0, reset_at: reset_at},
+            %{kind: "weekly", state: :observed, used_percent: 12.0, reset_at: reset_at}
+          ],
+          observed_at: observed_at,
+          freshness: %{max_age_seconds: 300},
+          source: %{
+            adapter_id: "shoestring.harness.fake",
+            provider_id: provider_id,
+            invocation_mode: "headless",
+            event: :explicit_read
+          },
+          scope: scope,
+          confidence: :high,
+          support_tier: :proactive,
+          compatibility_state: :compatible,
+          reason: nil,
+          extensions: %{}
+        },
+        now: observed_at
+      )
+
+    snapshot
   end
 
   @doc """

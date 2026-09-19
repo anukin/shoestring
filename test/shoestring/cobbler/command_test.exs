@@ -40,7 +40,13 @@ defmodule Shoestring.Cobbler.CommandTest do
     test "rejects an unknown command type" do
       {:error, changeset} = Command.new(%{"type" => "task.execute", "payload" => %{}})
 
-      assert errors_on(changeset)[:type] == ["must be one of task.claim, task.release"]
+      # The message enumerates `Command.types/0`, so this stays a lock on the
+      # closed type set rather than on a frozen string: adding a type must be
+      # a deliberate edit here too.
+      assert errors_on(changeset)[:type] ==
+               ["must be one of " <> Enum.join(Command.types(), ", ")]
+
+      assert Command.types() == ["task.claim", "task.release", "run.handoff"]
     end
 
     test "rejects a task.claim payload with a missing field" do
