@@ -445,46 +445,78 @@ defmodule Shoestring.Harness.CodexAppServer do
 
   # --- Capacity Probe Helpers ---
 
+  # The live account read belongs to `CodexMonitor`; this adapter owns no
+  # independent quota source. When the monitor is absent, or answers with
+  # anything other than a snapshot, the only honest answer is that capacity
+  # is UNKNOWN.
+  #
+  # What this replaced: an `:observed` / `:high`-confidence snapshot claiming
+  # a flat 25% five-hour utilization under a hard-coded snapshot id — a
+  # reading no one had taken. Two policies consumed it as real evidence.
+  # Admission (`AdmissionEvaluation.check_hard_constraints/6` and the
+  # confirmation tier) treats `:observed` + `:high` as automatically
+  # admissible, so a missing monitor silently authorized execution against
+  # invented headroom. Renewal chains a lease to `admitted_snapshot_id`, and
+  # the constant id made every such fabrication indistinguishable from the
+  # one before it, so a renewal could bind to a "fresh" observation that had
+  # never been re-read — and `Cobbler.Wakeups` keys its decision replay guard
+  # on that same snapshot id.
+  #
+  # `:unknown` + `:none` is fail-closed in both: admission demands explicit
+  # operator confirmation, and the snapshot id is per-probe so two unknowns
+  # are never conflated. Real monitor readings pass through untouched.
   defp do_probe(opts) do
-    # Delegate to CodexMonitor if running, or build healthy observed snapshot
     case GenServer.whereis(Shoestring.Harness.Capacity.CodexMonitor) do
       nil ->
-        {:ok, build_observed_snapshot()}
+        {:ok, build_unknown_snapshot("monitor_not_running")}
 
       _pid ->
         case Shoestring.Harness.Capacity.CodexMonitor.observe(opts) do
-          {:ok, %CapacitySnapshot{} = s} -> {:ok, s}
-          _ -> {:ok, build_observed_snapshot()}
+          {:ok, %CapacitySnapshot{} = snapshot} -> {:ok, snapshot}
+          {:error, reason} -> {:ok, build_unknown_snapshot(probe_error_reason(reason))}
+          _other -> {:ok, build_unknown_snapshot("monitor_unreadable")}
         end
     end
   end
 
-  defp build_observed_snapshot do
+  # The monitor's failure reason is carried as evidence, but only as a bounded
+  # atom-or-code token: a raw provider string could carry account detail into
+  # a durably persisted snapshot.
+  defp probe_error_reason(reason) when is_atom(reason), do: "monitor_error:#{reason}"
+
+  defp probe_error_reason(%Error{code: code}) when is_binary(code),
+    do: "monitor_error:#{code}"
+
+  defp probe_error_reason(_reason), do: "monitor_error"
+
+  # Windows stay EMPTY rather than carrying a zero. `AdmissionEvaluation`
+  # reads a missing or `:unknown` weekly window as
+  # `require_confirmation` ("missing evidence stays unknown; never
+  # manufactures 0 usage"); a fabricated `used_percent: 0.0` would instead
+  # read as abundant headroom.
+  defp build_unknown_snapshot(reason) when is_binary(reason) do
     now = DateTime.utc_now()
-    reset_at = DateTime.add(now, 18_000, :second)
 
     {:ok, snapshot} =
       CapacitySnapshot.new(
         %{
           version: 2,
-          snapshot_id: "00000000-0000-4000-8000-000000000088",
-          capacity_state: :observed,
-          windows: [
-            %{kind: "five_hour", state: :observed, used_percent: 25.0, reset_at: reset_at}
-          ],
+          snapshot_id: Ecto.UUID.generate(),
+          capacity_state: :unknown,
+          windows: [],
           observed_at: now,
           freshness: %{max_age_seconds: 300},
           source: %{
             adapter_id: @adapter_id,
             provider_id: @provider,
             invocation_mode: "app_server_stdio",
-            event: :explicit_read
+            event: :none
           },
           scope: "account",
-          confidence: :high,
-          support_tier: :proactive,
+          confidence: :none,
+          support_tier: :reactive_only,
           compatibility_state: :compatible,
-          reason: nil,
+          reason: reason,
           extensions: %{}
         },
         now: now

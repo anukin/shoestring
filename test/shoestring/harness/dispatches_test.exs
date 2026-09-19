@@ -706,6 +706,11 @@ defmodule Shoestring.Harness.DispatchesTest do
              Repo.get!(DispatchRecord, @dispatch_id)
   end
 
+  # Projection state is not delivery state. The Cobbler grant path persists
+  # the run and appends `run.requested` — which projects the run — before
+  # `Dispatcher` enqueues delivery, so the crash window between grant and
+  # enqueue always leaves `projection_sequence > 0`. Excluding those runs
+  # made exactly that window unreconcilable.
   test "restart reconciliation repairs a requested run whose projection already advanced", %{
     goal: goal,
     task: task
@@ -715,6 +720,30 @@ defmodule Shoestring.Harness.DispatchesTest do
     run
     |> RunRecord.projection_changeset(%{
       status: "requested",
+      projection_sequence: 4,
+      updated_at: Shoestring.Test.FixedClock.now()
+    })
+    |> Repo.update!()
+
+    assert {:ok, %{repaired_count: 1, failures: []}} = Dispatches.reconcile(opts())
+    run_id = run.id
+    assert %DispatchRecord{run_id: ^run_id} = Repo.get!(DispatchRecord, @dispatch_id)
+    assert [%Job{}] = all_enqueued(worker: DispatchWorker)
+  end
+
+  # Twin of the above: `status == "requested"`, not projection state, is what
+  # keeps reconciliation away from live execution. A run whose effect has
+  # begun has already left `requested`, so widening the projection filter
+  # must not make it deliverable a second time.
+  test "restart reconciliation leaves a run whose effect already began alone", %{
+    goal: goal,
+    task: task
+  } do
+    assert {:ok, run} = Runs.request(run_request(goal, task), identity(), opts())
+
+    run
+    |> RunRecord.projection_changeset(%{
+      status: "running",
       projection_sequence: 4,
       updated_at: Shoestring.Test.FixedClock.now()
     })

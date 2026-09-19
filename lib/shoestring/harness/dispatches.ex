@@ -158,14 +158,27 @@ defmodule Shoestring.Harness.Dispatches do
     {:ok, result}
   end
 
+  # A `requested` run with no dispatch row is an intent with no delivery,
+  # whatever its projection state. The former `projection_sequence == 0`
+  # filter silently excluded exactly the Cobbler grant path's crash window:
+  # `Leases.issue_for_claim/6` persists the run, the grant, and the
+  # `run.requested` event — which projects the run, moving its
+  # `projection_sequence` past zero — before `Dispatcher` enqueues delivery.
+  # A crash in between produced a granted, projected, permanently
+  # unreconcilable run.
+  #
+  # `run.status == "requested"` remains the guard that keeps this from
+  # touching live execution: any run whose effect has begun has already left
+  # `requested`, so this never re-delivers an active run. The projection
+  # concern the old filter stood for is preserved where it belongs —
+  # `Runs.reconcile_run/2` re-checks `projection_sequence == 0` itself before
+  # repairing a missing `run.requested` event.
   defp run_only_reconciliation_candidates(repo) do
     repo.all(
       from run in RunRecord,
         left_join: dispatch in DispatchRecord,
         on: dispatch.dispatch_id == run.dispatch_id,
-        where:
-          run.status == "requested" and run.projection_sequence == 0 and
-            is_nil(dispatch.dispatch_id),
+        where: run.status == "requested" and is_nil(dispatch.dispatch_id),
         order_by: [asc: run.inserted_at]
     )
   end
