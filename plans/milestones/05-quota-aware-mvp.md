@@ -294,8 +294,10 @@ Demonstrate the complete MVP with fakes, then one live path if capacity permits:
   deterministic eval-matrix rows pass, both adapter contract suites pass, and
   the scripted demo passes against fakes. The acceptance gate is **not**
   fully met: no real cross-provider handoff was evaluated, the semantic eval
-  is fixture-authored, and work package G's "audit all cards" clause was not
-  performed. The hard dependency (iteration 4 complete) is **not** satisfied.
+  is fixture-authored, and work package G carries two audited acceptance
+  blockers (checkpoint artifacts are never rendered; no next boundary is
+  rendered or computed). The hard dependency (iteration 4 complete) is
+  **not** satisfied.
 - **Completed on:** *Not completed.* Integration measured 2026-09-19.
 - **Policy version/default reserves:** policy version `1`
   (`Shoestring.Cobbler.AdmissionPolicy.version/0`); defaults
@@ -352,7 +354,13 @@ Demonstrate the complete MVP with fakes, then one live path if capacity permits:
   production `start_run` caller; "all stops checkpoint" is proven per
   exercised path, not by exhaustive enumeration; PR #72 was developed against
   a pre-#71 base and this integration is the first gate covering the
-  combination; UI was never visually inspected. Full list in the closeout
+  combination; UI was code-audited and test-verified but never visually
+  inspected at any viewport. Work package G was audited bullet by bullet
+  (closeout evidence §4.7, 65 goal-page tests executed, 0 failures): five of
+  seven bullets fully met, two acceptance blockers (G-BLOCK-1 checkpoint
+  artifacts never rendered; G-BLOCK-2 no next boundary rendered or computed)
+  and one nit (G-NIT-3 sleep/reset shown as absolute times, not a countdown),
+  each with a bounded proposed fix and none applied. Full list in the closeout
   evidence §6–§7.
 - **Instructions for iteration 6:** **Do not start iteration 6 on this
   result.** This milestone's own condition — iteration 4 complete and the eval
@@ -361,5 +369,6 @@ Demonstrate the complete MVP with fakes, then one live path if capacity permits:
   gate's real-cross-provider and real-semantic halves are unmet. To unlock
   iteration 6: close the iteration-4 live turn, evaluate at least one real
   cross-provider handoff under an authorized budget, obtain semantic evidence
-  that is not fixture-authored, and complete work package G's audit of all
-  cards.
+  that is not fixture-authored, and close package G's two audited blockers
+  (G-BLOCK-1 checkpoint artifacts, G-BLOCK-2 next boundary), each of which has
+  a bounded fix specified in the closeout evidence §4.7.

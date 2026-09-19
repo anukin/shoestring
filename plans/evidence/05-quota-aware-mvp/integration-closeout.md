@@ -175,7 +175,7 @@ against a paraphrase and not narrowed to whatever evidence happened to exist.
 | D | Full checkpoint content set; no invented semantic certainty | **Met** | `Checkpoint` struct carries version, ids, acceptance contract, repository state, evidence, decisions, unresolved issues, next action, provider session id, stop reason, artifact ids; `final-checkpoint-resume.md`, `terminal-checkpoint.md` |
 | E | Wake intent + absolute reset before job, boot repair, fresh recheck, durable dedupe, no model loop while sleeping | **Met** | `wakeups.ex`, `wakeup_record.ex`, `wakeup_reconciler.ex`, `wakeup_worker.ex`, `wakeup_observe.ex`; matrix row 5 |
 | F | Bounded projection, explicit sections, same-provider native resume with reconciliation, fresh cross-provider session with no raw transcript, `handoff.created` | **Met (Fake providers)** | `continuation.ex`, `projector.ex`, `handoffs.ex`; matrix rows 7 (no forbidden key) and 8 (same-session resume validates once; mismatch refuses before adapter call) |
-| G | Show all listed UI surfaces; **audit all cards, not only new ones** | **Partially met — the audit clause is unmet** | The changed cards are covered (`cobbler_goal_execution_test.exs`, `cobbler_presentation_test.exs`, matrix row 10; 175 web tests pass). **No audit of the pre-existing cards was performed in this integration, and no card was visually inspected at any viewport.** See §7. |
+| G | Show one goal's state, provider, worktree, capacity/reserves, lease, checkpoint, sleep, handoff and warnings | **Partially met — 2 acceptance blockers, 1 nit** | Audited item by item in **§4.7** (executed: 65 tests, 0 failures across all six goal-page suites). Five of seven bullets fully met. **G-BLOCK-1:** checkpoint artifacts are never rendered. **G-BLOCK-2:** no next boundary is rendered or computed. **G-NIT-3:** sleep/reset shown as absolute times, not a countdown. No card was visually inspected at any viewport (§7). |
 
 ### 4.3 Deterministic matrix
 
@@ -239,6 +239,119 @@ authorized") is not satisfied.
   semantic judge as sole authority, no cross-provider review or autonomous
   merge, and no terminal takeover.
 
+### 4.7 Work package G — full item-by-item audit
+
+Performed as a deliberate audit of **every** original G bullet, not inferred
+from the gate. Each row was traced to the rendering site and to the command
+path behind it. `file:line` references are REPO-INSPECTION; the test column is
+**executed** — all six goal-page suites were run for this audit:
+
+    mix test test/shoestring_web/live/cobbler_goal_live_test.exs \
+             test/shoestring_web/live/cobbler_goal_execution_test.exs \
+             test/shoestring_web/live/cobbler_goal_terminal_test.exs \
+             test/shoestring_web/live/cobbler_goal_recheck_test.exs \
+             test/shoestring_web/live/cobbler_goal_authorization_test.exs \
+             test/shoestring_web/live/cobbler_presentation_test.exs
+    → 65 tests, 0 failures
+
+Template paths below are `lib/shoestring_web/live/cobbler_goal_live.html.heex`
+(`.heex`), `lib/shoestring_web/live/cobbler_goal_live.ex` (`.ex`) and
+`lib/shoestring_web/live/cobbler_presentation.ex` (`presentation.ex`).
+
+| G bullet | Verdict | Rendering (REPO-INSPECTION) | Test evidence (executed) |
+| --- | --- | --- | --- |
+| Cobbler state, active/queued provider, worktree | **Met** | State badge `#cobbler-goal-status` `.heex:29`. Executing provider `#cobbler-active-provider` `.heex:278` ("Owns the live turn on run", `.heex:285`), held strictly separate from the admission candidate block "evaluated, not executed" `.heex:357` with `#cobbler-candidate-provider/-adapter/-tier/-compatibility` `.heex:363–386`. Worktree card `#cobbler-worktree` `.heex:407` with path/branch/base-commit/repo id `.heex:448–470` and an explicit `#cobbler-worktree-unknown` state `.heex:480`. | `cobbler_goal_execution_test.exs`, `cobbler_goal_live_test.exs`, `cobbler_goal_terminal_test.exs` |
+| Capacity evidence and reserves used for the last decision | **Met** | `#cobbler-decision-reserves` `.heex:110` and `#cobbler-decision-observation` `.heex:114`, beside result `.heex:90`, reason `.heex:104` and `defer_until` `.heex:119`. | `cobbler_goal_terminal_test.exs`, `cobbler_goal_live_test.exs`, and matrix row 10 (`matrix_test.exs`) |
+| Lease bounds, **next boundary**, renewal status | **Partially met — gap G-BLOCK-2** | Bounds rendered `.heex:165–183`: response budget, tool budget, response reserve, tool reserve, checkpoint cadence, deadline. Renewal status `#cobbler-lease-renewal` `.heex:155` over `renewal_presentation/1` `presentation.ex:508–546`. **No next boundary is rendered or computed** — see below. | `cobbler_goal_live_test.exs` (`#cobbler-lease`, `#cobbler-lease-renewal`) |
+| Checkpoint contents **and artifacts** | **Partially met — gap G-BLOCK-1** | Contents `#cobbler-checkpoint-contents` `.heex:215`, plus next action and stop reason `.heex:209–211`. **Artifacts are not rendered** — see below. | `cobbler_goal_live_test.exs` (`#cobbler-checkpoint-contents`) |
+| Sleep/reset **countdown** and manual recheck | **Partially met — nit G-NIT-3** | Sleep card `#cobbler-sleep-card` `.heex:551`; deferral target `.heex:557–566`; next wake intent `#cobbler-pending-wake` `.heex:577` with reason and status. Manual recheck form `#cobbler-recheck-form` `.heex:589` requires an operator identity `.heex:595` before `phx-submit="request_recheck"` — attributable, matching the milestone's "explicit, attributable, never automatic safety". **Times are absolute ISO-8601 only; no countdown.** | `cobbler_goal_recheck_test.exs` (`#cobbler-sleep-card`, `#cobbler-pending-wake`, `#cobbler-recheck-form`) |
+| Handoff source/receiver and explanation | **Met** | `#cobbler-handoff` `.heex:492`; source `.heex:503`, receiver `.heex:513`, reason `.heex:521`, next action `.heex:523`, new/prior run and checkpoint id `.heex:525–529`; `#cobbler-handoff-empty` `.heex:538`. | `cobbler_goal_terminal_test.exs:104–110` asserts the card, source (`codex`), receiver (`claude`), reason (`provider quota refused`) and the new run id |
+| Explicit degraded/manual mode warnings | **Met** | Banner `#cobbler-warnings` `.heex:54`, headed "Degraded state" `.heex:59`, fed by `build_warnings/3` `.ex:772–830`: stale observation, degraded capacity, projection failed, rebuild diverged. Separate `#cobbler-rebuild-warning` `.heex:71`. Manual mode surfaces as `decision_presentation(:require_confirmation)` `presentation.ex:285–293` — "Needs confirmation." / "Requires an attributable single-decision operator confirmation." / `status: "confirmation-required"`. | `cobbler_goal_live_test.exs` (`#cobbler-warnings`), `cobbler_presentation_test.exs` |
+
+#### G-BLOCK-1 — checkpoint artifacts are never rendered (acceptance blocker)
+
+**Finding (REPO-INSPECTION, traced to the terminal consequence).**
+`checkpoint_display/1` at `.ex:733–751` builds the rendered payload from
+exactly five keys — `acceptance_contract`, `repository_state`, `evidence`,
+`decisions`, `unresolved_issues`. The `Checkpoint` struct carries
+`artifact_ids` (`lib/shoestring/harness/checkpoint.ex`), and the record is
+read whole at `.ex:720–729`, but `artifact_ids` is dropped before rendering.
+A case-insensitive search for `artifact` across the goal template and its
+LiveView returns **zero** matches. The G bullet requires "checkpoint contents
+**and artifacts**"; artifacts are unreachable from this page.
+
+**Bounded proposed fix (not applied — this turn is docs-only).** Add
+`"artifact_ids" => checkpoint.artifact_ids` to the `contents` map at
+`.ex:734–740`, or, preferably, render a dedicated
+`<dd id="cobbler-checkpoint-artifacts">` in the checkpoint card beside next
+action and stop reason, falling back to the card's existing "not recorded"
+idiom when the list is empty. Add one assertion to
+`cobbler_goal_live_test.exs` alongside the existing
+`#cobbler-checkpoint-contents` case. Estimated ~10 lines of source plus one
+test. No domain or schema change: the data is already persisted and already
+loaded.
+
+#### G-BLOCK-2 — no next boundary is rendered (acceptance blocker)
+
+**Finding (REPO-INSPECTION).** The G bullet requires "lease bounds, **next
+boundary**, and renewal status". Bounds and renewal status are rendered;
+the next boundary is not, and no such concept exists to render: a search for
+`next_boundary`, `next safe boundary` and `boundary_at` across
+`lib/shoestring_web`, `lib/shoestring/cobbler/leases.ex` and
+`lib/shoestring/cobbler/lease_bounds.ex` returns **zero** matches.
+
+The inputs do exist. `LeaseBounds` (`lease_bounds.ex:51–67`) carries
+`checkpoint_cadence` together with the live counters `responses`, `tools`,
+`epoch` and the `due` flag. The template renders `checkpoint_cadence`
+(`.heex:176`) but **none of the consumed counters**, so an operator can see
+the cadence and the budget but cannot see progress toward the next boundary,
+which is precisely what the bullet asks for.
+
+**Bounded proposed fix (not applied).** Thread `responses`, `tools` and
+`epoch` from `LeaseBounds` into the lease assign and render a derived
+"Next boundary" row — e.g. `responses` of `checkpoint_cadence` consumed —
+in the existing `<dl>` at `.heex:165–183`, with the renewal badge continuing
+to carry the `due` state. Add one assertion to `cobbler_goal_live_test.exs`.
+Estimated ~15 lines of source plus one test. No new domain concept and no
+schema change are required; this is a projection of state the lease already
+holds.
+
+#### G-NIT-3 — sleep/reset shown as absolute times, not a countdown
+
+**Finding (REPO-INSPECTION).** `.heex:557–585` renders `defer_until` and
+`pending_wakeup.wake_at` as absolute ISO-8601 `<time>` values. The bullet says
+"sleep/reset **countdown**". No relative remaining-time is displayed.
+
+**Classified NIT, not a blocker.** The absolute reset time — the decision-
+relevant fact — is shown, and the surrounding copy is deliberately explicit
+that no wake time is invented and that only a durable wake intent wakes the
+goal, which serves the milestone's locked decision on sleep honesty. A
+countdown derived from a persisted `wake_at` would not violate that.
+**Bounded fix if wanted:** render a relative delta beside the absolute time.
+Left alone here because the task forbade broadening scope for cosmetic work.
+
+#### Two suspected defects traced and cleared (recorded so they are not re-raised)
+
+- **Duplicate DOM id `cobbler-active-provider`** at `.heex:278` and
+  `.heex:295`. **Not a defect** — the two sites are the `if`/`else` branches of
+  `@execution.executing_run` (`.heex:276`, `.heex:293`), so exactly one ever
+  renders.
+- **`checkpoint_display/1` discards `_omitted, _truncated?`** at `.ex:743–744`,
+  suggesting silent truncation. **Not a defect** — `RunPresentation.cap_text/2`
+  (`run_presentation.ex:248–258`) embeds the marker
+  `… [truncated, N bytes omitted]` into the returned string, so truncation is
+  visible on the page even though the boolean is dropped.
+
+#### Scope note
+
+The original G bullet list is scoped to "Show one goal's: …", so this audit
+covers the goal page and the presentation module behind it. The instruction to
+audit *all* items rather than only the cards PR #74 changed was followed: every
+one of the seven bullets above was traced independently, including the four
+whose rendering predates #74.
+
+---
+
 ## 5. Iteration-4 dependency truth
 
 Iteration 5 rests on iteration-4 harness verification, which is **partially
@@ -272,10 +385,12 @@ it, and no iteration-4 claim was re-labeled.
 3. **The one un-rerun iteration-4 Codex live turn** (§5) remains the known gap
    in the layer beneath this milestone, and keeps the contract's hard
    dependency unsatisfied.
-4. **UI is test-verified but never looked at** (package G). 175 web tests
-   pass, including the changed cards' assertions, but no human or machine has
-   seen the rendered result at any viewport in this integration, and the
-   pre-existing cards were not re-audited.
+4. **UI is code-audited and test-verified but never looked at** (package G).
+   All seven G bullets were traced to their rendering sites and the six
+   goal-page suites executed (65 tests, 0 failures), surfacing two acceptance
+   blockers (§4.7). But no human or machine has seen the rendered result at
+   any viewport, so pixel-level regressions, layout breakage and
+   mobile-viewport behavior remain unverified.
 5. **#72 was developed against a pre-#71 base.** Its file set is disjoint from
    #71's, and the full integrated gate is green, so no interaction defect is
    known — but #72's own gate never ran with #71's admission/recovery code
@@ -313,9 +428,22 @@ complete.
 2. **No real semantic evidence** (acceptance 8). The ablation shows receiver
    behavior and handoff tax across arms, but fixture-authored, which the
    contract forbids calling real semantic evaluation.
-3. **The package-G audit clause is unmet.** The changed cards are covered by
-   tests, but "audit all cards, not only new ones" was not performed: no
-   pre-existing card was re-audited in this integration.
+3. **Package G has two acceptance blockers.** The audit is now complete (§4.7,
+   every one of the seven original bullets traced, 65 tests executed, 0
+   failures). Five bullets are fully met. Two are not, and both are genuine
+   contract gaps rather than test gaps:
+   **G-BLOCK-1** — checkpoint **artifacts** are never rendered
+   (`cobbler_goal_live.ex:733–751` drops `artifact_ids`; "artifact" appears
+   nowhere in the goal page).
+   **G-BLOCK-2** — no **next boundary** is rendered or computed
+   (`next_boundary` has zero occurrences across the web layer and the lease
+   modules; the consumed counters `responses`/`tools` that would derive it are
+   not surfaced).
+   Bounded fixes for both are specified in §4.7, roughly 10 and 15 lines of
+   source plus one test each, with no schema or domain change. **They were not
+   applied: this turn was docs-only by instruction.**
+   **G-NIT-3** (sleep/reset shown as absolute times rather than a countdown) is
+   recorded as a nit, not a blocker.
 4. **UI visual validation was not performed at any viewport.** Neither browser
    path was reachable — no Chrome extension instance is connected
    (`list_connected_browsers` → `[]`) and the Omnigent embedded pane timed out
