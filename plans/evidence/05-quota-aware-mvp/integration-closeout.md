@@ -7,7 +7,7 @@ supports.
 **This document records an integration measurement, not an approval.** The
 branch it describes has not been independently reviewed at the time of
 writing, and the milestone is not declared complete here. See
-[Unmet and Limitations](#unmet-and-limitations).
+[Unmet items and limitations](#7-unmet-items-and-limitations).
 
 Claim labels follow the convention in this directory's `README.md`
 (`VERIFIED`, `REPO-INSPECTION`, `SCHEMA-ONLY`, `UNVERIFIED`).
@@ -132,44 +132,112 @@ orderings.
 
 ---
 
-## 4. Acceptance matrix
+## 4. Acceptance matrix against the milestone contract
 
-The milestone plan this matrix should be graded against does not exist in the
-repository (see [Unmet and Limitations](#unmet-and-limitations)). The rows
-below are therefore grounded in the capability areas the three integrated
-slices and the base actually claim, each tied to committed evidence and to a
-suite that ran at this HEAD. Support level is stated per row.
+Graded against `plans/milestones/05-quota-aware-mvp.md`, which is the
+**original milestone document, copied verbatim** — not a reconstruction.
 
-| # | Capability | Support at this HEAD | Evidence | Exercised by |
-| --- | --- | --- | --- | --- |
-| A1 | Reliable terminal checkpoints on the Elf terminal path | Supported, hermetic | `final-checkpoint-resume.md`, `terminal-checkpoint.md` | `terminal_checkpoint_test.exs`, `elf_terminal_checkpoint_test.exs` |
-| A2 | Same-provider continuation / resume-first start | Supported, **Fake-backed** | `final-checkpoint-resume.md`, `round-3-fixes.md` | `elf_checkpoint_resume_test.exs`, `elf_resume_start_test.exs` |
-| A3 | Durable `run.handoff` Cobbler command, authorize/identity first, one-active-Elf guard | Supported, hermetic | `handoff-production.md` | `handoff_production_test.exs` |
-| A4 | Handoff queue worker + boot reconciler consume the intent end to end | Supported, hermetic | `handoff-production.md` | `handoff_worker_test.exs` |
-| A5 | Decision-to-pointer crash-window recovery; durable `handoff.failed` settling | Supported, hermetic | `handoff-production.md` | `handoff_crash_window_test.exs` |
-| A6 | Removal of the unsupervised `Elves.resume_run/2` cross-provider bypass | Supported | `handoff-production.md` | `handoff_production_test.exs`, `safe_stop_session_lookup_test.exs` |
-| A7 | Admission decisions, operational reserve, wake/dispatch crash-window recovery | Supported (from base #71) | `final-admission-recovery.md`, `admission-policy.md` | `admission_recovery_test.exs` |
-| A8 | Goal-page worktree identity from the durable record | Supported | `goal-ui.md` | `cobbler_goal_execution_test.exs` |
-| A9 | Executing provider kept distinct from admission candidate and from provider-reported evidence; explicit per-state unknowns | Supported | `goal-ui.md` | `cobbler_presentation_test.exs`, `cobbler_goal_execution_test.exs` |
-| A10 | Adapter contract conformance (Codex app-server, Claude headless) | Supported, hermetic; `:resume` not declared by ClaudeHeadless | `handoff-production.md`, iteration-4 adapter evidence | both contract suites |
-| A11 | Deterministic eval matrix with genuine arms | Supported, **fixture-authored semantics** | `eval-matrix-results.md`, `ablation.md`, `round-4-fixes.md` | `matrix_test.exs`, `demo_test.exs`, `ablation_test.exs`, `semantic_fixture_test.exs` |
-| A12 | Cross-provider handoff against real providers | **LIVE-UNVERIFIED** | — | not exercised; `:live` tests excluded |
-| A13 | UI visual appearance, desktop and mobile | **UNVERIFIED** | — | no browser tooling reachable |
+The file was never lost. `plans/milestones/*` is gitignored (`.gitignore`
+lines 45–50, under the comment "Planning documents are intentionally local to
+this workspace"), allowlisting only `00a` and `02`, so this milestone was
+simply never tracked. The original was recovered read-only from the untracked
+working copy in the user's source checkout (11539 bytes, mtime 2026-08-29);
+**that checkout was not modified**. Everything from `## Mission` through
+`## Likely blockers and response` is byte-identical to it (verified: 10947
+characters, equal); the only additions to the tracked copy are a provenance
+note and the filled-in `## Completion record`, and one `.gitignore` allowlist
+line was added to make it trackable.
 
-### Supported vs fake-backed vs live-unverified
+Grading below is therefore against the **actual original requirements**, not
+against a paraphrase and not narrowed to whatever evidence happened to exist.
 
-- **Supported and hermetically exercised at this HEAD:** A1, A3, A4, A5, A6,
-  A7, A8, A9, A10.
-- **Fake-backed** — real control flow and real durable state, but the provider
-  is `Shoestring.Harness.Fake` and the semantic content is fixture-authored:
-  A2, A11. `semantic_fixture_test.exs` says so in its own moduledoc: the
-  semantic strings remain fixture-authored and cross-provider live behavior is
-  unverified. **Fake semantic continuation is not evidence of real provider
-  semantic continuation** and is not treated as such here.
-- **Live-unverified:** A12, and the live half of A2/A11. No provider process
-  was started and no quota was consumed by this task.
+### 4.1 Acceptance criteria (the nine)
 
----
+| # | Criterion | Verdict | Basis |
+| --- | --- | --- | --- |
+| 1 | Automatic dispatch never violates configured known reserves | **Met (hermetic)** | matrix row 1 — reserve refusal defers, gate refuses with zero jobs |
+| 2 | Unknown / stale / reactive follow documented policy | **Met (hermetic)** | matrix row 2 — missing windows stay unknown (never bare 0), require confirmation; `admission_policy.ex` |
+| 3 | **All** planned and failure stops produce a minimum structural checkpoint | **Met for every stop path exercised** | `terminal_checkpoint.ex`, `checkpoint_fallback.ex`; `terminal_checkpoint_test.exs`, `elf_terminal_checkpoint_test.exs`, matrix rows 3–4. *Universal quantification over all stop paths is not proven by enumeration* — see residual risk 7 |
+| 4 | Checkpoint fallback performs no inference | **Met (hermetic, strong)** | matrix row 4 — fallback checkpoint written with **zero adapter calls** |
+| 5 | Wakes and dispatches idempotent across restart | **Met (hermetic)** | matrix row 5 (one wake + fresh recheck after reboot), row 6 (one effect per `dispatch_id` under kill + reconcile + double-perform) |
+| 6 | Same-provider resume **and fake** cross-provider handoff both work | **Met (hermetic / Fake — which is what this criterion asks)** | `elf_checkpoint_resume_test.exs`, `elf_resume_start_test.exs`, `handoff_production_test.exs`, `semantic_fixture_test.exs` |
+| 7 | One **real** cross-provider handoff, **or** explicit live-unverified | **Met via the contract's escape clause only** | No live run was performed or authorized; recorded explicitly as live-unverified here and in §6. **The preferred branch — a real cross-provider handoff — is unmet.** |
+| 8 | Semantic eval shows receiver behavior and handoff tax, not only final pass | **Structurally met; unmet as real semantic evidence** | `ablation_test.exs` runs four arms on one fixture and records turns-to-progress and capacity consumed per arm as handoff-tax metrics. But receiver behavior is **fixture-authored**, and the milestone states outright: do not call fixture-authored receiver behavior real semantic evaluation. This document does not. |
+| 9 | Every decision explainable from persisted policy inputs | **Met (hermetic)** | `admission_decision.ex`; matrix row 10 — goal page displays the persisted reason, reserves and bounds |
+
+### 4.2 Work packages A–G
+
+| Pkg | Requirement | Verdict | Basis / caveat |
+| --- | --- | --- | --- |
+| A | Legal transitions, intent before effects, idempotent restart reconciliation, ≤1 active Elf, UI commands not direct writes | **Met, with two stated caveats** | `goal_lifecycle.ex`, `dispatcher.ex`, `dispatch_gate.ex`, `commands.ex`. **(i)** The one-active-Elf guard is check-then-act, not a lock; `handoffs.ex:86` states the residual window itself and names the backstop (`Dispatches.prepare_for_effect/2` claims the row; `Elves.start_elf/3` returns `{:ok, :already_running, pid}`). **(ii)** A deliberate, audited expert/test hatch (`run[expert_bypass]` + non-blank `confirmed_by`, bypass audit event first) is the one production `start_run` caller — logged, not silent. |
+| B | Durable decisions with full policy inputs; required admission conditions; no fabricated task percentage cost | **Met** | `admission_decision.ex`, `admission_evaluation.ex`, `admission_policy.ex`; matrix rows 1, 2, 10 |
+| C | Fixed grant before execution, bounds advance on events, renewal at boundary/deadline, refresh at safe boundary, durable reasons, reactive fallback, timer never interrupts mutation | **Met** | `leases.ex`, `lease_bounds.ex`, `lease_grant.ex`, `lease_renewal.ex`; matrix row 3 (renewal fires one reserve early; stop+boundary expires to `checkpoint_required`) |
+| D | Full checkpoint content set; no invented semantic certainty | **Met** | `Checkpoint` struct carries version, ids, acceptance contract, repository state, evidence, decisions, unresolved issues, next action, provider session id, stop reason, artifact ids; `final-checkpoint-resume.md`, `terminal-checkpoint.md` |
+| E | Wake intent + absolute reset before job, boot repair, fresh recheck, durable dedupe, no model loop while sleeping | **Met** | `wakeups.ex`, `wakeup_record.ex`, `wakeup_reconciler.ex`, `wakeup_worker.ex`, `wakeup_observe.ex`; matrix row 5 |
+| F | Bounded projection, explicit sections, same-provider native resume with reconciliation, fresh cross-provider session with no raw transcript, `handoff.created` | **Met (Fake providers)** | `continuation.ex`, `projector.ex`, `handoffs.ex`; matrix rows 7 (no forbidden key) and 8 (same-session resume validates once; mismatch refuses before adapter call) |
+| G | Show all listed UI surfaces; **audit all cards, not only new ones** | **Partially met — the audit clause is unmet** | The changed cards are covered (`cobbler_goal_execution_test.exs`, `cobbler_presentation_test.exs`, matrix row 10; 175 web tests pass). **No audit of the pre-existing cards was performed in this integration, and no card was visually inspected at any viewport.** See §7. |
+
+### 4.3 Deterministic matrix
+
+All ten rows exist and pass (`test/shoestring/harness/eval_matrix/matrix_test.exs`;
+15 tests, 0 failures, reproduced at a second seed). Row numbering maps 1:1 to
+the contract's list:
+
+| Contract row | Test | Status |
+| --- | --- | --- |
+| 1 reserve refusal, no auto dispatch | row 1 | Pass |
+| 2 missing/malformed window → unknown/manual/defer | row 2 | Pass |
+| 3 reserve-crossed lease checkpoints at next safe boundary | row 3 | Pass |
+| 4 sudden exhaustion → fallback, no inference | row 4 | Pass |
+| 5 sleeping restart → one wake + fresh recheck | row 5 | Pass |
+| 6 post-intent crash → no duplicate Elf | row 6 | Pass |
+| 7 handoff request → no raw transcript | row 7 | Pass |
+| 8 same-session reconciled continuation | row 8 | Pass |
+| 9 incompatible CLI/schema mid-goal pauses/degrades visibly | row 9 | Pass |
+| 10 UI explanation matches persisted inputs/reasons | row 10 | Pass |
+
+### 4.4 Semantic evaluation and ablation
+
+The contract's three input arms exist on one shared fixture, plus a retained
+fallback-template arm: `ablation_test.exs` runs `worktree_only`,
+`naive_summary`, `trajectory_projection` and `fallback_template`, differing
+only in the checkpoint `next_action` the receiver gets.
+`semantic_fixture_test.exs` runs the three-arm form through the real handoff
+path. Turns-to-progress and capacity consumed are recorded per arm as
+handoff-tax metrics.
+
+**Honest limit, stated as the contract demands:** the receiver's semantic
+behavior is fixture-authored and the scoring uses harness-synthesized
+deterministic normalization. `ablation_test.exs` says so in its own moduledoc,
+including that I7 ships no producer, so with the driver present these tests
+*document* wired loop behavior rather than *lock* a behavior change. **This is
+not real semantic evaluation and is not presented as one.**
+
+### 4.5 Demo
+
+The scripted quota-aware demo exists and passes
+(`demo_test.exs`: submit → admission/lease → partial work → exhaustion →
+checkpoint → restart while sleeping → reset wake / provider switch → continue
+without transcript and pass acceptance), against Fakes.
+
+**The "then one live path" half is not done.** No live budget was authorized
+for this task, so the contract's conditional ("if safely available and
+authorized") is not satisfied.
+
+### 4.6 Preflight and out of scope
+
+- **Preflight is not fully satisfied.** The contract's first preflight item is
+  iteration-4 completion, and iteration 4 carries an open UNVERIFIED item
+  (§5). Both adapter contract suites pass (14 tests, 0 failures, 1
+  capability-appropriate skip). The remaining preflight items — iteration-3
+  tiers/stale policy, the four Fake scenarios, policy-labelled reserves, the
+  attributable manual override, and the scripted fixture repository — are
+  present and exercised by the suites above.
+- **Out of scope respected** (REPO-INSPECTION of the 39-file integrated diff):
+  the integrated slices add no learned consumption or checkpoint-distance
+  estimation, no planner DAG or parallel product workers, no automated
+  semantic judge as sole authority, no cross-provider review or autonomous
+  merge, and no terminal takeover.
 
 ## 5. Iteration-4 dependency truth
 
@@ -193,18 +261,21 @@ it, and no iteration-4 claim was re-labeled.
 
 ## 6. Residual risks
 
-1. **Cross-provider handoff has never run against real providers** (A12). The
-   durable intent, worker, reconciler and crash-window recovery are proven
-   against `Fake`. Real provider session-resume semantics, real refusal shapes,
-   and real timing are unproven.
-2. **Semantic continuation quality is fixture-authored** (A2, A11). The eval
-   matrix proves the plumbing and the arm separation, not that a real provider
-   continues a task coherently across a handoff.
-3. **The one un-rerun iteration-4 Codex live turn** (section 5) remains the
-   only known gap in the layer beneath this milestone.
-4. **UI is test-verified but never looked at** (A13). 175 web tests pass,
-   including the changed cards' assertions, but no human or machine has seen
-   the rendered result at any viewport in this integration.
+1. **Cross-provider handoff has never run against real providers**
+   (acceptance 7). The durable intent, worker, reconciler and crash-window
+   recovery are proven against `Fake`. Real provider session-resume semantics,
+   real refusal shapes and real timing are unproven.
+2. **Semantic continuation quality is fixture-authored** (acceptance 8). The
+   eval matrix and ablation prove the plumbing, the arm separation and the
+   handoff-tax metrics — not that a real provider continues a task coherently
+   across a handoff.
+3. **The one un-rerun iteration-4 Codex live turn** (§5) remains the known gap
+   in the layer beneath this milestone, and keeps the contract's hard
+   dependency unsatisfied.
+4. **UI is test-verified but never looked at** (package G). 175 web tests
+   pass, including the changed cards' assertions, but no human or machine has
+   seen the rendered result at any viewport in this integration, and the
+   pre-existing cards were not re-audited.
 5. **#72 was developed against a pre-#71 base.** Its file set is disjoint from
    #71's, and the full integrated gate is green, so no interaction defect is
    known — but #72's own gate never ran with #71's admission/recovery code
@@ -213,31 +284,72 @@ it, and no iteration-4 claim was re-labeled.
 6. **`Oban.Repo` emits a typing warning** from the dependency during
    compilation. It does not fail `--warnings-as-errors` (dependency code) and
    is pre-existing, not introduced here.
+7. **"All stops produce a checkpoint" is proven per exercised path, not
+   universally** (acceptance 3). The terminal path, the fallback path and the
+   matrix stop rows are covered; nothing in the suite enumerates every
+   reachable stop path, so the universal form of the claim rests on code
+   structure rather than exhaustive test coverage.
+8. **The one-active-Elf guard is check-then-act, not a lock** (package A).
+   `handoffs.ex:86` documents the residual window and names its backstop: the
+   dispatch row claim in `Dispatches.prepare_for_effect/2` and the run-id
+   registration in `Elves.start_elf/3`, which returns
+   `{:ok, :already_running, pid}` instead of starting a second Elf. The
+   backstop is what prevents two Elves, not this module.
 
 ---
 
-## 7. Unmet and Limitations
+## 7. Unmet items and limitations
 
-- **The milestone plan does not exist.** `plans/milestones/05-quota-aware-mvp.md`
-  is absent from the working tree **and from every ref in the repository**
-  (VERIFIED: `git log --all -- plans/milestones/05-quota-aware-mvp.md` is
-  empty; `plans/milestones/` contains only `00a-capacity-feasibility.md` and
-  `02-harness-contracts-fake.md`). The requested audit of the full milestone
-  against integrated evidence therefore **could not be performed as specified**.
-  Section 4 substitutes an audit against the capability claims that committed
-  evidence actually makes. Grading against the real milestone document remains
-  **unmet** until that document exists.
-- **UI browser visual validation was not performed.** Neither browser path was
-  reachable: no Chrome extension instance is connected
-  (`list_connected_browsers` → `[]`), and the Omnigent embedded pane timed out
-  (desktop app not running). No `sys_terminal` tool exists in this session.
-  A dev server was deliberately **not** started: `config/config.exs` enables
-  `:capacity_monitors` for both providers outside test, and both `codex` and
-  `claude` are on `PATH` here, so a dev boot would risk exactly the live
-  provider probes this task forbids. Desktop and mobile inspection of the
-  changed cards is **unmet**, and is recorded as a limitation rather than
-  worked around.
-- **No live provider verification of any kind** was performed (A12, and the
-  live half of A2/A11).
+Stated as the contract requires: **hermetic completeness is not milestone
+acceptance completeness.** The hermetic suite is green; the milestone is not
+complete.
+
+### Unmet
+
+1. **No real cross-provider handoff** (acceptance 7, preferred branch; demo's
+   live half). Satisfied only through the contract's explicit
+   live-unverified escape clause. No provider process was started and no
+   quota was consumed — none was authorized.
+2. **No real semantic evidence** (acceptance 8). The ablation shows receiver
+   behavior and handoff tax across arms, but fixture-authored, which the
+   contract forbids calling real semantic evaluation.
+3. **The package-G audit clause is unmet.** The changed cards are covered by
+   tests, but "audit all cards, not only new ones" was not performed: no
+   pre-existing card was re-audited in this integration.
+4. **UI visual validation was not performed at any viewport.** Neither browser
+   path was reachable — no Chrome extension instance is connected
+   (`list_connected_browsers` → `[]`) and the Omnigent embedded pane timed out
+   (desktop app not running); no `sys_terminal` tool exists in this session. A
+   dev server was deliberately **not** started: `config/config.exs` enables
+   `:capacity_monitors` for both providers outside test, and both `codex` and
+   `claude` are on `PATH` here, so a dev boot would risk exactly the live
+   provider probes this task forbids. Recorded as a limitation rather than
+   worked around.
+5. **Preflight is not fully satisfied**, because iteration 4 is not complete
+   (§5).
+
+### Iteration 6 is not unlocked
+
+The contract states iteration 6 must not be unlocked unconditionally while
+iteration 4 is incomplete or the eval gates are unmet. **Both conditions are
+currently live:** iteration 4 carries an open UNVERIFIED live turn, and the
+eval gate's real-semantic and real-cross-provider halves are unmet. Iteration 6
+should not be started on the strength of this integration.
+
+### Status
+
+- **Hermetic implementation: complete and green** for work packages A–F, all
+  ten deterministic matrix rows, both adapter contract suites, and the scripted
+  demo — at the measured gate in §3.
+- **Milestone acceptance: incomplete**, on items 1–5 above.
+
+### Other limitations
+
+- The milestone record this document grades against is the **original**,
+  recovered verbatim from the untracked working copy in the user's source
+  checkout and now tracked here (see its provenance note). It is absent from
+  git history only because `plans/milestones/*` is deliberately gitignored;
+  tracking it required one `.gitignore` allowlist line, which is a deviation
+  from the "docs only" scope of the task that restored it.
 - Pre-existing nits in the included slices were left alone; no cosmetic
   cleanup was attempted.
