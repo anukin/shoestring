@@ -68,6 +68,13 @@ defmodule Shoestring.Cobbler.LeaseBounds do
 
   @type effect :: :renewal_due | :quota_refused
 
+  @type boundary :: %{
+          bound: :checkpoint_cadence | :response_budget | :tool_budget,
+          unit: :responses | :tools,
+          remaining: non_neg_integer(),
+          reached?: boolean()
+        }
+
   @type t :: %__MODULE__{
           grant_id: Ecto.UUID.t(),
           run_id: Ecto.UUID.t(),
@@ -143,6 +150,31 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   end
 
   @doc """
+  The nearest renewal boundary and how far away it is (a D7 projection).
+
+  Reports which of the three `due?/1` conditions is closest and how much
+  spend is left before it fires: the checkpoint cadence, and each budget
+  taken one reserve early. Ties resolve in that order. `remaining` is
+  clamped at zero and `reached?` is exactly `due?/1`, so a read model built
+  on this can never disagree with the latch that actually fires renewal.
+
+  This is a projection of state the lease already holds, not a new bound.
+  """
+  @spec next_boundary(t()) :: boundary()
+  def next_boundary(%__MODULE__{} = state) do
+    {bound, unit, remaining} =
+      [
+        {:checkpoint_cadence, :responses, state.checkpoint_cadence - state.responses},
+        {:response_budget, :responses,
+         state.response_budget - state.response_reserve - state.responses},
+        {:tool_budget, :tools, state.tool_budget - state.tool_reserve - state.tools}
+      ]
+      |> Enum.min_by(fn {_bound, _unit, remaining} -> remaining end)
+
+    %{bound: bound, unit: unit, remaining: max(remaining, 0), reached?: due?(state)}
+  end
+
+  @doc """
   Folds one normalized event into bound state, returning `{state, effects}`.
 
   Effects are `:renewal_due` (edge-triggered) and `:quota_refused`
@@ -183,9 +215,98 @@ defmodule Shoestring.Cobbler.LeaseBounds do
     end)
   end
 
+  @doc """
+  Folds durable `harness.event_recorded` payloads for one `run_id`.
+
+  The read-model twin of `drain/3`, for callers that rebuild spend from the
+  trajectory log instead of the live buffer. Each payload map is rehydrated
+  into the fields the D4 counting rules actually read — `kind`,
+  `source_event_id`, `extensions`, and the `:quota_refused` error category —
+  and folded through the same `advance/2`, so a projection can never count
+  differently from the live fold. Payloads that cannot be rehydrated are
+  skipped rather than miscounted.
+
+  `occurred_at` is carried through when the payload parses, and otherwise
+  takes a fixed sentinel: no counting rule reads it.
+  """
+  @spec drain_persisted(t(), Ecto.UUID.t(), Enumerable.t()) :: {t(), [effect()]}
+  def drain_persisted(%__MODULE__{} = state, run_id, payloads) do
+    drain(state, run_id, Enum.flat_map(payloads, &persisted_event(&1, run_id)))
+  end
+
   # ----------------------------------------------------------------------------
   # Private
   # ----------------------------------------------------------------------------
+
+  @sentinel_time ~U[1970-01-01 00:00:00.000000Z]
+
+  defp persisted_event(payload, run_id) when is_map(payload) do
+    with kind when not is_nil(kind) <- persisted_kind(payload),
+         source when is_binary(source) <- payload["source_event_id"],
+         extensions when is_map(extensions) <- payload["extensions"] || %{} do
+      [
+        %HarnessEvent{
+          version: 1,
+          run_id: payload["run_id"] || run_id,
+          source_event_id: source,
+          ordinal: payload["ordinal"] || 1,
+          occurred_at: persisted_time(payload),
+          kind: kind,
+          process_id: nil,
+          provider_session_id: nil,
+          artifact_id: nil,
+          capacity_snapshot_id: nil,
+          error: persisted_error(payload),
+          result: nil,
+          extensions: extensions
+        }
+      ]
+    else
+      _other -> []
+    end
+  end
+
+  defp persisted_event(_payload, _run_id), do: []
+
+  defp persisted_kind(payload) do
+    case payload["kind"] do
+      kind when is_binary(kind) ->
+        atom = String.to_existing_atom(kind)
+        if atom in HarnessEvent.kinds(), do: atom, else: nil
+
+      _other ->
+        nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp persisted_time(payload) do
+    case payload["occurred_at"] do
+      at when is_binary(at) ->
+        case DateTime.from_iso8601(at) do
+          {:ok, time, _offset} -> time
+          _error -> @sentinel_time
+        end
+
+      %DateTime{} = at ->
+        at
+
+      _other ->
+        @sentinel_time
+    end
+  end
+
+  defp persisted_error(%{"kind" => "error", "error" => %{"category" => "quota_refused"} = error}) do
+    Error.new(
+      :quota_refused,
+      error["code"] || "quota_refused",
+      error["message"] || "quota refused",
+      details: %{}
+    )
+  end
+
+  defp persisted_error(_payload), do: nil
 
   defp quota_refused?(%HarnessEvent{kind: :error, error: %Error{category: :quota_refused}}),
     do: true
