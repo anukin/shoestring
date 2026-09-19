@@ -218,13 +218,22 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   @doc """
   Folds durable `harness.event_recorded` payloads for one `run_id`.
 
-  The read-model twin of `drain/3`, for callers that rebuild spend from the
-  trajectory log instead of the live buffer. Each payload map is rehydrated
-  into the fields the D4 counting rules actually read — `kind`,
-  `source_event_id`, `extensions`, and the `:quota_refused` error category —
-  and folded through the same `advance/2`, so a projection can never count
-  differently from the live fold. Payloads that cannot be rehydrated are
-  skipped rather than miscounted.
+  For callers that rebuild spend from the trajectory log instead of the live
+  buffer. Each payload map is rehydrated into the fields the D4 counting
+  rules actually read — `kind`, `source_event_id`, `extensions`, and the
+  `:quota_refused` error category — and folded through the same `advance/2`
+  as `drain/3`, so the same durable events produce the same counts here as
+  they do live.
+
+  This shares `drain/3`'s **counting rules**; it is not the same code path as
+  the Elf's own crash-recovery rebuild (`Elf.rebuild_spend/2`), and callers
+  may scope the payloads differently — `Shoestring.Cobbler.Leases.consumed/2`
+  restricts them to the lease's current spend epoch, which `rebuild_spend/2`
+  has no need to do.
+
+  Rehydration matches the Elf's: a payload with no `extensions` map is
+  dropped rather than counted, so the projection and the live fold agree on
+  a malformed row instead of the page claiming spend the Elf never counted.
 
   `occurred_at` is carried through when the payload parses, and otherwise
   takes a fixed sentinel: no counting rule reads it.
@@ -243,7 +252,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   defp persisted_event(payload, run_id) when is_map(payload) do
     with kind when not is_nil(kind) <- persisted_kind(payload),
          source when is_binary(source) <- payload["source_event_id"],
-         extensions when is_map(extensions) <- payload["extensions"] || %{} do
+         extensions when is_map(extensions) <- payload["extensions"] do
       [
         %HarnessEvent{
           version: 1,

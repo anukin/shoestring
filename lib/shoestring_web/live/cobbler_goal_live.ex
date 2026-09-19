@@ -215,6 +215,10 @@ defmodule ShoestringWeb.CobblerGoalLive do
   end
 
   defp load_detail(socket, %Goal{} = goal) do
+    # One reference instant per render: every countdown on the page is
+    # measured from the same "now", so the rows cannot disagree with
+    # each other.
+    now = DateTime.utc_now()
     events = safe_replay(goal.id)
     decisions = admission_decisions(events)
     latest_decision = List.last(decisions)
@@ -224,6 +228,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
     state = CobblerPresentation.derive_goal_state(events)
     claim = safe_active_claim()
     lease = latest_lease(goal.id)
+    wakeup = pending_wakeup(goal.id)
     checkpoint = latest_checkpoint(goal.id)
     position = Repo.get_by(ProjectorPosition, goal_id: goal.id, projector: @projector)
     projection = projection_state(position)
@@ -242,7 +247,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:latest_decision, latest_decision)
     |> assign(:handoffs, handoffs)
     |> assign(:latest_handoff, List.last(handoffs))
-    |> assign(:lease, lease_display(lease))
+    |> assign(:lease, lease_display(lease, now))
     |> assign(:checkpoint, checkpoint_display(checkpoint))
     |> assign(:claim, claim)
     |> assign(:claim_mine?, is_map(claim) and claim.goal_id == goal.id)
@@ -254,7 +259,12 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:commands_empty?, commands == [])
     |> assign(:respond_forms, respond_forms(commands))
     |> assign(:recheck_form, to_form(%{"operator_identity" => ""}, as: :recheck))
-    |> assign(:pending_wakeup, pending_wakeup(goal.id))
+    |> assign(:pending_wakeup, wakeup)
+    |> assign(:wake_countdown, CobblerPresentation.countdown_presentation(wakeup_at(wakeup), now))
+    |> assign(
+      :defer_countdown,
+      CobblerPresentation.countdown_presentation(defer_until(latest_decision), now)
+    )
     |> stream(:commands, commands, reset: true, dom_id: &command_dom_id/1)
     |> stream(:events, sanitized_events, reset: true, dom_id: &event_dom_id/1)
   end
@@ -701,9 +711,32 @@ defmodule ShoestringWeb.CobblerGoalLive do
     _error -> nil
   end
 
-  defp lease_display(nil), do: nil
+  # Countdown text for the template, with the absolute instant kept in the
+  # `datetime`/`title` attributes. If an instant could not be projected the
+  # raw recorded value is still shown rather than nothing — the page never
+  # drops a time it holds, and never invents one it does not.
+  defp countdown_label(%{relative: relative}, _recorded), do: relative
+  defp countdown_label(_countdown, recorded), do: to_string(recorded)
 
-  defp lease_display(%ExecutionLeaseRecord{} = lease) do
+  defp countdown_datetime(%{absolute: absolute}, _recorded), do: absolute
+  defp countdown_datetime(_countdown, recorded), do: to_string(recorded)
+
+  defp deadline_label(%{elapsed?: true, relative: relative}, _recorded), do: "Passed #{relative}"
+  defp deadline_label(%{relative: relative}, _recorded), do: "Expires #{relative}"
+  defp deadline_label(_countdown, recorded), do: to_string(recorded)
+
+  defp wakeup_at(%WakeupRecord{wake_at: wake_at}), do: wake_at
+  defp wakeup_at(_wakeup), do: nil
+
+  # The display map carries the raw payload string; the parsed instant lives
+  # on the `AdmissionDecision` struct beside it, so the countdown is derived
+  # from a real `DateTime` and never from re-parsing display text.
+  defp defer_until(%{decision: %AdmissionDecision{defer_until: %DateTime{} = at}}), do: at
+  defp defer_until(_decision), do: nil
+
+  defp lease_display(nil, _now), do: nil
+
+  defp lease_display(%ExecutionLeaseRecord{} = lease, now) do
     consumed = Leases.consumed(lease, repo: Repo)
 
     %{
@@ -718,7 +751,8 @@ defmodule ShoestringWeb.CobblerGoalLive do
       deadline: lease.deadline,
       checkpoint_cadence: lease.checkpoint_cadence,
       consumed: consumed,
-      next_boundary_text: next_boundary_text(consumed)
+      next_boundary_text: next_boundary_text(consumed),
+      deadline_countdown: CobblerPresentation.countdown_presentation(lease.deadline, now)
     }
   end
 

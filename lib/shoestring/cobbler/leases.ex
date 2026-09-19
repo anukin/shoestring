@@ -86,11 +86,17 @@ defmodule Shoestring.Cobbler.Leases do
 
   A read model, not new state: the durable `harness.event_recorded` payloads
   for the lease's run are folded through the same pure
-  `Shoestring.Cobbler.LeaseBounds` counting rules the Elf runs live
-  (`LeaseBounds.drain_persisted/3`), so the projection and the live fold can
-  never disagree. The epoch is the count of durable `lease.renewed` events
-  for the grant, and only events after the most recent renewal are counted —
-  matching `LeaseBounds.new_epoch/1`, which resets the counters on renewal.
+  `Shoestring.Cobbler.LeaseBounds` counting rules the Elf applies live
+  (`LeaseBounds.drain_persisted/3`, which shares `advance/2` with `drain/3`),
+  so the same durable events yield the same counts.
+
+  This shares those rules but is **not** the Elf's `rebuild_spend/2` path.
+  It adds epoch scoping the Elf does not need: the epoch is the count of
+  durable `lease.renewed` events for the grant, and only events after the
+  most recent renewal are counted, matching `LeaseBounds.new_epoch/1`, which
+  resets the counters on renewal. `rebuild_spend/2` needs no such filter
+  because `ensure_lease_bounds/1` memoizes, so it only ever runs once, before
+  any renewal; after that the Elf re-arms its counters in memory.
 
   Returns `nil` when the spend cannot be rebuilt (no run, or the log is
   unreadable); callers render that as "not recorded" rather than as zero.

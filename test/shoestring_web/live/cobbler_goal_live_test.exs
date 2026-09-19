@@ -203,6 +203,80 @@ defmodule ShoestringWeb.CobblerGoalLiveTest do
     assert has_element?(view, "#cobbler-lease-next-boundary", "5 responses away")
   end
 
+  test "a tool event with no extensions map is not counted, matching the Elf", %{conn: conn} do
+    goal = create_goal!(Repo, "Lease rehydration goal")
+    _admission = append_admission_event!(goal.id)
+    lease = insert_lease(goal, status: "active", renewal_state: "none")
+
+    # Both directions. A well-formed tool event counts ...
+    append_tool_event!(goal, lease.run_id, "evt-tool-ok")
+    # ... and one whose payload carries no extensions map is dropped, exactly
+    # as `Elf`'s rehydration drops it, so the page cannot claim spend the Elf
+    # never counted.
+    append_tool_event!(goal, lease.run_id, "evt-tool-bare", extensions: :absent)
+
+    {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+
+    assert has_element?(view, "#cobbler-lease-tools-consumed", "1")
+    refute has_element?(view, "#cobbler-lease-tools-consumed", "2")
+  end
+
+  test "lease deadline renders a countdown and keeps the exact instant", %{conn: conn} do
+    goal = create_goal!(Repo, "Lease deadline goal")
+    _admission = append_admission_event!(goal.id)
+
+    deadline = DateTime.add(DateTime.utc_now(), 7200, :second)
+    _lease = insert_lease(goal, status: "active", renewal_state: "none", deadline: deadline)
+
+    {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+
+    assert has_element?(view, "#cobbler-lease-deadline", "Expires in")
+
+    # The exact instant stays reachable rather than being replaced.
+    assert has_element?(
+             view,
+             "#cobbler-lease-deadline time[datetime='#{DateTime.to_iso8601(deadline)}']"
+           )
+  end
+
+  test "a passed lease deadline is worded in the past, not as a countdown", %{conn: conn} do
+    goal = create_goal!(Repo, "Lease passed deadline goal")
+    _admission = append_admission_event!(goal.id)
+
+    deadline = DateTime.add(DateTime.utc_now(), -7200, :second)
+    _lease = insert_lease(goal, status: "expired", renewal_state: "expired", deadline: deadline)
+
+    {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+
+    assert has_element?(view, "#cobbler-lease-deadline", "Passed")
+    assert has_element?(view, "#cobbler-lease-deadline", "ago")
+    refute has_element?(view, "#cobbler-lease-deadline", "Expires in")
+  end
+
+  test "a deferral target renders a countdown beside its exact instant", %{conn: conn} do
+    goal = create_goal!(Repo, "Deferral countdown goal")
+
+    defer_until = DateTime.add(DateTime.utc_now(), 5400, :second)
+
+    payload =
+      admission_payload()
+      |> Map.put("result", "defer_until")
+      |> Map.put("reason_code", "reserve_breach")
+      |> Map.put("explanation", "Deferred until quota reset")
+      |> Map.put("defer_until", DateTime.to_iso8601(defer_until))
+
+    append_admission_event!(goal.id, payload)
+
+    {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+
+    assert has_element?(view, "#cobbler-defer-countdown", "in 1 hour")
+
+    assert has_element?(
+             view,
+             "#cobbler-defer-countdown[datetime='#{DateTime.to_iso8601(defer_until)}']"
+           )
+  end
+
   test "checkpoint card renders referenced artifacts (G-BLOCK-1)", %{conn: conn} do
     goal = create_goal!(Repo, "Checkpoint artifact goal")
     _admission = append_admission_event!(goal.id)
@@ -595,7 +669,7 @@ defmodule ShoestringWeb.CobblerGoalLiveTest do
       tool_reserve: 5,
       response_budget: 10,
       tool_budget: 25,
-      deadline: DateTime.add(@now, 3600, :second),
+      deadline: Keyword.get(opts, :deadline, DateTime.add(@now, 3600, :second)),
       checkpoint_cadence: 5,
       renewal_state: Keyword.get(opts, :renewal_state, "none"),
       status: Keyword.get(opts, :status, "active"),
@@ -626,6 +700,41 @@ defmodule ShoestringWeb.CobblerGoalLiveTest do
             "kind" => "output",
             "extensions" => %{"shoestring.fake:text" => "assistant message"}
           }
+        },
+        trusted: [run_id: run_id]
+      )
+
+    event
+  end
+
+  # A durable tool event. `extensions: :absent` omits the key entirely, which
+  # the registry allows (extensions is optional for this type) and which the
+  # Elf's own rehydration treats as undecodable.
+  defp append_tool_event!(%Goal{} = goal, run_id, source_event_id, opts \\ []) do
+    base = %{
+      "run_id" => run_id,
+      "source_event_id" => source_event_id,
+      "ordinal" => 1,
+      "occurred_at" => DateTime.to_iso8601(@now),
+      "kind" => "tool"
+    }
+
+    payload =
+      case Keyword.get(opts, :extensions, %{"shoestring.fake:tool_name" => "grep"}) do
+        :absent -> base
+        extensions -> Map.put(base, "extensions", extensions)
+      end
+
+    {:ok, event} =
+      Trajectory.append(
+        goal.id,
+        %{
+          "type" => "harness.event_recorded",
+          "schema_version" => 1,
+          "actor" => "elf",
+          "occurred_at" => @now,
+          "idempotency_key" => source_event_id,
+          "payload" => payload
         },
         trusted: [run_id: run_id]
       )

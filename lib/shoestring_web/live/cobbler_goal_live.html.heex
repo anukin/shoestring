@@ -208,9 +208,12 @@
               {@lease.next_boundary_text}
             </dd>
             <dt class="text-zinc-500">Deadline</dt>
-            <dd class="font-medium text-zinc-900">
-              <time datetime={DateTime.to_iso8601(@lease.deadline)}>
-                {DateTime.to_iso8601(@lease.deadline)}
+            <dd id="cobbler-lease-deadline" class="font-medium text-zinc-900">
+              <time
+                datetime={countdown_datetime(@lease.deadline_countdown, @lease.deadline)}
+                title={countdown_datetime(@lease.deadline_countdown, @lease.deadline)}
+              >
+                {deadline_label(@lease.deadline_countdown, @lease.deadline)}
               </time>
             </dd>
           </dl>
@@ -608,10 +611,12 @@
         </h3>
         <%= if @lifecycle_state == :sleeping and @latest_decision && @latest_decision.defer_until do %>
           <p class="text-sm text-zinc-700">
-            Deferred by admission decision until <time datetime={
-              to_string(@latest_decision.defer_until)
-            }>
-              {to_string(@latest_decision.defer_until)}
+            Deferred by admission decision. Deferral target <time
+              id="cobbler-defer-countdown"
+              datetime={countdown_datetime(@defer_countdown, @latest_decision.defer_until)}
+              title={countdown_datetime(@defer_countdown, @latest_decision.defer_until)}
+            >
+              {countdown_label(@defer_countdown, @latest_decision.defer_until)}
             </time>.
             Waking happens only through a durable wake intent: an Oban wakeup-queue
             delivery for this goal's cobbler_wakeups row, which re-observes capacity
@@ -628,8 +633,12 @@
         <%= if @pending_wakeup do %>
           <p id="cobbler-pending-wake" class="text-sm text-zinc-700">
             Next wake intent:
-            <time datetime={DateTime.to_iso8601(@pending_wakeup.wake_at)}>
-              {DateTime.to_iso8601(@pending_wakeup.wake_at)}
+            <time
+              id="cobbler-wake-countdown"
+              datetime={countdown_datetime(@wake_countdown, @pending_wakeup.wake_at)}
+              title={countdown_datetime(@wake_countdown, @pending_wakeup.wake_at)}
+            >
+              {countdown_label(@wake_countdown, @pending_wakeup.wake_at)}
             </time>
             <span class="text-zinc-500">
               ({@pending_wakeup.reason}, {@pending_wakeup.status})
