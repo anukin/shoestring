@@ -44,12 +44,16 @@ defmodule Shoestring.Cobbler.Wakeups do
     (via the deterministic `CheckpointFallback` template and the
     `Checkpoints` writer) + resleep with the evaluation's new `wake_at`
     (the run stays suspended).
-  - `:require_confirmation` → stay asleep. The P5 `GoalLifecycle` clauses
-    keep `sleeping + require_confirmation` a legal wait (instead of
+  - `:require_confirmation` → stay asleep, and neutralize any still-pending
+    continuation dispatch this wakeup enqueued on an earlier, since
+    superseded attempt (same flip as the defer and reject branches; an
+    already-started effect is left untouched). The P5 `GoalLifecycle`
+    clauses keep `sleeping + require_confirmation` a legal wait (instead of
     collapsing derivation to `:unknown`), so the existing operator surface
     (`Commands.pending/2` plus the recorded decision) keeps rendering the
-    sleeping goal with its confirmation CTA. The next wake comes from an
-    explicit operator `request_recheck/2`.
+    sleeping goal with its confirmation CTA. Nothing is admitted, renewed,
+    or resumed: the next wake comes from an explicit operator
+    `request_recheck/2`.
   - `:reject` → `handing_off` + cancel intents (sibling pending wakeups are
     cancelled; a suspended run is moved to `cancelled`).
 
@@ -700,14 +704,100 @@ defmodule Shoestring.Cobbler.Wakeups do
   # Durable re-evaluation record: every wake that reaches evaluation persists
   # its decision as `admission.decided` v1, so re-observation is auditable
   # ("every decision explainable from persisted inputs") and downstream
-  # grants chain to a persisted event, never a transient struct. Idempotent
-  # per (wakeup, snapshot): a retry observing the SAME snapshot replays the
-  # first decision, but a retry with FRESH observations mints a new decision
-  # — fresh safety evidence always wins over a stale admission, so execution
-  # that failed after an admit can never be revived by replaying that admit
-  # past a newer refusal. Consumers MUST use the returned durable decision,
-  # not the ephemeral evaluation.
-  defp record_decision(_repo, goal, run, evaluation, wakeup, snapshot, now, opts) do
+  # grants chain to a persisted event, never a transient struct.
+  #
+  # Replay guard. A previously recorded decision for the same
+  # (wakeup, snapshot) is replayed ONLY when it both
+  #
+  #   * **agrees** with the fresh evaluation's `result`, and
+  #   * is still **fresh** — evaluated within the snapshot's own declared
+  #     `max_age_seconds` window as measured against this perform's `now`.
+  #
+  # Otherwise a new decision is appended under a decision-id-suffixed key.
+  # Keying on the snapshot id alone is not enough: an adapter may reuse a
+  # constant snapshot id, and the identical observation goes stale as `now`
+  # advances, so an admit recorded at T0 must never be revived at T0+1h
+  # when the fresh evaluation of that same reading now demands
+  # confirmation. Fresh safety evidence always wins over a stale admission.
+  #
+  # The converse still holds: an immediate crash-retry that re-observes the
+  # same snapshot inside the window and reaches the same verdict replays the
+  # first decision rather than minting a second, so retries converge instead
+  # of fanning out decisions (and, downstream, runs).
+  #
+  # Consumers MUST use the returned durable decision, not the ephemeral
+  # evaluation.
+  defp record_decision(repo, goal, run, evaluation, wakeup, snapshot, now, opts) do
+    prefix = "wakeup-decision:#{wakeup.id}:#{snapshot.snapshot_id}:"
+
+    case reusable_decision(repo, goal.id, prefix, evaluation, snapshot, now) do
+      {:ok, event} ->
+        case AdmissionDecision.from_payload(event.payload) do
+          {:ok, decision} -> {:ok, event, decision}
+          {:error, reason} -> {:error, {:wakeup_decision_failed, reason}}
+        end
+
+      :fresh ->
+        append_decision(goal, run, evaluation, prefix, now, opts)
+    end
+  end
+
+  # Candidate lookup is scoped by the (wakeup, snapshot) key prefix; the
+  # appended key carries the decision id as its final segment so every
+  # append is unique and the replay decision is made here, explicitly,
+  # rather than by the writer's idempotency collapse. The observation
+  # snapshot id is re-checked from the payload so a key collision can never
+  # substitute another observation's decision.
+  defp reusable_decision(repo, goal_id, prefix, evaluation, snapshot, now) do
+    pattern = prefix <> "%"
+
+    repo.all(
+      from event in TrajectoryEvent,
+        where:
+          event.goal_id == ^goal_id and event.type == "admission.decided" and
+            like(event.idempotency_key, ^pattern),
+        order_by: [asc: event.sequence]
+    )
+    |> Enum.find_value(:fresh, fn %TrajectoryEvent{payload: payload} = event ->
+      with true <- get_in(payload, ["observation", "snapshot_id"]) == snapshot.snapshot_id,
+           {:ok, decision} <- AdmissionDecision.from_payload(payload),
+           true <- decision.result == evaluation.result,
+           true <- decision_fresh?(decision, snapshot, now) do
+        {:ok, event}
+      else
+        _mismatch -> nil
+      end
+    end)
+  end
+
+  # A recorded decision stays replayable only while the observation it rests
+  # on is still inside its own declared freshness window. A snapshot that
+  # declares no usable window is never replayable — unknown freshness is
+  # not evidence of freshness.
+  defp decision_fresh?(
+         %AdmissionDecision{evaluated_at: %DateTime{} = evaluated_at},
+         snapshot,
+         now
+       ) do
+    case freshness_window(snapshot) do
+      max_age when is_integer(max_age) -> DateTime.diff(now, evaluated_at, :second) <= max_age
+      nil -> false
+    end
+  end
+
+  defp decision_fresh?(_decision, _snapshot, _now), do: false
+
+  defp freshness_window(%{freshness: %{max_age_seconds: max_age}})
+       when is_integer(max_age) and max_age > 0,
+       do: max_age
+
+  defp freshness_window(%{freshness: %{"max_age_seconds" => max_age}})
+       when is_integer(max_age) and max_age > 0,
+       do: max_age
+
+  defp freshness_window(_snapshot), do: nil
+
+  defp append_decision(goal, run, evaluation, prefix, now, opts) do
     payload =
       evaluation
       |> AdmissionDecision.to_payload()
@@ -718,7 +808,7 @@ defmodule Shoestring.Cobbler.Wakeups do
       "schema_version" => 1,
       "actor" => Keyword.get(opts, :actor, @actor),
       "occurred_at" => now,
-      "idempotency_key" => "wakeup-decision:#{wakeup.id}:#{snapshot.snapshot_id}",
+      "idempotency_key" => prefix <> to_string(Map.get(payload, "decision_id")),
       "payload" => payload
     }
 
@@ -864,7 +954,7 @@ defmodule Shoestring.Cobbler.Wakeups do
         )
 
       :require_confirmation ->
-        confirm_branch(repo, wakeup, goal, decision_event, decision, now)
+        confirm_branch(repo, wakeup, goal, decision_event, decision, now, opts)
 
       :reject ->
         reject_branch(repo, wakeup, goal, run, decision_event, decision, now, opts)
@@ -1188,10 +1278,115 @@ defmodule Shoestring.Cobbler.Wakeups do
       |> Keyword.put(:run_id, new_run_id)
 
     case Shoestring.Harness.Runs.request(request, identity, run_opts) do
-      {:ok, run} -> {:ok, run}
-      {:error, reason} -> {:error, {:wakeup_run_failed, reason}}
+      {:ok, run} ->
+        {:ok, run}
+
+      # Retry convergence across the enqueue crash window. The continuation
+      # `decision_refs` are projected from the goal's `admission.decided`
+      # history, so a retry that legitimately mints a FRESH decision (see
+      # `record_decision`) builds a request whose continuation no longer
+      # byte-matches the run persisted by the first attempt, and
+      # `Runs.request/3` reports `dispatch_id_conflict`. Nothing is left to
+      # create: the dispatch id IS this wakeup's id, so the row bound to it
+      # is unambiguously this wake's own prior attempt. Recover it instead of
+      # failing — failing here would strand the wake and, on the next
+      # operator retry, strand it again.
+      {:error, %Shoestring.Harness.Error{code: "dispatch_id_conflict"}} ->
+        recover_wake_run(repo, request, opts)
+
+      {:error, reason} ->
+        {:error, {:wakeup_run_failed, reason}}
     end
   end
+
+  # At-most-one is preserved by construction: recovery NEVER creates a run,
+  # it only re-adopts the single row already bound to this wakeup's dispatch
+  # id. It is deliberately narrow — everything except the continuation must
+  # already match, and the row must still be `requested`, i.e. no harness
+  # effect has begun. A row that has moved past `requested` is live execution,
+  # not an absent one, and is adopted as-is without rewriting its intent.
+  # Any other mismatch is a genuine conflict and still errors.
+  defp recover_wake_run(repo, request, opts) do
+    case repo.get_by(RunRecord, dispatch_id: request.dispatch_id, goal_id: request.goal_id) do
+      %RunRecord{} = run ->
+        case wake_run_recoverable(run, request) do
+          :ok -> refresh_continuation(repo, run, request, opts)
+          {:error, reason} -> {:error, reason}
+        end
+
+      nil ->
+        {:error, {:wakeup_run_failed, :wakeup_run_missing}}
+    end
+  end
+
+  # Identity fields compared here mirror `Runs.request_identity_matches?/2`
+  # minus `:continuation` (the one field a fresh decision legitimately
+  # changes) and minus `:provider_id`, which `Runs` already matched before it
+  # raised the conflict. Capabilities are compared in their PERSISTED shape
+  # (`RunRecord.intent_changeset/4` wraps the request list as
+  # `%{items: [...]}`), so the comparison sees what the row actually holds.
+  defp wake_run_recoverable(%RunRecord{} = run, request) do
+    mismatched =
+      Enum.reject(
+        [
+          {:task_id, run.task_id, request.task_id},
+          {:workspace_ref, run.workspace_ref, request.workspace_ref},
+          {:request_version, run.request_version, request.version},
+          {:prompt, run.prompt, request.prompt},
+          {:policy, stringify(run.policy), stringify(request.policy)},
+          {:requested_capabilities, stringify(run.requested_capabilities),
+           stringify(%{items: request.requested_capabilities})},
+          {:extensions, stringify(run.extensions || %{}), stringify(request.extensions || %{})}
+        ],
+        fn {_field, persisted, incoming} -> persisted == incoming end
+      )
+
+    case mismatched do
+      [] ->
+        :ok
+
+      [{field, _persisted, _incoming} | _rest] ->
+        {:error, {:wakeup_run_failed, {:conflict, field}}}
+    end
+  end
+
+  # Refreshing is not cosmetic: `Continuation.validate_resume/3` refuses a
+  # resume whose `decision_refs` are superseded (`:decision_superseded`), so
+  # re-adopting the first attempt's stale refs would hand the Elf a run it
+  # must refuse. Only a still-`requested` run is refreshed — an intent whose
+  # effect has begun is never rewritten underneath it.
+  defp refresh_continuation(repo, %RunRecord{status: "requested"} = run, request, _opts) do
+    continuation = stringify(request.continuation || %{})
+
+    if stringify(run.continuation || %{}) == continuation do
+      {:ok, run}
+    else
+      {count, _} =
+        repo.update_all(
+          from(r in RunRecord, where: r.id == ^run.id and r.status == "requested"),
+          set: [continuation: continuation]
+        )
+
+      case count do
+        1 -> {:ok, repo.get!(RunRecord, run.id)}
+        _other -> {:error, {:wakeup_run_failed, :wakeup_run_not_refreshable}}
+      end
+    end
+  end
+
+  defp refresh_continuation(_repo, %RunRecord{} = run, _request, _opts), do: {:ok, run}
+
+  # String-keyed canonical form, matching how the run row round-trips
+  # through the database, so an atom-keyed request map and its persisted
+  # twin compare equal.
+  defp stringify(value) when is_map(value) and not is_struct(value) do
+    Map.new(value, fn {key, inner} -> {to_string(key), stringify(inner)} end)
+  end
+
+  defp stringify(value) when is_list(value), do: Enum.map(value, &stringify/1)
+  defp stringify(value) when is_boolean(value) or is_nil(value), do: value
+  defp stringify(value) when is_atom(value), do: Atom.to_string(value)
+  defp stringify(value), do: value
 
   # The new continuation run gets its own lease from the fresh admit
   # decision, chained to the fresh snapshot: a resumed run never executes
@@ -1418,9 +1613,22 @@ defmodule Shoestring.Cobbler.Wakeups do
     end
   end
 
-  defp confirm_branch(repo, wakeup, goal, _decision_event, evaluation, now) do
+  # Confirmation is a refusal to admit automatically, so it must neutralize a
+  # superseded continuation exactly as `defer_branch` and `reject_branch` do.
+  # Crash window this closes: an earlier attempt admitted and enqueued the
+  # continuation dispatch, then died before the `woken` mark; the retry
+  # re-observes and now demands confirmation. Without this flip the retry
+  # leaves a `requested` dispatch behind that the DispatchWorker would still
+  # execute — unadmitted work running while the operator surface says the
+  # goal is waiting for approval. Explicit approval is still required: the
+  # goal stays `sleeping` with `confirmation_required`, and nothing here
+  # grants, renews, or resumes anything. Already-executed dispatches are left
+  # untouched (see `neutralize_pending_continuation`).
+  defp confirm_branch(repo, wakeup, goal, _decision_event, evaluation, now, opts) do
     with {:ok, :sleeping} <-
            GoalLifecycle.transition(:sleeping, {:admission_decision, :require_confirmation}),
+         {:ok, _neutralized} <-
+           neutralize_pending_continuation(repo, wakeup, "effect_deferred", now, opts),
          {:ok, wakeup} <- mark_status(repo, wakeup, "woken", now) do
       {:ok,
        %{

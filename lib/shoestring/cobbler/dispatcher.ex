@@ -234,9 +234,15 @@ defmodule Shoestring.Cobbler.Dispatcher do
     end
   end
 
-  # Enqueues durable delivery for a freshly granted run. Replays carry
-  # `run: nil` (zero new rows by contract) and pass through with
-  # `dispatch: nil, job: nil` rather than inventing delivery.
+  # Enqueues durable delivery for a freshly granted run. Replays normally
+  # carry `run: nil` (zero new rows by contract) and pass through with
+  # `dispatch: nil, job: nil` rather than inventing delivery. The one
+  # exception is restart recovery: `Leases.issue_for_claim/6` returns the run
+  # when a prior attempt granted and persisted it but crashed before this
+  # enqueue, so the still-undelivered grant converges here through the same
+  # idempotent pipeline instead of staying stranded (see
+  # `Leases.undelivered_granted_run/3`). A grant that already has a dispatch
+  # row still arrives as `nil`.
   defp dispatch_granted(%{run: nil} = leased, _opts) do
     {:ok, Map.merge(leased, %{dispatch: nil, job: nil})}
   end

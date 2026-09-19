@@ -434,7 +434,7 @@ defmodule Shoestring.Cobbler.Leases do
            outcome: outcome,
            disposition: :leased,
            lease_outcome: :replayed,
-           run: nil,
+           run: undelivered_granted_run(repo, goal_id, lease),
            lease: lease,
            grant_id: grant_id,
            events: [],
@@ -443,6 +443,34 @@ defmodule Shoestring.Cobbler.Leases do
          }}
     end
   end
+
+  # Restart recovery for the grant-then-enqueue crash window.
+  #
+  # `issue_for_claim/6` persists the run row and the grant, and only then does
+  # `Shoestring.Cobbler.Dispatcher` enqueue durable delivery. A crash in
+  # between leaves a granted, projected, `requested` run with no
+  # `harness_dispatches` row: admitted work that no worker will ever pick up.
+  # Returning `nil` here (replays create zero rows) made the retry skip
+  # enqueue too, so the run stayed stranded across every subsequent retry.
+  #
+  # Returning the run lets the caller re-drive the idempotent
+  # `Dispatches.enqueue_for_run/2`. It cannot duplicate an Elf, because the
+  # run is returned ONLY while it is still `requested` AND carries no
+  # dispatch row at all — an already-delivered or already-executing grant is
+  # still reported as `nil`, never re-enqueued and never treated as absent.
+  # The replay itself still creates zero lease rows and appends zero events.
+  defp undelivered_granted_run(repo, goal_id, %ExecutionLease{run_id: run_id})
+       when is_binary(run_id) do
+    case repo.get_by(RunRecord, id: run_id, goal_id: goal_id) do
+      %RunRecord{status: "requested", dispatch_id: dispatch_id} = run ->
+        if repo.get(Shoestring.Harness.DispatchRecord, dispatch_id), do: nil, else: run
+
+      _delivered_or_missing ->
+        nil
+    end
+  end
+
+  defp undelivered_granted_run(_repo, _goal_id, _lease), do: nil
 
   defp issue_fresh(goal_id, row, command, claim, outcome, event, decision, opts) do
     repo = Keyword.get(opts, :repo, Repo)
