@@ -64,7 +64,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   import Ecto.Query
 
   alias Shoestring.Harness.{CheckpointFallback, Checkpoints, Clock}
-  alias Shoestring.Trajectory.{Artifact, Redaction, TrajectoryEvent}
+  alias Shoestring.Trajectory.{Artifact, Goal, Redaction, Task, TrajectoryEvent}
 
   @max_changed_files 50
   @max_diff_bytes 32 * 1024
@@ -149,6 +149,272 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   end
 
   @doc """
+  Collects reactive (lease-decline) checkpoint inputs with real repository
+  evidence.
+
+  Same deterministic collectors as `collect/3` (worktree identity, git
+  revision/dirty/diff/changed files, verification trajectory, last safe
+  boundary, lease snapshot, goal/task acceptance contract), but keyed for
+  the lease path: `stop_reason` is the caller-supplied lease reason
+  (e.g. `"lease_exhausted"`), the checkpoint id is the Elf's
+  `lease_checkpoint_id` (stable per run so retries replay), the extension
+  kind is `"reactive"`, and the next action is the deterministic
+  decline-resume instruction. Unavailable facts are stated explicitly;
+  nothing is inferred.
+
+  Returns `{:ok, inputs}` or `{:error, reason}` (the caller applies the
+  reactive floor template). Never raises.
+  """
+  @spec collect_reactive(map(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def collect_reactive(state, reason, opts \\ []) do
+    checkpoint_id = Map.get(state, :lease_checkpoint_id) || Ecto.UUID.generate()
+
+    with {:ok, worktree} <- resolve_worktree(state, opts),
+         {:ok, git} <- git_evidence(worktree, opts),
+         {:ok, verification} <- verification_evidence(state, opts),
+         {:ok, boundary} <- boundary_evidence(state, opts) do
+      revision = git.revision
+      dirty? = git.dirty?
+      stop = reactive_stop_reason(reason)
+
+      evidence =
+        assemble_evidence(
+          worktree: worktree,
+          git: git,
+          verification: verification,
+          boundary: boundary,
+          lease: lease_snapshot(state),
+          outcome: "interrupted",
+          stop: stop,
+          provider_session: session_text(state),
+          os_exit: os_exit_text(state),
+          terminal_key: reactive_key(state),
+          checkpoint_id: checkpoint_id,
+          terminal_type: "lease.decline"
+        )
+
+      with {:ok, evidence} <- check_evidence_budget(evidence) do
+        {:ok,
+         %{
+           checkpoint_id: checkpoint_id,
+           goal_id: state.goal_id,
+           run_id: state.run_id,
+           acceptance_criteria: acceptance_criteria(state, opts),
+           repository_revision: revision,
+           repository_dirty: dirty?,
+           evidence: evidence,
+           decisions: terminal_decisions(state, opts),
+           unresolved_issues: reactive_unresolved(state, reason),
+           next_action: reactive_next_action(state, reason, revision, checkpoint_id),
+           stop_reason: stop,
+           provider_session_id: state.provider_session_id,
+           artifact_ids: terminal_artifact_ids(state, opts),
+           extensions: reactive_extensions(state, reason, nil)
+         }}
+      end
+    end
+  rescue
+    error -> {:error, {:reactive_checkpoint_collection_crashed, error}}
+  catch
+    kind, reason -> {:error, {:reactive_checkpoint_collection_caught, {kind, reason}}}
+  end
+
+  @doc """
+  Collects reactive checkpoint inputs and records them through the
+  `Checkpoints` writer.
+
+  Mirrors `record/3`: full collection first, deterministic reactive floor
+  template on collection failure, one floor retry when the first write
+  fails. Returns `{:ok, checkpoint_id}` or `{:error, reason}`. Never
+  raises.
+  """
+  @spec record_reactive(map(), String.t(), keyword()) ::
+          {:ok, Ecto.UUID.t()} | {:error, term()}
+  def record_reactive(state, reason, opts \\ []) do
+    checkpoint_id = Map.get(state, :lease_checkpoint_id) || Ecto.UUID.generate()
+    state = Map.put(state, :lease_checkpoint_id, checkpoint_id)
+
+    result =
+      case collect_reactive(state, reason, opts) do
+        {:ok, inputs} ->
+          build_and_write(state, inputs, opts, nil)
+
+        {:error, collection_error} ->
+          build_and_write(
+            state,
+            reactive_floor_inputs(state, reason, collection_error, opts),
+            opts,
+            nil
+          )
+      end
+
+    case result do
+      {:ok, recorded_id} -> {:ok, recorded_id}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    error -> {:error, {:reactive_checkpoint_crashed, error}}
+  catch
+    kind, reason -> {:error, {:reactive_checkpoint_caught, {kind, reason}}}
+  end
+
+  @doc """
+  The deterministic reactive floor template: used when collection finds
+  nothing. Revision is `"unknown"`, the lease reason and last durable
+  event are pointed at precisely, and a rerun verification command is
+  named. No certainty is invented.
+  """
+  @spec reactive_floor_inputs(map(), String.t(), term(), keyword()) :: map()
+  def reactive_floor_inputs(state, reason, collection_error, opts \\ []) do
+    anchor = last_event_anchor(state)
+    checkpoint_id = Map.get(state, :lease_checkpoint_id) || Ecto.UUID.generate()
+    stop = reactive_stop_reason(reason)
+
+    %{
+      checkpoint_id: checkpoint_id,
+      goal_id: state.goal_id,
+      run_id: state.run_id,
+      acceptance_criteria: acceptance_criteria(state, opts),
+      repository_revision: "unknown",
+      repository_dirty: false,
+      evidence:
+        Redaction.redact([
+          "reactive checkpoint floor: repo-evidence collection failed " <>
+            "(#{short_reason(collection_error)}); no worktree state is claimed",
+          "no verification recorded",
+          "lease #{stop} for run #{state.run_id} " <>
+            "(decline key #{reactive_key(state)}); last durable event: #{anchor}"
+        ]),
+      decisions: terminal_decisions(state, opts),
+      unresolved_issues: reactive_unresolved(state, reason),
+      next_action: reactive_next_action(state, reason, "unknown", checkpoint_id),
+      stop_reason: stop,
+      provider_session_id: state.provider_session_id,
+      artifact_ids: [],
+      extensions: reactive_extensions(state, reason, collection_error)
+    }
+  end
+
+  # -- Acceptance contract (goal/task rows, never invented) --
+
+  # Deterministic acceptance criteria from the durable goal/task rows.
+  # Unavailable facts are stated explicitly ("unknown"/"not found"); no
+  # model inference, no transcript. Always a non-empty list within the
+  # fallback text budget.
+  defp acceptance_criteria(state, opts) do
+    repo = Keyword.get(opts, :repo, Map.get(state, :repo))
+    goal_id = Map.get(state, :goal_id)
+    task_id = Map.get(state, :task_id)
+
+    goal_text = goal_criterion(repo, goal_id)
+    task_text = task_criterion(repo, goal_id, task_id)
+
+    [truncate_criterion("accept #{goal_text}; #{task_text}")]
+    |> Redaction.redact()
+  rescue
+    _error -> [@default_criteria]
+  catch
+    _kind, _reason -> [@default_criteria]
+  end
+
+  defp goal_criterion(repo, goal_id) when is_atom(repo) and is_binary(goal_id) do
+    case repo.get(Goal, goal_id) do
+      %Goal{title: title, description: description} ->
+        "goal #{goal_id} #{criterion_title(title)} — #{criterion_description(description)}"
+
+      nil ->
+        "goal #{goal_id} unavailable: goal row not found"
+
+      _other ->
+        "goal #{goal_id} unavailable: goal row unreadable"
+    end
+  rescue
+    _error -> "goal #{inspect(goal_id)} unavailable: goal lookup failed"
+  catch
+    _kind, _reason -> "goal unavailable: goal lookup failed"
+  end
+
+  defp goal_criterion(_repo, goal_id),
+    do: "goal #{inspect(goal_id)} unavailable: goal id missing"
+
+  defp task_criterion(repo, goal_id, task_id) when is_atom(repo) and is_binary(task_id) do
+    case repo.get(Task, task_id) do
+      %Task{goal_id: ^goal_id, title: title, description: description} ->
+        "task #{task_id} #{criterion_title(title)} — #{criterion_description(description)}"
+
+      %Task{goal_id: other_goal} when is_binary(other_goal) ->
+        "task #{task_id} unavailable: task belongs to another goal"
+
+      nil ->
+        "task #{task_id} unavailable: task row not found"
+
+      _other ->
+        "task #{task_id} unavailable: task row unreadable"
+    end
+  rescue
+    _error -> "task #{inspect(task_id)} unavailable: task lookup failed"
+  catch
+    _kind, _reason -> "task unavailable: task lookup failed"
+  end
+
+  defp task_criterion(_repo, _goal_id, task_id),
+    do: "task #{inspect(task_id)} unavailable: task id missing"
+
+  defp criterion_title(title) when is_binary(title) and title != "", do: inspect(title)
+  defp criterion_title(_title), do: "(unknown title)"
+
+  defp criterion_description(description) when is_binary(description) and description != "",
+    do: description
+
+  defp criterion_description(_description), do: "no description stated"
+
+  defp truncate_criterion(text) when byte_size(text) <= 2_000, do: text
+
+  defp truncate_criterion(text),
+    do: String.slice(text, 0, 2_000 - String.length("…[truncated]")) <> "…[truncated]"
+
+  defp reactive_stop_reason(reason) when is_binary(reason) and reason != "" do
+    String.slice(reason, 0, 300)
+  end
+
+  defp reactive_stop_reason(_reason), do: "lease_exhausted"
+
+  defp reactive_key(state), do: "elf-lease-decline:#{Map.get(state, :dispatch_id)}"
+
+  defp reactive_unresolved(state, reason) do
+    [
+      "lease #{reactive_stop_reason(reason)} for run #{state.run_id}: " <>
+        "inspect decline key #{reactive_key(state)} and rerun verification before retry"
+    ]
+  end
+
+  defp reactive_next_action(state, reason, revision, checkpoint_id) do
+    "Lease #{reactive_stop_reason(reason)} for run #{state.run_id} at revision #{revision}. " <>
+      "Resume from checkpoint #{checkpoint_id} after re-observing capacity and " <>
+      "re-evaluating admission; re-verify with `mix precommit`."
+  end
+
+  defp reactive_extensions(state, reason, collection_error) do
+    base = %{
+      "shoestring.elf:checkpoint_kind" => "reactive",
+      "shoestring.elf:lease_decline_reason" => reactive_stop_reason(reason)
+    }
+
+    base =
+      if Map.get(state, :lease_grant_id) != nil do
+        Map.put(base, "shoestring.elf:lease_grant_id", to_string(Map.get(state, :lease_grant_id)))
+      else
+        base
+      end
+
+    if collection_error != nil do
+      Map.put(base, "shoestring.elf:checkpoint_error", short_reason(collection_error))
+    else
+      base
+    end
+  end
+
+  @doc """
   Collects `CheckpointFallback.build/1` inputs with real repository evidence.
 
   Returns `{:ok, inputs}` or `{:error, reason}` (the caller applies the floor
@@ -186,7 +452,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
          %{
            goal_id: state.goal_id,
            run_id: state.run_id,
-           acceptance_criteria: [@default_criteria],
+           acceptance_criteria: acceptance_criteria(state, opts),
            repository_revision: revision,
            repository_dirty: dirty?,
            evidence: evidence,
@@ -220,7 +486,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
       checkpoint_id: checkpoint_id(state.run_id),
       goal_id: state.goal_id,
       run_id: state.run_id,
-      acceptance_criteria: [@default_criteria],
+      acceptance_criteria: acceptance_criteria(state, opts),
       repository_revision: "unknown",
       repository_dirty: false,
       evidence:
@@ -265,13 +531,31 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
           nil ->
             # One floor retry so a full-inputs failure still lands durable
             # evidence (carrying the first error) instead of nothing.
-            floor = fallback_inputs(state, terminal_of(inputs), reason, opts)
+            # Reactive inputs retry with the reactive floor (stable lease
+            # checkpoint id); terminal inputs retry with the terminal floor.
+            floor = floor_for(inputs, state, reason, opts)
             build_and_write(state, floor, opts, reason)
 
           _already_floored ->
             {:error, {:terminal_checkpoint_write_failed, first_error, reason}}
         end
     end
+  end
+
+  defp floor_for(
+         %{extensions: %{"shoestring.elf:checkpoint_kind" => "reactive"}} = inputs,
+         state,
+         reason,
+         opts
+       ) do
+    lease_reason =
+      inputs[:stop_reason] || Map.get(inputs, "stop_reason", "lease_exhausted")
+
+    reactive_floor_inputs(state, to_string(lease_reason), reason, opts)
+  end
+
+  defp floor_for(inputs, state, reason, opts) do
+    fallback_inputs(state, terminal_of(inputs), reason, opts)
   end
 
   # The floor retry needs the terminal class for its template; recover it
