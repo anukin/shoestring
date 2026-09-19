@@ -349,10 +349,26 @@ defmodule Shoestring.Cobbler.Handoffs do
     end
   end
 
+  # An intent is settled when the canonical history says its outcome is
+  # final. Three ways that happens, all read from events rather than rows:
+  #
+  #   * the transfer completed (pointer AND the receiver's dispatch row);
+  #   * it was refused on evidence (a handoff-scoped non-admit decision);
+  #   * it failed permanently (`handoff.failed`).
+  #
+  # A pointer WITHOUT its dispatch row is deliberately not settled: that is
+  # the crash window `converge/5` repairs, and re-delivering it costs one
+  # idempotent call.
   defp settled?(repo, %CommandRecord{} = command) do
-    case existing_intent(repo, command.goal_id, command.id) do
-      {:ok, event} -> receiver_dispatched?(repo, event)
-      :none -> refused?(repo, command)
+    case existing_failure(repo, command.goal_id, command.id) do
+      {:ok, _event} ->
+        true
+
+      :none ->
+        case existing_intent(repo, command.goal_id, command.id) do
+          {:ok, event} -> receiver_dispatched?(repo, event)
+          :none -> refused?(repo, command)
+        end
     end
   end
 
@@ -418,6 +434,14 @@ defmodule Shoestring.Cobbler.Handoffs do
           {:ok, perform_result()} | {:error, term()}
   def perform(goal_id, command_id, opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
+
+    goal_id
+    |> do_perform(command_id, opts)
+    |> settle_permanent_failure(repo, goal_id, command_id, opts)
+  end
+
+  defp do_perform(goal_id, command_id, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
     now = now(opts)
 
     with {:ok, goal} <- fetch_goal(repo, goal_id),
@@ -456,7 +480,8 @@ defmodule Shoestring.Cobbler.Handoffs do
           converge(repo, goal, event, handoff_id, opts)
 
         :none ->
-          with {:ok, checkpoint, continuation} <- boundary(repo, goal, sender, intent, opts) do
+          with {:ok, checkpoint, continuation} <-
+                 boundary(repo, goal, sender, intent, handoff_id, opts) do
             transfer(
               repo,
               goal,
@@ -473,6 +498,150 @@ defmodule Shoestring.Cobbler.Handoffs do
       end
     end
   end
+
+  # ----------------------------------------------------------------------------
+  # Permanent failure: durable, explained, and terminal
+  # ----------------------------------------------------------------------------
+
+  # Errors that no retry can clear. They describe a durable disagreement
+  # between the authorized intent and the world — a boundary that moved, an
+  # authorization that no longer matches, a receiver that cannot be named —
+  # and re-running `perform/3` will reach the identical conclusion forever.
+  #
+  # Left OUT of this list, deliberately, is everything that a later attempt
+  # could legitimately resolve: a sender still running, a claim momentarily
+  # held elsewhere, an unreachable capacity probe, a failed write. Those stay
+  # retriable, and the intent stays unsettled so `reconcile/1` keeps it alive
+  # across a restart.
+  @permanent_reasons [
+    :stale_continuation,
+    :decision_superseded,
+    :handoff_refs_unauthorized,
+    :cross_run_resume,
+    :session_mismatch
+  ]
+
+  @permanent_tags [
+    :unknown_provider,
+    :handoff_not_allowed,
+    :handoff_receiver_missing,
+    :invalid_handoff_request,
+    :handoff_command_not_found,
+    :handoff_command_type_invalid,
+    :handoff_not_requested,
+    :handoff_run_not_found
+  ]
+
+  @doc """
+  True when an error from `perform/3` can never be cleared by retrying.
+
+  `Shoestring.Cobbler.HandoffWorker` uses this to cancel a delivery attempt
+  instead of burning retries, and `perform/3` uses it to record the durable
+  `handoff.failed` event that stops `reconcile/1` resurrecting the intent.
+  """
+  @spec permanent_error?(term()) :: boolean()
+  def permanent_error?(reason) when reason in @permanent_reasons, do: true
+  def permanent_error?({tag, _detail}) when tag in @permanent_tags, do: true
+  def permanent_error?(_reason), do: false
+
+  # A permanent failure is recorded on the trajectory, not in a row flag and
+  # not only in a log line. Three things follow from that, and all three are
+  # required by the contract:
+  #
+  #   * `reconcile/1` reads the same canonical history every other consumer
+  #     reads, so a failed intent is never resurrected — not on the next
+  #     pass, not after a restart, not after the Oban job table is cleared;
+  #   * the reason is operator-visible and attributable, next to the
+  #     `handoff.created` that would have been there had it succeeded;
+  #   * there is no row-only hidden truth: the event IS the outcome.
+  #
+  # The append is idempotent under `handoff-failed:<handoff_id>`, so a
+  # concurrent second attempt that reaches the same conclusion converges on
+  # one record instead of writing two.
+  #
+  # A failure to WRITE the failure is itself transient and is deliberately
+  # not fatal: the original error is still returned, the intent stays
+  # unsettled, and the next attempt tries again. Swallowing the original
+  # error here would be worse than a retry.
+  defp settle_permanent_failure({:error, reason} = result, repo, goal_id, command_id, opts) do
+    if permanent_error?(reason) do
+      record_failure(repo, goal_id, command_id, reason, opts)
+    end
+
+    result
+  end
+
+  defp settle_permanent_failure(result, _repo, _goal_id, _command_id, _opts), do: result
+
+  defp record_failure(repo, goal_id, command_id, reason, opts) do
+    with %CommandRecord{} = command <- Commands.get(goal_id, command_id, repo: repo),
+         :none <- existing_failure(repo, goal_id, command.id) do
+      clock = Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
+
+      Trajectory.append(
+        goal_id,
+        %{
+          "type" => "handoff.failed",
+          "schema_version" => 1,
+          "actor" => Keyword.get(opts, :actor, @actor),
+          "occurred_at" => Clock.now(clock),
+          "idempotency_key" => failure_key(command.id),
+          "payload" => failure_payload(command, reason)
+        },
+        writer_opts: Keyword.get(opts, :writer_opts, [])
+      )
+    end
+  rescue
+    _error -> :error
+  catch
+    _kind, _reason -> :error
+  end
+
+  # `reason` is the machine-readable branch point; `detail` is bounded prose
+  # for a human reading the timeline. Neither carries adapter output.
+  defp failure_payload(%CommandRecord{} = command, reason) do
+    intent = command.result || %{}
+
+    %{
+      "handoff_id" => command.id,
+      "contract_version" => @contract_version,
+      "reason" => failure_reason(reason),
+      "detail" => failure_detail(reason),
+      "extensions" => %{
+        "cobbler.handoff:command_id" => command.command_id,
+        "cobbler.handoff:requested_by" => intent["requested_by"]
+      }
+    }
+    |> maybe_put("run_id", intent["run_id"])
+    |> maybe_put("checkpoint_id", intent["checkpoint_id"])
+  end
+
+  defp failure_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp failure_reason({tag, _detail}) when is_atom(tag), do: Atom.to_string(tag)
+  defp failure_reason(_reason), do: "handoff_failed"
+
+  defp failure_detail(reason) do
+    reason
+    |> inspect(limit: 5, printable_limit: 200)
+    |> String.slice(0, 500)
+  end
+
+  defp existing_failure(repo, goal_id, handoff_id) do
+    key = failure_key(handoff_id)
+
+    case repo.one(
+           from event in TrajectoryEvent,
+             where:
+               event.goal_id == ^goal_id and event.type == "handoff.failed" and
+                 event.idempotency_key == ^key,
+             limit: 1
+         ) do
+      %TrajectoryEvent{} = event -> {:ok, event}
+      nil -> :none
+    end
+  end
+
+  defp failure_key(handoff_id), do: "handoff-failed:" <> handoff_id
 
   # ----------------------------------------------------------------------------
   # Command + boundary
@@ -558,9 +727,9 @@ defmodule Shoestring.Cobbler.Handoffs do
   # command id carrying different refs is a conflict rather than a silent
   # replacement, and a restart reconstructs the authorized set from the same
   # durable payload.
-  defp boundary(repo, goal, sender, intent, opts) do
+  defp boundary(repo, goal, sender, intent, handoff_id, opts) do
     with {:ok, record} <- Continuation.latest_checkpoint(repo, goal.id, run_id: sender.id),
-         refs <- Continuation.decision_refs(repo, goal.id),
+         refs <- comparable_refs(repo, goal.id, handoff_id),
          {:ok, continuation} <- Continuation.project_latest([record], refs),
          :ok <- named_boundary(record, intent),
          {:ok, authorized} <- authorized_refs(intent),
@@ -586,6 +755,33 @@ defmodule Shoestring.Cobbler.Handoffs do
            ) do
       {:ok, record, continuation}
     end
+  end
+
+  # THE FRESH SIDE OF THE COMPARISON EXCLUDES THIS HANDOFF'S OWN DECISIONS.
+  #
+  # `transfer/10` persists its own `admission.decided` (keyed
+  # `handoff-decision:<handoff_id>:<snapshot_id>`) BEFORE the receiver row,
+  # the lease and the pointer. A crash in that window leaves the decision
+  # committed and no pointer, so the retry misses the idempotency guard and
+  # arrives back here — where an unfiltered projection would show this
+  # handoff its own decision as an external change and refuse
+  # `:decision_superseded`. Permanently: every retry would re-read the same
+  # committed decision. The handoff could never complete and could never be
+  # repaired, only abandoned.
+  #
+  # Excluding by this handoff's own key prefix removes exactly those
+  # decisions and nothing else. A decision from any other source — an
+  # operator, a wake, another handoff — keeps a different key, stays in the
+  # set, and still refuses. The exclusion cannot hide an external change
+  # because it is scoped to one handoff id, and a handoff can only write
+  # under its own.
+  #
+  # The same filtered set feeds `project_latest/2`, so the receiver's
+  # continuation is byte-identical across retries. That is what lets
+  # `Runs.request/3` recover the row a crashed attempt inserted instead of
+  # reporting a dispatch-id conflict against a drifted request.
+  defp comparable_refs(repo, goal_id, handoff_id) do
+    Continuation.decision_refs(repo, goal_id, exclude_key_prefix: decision_key_prefix(handoff_id))
   end
 
   defp named_boundary(%CheckpointRecord{id: id}, %{"checkpoint_id" => id}), do: :ok

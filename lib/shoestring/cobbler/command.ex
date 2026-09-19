@@ -54,9 +54,10 @@ defmodule Shoestring.Cobbler.Command do
   @types ["task.claim", "task.release", "run.handoff"]
   @statuses [:pending, :needs_user, :resolved, :rejected]
 
-  # Mirrors `Shoestring.Harness.Continuation.max_decision_refs/0`; the
-  # authorized ref set can never exceed what projection can produce.
-  @max_decision_refs 32
+  # Read from `Shoestring.Harness.Continuation` at compile time rather than
+  # restated, so the authorized ref set and what projection can produce
+  # cannot drift apart.
+  @max_decision_refs Shoestring.Harness.Continuation.max_decision_refs()
 
   @enforce_keys [:version, :command_id, :type, :payload, :digest]
   defstruct [:version, :command_id, :type, :payload, :digest]

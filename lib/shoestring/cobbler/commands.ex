@@ -63,7 +63,7 @@ defmodule Shoestring.Cobbler.Commands do
   require Logger
 
   alias Shoestring.Cobbler.{Command, CommandRecord, TaskClaimRecord}
-  alias Shoestring.Harness.{CheckpointRecord, Contract, RunRecord}
+  alias Shoestring.Harness.{CheckpointRecord, Continuation, Contract, RunRecord}
   alias Shoestring.Repo
   alias Shoestring.Trajectory.Goal
   alias Shoestring.Trajectory.{EventRegistry, TrajectoryEvent}
@@ -342,12 +342,45 @@ defmodule Shoestring.Cobbler.Commands do
       )
 
     cond do
-      is_nil(run) -> {:rejected, "handoff_run_not_found"}
-      is_nil(checkpoint) -> {:rejected, "handoff_checkpoint_not_found"}
-      checkpoint.run_id != run.id -> {:rejected, "handoff_checkpoint_run_mismatch"}
-      run.provider_id == command.payload["to_provider_id"] -> {:rejected, "handoff_same_provider"}
-      true -> {:ok, checkpoint}
+      is_nil(run) ->
+        {:rejected, "handoff_run_not_found"}
+
+      is_nil(checkpoint) ->
+        {:rejected, "handoff_checkpoint_not_found"}
+
+      checkpoint.run_id != run.id ->
+        {:rejected, "handoff_checkpoint_run_mismatch"}
+
+      run.provider_id == command.payload["to_provider_id"] ->
+        {:rejected, "handoff_same_provider"}
+
+      not authorized_refs_current?(repo, goal_id, command) ->
+        {:rejected, "handoff_decision_refs_stale"}
+
+      true ->
+        {:ok, checkpoint}
     end
+  end
+
+  # Fail fast on an authorization that is already stale when it arrives.
+  #
+  # The refs in the payload are what the operator authorized the transfer
+  # against. `Shoestring.Cobbler.Handoffs.perform/3` re-checks them at
+  # execution time — that check is the load-bearing one and is not replaced
+  # here — but without this the operator only learns that their request was
+  # written against a superseded view once the delivery attempt runs, by
+  # which point the intent is recorded, queued, and then permanently failed.
+  # Checking at request time turns that into an immediate, correctable
+  # rejection.
+  #
+  # Exact-set comparison, matching `Continuation.validate_resume/3`: a
+  # subset is not "close enough", because a decision the operator did not
+  # see is exactly what the check exists to catch.
+  defp authorized_refs_current?(repo, goal_id, command) do
+    authorized = command.payload["decision_refs"] || []
+    current = Continuation.decision_refs(repo, goal_id)
+
+    MapSet.equal?(MapSet.new(authorized), MapSet.new(current))
   end
 
   @doc """

@@ -218,9 +218,16 @@ defmodule Shoestring.Elves do
   # alone found nothing and a safe stop reported `:session_not_found` for a
   # session that was alive. Dispatch id first, run row id second.
   #
-  # A custom `:session_resolver` is probed with the same ids in the same
-  # order, so a test registry behaves like the real one rather than like a
-  # single-key lookup.
+  # `:session_resolver` REPLACES the registry lookup, not the id list: it is
+  # called once per candidate id, in the same dispatch-first order, and
+  # stops at the first live pid — so a supplied registry behaves like the
+  # real one rather than like a single-key lookup. It must therefore be a
+  # pure lookup returning a pid or nil, safe to call more than once per
+  # `request_stop/2`; it is not a place to hang side effects. (Before this
+  # change it happened to be called exactly once, which was an accident of
+  # the single-id bug, not a contract.) Nothing else calls it: `resolve_session/2`
+  # is reached only from `dispatch_safe_stop/2`, and only when neither
+  # `:session` nor `:session_pid` was supplied.
   defp resolve_session(%RunRecord{} = run, opts) do
     lookup =
       case Keyword.get(opts, :session_resolver) do

@@ -177,7 +177,13 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
     # what an operator choosing to switch would do.
     Eval.ensure_claim!(goal)
 
-    active_attrs = handoff_attrs(goal, run, checkpoint_id, [decision_id])
+    # Authorized against what the goal's history says NOW (the wake recorded
+    # a newer decision), so this is a valid intent and the ONLY thing that
+    # can refuse it is the live sender.
+    current_refs = Continuation.decision_refs(Repo, goal.id)
+    refute current_refs == [decision_id]
+
+    active_attrs = handoff_attrs(goal, run, checkpoint_id, current_refs)
     {:ok, %{command: active_command}} = Shoestring.Cobbler.Handoffs.request(goal.id, active_attrs)
 
     assert {:error, {:sender_run_active, "starting"}} =
@@ -196,19 +202,24 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
     assert Repo.get!(RunRecord, run.id).status == "interrupted"
 
     # The wake persisted a newer admission decision above, so an intent
-    # authorized against the PRE-wake refs is genuinely stale. The production
-    # handoff refuses it rather than silently carrying it forward (B4).
+    # authorized against the PRE-wake refs is genuinely stale. It is refused
+    # when it is WRITTEN — the operator learns immediately, rather than after
+    # the intent has been recorded, queued and delivered.
     Eval.ensure_claim!(goal)
 
     stale_attrs = handoff_attrs(goal, run, checkpoint_id, [decision_id])
     {:ok, %{command: stale_command}} = Shoestring.Cobbler.Handoffs.request(goal.id, stale_attrs)
 
-    assert {:error, :decision_superseded} =
+    assert stale_command.status == "rejected"
+    assert stale_command.result["reason"] == "handoff_decision_refs_stale"
+
+    # And a rejected command carries no intent, so it can never execute.
+    assert {:error, {:handoff_not_requested, _}} =
              Shoestring.Cobbler.Handoffs.perform(goal.id, stale_command.command_id,
                clock: Shoestring.Test.FixedClock,
                now: Shoestring.Test.FixedClock.now(),
                observe: fn _scoping ->
-                 flunk("a superseded authorization must refuse BEFORE observing the receiver")
+                 flunk("a rejected authorization must never observe the receiver")
                end
              )
 

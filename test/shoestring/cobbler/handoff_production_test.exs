@@ -62,6 +62,16 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
       nothing consumed the intent: no `handoff` queue, no worker, no
       `reconcile/1`.
 
+  **TRUE behavioural lock against `640f6be`** (the round-2 head): `"an
+  intent authorizing refs that never existed is rejected at request time"`.
+  There, such a request was accepted, queued, and only refused once the
+  delivery attempt ran — and then retried forever, because nothing settled
+  it.
+
+  The decision-to-pointer crash window and the durable settling of permanent
+  failures are covered in `Shoestring.Cobbler.HandoffCrashWindowTest`, which
+  carries its own ledger against `640f6be`.
+
   The exact failure output for each group is recorded in
   `plans/evidence/05-quota-aware-mvp/handoff-production.md`.
   """
@@ -652,11 +662,39 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
                [fixture.decision_id]
     end
 
-    test "an intent authorizing refs that never existed refuses" do
+    test "an intent authorizing refs that never existed is rejected at request time" do
+      # Fail fast: an authorization already stale on arrival is refused when
+      # it is written, not after it has been recorded, queued and delivered.
       fixture = fixture()
 
       attrs = put_payload(handoff_attrs(fixture), "decision_refs", [Ecto.UUID.generate()])
-      {:ok, %{command: command}} = Handoffs.request(fixture.goal.id, attrs)
+      assert {:ok, %{command: command, job: nil}} = Handoffs.request(fixture.goal.id, attrs)
+
+      assert command.status == "rejected"
+      assert command.result["reason"] == "handoff_decision_refs_stale"
+      assert job_count() == 0
+
+      # And it stays unexecutable: a rejected command carries no intent.
+      assert {:error, {:handoff_not_requested, _}} =
+               Handoffs.perform(
+                 fixture.goal.id,
+                 command.command_id,
+                 perform_opts(observe: fn _ -> flunk("a rejected intent must not observe") end)
+               )
+
+      assert dispatch_count() == 0
+    end
+
+    test "refs that go stale AFTER a valid request still refuse at perform time" do
+      # The request-time check does not replace the perform-time one: this
+      # request is valid when written and only diverges afterwards.
+      fixture = fixture()
+      {:ok, %{command: command}} = request!(fixture)
+
+      append_admission_event!(
+        fixture.goal.id,
+        admission_payload(decision_id: Ecto.UUID.generate())
+      )
 
       assert {:error, :decision_superseded} =
                Handoffs.perform(fixture.goal.id, command.command_id, perform_opts())

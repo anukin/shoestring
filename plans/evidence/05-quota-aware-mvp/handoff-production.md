@@ -124,13 +124,13 @@ reimplementing it.
   operator answers a refusal with a NEW command. `reconcile/1` deliberately
   leaves refused intents alone: re-observing and re-deciding behind the
   operator would turn an auditable refusal into a silent retry loop.
-- **`reconcile/1` cannot repair a crash before the receiver row exists but
-  after the pointer committed.** `converge/5` reports
-  `{:handoff_receiver_missing, run_id}` rather than re-creating the row,
-  because re-creating it would need a fresh admission that this branch
-  deliberately does not run. `UNVERIFIED` in practice: the pointer and the
-  row are written in adjacent statements and no test forces that exact
-  window.
+- **`reconcile/1` cannot repair a pointer whose receiver row is gone.**
+  `converge/5` reports `{:handoff_receiver_missing, run_id}` rather than
+  re-creating the row, because re-creating it would need a fresh admission
+  that branch deliberately does not run. Since the pointer is appended after
+  the row is created, this is corruption rather than a crash window; it is
+  classified permanent and settles durably (§8, C2). `UNVERIFIED` in
+  practice: no test forces that exact corruption.
 - **The `|| :unknown` fallbacks in `admit/8` are unreachable today**:
   `CapacitySnapshot` requires `support_tier` and `compatibility_state`. They
   exist so a future nil can never become a fail-open default.
@@ -178,7 +178,7 @@ vacuously.
 
 ## 5. Verification
 
-### Gate (`VERIFIED`, review round 2)
+### Gate (`VERIFIED`, review round 3)
 
 Command, run in the worktree with a dropped-and-remigrated test database:
 
@@ -190,22 +190,33 @@ Exit status **0**.
 
 - `format --check-formatted`: clean.
 - `compile --warnings-as-errors`: clean.
-- Elixir: **1245 tests, 0 failures, 1 skipped (6 excluded)**, 92.3s.
+- Elixir: **1259 tests, 0 failures, 1 skipped (6 excluded)**, 91.5s.
 - Node (`gate_0a.node_test`): **tests 52, pass 52, fail 0, skipped 0**.
 
-Counts across the two rounds, measured each time rather than carried:
+Run once, with a fresh platform-native state directory
+(`SHOESTRING_TEST_STATE_DIR=$(mktemp -d)`, resolving under
+`/var/folders/...` on this machine) and a dropped-and-remigrated database.
+Not re-run to obtain a better result.
+
+Two expected log lines appear in the gate output and are not failures: a
+pre-existing sandbox-ownership warning from the capacity-storm test
+(`:healthy_codex_storm`, unrelated to this slice), and one
+`Exqlite.Connection ... disconnected` from the deliberate raise in
+`HandoffCrashWindowTest`, which is what injecting a crash inside a sandboxed
+process looks like.
+
+Counts across the three rounds, measured each time rather than carried:
 
 | Head | Elixir tests | Failures |
 | :--- | ---: | ---: |
 | `01f2a54` (origin/main, measured) | 1207 | 0 |
 | `335b56a` (this PR, round 1) | 1230 | 0 |
-| this head (round 2) | 1245 | 0 |
+| `640f6be` (this PR, round 2) | 1245 | 0 |
+| this head (round 3) | 1259 | 0 |
 
-1230 → 1245 is **+15**: +13 in `handoff_production_test.exs`, +6 in the new
-`handoff_worker_test.exs`, +2 in the renamed
-`safe_stop_session_lookup_test.exs`, **−6** in
-`handoff_correction_test.exs`, where nine cross-provider tests of the
-removed unsupervised path were replaced by three refusal tests.
+1245 → 1259 is **+14**: +13 in the new `handoff_crash_window_test.exs` and
++1 in `handoff_production_test.exs` (the stale-refs test split into a
+request-time rejection and a perform-time drift twin).
 
 ### Baseline (`VERIFIED`, measured — not carried forward)
 
@@ -527,7 +538,152 @@ DOCUMENTATION.
 
 ---
 
-## 8. Twin checks performed
+## 8. Review round 3 — finding map
+
+Independent review of `640f6be` returned two blockers.
+
+### C1 — the handoff refused itself forever after a crash
+
+`transfer/10` commits its own `admission.decided` BEFORE the receiver row,
+the lease and the pointer. A crash in that gap leaves a committed decision
+and no pointer, so the retry misses the idempotency guard and lands back on
+the boundary check — where `boundary/5` compared the frozen authorized refs
+against an *unfiltered* `Continuation.decision_refs/2`, and therefore showed
+the handoff its own decision as an external change.
+
+That is permanent, not transient: every retry re-reads the same committed
+decision and returns `:decision_superseded`. Combined with C2, the intent
+was also re-enqueued forever. The handoff could never complete and could
+never be repaired — only abandoned by hand.
+
+Fixed by giving `Continuation.decision_refs/3` an `:exclude_key_prefix`
+option and having `boundary/6` pass this handoff's own decision-key prefix.
+The exclusion is scoped to one handoff id, and a handoff can only ever write
+under its own prefix, so it **cannot** hide an external change: a decision
+from an operator, a wake, or a different handoff keeps a different key,
+stays in the comparison, and still supersedes. That is asserted directly
+(`"a GENUINELY external decision in the same window still refuses"`).
+
+The same filtered set feeds `project_latest/2`, which is what makes the
+receiver's continuation byte-identical across retries — the property
+`Runs.request/3` needs to recover the row a crashed attempt inserted instead
+of reporting a dispatch-id conflict against a drifted request.
+
+**Injection, not simulation.** `perform/3` documents `:repo`, so the crash
+goes through that real seam: `CrashingRepo` delegates to `Shoestring.Repo`
+except for the receiver-run insert, where it raises. The decision is
+appended through the trajectory writer (global repo) and genuinely commits
+before the raise, so the test reproduces the window rather than
+reconstructing it. The proof asserts the wreckage (decision present, no
+pointer, no run, no lease, no dispatch), then that the retry completes into
+**exactly one** receiver, lease, pointer and dispatch, and separately that
+the repaired delivery runs end to end into one supervised Elf with exactly
+one `run.running`. A two-crashes-in-a-row case is covered too.
+
+### C2 — permanent errors never settled
+
+`:stale_continuation`, a genuinely superseded authorization, an unnameable
+receiver and the receiver-missing converge case all returned an error that
+no retry could clear — while the worker burned its five attempts and
+`reconcile/1` re-enqueued the intent on every boot, forever.
+
+Fixed with a durable, explained terminal record on the **trajectory**, not a
+row flag and not a log line: a new `handoff.failed` v1 event
+(`handoff-failed:<handoff_id>`), carrying the machine-readable `reason`, a
+bounded human `detail`, the run and checkpoint it concerned, and the
+requesting identity. Registry entry plus the trajectory projector's no-op
+set; the harness projector already ignores unknown types, and no row is
+written.
+
+Three consequences, all required rather than incidental:
+
+* `settled?/2` reads it, so `reconcile/1` never resurrects a failed intent —
+  not on the next pass, not after a restart, not after the job table is
+  cleared. That last case is why cancelling the Oban job alone is
+  insufficient, and it is asserted explicitly by deleting every job and
+  reconciling three times plus booting `HandoffReconciler`;
+* `HandoffWorker` cancels instead of retrying, via the public
+  `Handoffs.permanent_error?/1`;
+* the reason is operator-visible next to the `handoff.created` that would
+  have been there had it succeeded — no row-only hidden truth.
+
+**Receiver-missing, assessed rather than assumed.** The pointer is appended
+*after* the receiver row is created, so a pointer with no row is not a crash
+window — the row was removed underneath. `converge/5` cannot rebuild it
+without a fresh admission it deliberately does not run, so this is classified
+permanent and settles. Stated as an assessment, and still `UNVERIFIED` in
+practice: no test forces that exact corruption.
+
+**The classification is the load-bearing part**, so the transient side is
+asserted as hard as the permanent side. A live sender, an unreachable probe
+and a crash mid-flight each record no `handoff.failed`, are retried rather
+than cancelled by the worker, and are re-enqueued by `reconcile/1` — and the
+live-sender case then completes once the sender parks, proving the intent
+was genuinely still alive and not merely un-settled.
+
+### Nits
+
+* **`session_resolver` semantics** — it replaces the registry lookup, not the
+  id list, so it is now called once per candidate id in dispatch-first order.
+  Documented at the call site: it must be a pure lookup returning a pid or
+  nil and is safe to call more than once. The previous single call was an
+  accident of the single-id bug, not a contract. Nothing else calls it.
+* **Duplicated `32`** — `Command`'s `@max_decision_refs` now reads
+  `Continuation.max_decision_refs()` at compile time instead of restating the
+  literal, so the authorized ref cap and what projection can produce cannot
+  drift.
+* **Request-time refs failed slow** — taken. `validate_handoff_reference/3`
+  now rejects an authorization that is already stale on arrival
+  (`handoff_decision_refs_stale`), so the operator is told at request time
+  instead of after the intent is recorded, queued, delivered and permanently
+  failed. This does **not** replace the perform-time check: a request valid
+  when written and superseded afterwards still refuses at perform, and both
+  halves are asserted.
+
+---
+
+## 9. Fail-on-prior-head proof (review round 3) (`VERIFIED`)
+
+`lib/` reverted to `640f6be` (`git checkout 640f6be -- lib/`), the new test
+file kept, then restored and re-run green (13/13).
+
+`handoff_crash_window_test.exs` → **13 tests, 10 failures**:
+
+```
+C1  "a crash after admission recovers into ONE receiver, lease, pointer and dispatch"
+    left: {:ok, %{outcome: :dispatched, run: receiver}}
+    right: {:error, :decision_superseded}
+C1  "recovery runs end to end: the repaired delivery starts one supervised Elf"
+    assert :ok = perform_delivery(handoff_job)
+    left: :ok   right: {:error, :decision_superseded}
+C1  "two crashes in a row still recover to exactly one transfer"
+    (the second attempt refuses before reaching the insert, so no raise)
+C2  "reconcile NEVER resurrects a permanently failed intent, on any pass"
+    left: {:ok, %{repaired_count: 0, failures: []}}
+    right: {:ok, %{repaired_count: 1, failures: []}}
+C2  "the worker cancels rather than retrying an error no retry can clear"
+    left: {:cancel, :stale_continuation}   right: {:error, :stale_continuation}
+C2  "a moved boundary records handoff.failed with an operator-visible reason"
+    assert [failure] = failure_events(...)   left: [failure]   right: []
+```
+
+`right: {:error, :decision_superseded}` where a completed transfer is
+asserted IS C1 — the handoff refusing itself. `repaired_count: 1` where 0 is
+asserted IS C2 — reconcile resurrecting a failure that can never succeed.
+
+The three that PASS at `640f6be` are DOCUMENTATION and are labelled as such:
+the external-change twin, the live-sender transient twin, and the
+crash-is-transient case. They pin behaviour the repair must not break, and
+their passing is the evidence that the C1 exclusion did not simply disable
+the supersede check.
+
+`handoff_production_test.exs` → **1 failure** at `640f6be`: `"an intent
+authorizing refs that never existed is rejected at request time"`, which
+that head accepted and queued.
+
+---
+
+## 10. Twin checks performed
 
 - **Session lookup**: `live_receiver_session?/2` is gone with the
   unsupervised path; `resolve_session/2` was fixed for BOTH its lookup
