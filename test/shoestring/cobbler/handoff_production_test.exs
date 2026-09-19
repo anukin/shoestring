@@ -31,19 +31,39 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
     checkpoint pointer, `next_action` and decision refs, and carries neither
     the sender's transcript text nor the sender's provider session id.
 
-  ## Lock-vs-documentation ledger (base `01f2a54`)
+  ## Lock-vs-documentation ledger
 
-  Every test here is a TRUE behavioural lock against base: `Handoffs` does
-  not exist on base, and base's only handoff path
-  (`Shoestring.Elves.resume_run/2`) performs no observation, no admission,
-  no receiver lease and no durable dispatch. Base-failure for the right
-  behavioural reason is recorded in
-  `plans/evidence/05-quota-aware-mvp/handoff-production.md`; because the
-  module is new surface, base failure surfaces as
-  `UndefinedFunctionError`, which is DOCUMENTATION strength for the
-  new-module arms and a genuine behavioural lock only for the arms that also
-  assert against the durable pipeline (dispatch rows, lease rows, decision
-  events) that base never produces for a handoff.
+  Stated precisely, because "it fails on base" and "it locks a behaviour" are
+  not the same claim.
+
+  **DOCUMENTATION against base `01f2a54`.** Every test in this file fails on
+  base, but it fails because the surface does not exist there: `Handoffs` is
+  a new module, and `run.handoff` is not an accepted command type, so base
+  reports `type: "must be one of task.claim, task.release"` or an
+  `UndefinedFunctionError`. A missing-module or rejected-enum failure is not
+  evidence that base did the wrong thing at the same surface. These tests
+  specify new behaviour; they do not lock a repaired defect.
+
+  **TRUE behavioural locks against the PR's own prior head `335b56a`**, where
+  `Handoffs` already existed:
+
+    * `"a lost claim refuses BEFORE the provider is observed"` and
+      `"an unknown receiver provider refuses BEFORE the provider is
+      observed"` — at `335b56a` the claim gate and receiver-identity
+      resolution ran AFTER the observation and the admission append, so both
+      fail there with `probe.count == 1` and a persisted
+      `capacity.snapshot_observed` where 0 and `[]` are asserted.
+    * every test in the `"the transfer is authorized against a frozen
+      decision-ref set"` group — at `335b56a` the boundary check compared
+      projected refs with themselves, so `:decision_superseded` was
+      unreachable and the payload carried no `decision_refs` at all.
+    * every test in the `"reconcile/1 repairs lost delivery attempts"` group,
+      plus the delivery-attempt assertions in `request/3` — at `335b56a`
+      nothing consumed the intent: no `handoff` queue, no worker, no
+      `reconcile/1`.
+
+  The exact failure output for each group is recorded in
+  `plans/evidence/05-quota-aware-mvp/handoff-production.md`.
   """
   use Shoestring.DataCase, async: false
 
@@ -112,12 +132,16 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
       assert command.result["requested_by"] == "user:operator-1"
       assert handoff_id == command.id
 
-      # Intent only: not one effect.
+      # Intent plus ONE delivery attempt on the handoff queue — and not one
+      # execution effect. The row is the authority; the job only delivers.
       assert handoff_events(fixture.goal.id) == []
       assert run_ids(fixture.goal.id) == [fixture.run.id]
       assert dispatch_count() == 0
       assert lease_count(fixture.goal.id) == 0
-      assert job_count() == 0
+      assert [job] = Repo.all(Job)
+      assert job.queue == "handoff"
+      assert job.args["handoff_id"] == handoff_id
+      assert job.args["command_id"] == command.command_id
     end
 
     test "re-requesting the same command id replays the intent without new events" do
@@ -134,6 +158,10 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
 
       assert second.id == first.id
       assert command_event_count(fixture.goal.id) == before
+
+      # Oban uniqueness on handoff_id: a replayed request does not fan out
+      # delivery attempts.
+      assert job_count() == 1
     end
 
     test "a handoff naming the sender's own provider is rejected, not recorded as intent" do
@@ -144,9 +172,11 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
         |> handoff_attrs()
         |> put_payload("to_provider_id", @sender_provider)
 
-      assert {:ok, %{command: command}} = Handoffs.request(fixture.goal.id, attrs)
+      assert {:ok, %{command: command, job: nil}} = Handoffs.request(fixture.goal.id, attrs)
       assert command.status == "rejected"
       assert command.result["reason"] == "handoff_same_provider"
+      # A rejected command is not an intent, so it gets no delivery attempt.
+      assert job_count() == 0
 
       assert {:error, {:handoff_not_requested, detail}} =
                Handoffs.perform(fixture.goal.id, command.command_id, perform_opts())
@@ -230,8 +260,7 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
       assert dispatch.run_id == receiver.id
       assert dispatch.dispatch_id == handoff_id
       assert dispatch.job_id
-      assert [job] = Repo.all(Job)
-      assert job.queue == "dispatch"
+      assert [job] = Repo.all(from j in Job, where: j.queue == "dispatch")
       assert job.id == dispatch.job_id
       assert result.dispatch_id == dispatch.dispatch_id
     end
@@ -249,7 +278,7 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
       assert second.id == first.id
       assert length(handoff_events(fixture.goal.id)) == 1
       assert length(Repo.all(DispatchRecord)) == 1
-      assert job_count() == 1
+      assert dispatch_job_count() == 1
       assert Repo.aggregate(ExecutionLeaseRecord, :count, :id) == 1
       assert run_ids(fixture.goal.id) |> length() == 2
 
@@ -259,18 +288,79 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
       assert length(events(fixture.goal.id, "capacity.snapshot_observed")) == 1
     end
 
-    test "the dispatch is gated on the live claim: a lost claim performs no effect" do
+    test "a lost claim refuses BEFORE the provider is observed" do
       fixture = fixture()
       {:ok, %{command: command}} = request!(fixture)
 
       {:ok, _} =
         Commands.submit(fixture.goal.id, release_command("operator released for the test"))
 
-      assert {:error, {:handoff_claim_lost, _}} =
-               Handoffs.perform(fixture.goal.id, command.command_id, perform_opts())
+      # The observe fun would succeed; it must never be reached. Observing an
+      # unauthorized provider is itself an effect — it reaches a CLI and
+      # writes a capacity claim into the goal's auditable history.
+      probe = probe_counter()
 
-      assert dispatch_count() == 0
+      assert {:error, {:handoff_claim_lost, _}} =
+               Handoffs.perform(
+                 fixture.goal.id,
+                 command.command_id,
+                 perform_opts(observe: probe.fun)
+               )
+
+      assert probe.count.() == 0
+      assert events(fixture.goal.id, "capacity.snapshot_observed") == []
+      assert handoff_decisions(fixture.goal.id) == []
       assert handoff_events(fixture.goal.id) == []
+      assert dispatch_count() == 0
+      assert lease_count(fixture.goal.id) == 0
+      assert run_ids(fixture.goal.id) == [fixture.run.id]
+    end
+
+    test "an unknown receiver provider refuses BEFORE the provider is observed" do
+      fixture = fixture()
+
+      attrs =
+        fixture
+        |> handoff_attrs()
+        |> put_payload("to_provider_id", "provider-that-does-not-exist")
+        |> put_payload("to_adapter_id", "adapter-that-does-not-exist")
+
+      {:ok, %{command: command}} = Handoffs.request(fixture.goal.id, attrs)
+      probe = probe_counter()
+
+      assert {:error, {:unknown_provider, "provider-that-does-not-exist"}} =
+               Handoffs.perform(
+                 fixture.goal.id,
+                 command.command_id,
+                 perform_opts(observe: probe.fun)
+               )
+
+      assert probe.count.() == 0
+      assert events(fixture.goal.id, "capacity.snapshot_observed") == []
+      assert handoff_decisions(fixture.goal.id) == []
+      assert dispatch_count() == 0
+      assert lease_count(fixture.goal.id) == 0
+      assert run_ids(fixture.goal.id) == [fixture.run.id]
+    end
+
+    test "an authorized admitted handoff still reaches the provider and dispatches" do
+      # The twin of the two refusals above: the reordering must not have made
+      # the normal path unreachable.
+      fixture = fixture()
+      {:ok, %{command: command}} = request!(fixture)
+      probe = probe_counter()
+
+      assert {:ok, %{outcome: :dispatched}} =
+               Handoffs.perform(
+                 fixture.goal.id,
+                 command.command_id,
+                 perform_opts(observe: probe.fun)
+               )
+
+      assert probe.count.() == 1
+      assert length(events(fixture.goal.id, "capacity.snapshot_observed")) == 1
+      assert length(handoff_decisions(fixture.goal.id)) == 1
+      assert dispatch_count() == 1
     end
   end
 
@@ -324,7 +414,12 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
 
       assert dispatch_count() == 0
 
-      {:ok, %{command: attributed}} = request!(fixture)
+      # The refused attempt recorded its own `admission.decided`, so the
+      # goal's decision refs have MOVED. A second authorization must be taken
+      # against what projection says now — which is exactly what the B4
+      # supersede check is for, and what an operator reading the current
+      # decisions would do.
+      {:ok, %{command: attributed}} = request!(fixture, current_refs(fixture.goal.id))
 
       assert {:ok, %{outcome: :dispatched, decision_id: decision_id}} =
                Handoffs.perform(
@@ -487,6 +582,191 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
   end
 
   # ----------------------------------------------------------------------------
+  # Authorized decision refs (B4)
+  # ----------------------------------------------------------------------------
+
+  describe "the transfer is authorized against a frozen decision-ref set" do
+    test "a decision recorded between request and perform refuses as superseded" do
+      fixture = fixture()
+      {:ok, %{command: command}} = request!(fixture)
+
+      # Something else decides admission for this goal after the operator
+      # authorized the transfer. The authorization no longer describes the
+      # state being transferred.
+      append_admission_event!(
+        fixture.goal.id,
+        admission_payload(decision_id: Ecto.UUID.generate())
+      )
+
+      probe = probe_counter()
+
+      assert {:error, :decision_superseded} =
+               Handoffs.perform(
+                 fixture.goal.id,
+                 command.command_id,
+                 perform_opts(observe: probe.fun)
+               )
+
+      # Conservative refusal: nothing observed, nothing decided, nothing
+      # transferred. The operator re-authorizes with a NEW command.
+      assert probe.count.() == 0
+      assert handoff_events(fixture.goal.id) == []
+      assert handoff_decisions(fixture.goal.id) == []
+      assert dispatch_count() == 0
+      assert lease_count(fixture.goal.id) == 0
+      assert run_ids(fixture.goal.id) == [fixture.run.id]
+    end
+
+    test "the authorized refs live in the durable payload, so a restart reconstructs them" do
+      fixture = fixture()
+      {:ok, %{command: command, handoff_id: handoff_id}} = request!(fixture)
+
+      # Everything the perform side reads is durable: nothing about the
+      # authorization lives in the caller's memory or in the Oban job args.
+      reloaded = Commands.get(fixture.goal.id, command.command_id)
+      assert reloaded.payload["decision_refs"] == [fixture.decision_id]
+      assert reloaded.result["decision_refs"] == [fixture.decision_id]
+      assert reloaded.id == handoff_id
+
+      [job] = Repo.all(Job)
+      assert Enum.sort(Map.keys(job.args)) == ["command_id", "goal_id", "handoff_id"]
+
+      # A cold perform driven only from the durable row still transfers.
+      assert {:ok, %{outcome: :dispatched}} =
+               Handoffs.perform(fixture.goal.id, command.command_id, perform_opts())
+    end
+
+    test "re-requesting the same command id with different refs is a conflict, not a replacement" do
+      fixture = fixture()
+      attrs = handoff_attrs(fixture)
+      assert {:ok, %{command: first}} = Handoffs.request(fixture.goal.id, attrs)
+
+      widened = put_payload(attrs, "decision_refs", [fixture.decision_id, Ecto.UUID.generate()])
+
+      assert {:error, {:command_conflict, detail}} = Handoffs.request(fixture.goal.id, widened)
+      assert detail["command_id"] == first.command_id
+
+      # The authorized set is unchanged: a conflicting re-request cannot
+      # silently widen what the operator approved.
+      assert Commands.get(fixture.goal.id, first.command_id).payload["decision_refs"] ==
+               [fixture.decision_id]
+    end
+
+    test "an intent authorizing refs that never existed refuses" do
+      fixture = fixture()
+
+      attrs = put_payload(handoff_attrs(fixture), "decision_refs", [Ecto.UUID.generate()])
+      {:ok, %{command: command}} = Handoffs.request(fixture.goal.id, attrs)
+
+      assert {:error, :decision_superseded} =
+               Handoffs.perform(fixture.goal.id, command.command_id, perform_opts())
+
+      assert dispatch_count() == 0
+    end
+
+    test "non-UUID refs are refused at request time, before any row is written" do
+      fixture = fixture()
+      attrs = put_payload(handoff_attrs(fixture), "decision_refs", ["not-a-uuid"])
+
+      assert {:error, changeset} = Handoffs.request(fixture.goal.id, attrs)
+      assert errors_on(changeset)[:decision_refs] == ["must contain only UUIDs"]
+      assert Commands.list(fixture.goal.id) |> Enum.filter(&(&1.type == "run.handoff")) == []
+    end
+  end
+
+  # ----------------------------------------------------------------------------
+  # Durable delivery and reconciliation (B1)
+  # ----------------------------------------------------------------------------
+
+  describe "reconcile/1 repairs lost delivery attempts" do
+    test "an intent whose delivery attempt was lost gets one back" do
+      fixture = fixture()
+      {:ok, %{handoff_id: handoff_id}} = request!(fixture)
+
+      # The crash window: the command row committed, the job did not survive.
+      Repo.delete_all(Job)
+      assert job_count() == 0
+
+      assert {:ok, %{repaired_count: 1, failures: []}} = Handoffs.reconcile()
+
+      assert [job] = Repo.all(Job)
+      assert job.queue == "handoff"
+      assert job.args["handoff_id"] == handoff_id
+    end
+
+    test "an intent that already has a live attempt is left alone" do
+      fixture = fixture()
+      {:ok, _} = request!(fixture)
+
+      assert {:ok, %{repaired_count: 0, failures: []}} = Handoffs.reconcile()
+      assert job_count() == 1
+    end
+
+    test "a completed handoff is settled and never re-enqueued" do
+      fixture = fixture()
+      {:ok, %{command: command}} = request!(fixture)
+
+      assert {:ok, %{outcome: :dispatched}} =
+               Handoffs.perform(fixture.goal.id, command.command_id, perform_opts())
+
+      Repo.delete_all(from j in Job, where: j.queue == "handoff")
+
+      assert {:ok, %{repaired_count: 0, failures: []}} = Handoffs.reconcile()
+      assert handoff_job_count() == 0
+    end
+
+    test "a refused handoff is settled: reconcile never re-observes behind the operator" do
+      fixture = fixture()
+      {:ok, %{command: command}} = request!(fixture)
+
+      assert {:ok, %{outcome: :refused}} =
+               Handoffs.perform(
+                 fixture.goal.id,
+                 command.command_id,
+                 perform_opts(snapshot: degraded_snapshot!())
+               )
+
+      Repo.delete_all(Job)
+
+      assert {:ok, %{repaired_count: 0, failures: []}} = Handoffs.reconcile()
+      assert job_count() == 0
+    end
+
+    test "a pointer without its dispatch row is NOT settled: reconcile restores delivery" do
+      fixture = fixture()
+      {:ok, %{command: command}} = request!(fixture)
+
+      assert {:ok, %{outcome: :dispatched, run: receiver}} =
+               Handoffs.perform(fixture.goal.id, command.command_id, perform_opts())
+
+      # Simulate the crash window between the pointer and the dispatch row.
+      Repo.delete_all(DispatchRecord)
+      Repo.delete_all(Job)
+
+      assert {:ok, %{repaired_count: 1, failures: []}} = Handoffs.reconcile()
+      assert handoff_job_count() == 1
+
+      # And the repaired delivery converges rather than transferring again.
+      assert {:ok, %{outcome: :converged, run: same}} =
+               Handoffs.perform(fixture.goal.id, command.command_id, perform_opts())
+
+      assert same.id == receiver.id
+      assert length(handoff_events(fixture.goal.id)) == 1
+    end
+
+    test "a rejected command is not an intent and is never enqueued by reconcile" do
+      fixture = fixture()
+
+      attrs = put_payload(handoff_attrs(fixture), "to_provider_id", @sender_provider)
+      {:ok, %{command: command}} = Handoffs.request(fixture.goal.id, attrs)
+      assert command.status == "rejected"
+
+      assert {:ok, %{repaired_count: 0, failures: []}} = Handoffs.reconcile()
+      assert job_count() == 0
+    end
+  end
+
+  # ----------------------------------------------------------------------------
   # Privacy
   # ----------------------------------------------------------------------------
 
@@ -645,6 +925,7 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
       "payload" => %{
         "run_id" => fixture.run.id,
         "checkpoint_id" => fixture.checkpoint_id,
+        "decision_refs" => [fixture.decision_id],
         "to_provider_id" => @receiver_provider,
         "to_adapter_id" => @receiver_adapter,
         "scope" => @receiver_scope,
@@ -657,10 +938,18 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
   defp put_payload(attrs, key, value),
     do: put_in(attrs, ["payload", key], value)
 
-  defp request!(fixture) do
-    {:ok, result} = Handoffs.request(fixture.goal.id, handoff_attrs(fixture))
+  defp request!(fixture, refs \\ nil) do
+    attrs =
+      case refs do
+        nil -> handoff_attrs(fixture)
+        refs -> put_payload(handoff_attrs(fixture), "decision_refs", refs)
+      end
+
+    {:ok, result} = Handoffs.request(fixture.goal.id, attrs)
     {:ok, result}
   end
+
+  defp current_refs(goal_id), do: Continuation.decision_refs(Repo, goal_id)
 
   defp perform_opts(overrides \\ []) do
     snapshot = Keyword.get_lazy(overrides, :snapshot, &eligible_snapshot!/0)
@@ -789,4 +1078,28 @@ defmodule Shoestring.Cobbler.HandoffProductionTest do
   end
 
   defp job_count, do: Repo.aggregate(Job, :count, :id)
+
+  defp handoff_job_count do
+    Repo.one!(from j in Job, where: j.queue == "handoff", select: count(j.id))
+  end
+
+  defp dispatch_job_count do
+    Repo.one!(from j in Job, where: j.queue == "dispatch", select: count(j.id))
+  end
+
+  # A counting observe fun: proves the provider probe was never reached, which
+  # event absence alone cannot (an event could be absent because the append
+  # failed rather than because nothing was observed).
+  defp probe_counter do
+    {:ok, agent} = Agent.start_link(fn -> 0 end)
+    snapshot = eligible_snapshot!()
+
+    %{
+      fun: fn _scoping ->
+        Agent.update(agent, &(&1 + 1))
+        {:ok, snapshot}
+      end,
+      count: fn -> Agent.get(agent, & &1) end
+    }
+  end
 end

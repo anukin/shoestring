@@ -21,6 +21,7 @@ defmodule Shoestring.Application do
       ] ++
         dispatch_reconciler_children() ++
         wakeup_reconciler_children() ++
+        handoff_reconciler_children() ++
         capacity_supervisor_children() ++
         elves_children() ++
         [
@@ -82,6 +83,17 @@ defmodule Shoestring.Application do
   defp wakeup_reconciler_children do
     if Application.get_env(:shoestring, :wakeup_reconciler, true) do
       [Shoestring.Cobbler.WakeupReconciler]
+    else
+      []
+    end
+  end
+
+  # Startup-only handoff repair: one reconcile pass at boot restoring lost
+  # delivery attempts for standing handoff intents. No timers, no new handoff
+  # semantics. Disabled in test via `:handoff_reconciler`.
+  defp handoff_reconciler_children do
+    if Application.get_env(:shoestring, :handoff_reconciler, true) do
+      [Shoestring.Cobbler.HandoffReconciler]
     else
       []
     end

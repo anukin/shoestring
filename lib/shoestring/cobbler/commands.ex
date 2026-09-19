@@ -200,6 +200,7 @@ defmodule Shoestring.Cobbler.Commands do
            "kind" => "handoff_requested",
            "run_id" => command.payload["run_id"],
            "checkpoint_id" => checkpoint.id,
+           "decision_refs" => command.payload["decision_refs"],
            "to_provider_id" => command.payload["to_provider_id"],
            "to_adapter_id" => command.payload["to_adapter_id"],
            "scope" => command.payload["scope"],
