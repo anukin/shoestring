@@ -762,6 +762,51 @@ defmodule ShoestringWeb.CobblerPresentation do
         "unknown"
       )
 
+  @doc """
+  A countdown beside an absolute instant, for a boundary the operator is
+  waiting on (a lease deadline, a deferral target, a durable wake intent).
+
+  Pure and clock-injected: `now` is passed in, never read here, so the
+  relative text is a projection of two given instants rather than an
+  invented one. It is computed once per render and does not tick — the
+  caller keeps `absolute` reachable (the `datetime`/`title` attributes) so
+  the exact instant stays readable and assertable.
+
+  Coarsens to the largest whole unit (days, hours, minutes, else seconds).
+  `elapsed?` marks an instant already in the past, which callers word for
+  themselves; a nil instant yields nil, so no time is invented for an
+  absent one.
+  """
+  @spec countdown_presentation(DateTime.t() | nil, DateTime.t()) ::
+          %{absolute: String.t(), relative: String.t(), elapsed?: boolean()} | nil
+  def countdown_presentation(nil, _now), do: nil
+
+  def countdown_presentation(%DateTime{} = target, %DateTime{} = now) do
+    seconds = DateTime.diff(target, now, :second)
+
+    %{
+      absolute: DateTime.to_iso8601(target),
+      relative: relative_text(seconds),
+      elapsed?: seconds < 0
+    }
+  rescue
+    _error -> nil
+  end
+
+  def countdown_presentation(_target, _now), do: nil
+
+  defp relative_text(0), do: "now"
+  defp relative_text(seconds) when seconds > 0, do: "in " <> duration_text(seconds)
+  defp relative_text(seconds), do: duration_text(-seconds) <> " ago"
+
+  defp duration_text(seconds) when seconds < 60, do: unit_text(seconds, "second")
+  defp duration_text(seconds) when seconds < 3600, do: unit_text(div(seconds, 60), "minute")
+  defp duration_text(seconds) when seconds < 86_400, do: unit_text(div(seconds, 3600), "hour")
+  defp duration_text(seconds), do: unit_text(div(seconds, 86_400), "day")
+
+  defp unit_text(1, unit), do: "1 #{unit}"
+  defp unit_text(count, unit), do: "#{count} #{unit}s"
+
   defp lease_status(label, dot_class, badge_class, icon, status) do
     %{label: label, dot_class: dot_class, badge_class: badge_class, icon: icon, status: status}
   end

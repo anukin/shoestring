@@ -30,6 +30,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
 
   alias Shoestring.Cobbler
   alias Shoestring.Cobbler.AdmissionDecision
+  alias Shoestring.Cobbler.Leases
   alias Shoestring.Cobbler.{WakeupRecord, Wakeups}
   alias Shoestring.Harness.{CheckpointRecord, ExecutionLeaseRecord, RunRecord}
   alias Shoestring.Repo
@@ -214,6 +215,10 @@ defmodule ShoestringWeb.CobblerGoalLive do
   end
 
   defp load_detail(socket, %Goal{} = goal) do
+    # One reference instant per render: every countdown on the page is
+    # measured from the same "now", so the rows cannot disagree with
+    # each other.
+    now = DateTime.utc_now()
     events = safe_replay(goal.id)
     decisions = admission_decisions(events)
     latest_decision = List.last(decisions)
@@ -223,6 +228,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
     state = CobblerPresentation.derive_goal_state(events)
     claim = safe_active_claim()
     lease = latest_lease(goal.id)
+    wakeup = pending_wakeup(goal.id)
     checkpoint = latest_checkpoint(goal.id)
     position = Repo.get_by(ProjectorPosition, goal_id: goal.id, projector: @projector)
     projection = projection_state(position)
@@ -241,7 +247,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:latest_decision, latest_decision)
     |> assign(:handoffs, handoffs)
     |> assign(:latest_handoff, List.last(handoffs))
-    |> assign(:lease, lease_display(lease))
+    |> assign(:lease, lease_display(lease, now))
     |> assign(:checkpoint, checkpoint_display(checkpoint))
     |> assign(:claim, claim)
     |> assign(:claim_mine?, is_map(claim) and claim.goal_id == goal.id)
@@ -253,7 +259,12 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:commands_empty?, commands == [])
     |> assign(:respond_forms, respond_forms(commands))
     |> assign(:recheck_form, to_form(%{"operator_identity" => ""}, as: :recheck))
-    |> assign(:pending_wakeup, pending_wakeup(goal.id))
+    |> assign(:pending_wakeup, wakeup)
+    |> assign(:wake_countdown, CobblerPresentation.countdown_presentation(wakeup_at(wakeup), now))
+    |> assign(
+      :defer_countdown,
+      CobblerPresentation.countdown_presentation(defer_until(latest_decision), now)
+    )
     |> stream(:commands, commands, reset: true, dom_id: &command_dom_id/1)
     |> stream(:events, sanitized_events, reset: true, dom_id: &event_dom_id/1)
   end
@@ -700,9 +711,34 @@ defmodule ShoestringWeb.CobblerGoalLive do
     _error -> nil
   end
 
-  defp lease_display(nil), do: nil
+  # Countdown text for the template, with the absolute instant kept in the
+  # `datetime`/`title` attributes. If an instant could not be projected the
+  # raw recorded value is still shown rather than nothing — the page never
+  # drops a time it holds, and never invents one it does not.
+  defp countdown_label(%{relative: relative}, _recorded), do: relative
+  defp countdown_label(_countdown, recorded), do: to_string(recorded)
 
-  defp lease_display(%ExecutionLeaseRecord{} = lease) do
+  defp countdown_datetime(%{absolute: absolute}, _recorded), do: absolute
+  defp countdown_datetime(_countdown, recorded), do: to_string(recorded)
+
+  defp deadline_label(%{elapsed?: true, relative: relative}, _recorded), do: "Passed #{relative}"
+  defp deadline_label(%{relative: relative}, _recorded), do: "Expires #{relative}"
+  defp deadline_label(_countdown, recorded), do: to_string(recorded)
+
+  defp wakeup_at(%WakeupRecord{wake_at: wake_at}), do: wake_at
+  defp wakeup_at(_wakeup), do: nil
+
+  # The display map carries the raw payload string; the parsed instant lives
+  # on the `AdmissionDecision` struct beside it, so the countdown is derived
+  # from a real `DateTime` and never from re-parsing display text.
+  defp defer_until(%{decision: %AdmissionDecision{defer_until: %DateTime{} = at}}), do: at
+  defp defer_until(_decision), do: nil
+
+  defp lease_display(nil, _now), do: nil
+
+  defp lease_display(%ExecutionLeaseRecord{} = lease, now) do
+    consumed = Leases.consumed(lease, repo: Repo)
+
     %{
       id: lease.id,
       status_presentation: CobblerPresentation.lease_presentation(lease.status || :unknown),
@@ -713,16 +749,42 @@ defmodule ShoestringWeb.CobblerGoalLive do
       response_reserve: lease.response_reserve,
       tool_reserve: lease.tool_reserve,
       deadline: lease.deadline,
-      checkpoint_cadence: lease.checkpoint_cadence
+      checkpoint_cadence: lease.checkpoint_cadence,
+      consumed: consumed,
+      next_boundary_text: next_boundary_text(consumed),
+      deadline_countdown: CobblerPresentation.countdown_presentation(lease.deadline, now)
     }
   end
+
+  # "Which bound is nearest, and how far away" — rendered straight from
+  # `LeaseBounds.next_boundary/1` so the page never restates the D7 rule.
+  # Absent spend is stated as absent, never as zero consumed.
+  defp next_boundary_text(nil), do: "Not recorded (no rebuildable spend for this lease)."
+
+  defp next_boundary_text(%{next_boundary: %{reached?: true, bound: bound}}) do
+    "Reached — #{boundary_label(bound)}; renewal is due."
+  end
+
+  defp next_boundary_text(%{next_boundary: %{bound: bound, unit: unit, remaining: remaining}}) do
+    "#{boundary_label(bound)} — #{remaining} #{unit_label(unit, remaining)} away."
+  end
+
+  defp boundary_label(:checkpoint_cadence), do: "Checkpoint cadence"
+  defp boundary_label(:response_budget), do: "Response budget (one reserve early)"
+  defp boundary_label(:tool_budget), do: "Tool budget (one reserve early)"
+
+  defp unit_label(:responses, 1), do: "response"
+  defp unit_label(:responses, _remaining), do: "responses"
+  defp unit_label(:tools, 1), do: "tool call"
+  defp unit_label(:tools, _remaining), do: "tool calls"
 
   defp latest_checkpoint(goal_id) do
     Repo.one(
       from checkpoint in CheckpointRecord,
         where: checkpoint.goal_id == ^goal_id,
         order_by: [desc: checkpoint.inserted_at],
-        limit: 1
+        limit: 1,
+        preload: [:artifact_references]
     )
   rescue
     _error -> nil
@@ -746,9 +808,21 @@ defmodule ShoestringWeb.CobblerGoalLive do
       id: checkpoint.id,
       next_action: RunPresentation.redact_text(checkpoint.next_action || ""),
       stop_reason: RunPresentation.redact_text(checkpoint.stop_reason || ""),
-      contents_text: text
+      contents_text: text,
+      artifact_ids: checkpoint_artifact_ids(checkpoint)
     }
   end
+
+  # The checkpoint's artifacts, from the already-persisted
+  # `harness_checkpoint_artifact_references` join. An unloaded association
+  # (a rescued read) yields `[]`, which the card renders as "none recorded"
+  # rather than as a dangling empty list.
+  defp checkpoint_artifact_ids(%CheckpointRecord{artifact_references: references})
+       when is_list(references) do
+    references |> Enum.map(& &1.artifact_id) |> Enum.sort()
+  end
+
+  defp checkpoint_artifact_ids(_checkpoint), do: []
 
   defp projection_state(nil), do: %{status: "not_projected", error_detail: nil}
 

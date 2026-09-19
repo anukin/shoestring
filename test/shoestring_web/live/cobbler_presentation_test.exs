@@ -145,4 +145,60 @@ defmodule ShoestringWeb.CobblerPresentationTest do
       assert length(Enum.uniq(renewal_statuses)) == length(renewal_statuses)
     end
   end
+
+  describe "countdown_presentation/2" do
+    @now ~U[2026-09-19 12:00:00.000000Z]
+
+    test "coarsens a future instant to its largest whole unit" do
+      for {seconds, expected} <- [
+            {30, "in 30 seconds"},
+            {1, "in 1 second"},
+            {60, "in 1 minute"},
+            {150, "in 2 minutes"},
+            {3600, "in 1 hour"},
+            {7200, "in 2 hours"},
+            {86_400, "in 1 day"},
+            {172_800, "in 2 days"}
+          ] do
+        target = DateTime.add(@now, seconds, :second)
+        countdown = CobblerPresentation.countdown_presentation(target, @now)
+
+        assert countdown.relative == expected
+        assert countdown.elapsed? == false
+        assert countdown.absolute == DateTime.to_iso8601(target)
+      end
+    end
+
+    test "marks a past instant elapsed and words it in the past" do
+      countdown =
+        CobblerPresentation.countdown_presentation(DateTime.add(@now, -300, :second), @now)
+
+      assert countdown.relative == "5 minutes ago"
+      assert countdown.elapsed? == true
+    end
+
+    test "the instant itself is neither future nor elapsed" do
+      countdown = CobblerPresentation.countdown_presentation(@now, @now)
+
+      assert countdown.relative == "now"
+      assert countdown.elapsed? == false
+    end
+
+    # No time is invented for an absent one: a nil instant yields nil, and
+    # the caller falls back to whatever it actually recorded.
+    test "an absent instant yields no countdown" do
+      assert CobblerPresentation.countdown_presentation(nil, @now) == nil
+      assert CobblerPresentation.countdown_presentation("2026-09-19T12:00:00Z", @now) == nil
+    end
+
+    # The absolute instant always survives, so it stays reachable through
+    # the `datetime`/`title` attributes even when the relative text is coarse.
+    test "keeps the exact instant alongside the coarsened text" do
+      target = DateTime.add(@now, 5401, :second)
+      countdown = CobblerPresentation.countdown_presentation(target, @now)
+
+      assert countdown.relative == "in 1 hour"
+      assert countdown.absolute == DateTime.to_iso8601(target)
+    end
+  end
 end

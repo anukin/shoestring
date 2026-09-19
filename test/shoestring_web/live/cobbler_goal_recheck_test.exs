@@ -51,6 +51,15 @@ defmodule ShoestringWeb.CobblerGoalRecheckTest do
     assert wakeup_count(goal.id) == 1
     assert wakeup_job_count(goal.id) == 1
     assert has_element?(view, "#cobbler-pending-wake")
+
+    # The wake intent reads as a countdown, with the exact recorded instant
+    # kept in the `datetime` attribute rather than replaced by it. A manual
+    # recheck wakes immediately, so the relative wording here is "now" or a
+    # few seconds past; the wording itself is pinned deterministically in
+    # `CobblerPresentationTest`, not against the wall clock.
+    assert has_element?(view, "#cobbler-wake-countdown")
+    assert has_element?(view, "#cobbler-wake-countdown[datetime]")
+    assert has_element?(view, "#cobbler-wake-countdown[title]")
   end
 
   test "an anonymous recheck is rejected and schedules nothing", %{conn: conn} do

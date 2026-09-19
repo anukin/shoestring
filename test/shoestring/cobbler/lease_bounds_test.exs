@@ -378,6 +378,55 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
     assert :renewal_due in epoch2_effects
   end
 
+  # Characterization, not a regression lock: `next_boundary/1` already
+  # resolves ties this way at 931ef38, because `Enum.min_by/2` returns the
+  # first minimum. This test passes against that commit by design — it makes
+  # the documented order (cadence, then response budget, then tool budget) a
+  # contract instead of an implicit property of the fold.
+  test "next_boundary resolves ties in the documented order" do
+    # Cadence 8 ties the response budget taken one reserve early (10 - 2);
+    # the tool bound is further out. Cadence wins.
+    cadence_tie =
+      bounds(%{
+        checkpoint_cadence: 8,
+        response_budget: 10,
+        tool_budget: 25,
+        reserves: %{response: 2, tool: 5}
+      })
+
+    assert %{bound: :checkpoint_cadence, unit: :responses, remaining: 8, reached?: false} =
+             LeaseBounds.next_boundary(cadence_tie)
+
+    # With the cadence pushed out of reach, the two budgets tie at 8
+    # (10 - 2 responses, 13 - 5 tools). The response budget wins.
+    budget_tie =
+      bounds(%{
+        checkpoint_cadence: 100,
+        response_budget: 10,
+        tool_budget: 13,
+        reserves: %{response: 2, tool: 5}
+      })
+
+    assert %{bound: :response_budget, unit: :responses, remaining: 8, reached?: false} =
+             LeaseBounds.next_boundary(budget_tie)
+  end
+
+  # `reached?` must be exactly `due?/1` so the read model can never disagree
+  # with the latch that actually fires renewal, and `remaining` clamps at
+  # zero rather than going negative once a bound is passed.
+  test "next_boundary agrees with due? and clamps remaining at zero" do
+    spent =
+      bounds(%{checkpoint_cadence: 3, response_budget: 10, reserves: %{response: 1, tool: 1}})
+
+    {spent, _effects} = LeaseBounds.drain(spent, @run_id, Enum.map(1..5, &output(200 + &1)))
+
+    assert spent.responses == 5
+    assert LeaseBounds.due?(spent)
+
+    assert %{bound: :checkpoint_cadence, remaining: 0, reached?: true} =
+             LeaseBounds.next_boundary(spent)
+  end
+
   # ----------------------------------------------------------------------------
   # Helpers
   # ----------------------------------------------------------------------------
