@@ -292,7 +292,139 @@ defmodule Shoestring.Elves.TerminalCheckpointTest do
     end
   end
 
+  describe "acceptance criteria from goal/task rows (DOCUMENTATION)" do
+    # Standing-contract label: DOCUMENTATION. `acceptance_criteria` is new
+    # in this slice (the functions under test do not exist on the pre-fix
+    # base commit), so these cannot fail there for a behavioural reason.
+    # The behavioural locks live in `ElfCheckpointResumeTest`, which
+    # drives the real Elf and references only base-present modules.
+    test "collect/3 names the durable goal and task, titles and descriptions" do
+      goal = FakeHelpers.insert_goal() |> with_goal(%{"title" => "Criteria goal"})
+      task = FakeHelpers.insert_task(goal) |> with_task(%{"title" => "Criteria task"})
+      run_id = Ecto.UUID.generate()
+      fixture = ElfWorktreeFixture.create!(run_id)
+      on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+      state =
+        elf_state_for(goal.id, run_id, fixture.worktree.workspace_ref)
+        |> Map.put(:task_id, task.id)
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :completed})
+      assert length(inputs.acceptance_criteria) == 2
+      joined = Enum.join(inputs.acceptance_criteria, "\n")
+      assert joined =~ "Criteria goal"
+      assert joined =~ "Criteria task"
+    end
+
+    test "a long goal description never drops the task contract entry" do
+      goal =
+        FakeHelpers.insert_goal()
+        |> with_goal(%{"title" => "Long goal", "description" => String.duplicate("g", 3_000)})
+
+      task =
+        FakeHelpers.insert_task(goal)
+        |> with_task(%{"title" => "Kept task", "description" => "Task stays."})
+
+      run_id = Ecto.UUID.generate()
+      fixture = ElfWorktreeFixture.create!(run_id)
+      on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+      state =
+        elf_state_for(goal.id, run_id, fixture.worktree.workspace_ref)
+        |> Map.put(:task_id, task.id)
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :completed})
+      assert length(inputs.acceptance_criteria) == 2
+      assert Enum.all?(inputs.acceptance_criteria, &(String.length(&1) <= 2_000))
+      assert Enum.join(inputs.acceptance_criteria, "\n") =~ "Kept task"
+    end
+
+    test "secret-looking contract text is redacted but required content stays" do
+      goal =
+        FakeHelpers.insert_goal()
+        |> with_goal(%{
+          "title" => "Secret goal",
+          "description" => "deploy key api_key: hunter2-top-secret-value for staging"
+        })
+
+      task =
+        FakeHelpers.insert_task(goal)
+        |> with_task(%{"title" => "Secret task", "description" => "Rotate it."})
+
+      run_id = Ecto.UUID.generate()
+      fixture = ElfWorktreeFixture.create!(run_id)
+      on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+      state =
+        elf_state_for(goal.id, run_id, fixture.worktree.workspace_ref)
+        |> Map.put(:task_id, task.id)
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :completed})
+      joined = Enum.join(inputs.acceptance_criteria, "\n")
+      refute joined =~ "hunter2"
+      assert joined =~ "[REDACTED]"
+      assert joined =~ "Secret goal"
+      assert joined =~ "Secret task"
+      assert joined =~ "Rotate it."
+      assert Enum.all?(inputs.acceptance_criteria, &(String.length(&1) <= 2_000))
+    end
+
+    test "reactive_checkpoint_id/1 is deterministic, distinct, and namespaced apart" do
+      run_a = Ecto.UUID.generate()
+      run_b = Ecto.UUID.generate()
+
+      assert TerminalCheckpoint.reactive_checkpoint_id(run_a) ==
+               TerminalCheckpoint.reactive_checkpoint_id(run_a)
+
+      assert TerminalCheckpoint.reactive_checkpoint_id(run_a) !=
+               TerminalCheckpoint.reactive_checkpoint_id(run_b)
+
+      assert TerminalCheckpoint.reactive_checkpoint_id(run_a) !=
+               TerminalCheckpoint.checkpoint_id(run_a)
+
+      assert {:ok, _} = Ecto.UUID.cast(TerminalCheckpoint.reactive_checkpoint_id(run_a))
+    end
+
+    test "record_reactive/3 returns the deterministic id through a stub writer" do
+      goal = FakeHelpers.insert_goal()
+      run_id = Ecto.UUID.generate()
+      test_pid = self()
+
+      writer = fn _goal_id, checkpoint, _opts ->
+        send(test_pid, {:written, checkpoint})
+
+        {:ok,
+         %{
+           checkpoint_id: checkpoint.checkpoint_id,
+           outcome: :recorded,
+           events: [],
+           checkpoint: checkpoint
+         }}
+      end
+
+      state =
+        elf_state("workspace/missing-#{System.unique_integer([:positive])}")
+        |> Map.merge(%{goal_id: goal.id, run_id: run_id})
+
+      assert {:ok, recorded_id} =
+               TerminalCheckpoint.record_reactive(state, "lease_exhausted", writer: writer)
+
+      assert recorded_id == TerminalCheckpoint.reactive_checkpoint_id(run_id)
+      assert_received {:written, checkpoint}
+      assert checkpoint.checkpoint_id == recorded_id
+      assert checkpoint.extensions["shoestring.elf:checkpoint_kind"] == "reactive"
+    end
+  end
+
   # -- Helpers --
+
+  defp with_goal(goal, attrs) do
+    goal |> Shoestring.Trajectory.Goal.changeset(attrs) |> Shoestring.Repo.update!()
+  end
+
+  defp with_task(task, attrs) do
+    task |> Shoestring.Trajectory.Task.changeset(attrs) |> Shoestring.Repo.update!()
+  end
 
   defp elf_state_for(goal_id, run_id, workspace_ref, dispatch_id \\ nil) do
     %{

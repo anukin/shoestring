@@ -64,7 +64,8 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   import Ecto.Query
 
   alias Shoestring.Harness.{CheckpointFallback, Checkpoints, Clock}
-  alias Shoestring.Trajectory.{Artifact, Goal, Redaction, Task, TrajectoryEvent}
+  alias Shoestring.Trajectory.{Artifact, Goal, Redaction, TrajectoryEvent}
+  alias Shoestring.Trajectory.Task, as: TaskSchema
 
   @max_changed_files 50
   @max_diff_bytes 32 * 1024
@@ -97,6 +98,35 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   def checkpoint_id(run_id) when is_binary(run_id) do
     <<b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, _::binary>> =
       :crypto.hash(:sha256, "shoestring:terminal-checkpoint:v1:#{run_id}")
+
+    bytes =
+      <<b0, b1, b2, b3, b4, b5, Bitwise.bor(Bitwise.band(b6, 0x0F), 0x40), b7,
+        Bitwise.bor(Bitwise.band(b8, 0x3F), 0x80), b9, b10, b11, b12, b13, b14, b15>>
+
+    hex = Base.encode16(bytes, case: :lower)
+
+    <<a::binary-size(8), b::binary-size(4), c::binary-size(4), d::binary-size(4),
+      e::binary-size(12)>> = hex
+
+    "#{a}-#{b}-#{c}-#{d}-#{e}"
+  end
+
+  @doc """
+  Deterministic checkpoint id for a run's reactive (lease-decline)
+  checkpoint.
+
+  Same construction as `checkpoint_id/1` under a distinct namespace, so a
+  run's reactive and terminal checkpoints never collide while every retry
+  of the decline path converges on one idempotent row via the
+  `Checkpoints` writer (`"checkpoint-created:<id>"` replays instead of
+  duplicating). Callers pin `state.lease_checkpoint_id` to this before
+  writing; `record_reactive/3` derives it from `state.run_id` when the
+  caller has not pinned one.
+  """
+  @spec reactive_checkpoint_id(Ecto.UUID.t()) :: Ecto.UUID.t()
+  def reactive_checkpoint_id(run_id) when is_binary(run_id) do
+    <<b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, _::binary>> =
+      :crypto.hash(:sha256, "shoestring:reactive-checkpoint:v1:#{run_id}")
 
     bytes =
       <<b0, b1, b2, b3, b4, b5, Bitwise.bor(Bitwise.band(b6, 0x0F), 0x40), b7,
@@ -167,7 +197,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   """
   @spec collect_reactive(map(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def collect_reactive(state, reason, opts \\ []) do
-    checkpoint_id = Map.get(state, :lease_checkpoint_id) || Ecto.UUID.generate()
+    checkpoint_id = reactive_id(state)
 
     with {:ok, worktree} <- resolve_worktree(state, opts),
          {:ok, git} <- git_evidence(worktree, opts),
@@ -231,7 +261,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   @spec record_reactive(map(), String.t(), keyword()) ::
           {:ok, Ecto.UUID.t()} | {:error, term()}
   def record_reactive(state, reason, opts \\ []) do
-    checkpoint_id = Map.get(state, :lease_checkpoint_id) || Ecto.UUID.generate()
+    checkpoint_id = reactive_id(state)
     state = Map.put(state, :lease_checkpoint_id, checkpoint_id)
 
     result =
@@ -267,7 +297,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   @spec reactive_floor_inputs(map(), String.t(), term(), keyword()) :: map()
   def reactive_floor_inputs(state, reason, collection_error, opts \\ []) do
     anchor = last_event_anchor(state)
-    checkpoint_id = Map.get(state, :lease_checkpoint_id) || Ecto.UUID.generate()
+    checkpoint_id = reactive_id(state)
     stop = reactive_stop_reason(reason)
 
     %{
@@ -297,20 +327,42 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
 
   # -- Acceptance contract (goal/task rows, never invented) --
 
-  # Deterministic acceptance criteria from the durable goal/task rows.
-  # Unavailable facts are stated explicitly ("unknown"/"not found"); no
-  # model inference, no transcript. Always a non-empty list within the
-  # fallback text budget.
+  # Stable reactive id: the pinned `lease_checkpoint_id` when the caller
+  # set one, otherwise derived deterministically from the run id so every
+  # retry of the decline path converges on one idempotent row. A random id
+  # is only the last resort for states without a run id (never the Elf,
+  # which always has one).
+  defp reactive_id(state) do
+    case Map.get(state, :lease_checkpoint_id) do
+      id when is_binary(id) ->
+        id
+
+      _other ->
+        case Map.get(state, :run_id) do
+          run_id when is_binary(run_id) -> reactive_checkpoint_id(run_id)
+          _other -> Ecto.UUID.generate()
+        end
+    end
+  end
+
+  # Deterministic acceptance criteria from the durable goal/task rows: one
+  # bounded entry per row so a long goal can never drop the task contract.
+  # Each entry is redacted BEFORE truncation (a replacement can expand past
+  # the budget, so truncate-then-redact could overflow the writer). Order
+  # is fixed (goal, then task). Unavailable facts are stated explicitly
+  # ("unknown"/"not found"); no model inference, no transcript. Always a
+  # non-empty list within the fallback text budget.
   defp acceptance_criteria(state, opts) do
     repo = Keyword.get(opts, :repo, Map.get(state, :repo))
     goal_id = Map.get(state, :goal_id)
     task_id = Map.get(state, :task_id)
 
-    goal_text = goal_criterion(repo, goal_id)
-    task_text = task_criterion(repo, goal_id, task_id)
-
-    [truncate_criterion("accept #{goal_text}; #{task_text}")]
+    [
+      "accept #{goal_criterion(repo, goal_id)}",
+      "accept #{task_criterion(repo, goal_id, task_id)}"
+    ]
     |> Redaction.redact()
+    |> Enum.map(&truncate_criterion/1)
   rescue
     _error -> [@default_criteria]
   catch
@@ -338,11 +390,11 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
     do: "goal #{inspect(goal_id)} unavailable: goal id missing"
 
   defp task_criterion(repo, goal_id, task_id) when is_atom(repo) and is_binary(task_id) do
-    case repo.get(Task, task_id) do
-      %Task{goal_id: ^goal_id, title: title, description: description} ->
+    case repo.get(TaskSchema, task_id) do
+      %TaskSchema{goal_id: ^goal_id, title: title, description: description} ->
         "task #{task_id} #{criterion_title(title)} — #{criterion_description(description)}"
 
-      %Task{goal_id: other_goal} when is_binary(other_goal) ->
+      %TaskSchema{goal_id: other_goal} when is_binary(other_goal) ->
         "task #{task_id} unavailable: task belongs to another goal"
 
       nil ->
