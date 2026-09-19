@@ -1,42 +1,45 @@
 defmodule Shoestring.Harness.HandoffCorrectionTest do
   @moduledoc """
-  Hermetic regression locks for the handoff loop-closure correction (I5),
-  plus the round-2 finding-5 replay honesty fix:
+  What `Shoestring.Elves.resume_run/2` does, and no longer does.
 
-    * P1 intent-first: `handoff.created` precedes `run.requested` precedes
-      the adapter effect.
-    * Replay honesty (finding 5): a present receiver row is NOT success.
-      On replay the receiver is returned with zero new calls only with
-      terminal/result evidence or an observably live session; otherwise
-      the effect is re-attempted with the same handoff/run/dispatch ids
-      (at-least-once, idempotent convergence). Fake exposes no sessions,
-      so Fake replays re-attempt whenever no terminal evidence exists.
-    * P2 cross-provider = fresh session: the target receives
-      `adapter.start/2` (never resume) with a continuation-composed prompt;
-      the sender's session identity appears nowhere in the recorded request.
-    * P4 Codex `thread_resume` turn carries continuation content, not just
-      the original prompt.
-    * P5 same-provider resume without `resume/3` (Claude) returns the
-      precise `:resume_unsupported_for_provider` error; cross-provider TO
-      Claude goes through the fresh-start path.
-    * Privacy sweeps both directions: sensitive gone AND required present.
+  Same-provider resume is unchanged and still covered here: prior-session
+  reconcile, the session-mismatch refusal before any adapter call, and the
+  precise `:resume_unsupported_for_provider` error for an adapter without
+  `resume/3` (Claude).
 
-  Lock-vs-documentation ledger (base commit `4d2df5a`): the failed-start,
-  crash-before-start, no-terminal re-attempt, and dead-session tests are
-  TRUE locks — they FAIL on base, which replays any present receiver row
-  to success with zero new calls. The post-terminal and live-session
-  tests are DOCUMENTATION: they pass on base (base also returned success
-  with zero calls there) and pin the preserved success path. The
-  same-provider matrix test is DOCUMENTATION (passes on base).
+  Cross-provider handoff is refused. It used to be performed inline from this
+  function — bare receiver row, `handoff.created`, `adapter.start/2` — with
+  no receiver capacity observation, no admission decision, no lease of its
+  own, and outside the durable dispatch pipeline. That was a public,
+  unsupervised way to start a provider session, so it was removed rather than
+  gated behind a flag. The production path is
+  `Shoestring.Cobbler.Handoffs.request/3` + `HandoffWorker`, covered by
+  `Shoestring.Cobbler.HandoffProductionTest` and
+  `Shoestring.Cobbler.HandoffWorkerTest`, which is where the properties the
+  deleted tests asserted (fresh session, transcript-free projection, replay
+  convergence) now live — against the pipeline that actually supervises the
+  receiver.
+
+  ## Lock-vs-documentation ledger
+
+  TRUE behavioural locks against the PR's own prior head `335b56a`: both
+  tests in the `"cross-provider handoff is refused by this API"` group. At
+  that head the same calls returned `{:ok, %{handoff_id: ..., run: ...}}`
+  and started a Fake session, so they fail there on the success tuple — the
+  bypass itself, not a missing name.
+
+  DOCUMENTATION: the same-provider group and the Claude resume test. They
+  pass at both heads and pin behaviour this change must not disturb.
+
+  Hermetic: Fake adapter and `RequestLog` only; no provider CLI, no network.
   """
 
   use Shoestring.DataCase, async: false
 
   alias Shoestring.Elves
-  alias Shoestring.Harness.{Continuation, Contract, Fake, RunRequest}
+  alias Shoestring.Harness.{Continuation, Fake, RunRequest}
   alias Shoestring.Harness.CodexAppServer.Session
   alias Shoestring.Harness.Fake.{RequestLog, Scenario}
-  alias Shoestring.Harness.Security
   alias Shoestring.Repo
   alias Shoestring.Test.CobblerHelpers
   alias Shoestring.Test.Fixtures.FakeHelpers
@@ -113,440 +116,62 @@ defmodule Shoestring.Harness.HandoffCorrectionTest do
     end
   end
 
-  defmodule SilentStartFailureAdapter do
-    @moduledoc false
-    @behaviour Shoestring.Harness.Adapter
-
-    alias Shoestring.Harness.{Error, Fake}
-
-    @impl true
-    def identity, do: Fake.identity()
-    @impl true
-    def capabilities, do: Fake.capabilities()
-    @impl true
-    def probe(opts), do: Fake.probe(opts)
-
-    @impl true
-    def start(_request, _opts) do
-      # Crash between row insert and adapter start: durable state persists,
-      # but zero attempts are recorded in the RequestLog.
-      {:error, Error.new(:transport, "process_launch_failed", "silent start failure")}
-    end
-
-    @impl true
-    def resume(prior, request, opts), do: Fake.resume(prior, request, opts)
-    @impl true
-    def send(identity, message, opts), do: Fake.send(identity, message, opts)
-    @impl true
-    def cancel(identity, opts), do: Fake.cancel(identity, opts)
-    @impl true
-    def status(identity, opts), do: Fake.status(identity, opts)
-    @impl true
-    def stream(identity, opts), do: Fake.stream(identity, opts)
-  end
-
-  defmodule LiveSessionStubAdapter do
-    @moduledoc false
-    @behaviour Shoestring.Harness.Adapter
-
-    alias Shoestring.Harness.Fake
-
-    @impl true
-    def identity, do: Fake.identity()
-    @impl true
-    def capabilities, do: Fake.capabilities()
-    @impl true
-    def probe(opts), do: Fake.probe(opts)
-    @impl true
-    def start(request, opts), do: Fake.start(request, opts)
-    @impl true
-    def resume(prior, request, opts), do: Fake.resume(prior, request, opts)
-    @impl true
-    def send(identity, message, opts), do: Fake.send(identity, message, opts)
-    @impl true
-    def cancel(identity, opts), do: Fake.cancel(identity, opts)
-    @impl true
-    def status(identity, opts), do: Fake.status(identity, opts)
-    @impl true
-    def stream(identity, opts), do: Fake.stream(identity, opts)
-
-    @doc "Marks a receiver run id as having a live session (test process registry)."
-    def mark_live(run_id, pid \\ self()) do
-      live = Process.get(:live_session_stub_live, %{})
-      Process.put(:live_session_stub_live, Map.put(live, run_id, pid))
-      :ok
-    end
-
-    @doc "Session liveness read, mirroring CodexAppServer.lookup_session/1."
-    def lookup_session(run_id) do
-      case Process.get(:live_session_stub_live, %{}) do
-        %{^run_id => pid} when is_pid(pid) -> {:ok, pid}
-        _ -> {:error, :not_found}
-      end
-    end
-  end
-
-  describe "P1+P2: intent-first cross-provider handoff with fresh session" do
-    test "handoff.created precedes run.requested; target started fresh with composed prompt" do
+  describe "cross-provider handoff is refused by this API (B2)" do
+    test "refused with a pointer to the production path; no run, no event, no adapter call" do
       fixture = handoff_fixture()
       {:ok, log} = RequestLog.start()
-      handoff_id = Ecto.UUID.generate()
-      new_run_id = Ecto.UUID.generate()
-      new_dispatch_id = Ecto.UUID.generate()
+      runs_before = run_count()
 
-      assert {:ok, %{handoff_id: ^handoff_id, run: new_run, run_identity: identity}} =
+      assert {:error, {:handoff_requires_cobbler_command, detail}} =
                Elves.resume_run(fixture.run.id,
                  adapter: Fake,
                  adapter_opts: adapter_opts(log, Scenario.handoff_target()),
                  continuation: fixture.presented,
                  provider_session_id: @sender_session,
                  to_provider_id: "fake-harness-b",
-                 reason: "quota handoff",
-                 handoff_id: handoff_id,
-                 new_run_id: new_run_id,
-                 new_dispatch_id: new_dispatch_id
+                 reason: "quota handoff"
                )
 
-      assert new_run.id == new_run_id
-      assert new_run.goal_id == fixture.goal.id
+      assert detail["from_provider_id"] == fixture.run.provider_id
+      assert detail["to_provider_id"] == "fake-harness-b"
+      assert detail["use"] == "Shoestring.Cobbler.Handoffs.request/3"
 
-      # Fresh identity: the target session is new, never the sender's.
-      assert identity.provider_session_id == "fake-session-handoff-b"
-      refute identity.provider_session_id == @sender_session
-
-      # Fresh session: exactly one start, zero resumes.
-      assert RequestLog.count(log) == 1
-      assert RequestLog.resumes(log) == []
-      [recorded] = RequestLog.starts(log)
-
-      # Exact continuation keys (3-key pointer, additive schema unchanged).
-      assert Enum.sort(Map.keys(recorded.continuation)) ==
-               [:checkpoint_id, :decision_refs, :next_action]
-
-      assert recorded.continuation.checkpoint_id == fixture.checkpoint_id
-      assert recorded.continuation.next_action =~ @next_action_marker
-      assert recorded.continuation.decision_refs == [fixture.decision_id]
-
-      # Composed prompt: continuation IS sent, original transcript is not.
-      assert recorded.prompt =~ @next_action_marker
-      assert recorded.prompt =~ fixture.checkpoint_id
-      refute recorded.prompt =~ @original_marker
-
-      # Sender session identity appears nowhere in the recorded request.
-      refute inspect(recorded) =~ @sender_session
-
-      # Ordering proof: intent (handoff.created) before durable effect
-      # (run.requested) for the new run.
-      handoff_seq = event_sequence!(fixture.goal.id, new_run_id, "handoff.created")
-      requested_seq = event_sequence!(fixture.goal.id, new_run_id, "run.requested")
-      assert handoff_seq < requested_seq
-
-      # Pointer event: required present, sensitive gone (both directions).
-      handoff_event =
-        Repo.one!(
-          from event in TrajectoryEvent,
-            where:
-              event.goal_id == ^fixture.goal.id and event.type == "handoff.created" and
-                event.idempotency_key == ^"handoff:#{handoff_id}"
-        )
-
-      assert handoff_event.payload["handoff_id"] == handoff_id
-      assert handoff_event.payload["run_id"] == new_run_id
-      assert handoff_event.payload["checkpoint_id"] == fixture.checkpoint_id
-      assert handoff_event.payload["prior_run_id"] == fixture.run.id
-      assert handoff_event.payload["to_provider_id"] == "fake-harness-b"
-      assert handoff_event.payload["reason"] == "quota handoff"
-      assert handoff_event.payload["next_action"] =~ @next_action_marker
-
-      for key <- Continuation.forbidden_keys() do
-        refute Map.has_key?(handoff_event.payload, Atom.to_string(key)),
-               "forbidden key #{key} in handoff payload"
-
-        refute Map.has_key?(recorded.continuation, key),
-               "forbidden key #{key} reached the adapter"
-      end
-
-      assert Security.scan_term(handoff_event.payload) == []
-      assert Contract.safe_term?(handoff_event.payload)
-      assert Security.scan_term(recorded.prompt) == []
-
-      # The stored run continuation is a clean 3-key pointer too.
-      assert :ok = Continuation.validate_attrs(new_run.continuation)
-    end
-
-    test "handoff prompt carries checkpoint content sections, not just the pointer" do
-      # The production handoff path threads the checkpoint record into prompt
-      # composition, so completed work / failure / constraints / verification
-      # travel with the pointer. (Base: pointer-only prompt.)
-      fixture = handoff_fixture()
-      {:ok, log} = RequestLog.start()
-
-      assert {:ok, %{run: _new_run}} =
-               Elves.resume_run(fixture.run.id,
-                 adapter: Fake,
-                 adapter_opts: adapter_opts(log, Scenario.handoff_target()),
-                 continuation: fixture.presented,
-                 provider_session_id: @sender_session,
-                 to_provider_id: "fake-harness-b",
-                 reason: "quota handoff",
-                 handoff_id: Ecto.UUID.generate(),
-                 new_run_id: Ecto.UUID.generate(),
-                 new_dispatch_id: Ecto.UUID.generate()
-               )
-
-      [recorded] = RequestLog.starts(log)
-      assert recorded.prompt =~ @next_action_marker
-      assert recorded.prompt =~ "chose approach A"
-      assert recorded.prompt =~ "quota_refused"
-    end
-
-    test "failed start replays to a re-attempt: same run, one new effect, no duplicates" do
-      fixture = handoff_fixture()
-      {:ok, log} = RequestLog.start()
-      handoff_id = Ecto.UUID.generate()
-      new_run_id = Ecto.UUID.generate()
-      new_dispatch_id = Ecto.UUID.generate()
-
-      base_opts = [
-        adapter: Fake,
-        continuation: fixture.presented,
-        provider_session_id: @sender_session,
-        to_provider_id: "fake-harness-b",
-        reason: "quota handoff",
-        handoff_id: handoff_id,
-        new_run_id: new_run_id,
-        new_dispatch_id: new_dispatch_id
-      ]
-
-      # Attempt 1: the adapter effect fails AFTER intent is durable.
-      assert {:error, _} =
-               Elves.resume_run(
-                 fixture.run.id,
-                 Keyword.put(
-                   base_opts,
-                   :adapter_opts,
-                   adapter_opts(log, Scenario.start_failure())
-                 )
-               )
-
-      # Intent precedes effect: the pointer survived the failed effect.
-      assert handoff_count(fixture.goal.id, handoff_id) == 1
-      assert RequestLog.count(log) == 1
-
-      # Replay with the same handoff_id re-attempts the effect: the failed
-      # start left no terminal/result evidence and Fake exposes no live
-      # sessions, so replaying to success here would report an effect that
-      # never ran (round-2 finding 5).
-      assert {:ok, %{handoff_id: ^handoff_id, run: replayed, run_identity: identity}} =
-               Elves.resume_run(
-                 fixture.run.id,
-                 Keyword.put(
-                   base_opts,
-                   :adapter_opts,
-                   adapter_opts(log, Scenario.handoff_target())
-                 )
-               )
-
-      assert replayed.id == new_run_id
-      assert identity.provider_session_id == "fake-session-handoff-b"
-
-      # At-least-once: exactly one NEW adapter call (failed attempt + success).
-      assert RequestLog.count(log) == 2
-      assert RequestLog.resumes(log) == []
-
-      # Idempotent convergence: still exactly one of each durable effect.
-      assert handoff_count(fixture.goal.id, handoff_id) == 1
-      assert requested_count(fixture.goal.id, new_dispatch_id) == 1
-    end
-
-    test "crash before adapter start (row exists, zero logged attempts): replay performs the effect once" do
-      fixture = handoff_fixture()
-      {:ok, log} = RequestLog.start()
-      handoff_id = Ecto.UUID.generate()
-      new_run_id = Ecto.UUID.generate()
-      new_dispatch_id = Ecto.UUID.generate()
-
-      base_opts = [
-        continuation: fixture.presented,
-        provider_session_id: @sender_session,
-        to_provider_id: "fake-harness-b",
-        reason: "quota handoff",
-        handoff_id: handoff_id,
-        new_run_id: new_run_id,
-        new_dispatch_id: new_dispatch_id
-      ]
-
-      # Attempt 1: crash between row insert and adapter start — the receiver
-      # row and intent are durable, but the adapter records zero attempts.
-      assert {:error, _} =
-               Elves.resume_run(
-                 fixture.run.id,
-                 base_opts
-                 |> Keyword.put(:adapter, SilentStartFailureAdapter)
-                 |> Keyword.put(:adapter_opts, adapter_opts(log, Scenario.handoff_target()))
-               )
-
-      assert handoff_count(fixture.goal.id, handoff_id) == 1
       assert RequestLog.count(log) == 0
+      assert run_count() == runs_before
 
-      # Replay performs the effect exactly once with the same ids.
-      assert {:ok, %{handoff_id: ^handoff_id, run: replayed, run_identity: identity}} =
-               Elves.resume_run(
-                 fixture.run.id,
-                 base_opts
-                 |> Keyword.put(:adapter, Fake)
-                 |> Keyword.put(:adapter_opts, adapter_opts(log, Scenario.handoff_target()))
-               )
-
-      assert replayed.id == new_run_id
-      assert identity.provider_session_id == "fake-session-handoff-b"
-      assert RequestLog.count(log) == 1
-      assert RequestLog.resumes(log) == []
-      assert handoff_count(fixture.goal.id, handoff_id) == 1
-      assert requested_count(fixture.goal.id, new_dispatch_id) == 1
+      refute Repo.exists?(
+               from event in TrajectoryEvent,
+                 where: event.goal_id == ^fixture.goal.id and event.type == "handoff.created"
+             )
     end
 
-    test "replay without terminal evidence re-attempts the effect (Fake exposes no live sessions)" do
+    test "no option re-opens it: the refusal is not gated behind a flag" do
+      # The bypass was removed rather than gated, so there is nothing to pass.
+      # These are the options the old unsupervised path accepted; none of them
+      # brings it back.
       fixture = handoff_fixture()
       {:ok, log} = RequestLog.start()
-      handoff_id = Ecto.UUID.generate()
-      new_run_id = Ecto.UUID.generate()
-      new_dispatch_id = Ecto.UUID.generate()
 
-      opts = [
-        adapter: Fake,
-        adapter_opts: adapter_opts(log, Scenario.handoff_target()),
-        continuation: fixture.presented,
-        provider_session_id: @sender_session,
-        to_provider_id: "fake-harness-b",
-        reason: "quota handoff",
-        handoff_id: handoff_id,
-        new_run_id: new_run_id,
-        new_dispatch_id: new_dispatch_id
-      ]
+      for extra <- [
+            [handoff_id: Ecto.UUID.generate()],
+            [new_run_id: Ecto.UUID.generate(), new_dispatch_id: Ecto.UUID.generate()],
+            [goal_state: :working],
+            [require_cobbler_command: false]
+          ] do
+        opts =
+          [
+            adapter: Fake,
+            adapter_opts: adapter_opts(log, Scenario.handoff_target()),
+            continuation: fixture.presented,
+            provider_session_id: @sender_session,
+            to_provider_id: "fake-harness-b"
+          ] ++ extra
 
-      assert {:ok, %{run: first}} = Elves.resume_run(fixture.run.id, opts)
-      assert RequestLog.count(log) == 1
+        assert {:error, {:handoff_requires_cobbler_command, _}} =
+                 Elves.resume_run(fixture.run.id, opts)
+      end
 
-      # No terminal/result evidence exists for the receiver and Fake has no
-      # session lookup, so an immediate replay must re-attempt rather than
-      # report the unexecuted effect as a success.
-      assert {:ok, %{handoff_id: ^handoff_id, run: second, run_identity: identity}} =
-               Elves.resume_run(fixture.run.id, opts)
-
-      assert second.id == first.id
-      assert identity.provider_session_id == "fake-session-handoff-b"
-      assert RequestLog.count(log) == 2
-      assert RequestLog.resumes(log) == []
-      assert handoff_count(fixture.goal.id, handoff_id) == 1
-      assert requested_count(fixture.goal.id, new_dispatch_id) == 1
-    end
-
-    test "replay after terminal evidence performs zero new adapter calls" do
-      fixture = handoff_fixture()
-      {:ok, log} = RequestLog.start()
-      handoff_id = Ecto.UUID.generate()
-      new_run_id = Ecto.UUID.generate()
-      new_dispatch_id = Ecto.UUID.generate()
-
-      opts = [
-        adapter: Fake,
-        adapter_opts: adapter_opts(log, Scenario.handoff_target()),
-        continuation: fixture.presented,
-        provider_session_id: @sender_session,
-        to_provider_id: "fake-harness-b",
-        reason: "quota handoff",
-        handoff_id: handoff_id,
-        new_run_id: new_run_id,
-        new_dispatch_id: new_dispatch_id
-      ]
-
-      assert {:ok, %{run: first}} = Elves.resume_run(fixture.run.id, opts)
-      assert RequestLog.count(log) == 1
-
-      # Downstream completion: terminal evidence for the receiver run.
-      :ok = FakeHelpers.append_run_completed(fixture.goal, first)
-
-      assert {:ok, %{handoff_id: ^handoff_id, run: second}} =
-               Elves.resume_run(fixture.run.id, opts)
-
-      assert second.id == first.id
-      assert RequestLog.count(log) == 1
-      assert RequestLog.resumes(log) == []
-      assert handoff_count(fixture.goal.id, handoff_id) == 1
-    end
-
-    test "live receiver session replays to success with zero new calls (DOCUMENTATION)" do
-      fixture = handoff_fixture()
-      {:ok, log} = RequestLog.start()
-      handoff_id = Ecto.UUID.generate()
-      new_run_id = Ecto.UUID.generate()
-      new_dispatch_id = Ecto.UUID.generate()
-
-      opts = [
-        adapter: LiveSessionStubAdapter,
-        adapter_opts: adapter_opts(log, Scenario.handoff_target()),
-        continuation: fixture.presented,
-        provider_session_id: @sender_session,
-        to_provider_id: "fake-harness-b",
-        reason: "quota handoff",
-        handoff_id: handoff_id,
-        new_run_id: new_run_id,
-        new_dispatch_id: new_dispatch_id
-      ]
-
-      assert {:ok, %{run: first}} = Elves.resume_run(fixture.run.id, opts)
-      assert RequestLog.count(log) == 1
-
-      # The receiver session is observably live: replay succeeds without a
-      # new adapter call. This documents the preserved success path — it
-      # passes on base too, since base also returned success here.
-      :ok = LiveSessionStubAdapter.mark_live(first.id)
-
-      assert {:ok, %{handoff_id: ^handoff_id, run: second}} =
-               Elves.resume_run(fixture.run.id, opts)
-
-      assert second.id == first.id
-      assert RequestLog.count(log) == 1
-      assert RequestLog.resumes(log) == []
-      assert handoff_count(fixture.goal.id, handoff_id) == 1
-    end
-
-    test "dead receiver session does not mask: replay re-attempts" do
-      fixture = handoff_fixture()
-      {:ok, log} = RequestLog.start()
-      handoff_id = Ecto.UUID.generate()
-      new_run_id = Ecto.UUID.generate()
-      new_dispatch_id = Ecto.UUID.generate()
-
-      opts = [
-        adapter: LiveSessionStubAdapter,
-        adapter_opts: adapter_opts(log, Scenario.handoff_target()),
-        continuation: fixture.presented,
-        provider_session_id: @sender_session,
-        to_provider_id: "fake-harness-b",
-        reason: "quota handoff",
-        handoff_id: handoff_id,
-        new_run_id: new_run_id,
-        new_dispatch_id: new_dispatch_id
-      ]
-
-      assert {:ok, %{run: first}} = Elves.resume_run(fixture.run.id, opts)
-      assert RequestLog.count(log) == 1
-
-      # A registry entry pointing at a dead pid is not a live session.
-      {:ok, dead} = Agent.start(fn -> :ok end)
-      :ok = Agent.stop(dead)
-      :ok = LiveSessionStubAdapter.mark_live(first.id, dead)
-
-      assert {:ok, %{handoff_id: ^handoff_id, run: second, run_identity: identity}} =
-               Elves.resume_run(fixture.run.id, opts)
-
-      assert second.id == first.id
-      assert identity.provider_session_id == "fake-session-handoff-b"
-      assert RequestLog.count(log) == 2
-      assert handoff_count(fixture.goal.id, handoff_id) == 1
-      assert requested_count(fixture.goal.id, new_dispatch_id) == 1
+      assert RequestLog.count(log) == 0
     end
   end
 
@@ -598,37 +223,24 @@ defmodule Shoestring.Harness.HandoffCorrectionTest do
       assert run_count() == runs_before
     end
 
-    test "cross-provider TO Claude starts a fresh session (no fake resume)" do
+    test "cross-provider TO Claude is refused here too (B2)" do
+      # The old path started Claude fresh from this call. Cross-provider is
+      # cross-provider: the receiver needs an observation, an admission
+      # decision and a lease of its own before anything starts.
       fixture = handoff_fixture()
-      handoff_id = Ecto.UUID.generate()
-      new_run_id = Ecto.UUID.generate()
-      new_dispatch_id = Ecto.UUID.generate()
+      runs_before = run_count()
 
-      assert {:ok, %{handoff_id: ^handoff_id, run: new_run, run_identity: identity}} =
+      assert {:error, {:handoff_requires_cobbler_command, detail}} =
                Elves.resume_run(fixture.run.id,
                  adapter: Shoestring.Harness.ClaudeHeadless,
                  adapter_opts: %{},
                  continuation: fixture.presented,
                  provider_session_id: @sender_session,
-                 to_provider_id: "claude",
-                 reason: "quota handoff",
-                 handoff_id: handoff_id,
-                 new_run_id: new_run_id,
-                 new_dispatch_id: new_dispatch_id
+                 to_provider_id: "claude"
                )
 
-      assert new_run.id == new_run_id
-      assert identity.provider_session_id == "aaaaaaaa-0000-4000-a000-000000000001"
-
-      handoff_event =
-        Repo.one!(
-          from event in TrajectoryEvent,
-            where:
-              event.goal_id == ^fixture.goal.id and event.type == "handoff.created" and
-                event.idempotency_key == ^"handoff:#{handoff_id}"
-        )
-
-      assert handoff_event.payload["to_provider_id"] == "claude"
+      assert detail["to_provider_id"] == "claude"
+      assert run_count() == runs_before
     end
   end
 
@@ -844,40 +456,6 @@ defmodule Shoestring.Harness.HandoffCorrectionTest do
 
   defp adapter_opts(log, scenario) do
     %{scenario: scenario, clock: Shoestring.Test.FixedClock, request_log: log}
-  end
-
-  defp event_sequence!(goal_id, run_id, type) do
-    Repo.one!(
-      from event in TrajectoryEvent,
-        where: event.goal_id == ^goal_id and event.run_id == ^run_id and event.type == ^type,
-        order_by: [asc: event.sequence],
-        limit: 1,
-        select: event.sequence
-    )
-  end
-
-  defp handoff_count(goal_id, handoff_id) do
-    key = "handoff:" <> handoff_id
-
-    Repo.one!(
-      from event in TrajectoryEvent,
-        where:
-          event.goal_id == ^goal_id and event.type == "handoff.created" and
-            event.idempotency_key == ^key,
-        select: count(event.id)
-    )
-  end
-
-  defp requested_count(goal_id, dispatch_id) do
-    key = "run-requested:" <> dispatch_id
-
-    Repo.one!(
-      from event in TrajectoryEvent,
-        where:
-          event.goal_id == ^goal_id and event.type == "run.requested" and
-            event.idempotency_key == ^key,
-        select: count(event.id)
-    )
   end
 
   defp run_count do

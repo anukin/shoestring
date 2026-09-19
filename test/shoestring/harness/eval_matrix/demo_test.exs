@@ -168,25 +168,48 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
     assert Repo.get!(ExecutionLeaseRecord, grant_id).admitted_snapshot_id == fresh.snapshot_id
 
     {:ok, log_b} = RequestLog.start()
-    new_run_id = Ecto.UUID.generate()
     decision_id = admission.payload["decision_id"]
 
-    # The wake persisted a newer admission decision above, so the pre-wake
-    # triple is genuinely stale and must be refused (not silently reused).
+    # The wake moved the sender run to `starting` to resume it on its own
+    # provider. A handoff is only legal once the sender has stopped
+    # producing, and the production path refuses while it has not — so the
+    # switch to the second provider begins by parking the sender, which is
+    # what an operator choosing to switch would do.
+    Eval.ensure_claim!(goal)
+
+    active_attrs = handoff_attrs(goal, run, checkpoint_id, [decision_id])
+    {:ok, %{command: active_command}} = Shoestring.Cobbler.Handoffs.request(goal.id, active_attrs)
+
+    assert {:error, {:sender_run_active, "starting"}} =
+             Shoestring.Cobbler.Handoffs.perform(goal.id, active_command.command_id,
+               clock: Shoestring.Test.FixedClock,
+               observe: fn _scoping ->
+                 flunk("a live sender must refuse BEFORE observing the receiver")
+               end
+             )
+
+    # `starting -> interrupt -> interrupted` is the legal way to park a run
+    # the wake had just re-started. An interrupted run has stopped producing,
+    # so it IS a valid handoff boundary.
+    Eval.append_event!(goal.id, run.id, "run.interrupted", %{"run_id" => run.id})
+    assert {:ok, _} = Projector.project(goal.id, clock: Shoestring.Test.FixedClock)
+    assert Repo.get!(RunRecord, run.id).status == "interrupted"
+
+    # The wake persisted a newer admission decision above, so an intent
+    # authorized against the PRE-wake refs is genuinely stale. The production
+    # handoff refuses it rather than silently carrying it forward (B4).
+    Eval.ensure_claim!(goal)
+
+    stale_attrs = handoff_attrs(goal, run, checkpoint_id, [decision_id])
+    {:ok, %{command: stale_command}} = Shoestring.Cobbler.Handoffs.request(goal.id, stale_attrs)
+
     assert {:error, :decision_superseded} =
-             Shoestring.Elves.resume_run(run.id,
-               adapter: Fake,
-               adapter_opts: Eval.adapter_opts(log_b, Scenario.handoff_target()),
-               continuation: %{
-                 checkpoint_id: checkpoint_id,
-                 next_action: continuation.next_action,
-                 decision_refs: [decision_id]
-               },
-               provider_session_id: @session,
-               to_provider_id: "fake-harness-b",
-               reason: "quota handoff",
-               new_run_id: Ecto.UUID.generate(),
-               new_dispatch_id: Ecto.UUID.generate()
+             Shoestring.Cobbler.Handoffs.perform(goal.id, stale_command.command_id,
+               clock: Shoestring.Test.FixedClock,
+               now: Shoestring.Test.FixedClock.now(),
+               observe: fn _scoping ->
+                 flunk("a superseded authorization must refuse BEFORE observing the receiver")
+               end
              )
 
     # Re-project after the wake: the fresh triple carries the wake decision.
@@ -194,37 +217,24 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
     assert fresh_cont.checkpoint_id == checkpoint_id
     refute fresh_cont.decision_refs == [decision_id]
 
-    assert {:ok, %{run: new_run}} =
-             Shoestring.Elves.resume_run(run.id,
-               adapter: Fake,
-               adapter_opts: Eval.adapter_opts(log_b, Scenario.handoff_target()),
-               continuation: %{
-                 checkpoint_id: checkpoint_id,
-                 next_action: fresh_cont.next_action,
-                 decision_refs: fresh_cont.decision_refs
-               },
-               provider_session_id: @session,
-               to_provider_id: "fake-harness-b",
-               reason: "quota handoff",
-               new_run_id: new_run_id,
-               new_dispatch_id: Ecto.UUID.generate()
-             )
+    # Re-authorized against what projection says now, the handoff runs
+    # through the production path: observation, admission, receiver lease,
+    # durable dispatch.
+    assert %{outcome: :dispatched, run: new_run} =
+             Eval.production_handoff!(goal, run, checkpoint_id)
 
-    # Continue sans first transcript: the second leg received pointer keys
+    # Continue sans first transcript: the second leg carries pointer keys
     # only, and the first leg's transcript text traveled nowhere.
-    # I5 handoff correction (P2): cross-provider transfer starts a FRESH
-    # session via adapter.start/2, never resume.
-    [recorded] = RequestLog.starts(log_b)
-    assert RequestLog.resumes(log_b) == []
+    persisted = Repo.get!(RunRecord, new_run.id)
 
-    assert Enum.sort(Map.keys(recorded.continuation)) == [
-             :checkpoint_id,
-             :decision_refs,
-             :next_action
+    assert Enum.sort(Map.keys(persisted.continuation)) == [
+             "checkpoint_id",
+             "decision_refs",
+             "next_action"
            ]
 
-    refute inspect(recorded.continuation) =~ @first_transcript_text
-    assert recorded.prompt != @first_transcript_text
+    refute inspect(persisted.continuation) =~ @first_transcript_text
+    assert persisted.prompt != @first_transcript_text
 
     # Step 8 — terminal projection through resumed execution: leg B runs to
     # completion under a real supervised Elf bound to the handoff run through
@@ -243,9 +253,9 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
     assert handoff_request.prompt ==
              Continuation.compose_handoff_prompt(
                %{
-                 checkpoint_id: fresh_cont.checkpoint_id,
-                 next_action: fresh_cont.next_action,
-                 decision_refs: fresh_cont.decision_refs
+                 checkpoint_id: leg_b_run.continuation["checkpoint_id"],
+                 next_action: leg_b_run.continuation["next_action"],
+                 decision_refs: leg_b_run.continuation["decision_refs"]
                },
                checkpoint_record: record
              )
@@ -253,7 +263,10 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
     refute handoff_request.prompt =~ @first_transcript_text
 
     %{dispatch: dispatch_b, terminal: terminal} =
-      Eval.drive_leg_to_terminal!(leg_b_run, scenario: Scenario.handoff_target())
+      Eval.drive_leg_to_terminal!(leg_b_run,
+        scenario: Scenario.handoff_target(),
+        request_log: log_b
+      )
 
     assert terminal.class == :completed
 
@@ -320,5 +333,21 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
     assert handoff_event.payload["checkpoint_id"] == checkpoint_id
     assert handoff_event.payload["prior_run_id"] == run.id
     assert handoff_event.payload["to_provider_id"] == "fake-harness-b"
+  end
+
+  defp handoff_attrs(_goal, run, checkpoint_id, decision_refs) do
+    %{
+      "command_id" => "cmd-handoff-" <> Ecto.UUID.generate(),
+      "payload" => %{
+        "run_id" => run.id,
+        "checkpoint_id" => checkpoint_id,
+        "decision_refs" => decision_refs,
+        "to_provider_id" => "fake-harness-b",
+        "to_adapter_id" => "shoestring.harness.fake",
+        "scope" => "account:fake-harness-b",
+        "reason" => "quota handoff",
+        "requested_by" => "user:demo-operator"
+      }
+    }
   end
 end

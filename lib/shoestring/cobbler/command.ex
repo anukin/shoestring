@@ -41,8 +41,9 @@ defmodule Shoestring.Cobbler.Command do
   retry converge instead of transferring twice.
 
   The payload names the sender run, the checkpoint boundary the operator is
-  transferring at, the receiver provider/adapter, a reason, and the
-  attributable `requested_by` identity (never silently defaulted — an
+  transferring at, the decision refs the transfer was authorized against,
+  the receiver provider/adapter, a reason, and the attributable
+  `requested_by` identity (never silently defaulted — an
   automated caller passes an explicit `system:`-prefixed identity, matching
   the `respond/4` attribution rule).
   """
@@ -52,6 +53,10 @@ defmodule Shoestring.Cobbler.Command do
   @version 1
   @types ["task.claim", "task.release", "run.handoff"]
   @statuses [:pending, :needs_user, :resolved, :rejected]
+
+  # Mirrors `Shoestring.Harness.Continuation.max_decision_refs/0`; the
+  # authorized ref set can never exceed what projection can produce.
+  @max_decision_refs 32
 
   @enforce_keys [:version, :command_id, :type, :payload, :digest]
   defstruct [:version, :command_id, :type, :payload, :digest]
@@ -228,6 +233,7 @@ defmodule Shoestring.Cobbler.Command do
   defp normalize_payload(raw, "run.handoff") do
     with {:ok, run_id} <- uuid_field(raw, :run_id),
          {:ok, checkpoint_id} <- uuid_field(raw, :checkpoint_id),
+         {:ok, decision_refs} <- decision_refs_field(raw),
          {:ok, to_provider_id} <- text_field(raw, :to_provider_id, max: 200),
          {:ok, to_adapter_id} <- text_field(raw, :to_adapter_id, max: 200),
          {:ok, scope} <- text_field(raw, :scope, max: 200),
@@ -237,6 +243,7 @@ defmodule Shoestring.Cobbler.Command do
        %{
          "run_id" => run_id,
          "checkpoint_id" => checkpoint_id,
+         "decision_refs" => decision_refs,
          "to_provider_id" => to_provider_id,
          "to_adapter_id" => to_adapter_id,
          "scope" => scope,
@@ -276,6 +283,37 @@ defmodule Shoestring.Cobbler.Command do
 
       :error ->
         Contract.invalid(:candidate, "can't be blank")
+    end
+  end
+
+  # The decision refs the operator authorized the transfer against, frozen
+  # into the durable intent. `Shoestring.Cobbler.Handoffs.perform/3` compares
+  # them against the refs projected at perform time and refuses a superseded
+  # set, so an admission decided between request and perform cannot be
+  # silently carried past. They are digest-covered, so a re-submission under
+  # the same command id carrying different refs is a conflict, not a
+  # replacement.
+  defp decision_refs_field(raw) do
+    case Contract.fetch(raw, :decision_refs) do
+      {:ok, value} when is_list(value) -> normalize_decision_refs(value)
+      {:ok, _other} -> Contract.invalid(:decision_refs, "must be a list")
+      :error -> Contract.invalid(:decision_refs, "can't be blank")
+    end
+  end
+
+  defp normalize_decision_refs(value) when length(value) > @max_decision_refs,
+    do: Contract.invalid(:decision_refs, "contains too many entries")
+
+  defp normalize_decision_refs(value) do
+    Enum.reduce_while(value, {:ok, []}, fn ref, {:ok, acc} ->
+      case Ecto.UUID.cast(ref) do
+        {:ok, uuid} -> {:cont, {:ok, [uuid | acc]}}
+        :error -> {:halt, Contract.invalid(:decision_refs, "must contain only UUIDs")}
+      end
+    end)
+    |> case do
+      {:ok, refs} -> {:ok, Enum.reverse(refs)}
+      error -> error
     end
   end
 

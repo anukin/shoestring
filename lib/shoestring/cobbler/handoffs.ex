@@ -3,22 +3,29 @@ defmodule Shoestring.Cobbler.Handoffs do
   Production cross-provider handoff: explicit command in, supervised
   receiver dispatch out (Milestone 05, work package I5-production).
 
-  `Shoestring.Elves.resume_run/2` already *projects* a handoff — it validates
-  the boundary, appends `handoff.created`, creates the receiver run and calls
-  the target adapter directly. That is the projection path and it stays what
-  it is. It is NOT production execution: it observes no capacity, evaluates
-  no admission for the receiver provider, grants the receiver no lease, and
-  bypasses the durable dispatch pipeline, so the receiver runs unsupervised
-  and unbudgeted. This module is the production path.
+  This is the **only** way to hand a run to another provider.
+  `Shoestring.Elves.resume_run/2` used to do it inline — bare receiver row,
+  `handoff.created`, `adapter.start/2`, no observation, no admission, no
+  lease of its own, outside the dispatch pipeline. That path is gone; it now
+  refuses cross-provider with
+  `{:error, {:handoff_requires_cobbler_command, detail}}` and keeps only
+  same-provider resume.
 
-  ## Two durable steps, never one
+  ## Three durable steps, never one
 
-      request/3   ->  a `run.handoff` Cobbler command row (durable intent)
-      perform/3   ->  observe -> admit -> grant -> create -> dispatch
+      request/3       ->  a `run.handoff` Cobbler command row (intent) plus
+                          a `handoff`-queue delivery attempt
+      HandoffWorker   ->  the durable consumer of that attempt
+      perform/3       ->  observe -> admit -> create -> grant -> dispatch
 
-  The split is the point. `request/3` writes intent and nothing else; every
-  effect in `perform/3` is replayed against that row. A handoff that crashes
-  anywhere after `request/3` re-performs into the same `handoff_id`, the same
+  The command row is the authority; the Oban job is only a delivery attempt,
+  exactly as `cobbler_wakeups` rows relate to `wakeup` jobs. The row commits
+  before the job is inserted, so a crash (or an Oban failure) between the two
+  leaves a standing intent that `reconcile/1` re-enqueues at the next boot,
+  through `Shoestring.Cobbler.HandoffReconciler`. Nothing strands.
+
+  Every effect in `perform/3` is replayed against that row. A handoff that
+  crashes mid-flight re-performs into the same `handoff_id`, the same
   receiver run id and the same dispatch id, so a retry converges instead of
   transferring twice. `handoff_id` IS the command row id — derived from
   durable identity, never from wall-clock time or randomness, matching the
@@ -74,6 +81,27 @@ defmodule Shoestring.Cobbler.Handoffs do
   and never the sender's prompt, transcript or provider session id. The
   sender's `provider_session_id` is not read on this path at all.
 
+  ## Remaining window (stated rather than implied)
+
+  The one-active-Elf guard is a check, not a lock. It runs once before the
+  observation and again immediately before the receiver row is created — the
+  first irreversible step — so a sender Elf that starts, or a claim that
+  moves, *during* the admission round trip is caught. It is still
+  check-then-act: nothing here holds a lock on the Elf registry or the claim
+  row, so a sender Elf starting in the microseconds between the second check
+  and `Runs.request/3` would not be seen by this module.
+
+  What backstops that residual window is not this module. The receiver only
+  ever executes through `Dispatches.prepare_for_effect/2`, which claims the
+  dispatch row, and `Elves.start_elf/3`, which registers by run id and
+  returns `{:ok, :already_running, pid}` rather than starting a second Elf.
+  Two Elves for one run are prevented there.
+
+  This module never pauses or cancels the sender. A handoff requested while
+  the sender is live is refused, not forced: cancellation is a separate
+  explicit operator act, and the Elf owns and reaps its own process group. No
+  timer, lease expiry or staleness signal reaches this module.
+
   ## Honest outcomes
 
   `perform/3` reports what actually happened: `:dispatched` (effect
@@ -84,6 +112,9 @@ defmodule Shoestring.Cobbler.Handoffs do
   """
 
   import Ecto.Query
+  require Logger
+
+  alias Oban.Job
 
   alias Shoestring.Cobbler.{
     AdmissionDecision,
@@ -94,6 +125,7 @@ defmodule Shoestring.Cobbler.Handoffs do
     Commands,
     DispatchGate,
     GoalLifecycle,
+    HandoffWorker,
     Leases
   }
 
@@ -102,6 +134,7 @@ defmodule Shoestring.Cobbler.Handoffs do
     CheckpointRecord,
     Clock,
     Continuation,
+    DispatchRecord,
     Dispatches,
     EventPayload,
     ExecutionLease,
@@ -125,6 +158,10 @@ defmodule Shoestring.Cobbler.Handoffs do
   # in flight. Everything else (suspended, interrupted, completed, failed,
   # cancelled) has stopped producing.
   @active_run_statuses ["starting", "running"]
+
+  # Oban states that count as a live delivery attempt, mirroring
+  # `Shoestring.Cobbler.Wakeups`.
+  @live_job_states ["available", "scheduled", "executing", "retryable", "suspended"]
 
   @type outcome :: :dispatched | :converged | :refused
 
@@ -158,18 +195,199 @@ defmodule Shoestring.Cobbler.Handoffs do
   conflict, because a handoff intent is not silently editable.
   """
   @spec request(Ecto.UUID.t(), map(), keyword()) ::
-          {:ok, %{command: CommandRecord.t(), handoff_id: Ecto.UUID.t(), outcome: atom()}}
+          {:ok,
+           %{
+             command: CommandRecord.t(),
+             handoff_id: Ecto.UUID.t(),
+             outcome: atom(),
+             job: Job.t() | nil
+           }}
           | {:error, term()}
   def request(goal_id, attrs, opts \\ []) when is_map(attrs) do
     attrs = attrs |> stringify_keys() |> Map.put("type", @command_type)
 
     case Commands.submit(goal_id, attrs, opts) do
       {:ok, %{command: command, outcome: outcome}} ->
-        {:ok, %{command: command, handoff_id: command.id, outcome: outcome}}
+        # INTENT FIRST, ALWAYS. The command row is committed by `submit/3`
+        # before this line runs, so the enqueue below is a delivery attempt
+        # on an authority that already exists durably. A crash, or an Oban
+        # failure, between the two leaves the intent standing and
+        # `reconcile/1` re-enqueues it — the intent is never stranded, and
+        # the job is never the authority.
+        {:ok,
+         %{
+           command: command,
+           handoff_id: command.id,
+           outcome: outcome,
+           job: enqueue_delivery(command, opts)
+         }}
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # A rejected command is not an intent and gets no delivery attempt.
+  defp enqueue_delivery(
+         %CommandRecord{status: "resolved", result: %{"kind" => "handoff_requested"}} = command,
+         opts
+       ) do
+    case command |> delivery_changeset() |> Oban.insert(oban_opts(opts)) do
+      {:ok, %Job{} = job} ->
+        job
+
+      {:error, _reason} ->
+        # Reported as "no live delivery attempt", not as a failed request:
+        # the durable intent stands and reconcile/1 owns the repair.
+        Logger.warning("handoff delivery enqueue failed; intent stands for reconciliation",
+          handoff_id: command.id
+        )
+
+        nil
+    end
+  rescue
+    _error -> nil
+  end
+
+  defp enqueue_delivery(_command, _opts), do: nil
+
+  defp delivery_changeset(%CommandRecord{} = command) do
+    HandoffWorker.new(%{
+      "goal_id" => command.goal_id,
+      "command_id" => command.command_id,
+      "handoff_id" => command.id
+    })
+  end
+
+  defp oban_opts(opts) do
+    case Keyword.get(opts, :repo) do
+      nil -> []
+      repo -> [repo: repo]
+    end
+  end
+
+  # ----------------------------------------------------------------------------
+  # Startup / retry reconciliation
+  # ----------------------------------------------------------------------------
+
+  @doc """
+  Re-enqueues a delivery attempt for every durable handoff intent that has
+  not settled and has no live job.
+
+  This is the crash-window repair: a process that dies between `request/3`'s
+  command commit and its Oban insert leaves a standing intent with no
+  delivery attempt, and without this pass nothing would ever execute it.
+  Mirrors `Shoestring.Cobbler.Wakeups.reconcile/1` — it adds no handoff
+  semantics of its own. It never observes a provider, never admits, never
+  dispatches; it only restores delivery. Oban uniqueness on `handoff_id`
+  makes the re-enqueue duplicate-safe even if the live-job lookup misses.
+
+  An intent is **settled**, and therefore left alone, when either:
+
+    * `handoff.created` exists for it AND the receiver run has its dispatch
+      row (the transfer completed end to end), or
+    * a handoff-scoped `admission.decided` recorded a non-admit result (the
+      transfer was refused; retrying it automatically would re-observe and
+      re-decide behind the operator's back — a refusal is answered by a NEW
+      command, explicitly).
+
+  Everything else is unsettled and gets a delivery attempt, including a
+  handoff whose pointer committed but whose dispatch row is missing:
+  `perform/3` converges that case without re-admitting.
+
+  Returns `{:ok, %{repaired_count:, failures:}}`, mirroring
+  `Dispatches.reconcile/1`.
+  """
+  @spec reconcile(keyword()) ::
+          {:ok, %{repaired_count: non_neg_integer(), failures: [map()]}} | {:error, term()}
+  def reconcile(opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    commands =
+      repo.all(
+        from command in CommandRecord,
+          where: command.type == ^@command_type and command.status == "resolved",
+          order_by: [asc: command.inserted_at, asc: command.id]
+      )
+
+    result =
+      Enum.reduce(commands, %{repaired_count: 0, failures: []}, fn command, acc ->
+        case safe_repair(repo, command, opts) do
+          {:ok, repaired} ->
+            %{acc | repaired_count: acc.repaired_count + repaired}
+
+          {:error, reason} ->
+            %{acc | failures: acc.failures ++ [%{handoff_id: command.id, reason: reason}]}
+        end
+      end)
+
+    {:ok, result}
+  end
+
+  defp safe_repair(repo, command, opts) do
+    repair(repo, command, opts)
+  rescue
+    _error -> {:error, :reconciliation_failed}
+  catch
+    _kind, _reason -> {:error, :reconciliation_failed}
+  end
+
+  defp repair(repo, %CommandRecord{result: %{"kind" => "handoff_requested"}} = command, opts) do
+    cond do
+      settled?(repo, command) -> {:ok, 0}
+      live_job?(repo, command.id) -> {:ok, 0}
+      true -> requeue(command, opts)
+    end
+  end
+
+  defp repair(_repo, _command, _opts), do: {:ok, 0}
+
+  defp requeue(command, opts) do
+    case command |> delivery_changeset() |> Oban.insert(oban_opts(opts)) do
+      {:ok, _job} -> {:ok, 1}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp settled?(repo, %CommandRecord{} = command) do
+    case existing_intent(repo, command.goal_id, command.id) do
+      {:ok, event} -> receiver_dispatched?(repo, event)
+      :none -> refused?(repo, command)
+    end
+  end
+
+  defp receiver_dispatched?(repo, %TrajectoryEvent{} = event) do
+    case event.payload["run_id"] || event.run_id do
+      nil -> false
+      run_id -> repo.exists?(from d in DispatchRecord, where: d.run_id == ^run_id)
+    end
+  end
+
+  # A recorded non-admit decision settles the intent: the transfer was
+  # refused on evidence, and only a new explicit command may retry it.
+  defp refused?(repo, %CommandRecord{} = command) do
+    pattern = decision_key_prefix(command.id) <> "%"
+
+    repo.exists?(
+      from event in TrajectoryEvent,
+        where:
+          event.goal_id == ^command.goal_id and event.type == "admission.decided" and
+            like(event.idempotency_key, ^pattern) and
+            fragment("(? ->> ?) <> ?", event.payload, "result", "admit")
+    )
+  end
+
+  defp live_job?(repo, handoff_id) do
+    states = @live_job_states
+
+    repo.exists?(
+      from job in Job,
+        where:
+          job.state in ^states and
+            fragment("json_extract(?, \'$.handoff_id\') = ?", job.args, ^handoff_id)
+    )
+  rescue
+    _error -> false
   end
 
   # ----------------------------------------------------------------------------
@@ -191,6 +409,8 @@ defmodule Shoestring.Cobbler.Handoffs do
       confirmation-class refusal, never a hard stop.
     * `:goal_state` - the goal's current lifecycle state (default
       `:working`); the `:handoff_requested` transition must be legal from it.
+    * `:sender_elf` - explicit sender-Elf liveness for callers that already
+      know it; defaults to reading the Elf registry.
     * `:policy`, `:occupancy`, `:now`, `:clock`, `:repo`, `:writer_opts`,
       `:identity` - as in `Shoestring.Cobbler.Wakeups.perform_wakeup/2`.
   """
@@ -204,16 +424,52 @@ defmodule Shoestring.Cobbler.Handoffs do
          {:ok, command} <- fetch_handoff_command(repo, goal.id, command_id),
          {:ok, intent} <- handoff_intent(command),
          {:ok, sender} <- fetch_sender_run(repo, goal.id, intent["run_id"]),
-         :ok <- ensure_no_active_elf(sender, opts),
-         {:ok, checkpoint, continuation} <- boundary(repo, goal, sender, intent, opts) do
+         # B3 ORDER IS LOAD-BEARING. Authorization and receiver identity are
+         # resolved BEFORE the provider is observed, so a lost claim or an
+         # unknown receiver produces no provider observation and no
+         # `capacity.snapshot_observed` / `admission.decided` event, let
+         # alone a run, lease or dispatch. Observing an unauthorized
+         # provider is itself an effect: it reaches a CLI and writes an
+         # auditable capacity claim into the goal's history.
+         :ok <- authorize(goal, opts),
+         {:ok, identity} <- receiver_identity(intent, opts),
+         :ok <- ensure_no_active_elf(sender, opts) do
       handoff_id = command.id
 
+      # THE IDEMPOTENCY GUARD PRECEDES THE BOUNDARY CHECK, deliberately.
+      #
+      # The boundary check (checkpoint identity + authorized decision refs)
+      # gates *deciding* a transfer. A transfer whose pointer already
+      # committed has been decided; it is converged, not re-authorized. Two
+      # things make that ordering necessary rather than merely tidy:
+      #
+      #   * `perform/3` itself appends an `admission.decided`, so the refs
+      #     projected after a successful transfer necessarily differ from the
+      #     ones the operator authorized against. Re-checking them on a retry
+      #     would report `:decision_superseded` for every completed handoff
+      #     and a crash between pointer and dispatch could never converge.
+      #   * `converge/5` decides nothing: it re-ensures the receiver's
+      #     dispatch delivery, which is idempotent, and re-observes and
+      #     re-admits nothing.
       case existing_intent(repo, goal.id, handoff_id) do
         {:ok, event} ->
           converge(repo, goal, event, handoff_id, opts)
 
         :none ->
-          transfer(repo, goal, sender, intent, checkpoint, continuation, handoff_id, now, opts)
+          with {:ok, checkpoint, continuation} <- boundary(repo, goal, sender, intent, opts) do
+            transfer(
+              repo,
+              goal,
+              sender,
+              intent,
+              checkpoint,
+              continuation,
+              identity,
+              handoff_id,
+              now,
+              opts
+            )
+          end
       end
     end
   end
@@ -287,23 +543,32 @@ defmodule Shoestring.Cobbler.Handoffs do
   # checkpoint means the operator authorized a transfer from a state the run
   # has since left, so the handoff refuses instead of shipping stale context.
   #
-  # `decision_refs` are re-projected here rather than carried in the command:
-  # a ref list frozen at request time would itself go stale. They are
-  # persisted into `handoff.created` below, so the refs the receiver was
-  # handed stay auditable. This means the `match_decisions/2` arm of
-  # `validate_resume/3` is trivially satisfied on this path — the load-bearing
-  # checks here are checkpoint identity, run binding, confirmation and the
-  # lease allowlist.
+  # B4. The presented side is what the OPERATOR AUTHORIZED, read from the
+  # durable command payload; the fresh side is what projection says NOW.
+  # Feeding projected refs into both sides (the earlier shape) made
+  # `match_decisions/2` compare a list with itself, so `:decision_superseded`
+  # was unreachable and an admission decided between request and perform
+  # rode along silently.
+  #
+  # The refusal is deliberately conservative: a changed ref set means the
+  # authorization no longer describes the transfer, so it refuses and the
+  # operator re-authorizes with a NEW command. Nothing here re-authorizes on
+  # the operator's behalf, and nothing records a "divergence accepted".
+  # Because the refs are digest-covered, a re-submission under the same
+  # command id carrying different refs is a conflict rather than a silent
+  # replacement, and a restart reconstructs the authorized set from the same
+  # durable payload.
   defp boundary(repo, goal, sender, intent, opts) do
     with {:ok, record} <- Continuation.latest_checkpoint(repo, goal.id, run_id: sender.id),
          refs <- Continuation.decision_refs(repo, goal.id),
          {:ok, continuation} <- Continuation.project_latest([record], refs),
          :ok <- named_boundary(record, intent),
+         {:ok, authorized} <- authorized_refs(intent),
          :ok <-
            Continuation.validate_resume(
              %{
                checkpoint_id: intent["checkpoint_id"],
-               decision_refs: refs,
+               decision_refs: authorized,
                run_id: sender.id,
                provider_session_id: nil
              },
@@ -325,6 +590,13 @@ defmodule Shoestring.Cobbler.Handoffs do
 
   defp named_boundary(%CheckpointRecord{id: id}, %{"checkpoint_id" => id}), do: :ok
   defp named_boundary(_record, _intent), do: {:error, :stale_continuation}
+
+  # A pre-`decision_refs` intent has no authorized set to compare. There is
+  # none in practice (the field is required by `Command.new/1` and no handoff
+  # command predates it), and refusing is the only honest answer: an absent
+  # authorization is not a matching one.
+  defp authorized_refs(%{"decision_refs" => refs}) when is_list(refs), do: {:ok, refs}
+  defp authorized_refs(_intent), do: {:error, :handoff_refs_unauthorized}
 
   defp sender_lease_status(repo, run_id, opts) do
     case Keyword.fetch(opts, :lease_status) do
@@ -372,6 +644,17 @@ defmodule Shoestring.Cobbler.Handoffs do
 
   defp intent_key(handoff_id), do: "handoff:" <> handoff_id
 
+  # Paired identities — see the comment above `append_decision/7`.
+  defp snapshot_key(handoff_id, snapshot),
+    do: "handoff-snapshot:#{handoff_id}:#{snapshot.snapshot_id}"
+
+  defp decision_key(handoff_id, snapshot),
+    do: "handoff-decision:#{handoff_id}:#{snapshot.snapshot_id}"
+
+  @doc "Idempotency key prefix for a handoff's persisted admission decisions."
+  @spec decision_key_prefix(Ecto.UUID.t()) :: String.t()
+  def decision_key_prefix(handoff_id), do: "handoff-decision:#{handoff_id}:"
+
   # Convergence, not a second transfer. The pointer event names the receiver
   # run; the dispatch pipeline is idempotent, so re-ensuring delivery repairs
   # a crash between the pointer and the dispatch row without duplicating
@@ -405,7 +688,18 @@ defmodule Shoestring.Cobbler.Handoffs do
   # Transfer
   # ----------------------------------------------------------------------------
 
-  defp transfer(repo, goal, sender, intent, checkpoint, continuation, handoff_id, now, opts) do
+  defp transfer(
+         repo,
+         goal,
+         sender,
+         intent,
+         checkpoint,
+         continuation,
+         identity,
+         handoff_id,
+         now,
+         opts
+       ) do
     with {:ok, :handing_off} <- lifecycle(opts),
          {:ok, snapshot} <- observe(intent, opts),
          {:ok, _event} <- persist_snapshot(goal, sender, snapshot, handoff_id, now, opts),
@@ -423,6 +717,7 @@ defmodule Shoestring.Cobbler.Handoffs do
             snapshot,
             decision_event,
             decision,
+            identity,
             handoff_id,
             opts
           )
@@ -475,7 +770,7 @@ defmodule Shoestring.Cobbler.Handoffs do
       "schema_version" => 2,
       "actor" => Keyword.get(opts, :actor, @actor),
       "occurred_at" => snapshot.observed_at || now,
-      "idempotency_key" => "handoff-snapshot:#{handoff_id}:#{snapshot.snapshot_id}",
+      "idempotency_key" => snapshot_key(handoff_id, snapshot),
       "payload" => EventPayload.capacity_snapshot(snapshot, sender.id)
     }
 
@@ -520,7 +815,7 @@ defmodule Shoestring.Cobbler.Handoffs do
     with {:ok, occupancy} <- occupancy(repo, goal, opts),
          {:ok, evaluation} <-
            evaluate(request, candidate, snapshot, policy, now: now, occupancy: occupancy) do
-      append_decision(goal, sender, evaluation, handoff_id, now, opts)
+      append_decision(goal, sender, evaluation, snapshot, handoff_id, now, opts)
     end
   end
 
@@ -547,10 +842,20 @@ defmodule Shoestring.Cobbler.Handoffs do
     end
   end
 
-  # Keyed by the handoff, so a retry that re-reaches this point (the pointer
-  # event has not committed yet) collapses onto the decision it already
-  # recorded instead of fanning out decisions — and, downstream, runs.
-  defp append_decision(goal, sender, evaluation, handoff_id, now, opts) do
+  # N1 COHERENCE. The observation and the decision share the same
+  # `(handoff_id, snapshot_id)` identity, so they can never be paired
+  # incorrectly. A crash-retry that re-observes the SAME reading (the
+  # Observatory serves a cached snapshot inside its freshness window)
+  # collapses BOTH appends on their idempotency keys: no duplicate
+  # observation, no duplicate decision. A retry that genuinely observes
+  # something NEW appends a new observation AND the decision taken on it —
+  # two honest events, correctly paired.
+  #
+  # Keying the decision on the handoff alone (the earlier shape) was
+  # incoherent in exactly the way that matters: the fresh observation
+  # appended, the decision collapsed onto the first one, and the history then
+  # showed a new reading beside a verdict that was never taken on it.
+  defp append_decision(goal, sender, evaluation, snapshot, handoff_id, now, opts) do
     payload =
       evaluation
       |> AdmissionDecision.to_payload()
@@ -561,7 +866,7 @@ defmodule Shoestring.Cobbler.Handoffs do
       "schema_version" => 1,
       "actor" => Keyword.get(opts, :actor, @actor),
       "occurred_at" => now,
-      "idempotency_key" => "handoff-decision:#{handoff_id}",
+      "idempotency_key" => decision_key(handoff_id, snapshot),
       "payload" => payload
     }
 
@@ -594,12 +899,21 @@ defmodule Shoestring.Cobbler.Handoffs do
          snapshot,
          decision_event,
          decision,
+         identity,
          handoff_id,
          opts
        ) do
     with {:ok, request} <- receiver_request(sender, intent, continuation, checkpoint, handoff_id),
-         {:ok, identity} <- receiver_identity(intent, opts),
+         # N4 re-validation. The guards above ran before the observation and
+         # admission round-trip, which is not instantaneous. Both are re-read
+         # here, immediately before the first irreversible step (the receiver
+         # row), so a claim lost or a sender Elf started DURING admission is
+         # caught. This narrows the window; it does not close it, because
+         # nothing here holds a lock on either. See the moduledoc's
+         # "Remaining window" note.
          :ok <- authorize(goal, opts),
+         {:ok, sender} <- fetch_sender_run(repo, goal.id, sender.id),
+         :ok <- ensure_no_active_elf(sender, opts),
          {:ok, receiver} <- create_receiver(repo, request, identity, handoff_id, opts),
          {:ok, grant_id, lease_state} <-
            grant_lease(repo, goal, receiver, snapshot, decision_event, decision, handoff_id, opts),

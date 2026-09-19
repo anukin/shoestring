@@ -207,80 +207,60 @@ defmodule Shoestring.Harness.ContinuationResumeTest do
   end
 
   describe "cross-provider handoff via Fake handoff_target" do
-    test "handoff creates a new run of the same goal plus the pointer event" do
+    test "cross-provider handoff is refused: this API cannot start another provider" do
       fixture = resume_fixture()
       {:ok, log} = RequestLog.start()
-      handoff_id = Ecto.UUID.generate()
-      new_run_id = Ecto.UUID.generate()
-      new_dispatch_id = Ecto.UUID.generate()
 
-      assert {:ok, %{handoff_id: ^handoff_id, run: new_run, run_identity: identity}} =
+      assert {:error, {:handoff_requires_cobbler_command, detail}} =
                Elves.resume_run(fixture.run.id,
                  adapter: Fake,
                  adapter_opts: adapter_opts(log, Scenario.handoff_target()),
                  continuation: fixture.presented,
                  provider_session_id: @session,
                  to_provider_id: "fake-harness-b",
-                 reason: "quota handoff",
-                 handoff_id: handoff_id,
-                 new_run_id: new_run_id,
-                 new_dispatch_id: new_dispatch_id
+                 reason: "quota handoff"
                )
 
-      assert new_run.id == new_run_id
-      assert new_run.goal_id == fixture.goal.id
-      assert identity.provider_session_id == "fake-session-handoff-b"
+      assert detail["run_id"] == fixture.run.id
+      assert detail["to_provider_id"] == "fake-harness-b"
+      assert detail["use"] == "Shoestring.Cobbler.Handoffs.request/3"
 
-      # Durable effect: the new run's run.requested carries the continuation.
-      assert Repo.exists?(
+      # Nothing at all happened: no adapter call, no pointer event, no second
+      # run. The production path is `Shoestring.Cobbler.Handoffs`, which
+      # observes the receiver, admits it, grants it its own lease and
+      # dispatches it under supervision.
+      assert RequestLog.count(log) == 0
+
+      refute Repo.exists?(
                from event in TrajectoryEvent,
-                 where:
-                   event.goal_id == ^fixture.goal.id and event.type == "run.requested" and
-                     event.run_id == ^new_run_id
+                 where: event.goal_id == ^fixture.goal.id and event.type == "handoff.created"
              )
 
-      # Pointer event with required fields and no forbidden content.
-      handoff_event =
-        Repo.one!(
-          from event in TrajectoryEvent,
-            where: event.goal_id == ^fixture.goal.id and event.type == "handoff.created",
-            order_by: [desc: event.sequence],
-            limit: 1
-        )
-
-      assert handoff_event.payload["handoff_id"] == handoff_id
-      assert handoff_event.payload["run_id"] == new_run_id
-      assert handoff_event.payload["checkpoint_id"] == fixture.checkpoint_id
-      assert handoff_event.payload["prior_run_id"] == fixture.run.id
-      assert handoff_event.payload["to_provider_id"] == "fake-harness-b"
-      assert handoff_event.payload["reason"] == "quota handoff"
-      assert handoff_event.payload["decision_refs"] == [fixture.decision_id]
-
-      for key <- Continuation.forbidden_keys() do
-        refute Map.has_key?(handoff_event.payload, Atom.to_string(key)),
-               "forbidden key #{key} in handoff payload"
-      end
-
-      # I5 handoff correction (P2): cross-provider transfer starts a FRESH
-      # session via adapter.start/2, never resume — the sender's session
-      # identity is never presented to the target.
-      [recorded] = RequestLog.starts(log)
-      assert RequestLog.resumes(log) == []
-      assert recorded.continuation.checkpoint_id == fixture.checkpoint_id
+      assert Repo.one!(
+               from run in Shoestring.Harness.RunRecord,
+                 where: run.goal_id == ^fixture.goal.id,
+                 select: count(run.id)
+             ) == 1
     end
 
-    test "handoff from a terminal goal state is refused" do
+    test "continuation validation still runs first: a stale boundary reports its own reason" do
+      # The refusal must not mask the precise continuation errors. A stale
+      # continuation is reported as stale even when the caller also asked for
+      # a cross-provider target.
       fixture = resume_fixture()
       {:ok, log} = RequestLog.start()
 
-      assert {:error, {:handoff_not_allowed, _}} =
+      newer_id = Ecto.UUID.generate()
+      append_checkpoint!(fixture, newer_id, "moved on")
+      assert {:ok, _} = Shoestring.Harness.Projector.project(fixture.goal.id)
+
+      assert {:error, :stale_continuation} =
                Elves.resume_run(fixture.run.id,
                  adapter: Fake,
                  adapter_opts: adapter_opts(log, Scenario.handoff_target()),
                  continuation: fixture.presented,
                  provider_session_id: @session,
-                 to_provider_id: "fake-harness-b",
-                 goal_state: :handing_off
+                 to_provider_id: "fake-harness-b"
                )
 
       assert RequestLog.count(log) == 0

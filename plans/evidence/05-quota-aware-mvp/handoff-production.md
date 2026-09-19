@@ -37,10 +37,13 @@ projector arms were already correct and are unchanged.
 
 | Module | Role |
 | :--- | :--- |
-| `Shoestring.Cobbler.Command` | `run.handoff` joins the closed type set; payload normalization for `run_id`, `checkpoint_id`, `to_provider_id`, `to_adapter_id`, `scope`, `reason`, and the attributable `requested_by`. |
+| `Shoestring.Cobbler.Command` | `run.handoff` joins the closed type set; payload normalization for `run_id`, `checkpoint_id`, the authorized `decision_refs`, `to_provider_id`, `to_adapter_id`, `scope`, `reason`, and the attributable `requested_by`. |
 | `Shoestring.Cobbler.Commands` | `evaluate/4` clause recording the handoff intent, plus `validate_handoff_reference/3` (run goal-owned, checkpoint goal-owned, checkpoint belongs to that run, receiver differs from sender). Execution stays disabled: the store records intent and stops. |
-| `Shoestring.Cobbler.Handoffs` (new) | `request/3` (durable intent) and `perform/3` (observe → admit → create → grant → point → dispatch), with the idempotency guard, the boundary check, the one-active-Elf guard and the convergence path. |
-| `Shoestring.Elves` | `live_receiver_session?/2` and `resolve_session/2` now probe dispatch id before run row id. |
+| `Shoestring.Cobbler.Handoffs` (new) | `request/3` (durable intent + delivery attempt), `perform/3` (authorize → identity → Elf guard → idempotency guard → boundary → observe → admit → create → grant → point → dispatch), and `reconcile/1` (startup repair of lost delivery attempts). |
+| `Shoestring.Cobbler.HandoffWorker` (new) | Oban `handoff`-queue consumer of the delivery attempt. |
+| `Shoestring.Cobbler.HandoffReconciler` (new) | One `reconcile/1` pass at boot, mirroring `WakeupReconciler`. No timers. |
+| `Shoestring.Elves` | Cross-provider handoff **removed** and refused (`:handoff_requires_cobbler_command`); same-provider resume unchanged. `resolve_session/2` probes dispatch id before run row id. |
+| `config/config.exs`, `config/runtime.exs`, `lib/shoestring/application.ex` | `handoff` queue, prod `:handoff_observe` MFA, boot reconciler child. |
 | `priv/repo/migrations/20260919034454_widen_cobbler_command_types.exs` | SQLite table rebuild widening `cobbler_commands_type_valid`. |
 
 ### Ordering, and why
@@ -52,22 +55,38 @@ idempotency rule. The receiver's `dispatch_id` is the same id, so
 `Runs.request/3` recovers a row a crashed attempt already inserted instead
 of creating a second one.
 
-`perform/3` runs:
+`perform/3` runs, and the order is load-bearing:
 
-1. boundary — the named checkpoint must still be the run's latest projected
-   checkpoint (`:stale_continuation` otherwise), then
-   `Continuation.validate_resume/3` in `:handoff` mode;
-2. one active Elf — a live `Elves.whereis/1` pid or a `starting`/`running`
-   run row refuses; nothing is cancelled, interrupted or signalled from
-   here;
-3. idempotency guard — an existing `handoff.created` under
-   `handoff:<handoff_id>` converges instead of re-admitting;
-4. fresh receiver observation → `capacity.snapshot_observed`;
-5. `AdmissionEvaluation.evaluate/5` → `admission.decided`; non-admit
+1. **authorization** — `DispatchGate.authorize/2`;
+2. **receiver identity** — fail-closed on an unknown provider/adapter;
+3. **one active Elf** — a live `Elves.whereis/1` pid or a
+   `starting`/`running` run row refuses; nothing is cancelled, interrupted
+   or signalled from here;
+4. **idempotency guard** — an existing `handoff.created` under
+   `handoff:<handoff_id>` converges instead of re-deciding;
+5. **boundary** — the named checkpoint must still be the run's latest
+   projected checkpoint (`:stale_continuation` otherwise), and the
+   authorized `decision_refs` must still match projection
+   (`:decision_superseded` otherwise);
+6. fresh receiver observation → `capacity.snapshot_observed`;
+7. `AdmissionEvaluation.evaluate/5` → `admission.decided`; non-admit
    refuses with the decision persisted;
-6. receiver run (bounded transcript-free prompt) → receiver lease grant →
-   `handoff.created` → `Dispatches.enqueue_for_run/2` behind
-   `DispatchGate.authorize/2` → `Projector.project/2`.
+8. re-check authorization and sender liveness, then receiver run (bounded
+   transcript-free prompt) → receiver lease grant → `handoff.created` →
+   `Dispatches.enqueue_for_run/2` → `Projector.project/2`.
+
+Steps 1–3 precede step 6 deliberately: **observing a provider is itself an
+effect.** It reaches a CLI and writes an auditable capacity claim into the
+goal's history, so an unauthorized or unidentifiable transfer must not get
+that far.
+
+Step 4 precedes step 5 deliberately too. `perform/3` appends its own
+`admission.decided`, so the refs projected after a successful transfer
+necessarily differ from the ones the operator authorized against;
+re-checking them on a retry would report `:decision_superseded` for every
+completed handoff and a crash between pointer and dispatch could never
+converge. `converge/5` decides nothing — it re-ensures the receiver's
+dispatch delivery, which is idempotent.
 
 ### Honest-admission detail worth naming
 
@@ -95,28 +114,36 @@ reimplementing it.
   and `02-harness-contracts-fake.md`). The production pattern was taken from
   the committed code instead — `Shoestring.Cobbler.Wakeups`'s admit branch —
   and from this directory's existing evidence. `REPO-INSPECTION`.
-- **`Elves.resume_run/2` is not removed or rerouted.** It remains the
-  projection path with its existing semantics and tests. Production callers
-  should use `Handoffs`; nothing yet forces them to. `UNVERIFIED` whether any
-  caller still needs the direct path — no caller inventory was taken in this
-  slice.
-- **`decision_refs` are re-projected at perform time, not carried in the
-  command.** A ref list frozen at request time would itself go stale. The
-  consequence is that `validate_resume/3`'s `match_decisions/2` arm is
-  trivially satisfied on this path; the load-bearing checks are checkpoint
-  identity, run binding, confirmation and the lease allowlist. Stated in the
-  code comment as well.
+- **`Elves.resume_run/2`'s cross-provider arm is removed, not gated.** A
+  caller inventory (`REPO-INSPECTION`, §7) found **zero** production callers;
+  every caller was a test or an eval. The arm now refuses with
+  `{:error, {:handoff_requires_cobbler_command, detail}}` and the
+  unsupervised implementation is deleted, because a flag would have left the
+  same bypass one keyword away. Same-provider resume is untouched.
+- **A refused handoff is settled and is not retried automatically.** The
+  operator answers a refusal with a NEW command. `reconcile/1` deliberately
+  leaves refused intents alone: re-observing and re-deciding behind the
+  operator would turn an auditable refusal into a silent retry loop.
+- **`reconcile/1` cannot repair a crash before the receiver row exists but
+  after the pointer committed.** `converge/5` reports
+  `{:handoff_receiver_missing, run_id}` rather than re-creating the row,
+  because re-creating it would need a fresh admission that this branch
+  deliberately does not run. `UNVERIFIED` in practice: the pointer and the
+  row are written in adjacent statements and no test forces that exact
+  window.
 - **The `|| :unknown` fallbacks in `admit/8` are unreachable today**:
   `CapacitySnapshot` requires `support_tier` and `compatibility_state`. They
   exist so a future nil can never become a fail-open default.
 - **No live provider run.** Cross-provider handoff against a real CLI is
   `UNVERIFIED`: no live run was made, no provider quota was spent, and no run
   budget was authorized. All coverage is Fake-to-Fake.
-- **The Oban dispatch job is never executed in these tests.** The suite
-  asserts the persisted delivery attempt (`harness_dispatches` row + `dispatch`
-  queue job). That the `DispatchWorker` then starts a supervised Elf is
-  existing, separately covered behaviour (`worker-effect.md`) and is
-  `UNVERIFIED` end-to-end for the handoff path specifically.
+- **Both delivery legs ARE executed end to end** in
+  `test/shoestring/cobbler/handoff_worker_test.exs`: the `handoff` job, then
+  the `dispatch` job, then a real supervised Elf that runs the receiver to
+  `run.completed` with exactly one `run.running`. Oban stays `testing:
+  :manual`, so jobs are performed explicitly rather than by a live queue —
+  the queue configuration itself is asserted as a file contract, not by
+  booting production.
 - **UI is untouched**, per the brief. No surface renders `run.handoff`
   commands yet.
 
@@ -151,7 +178,7 @@ vacuously.
 
 ## 5. Verification
 
-### Gate (`VERIFIED`)
+### Gate (`VERIFIED`, review round 2)
 
 Command, run in the worktree with a dropped-and-remigrated test database:
 
@@ -163,8 +190,22 @@ Exit status **0**.
 
 - `format --check-formatted`: clean.
 - `compile --warnings-as-errors`: clean.
-- Elixir: **1230 tests, 0 failures, 1 skipped (6 excluded)**, 89.5s.
+- Elixir: **1245 tests, 0 failures, 1 skipped (6 excluded)**, 92.3s.
 - Node (`gate_0a.node_test`): **tests 52, pass 52, fail 0, skipped 0**.
+
+Counts across the two rounds, measured each time rather than carried:
+
+| Head | Elixir tests | Failures |
+| :--- | ---: | ---: |
+| `01f2a54` (origin/main, measured) | 1207 | 0 |
+| `335b56a` (this PR, round 1) | 1230 | 0 |
+| this head (round 2) | 1245 | 0 |
+
+1230 → 1245 is **+15**: +13 in `handoff_production_test.exs`, +6 in the new
+`handoff_worker_test.exs`, +2 in the renamed
+`safe_stop_session_lookup_test.exs`, **−6** in
+`handoff_correction_test.exs`, where nine cross-provider tests of the
+removed unsupervised path were replaced by three refusal tests.
 
 ### Baseline (`VERIFIED`, measured — not carried forward)
 
@@ -275,15 +316,234 @@ No credentials, tokens, absolute paths or machine identifiers are committed.
 
 ---
 
-## 6. Twin checks performed
+## 6. Review round 2 — finding map
 
-- **Session lookup**: both call sites in `Shoestring.Elves`
-  (`live_receiver_session?/2`, `resolve_session/2`) were fixed, not just the
-  one the audit named. `Elf.lookup_session_ids/2` already held the correct
-  form and is untouched (Elf-owned).
+Independent review of `335b56a` returned REQUEST_CHANGES. What each finding
+was, and what changed.
+
+### B1 — the intent had no durable consumer
+
+`request/3` wrote a command row and nothing read it. There was no queue, no
+worker and no reconciliation, so a handoff intent could never become an
+execution and a crash between request and scheduling stranded it forever.
+
+Added: a `handoff` Oban queue, `Shoestring.Cobbler.HandoffWorker` (delivery
+attempt → `perform/3`), `Handoffs.reconcile/1` (re-enqueue for every
+unsettled intent with no live job), `Shoestring.Cobbler.HandoffReconciler`
+(one pass at boot), and the prod `:handoff_observe` wiring. `request/3` now
+commits the row and *then* inserts the job, so a failure between them leaves
+a standing intent that reconcile repairs — the row is the authority, the job
+is only delivery.
+
+"Settled" is derived from canonical events, not a hidden row flag: a
+`handoff.created` **plus** the receiver's dispatch row, or a recorded
+non-admit decision. A pointer without its dispatch row is NOT settled and is
+re-delivered; a refusal IS settled, because retrying it would re-observe and
+re-decide behind the operator.
+
+`test/shoestring/cobbler/handoff_worker_test.exs` drives **both** legs and a
+real supervised Elf: request → `handoff` job → `perform/3` → `dispatch` job
+→ `ElfEffect` → `run.completed` with exactly one `run.running`. Duplicate
+delivery converges (one pointer, one receiver, one dispatch, one lease, one
+Elf), and a restart with the job deleted still executes through
+`reconcile/1`.
+
+### B2 — the legacy unsupervised bypass
+
+**Caller inventory** (`REPO-INSPECTION`): `Elves.resume_run/2` had **zero**
+production callers. `Wakeups` has a private `resume_run/6` of a different
+arity; everything else was a test or an eval.
+
+So the arm was removed rather than gated: cross-provider now returns
+`{:error, {:handoff_requires_cobbler_command, detail}}`, and
+`resume_handoff/4`, `check_handoff_intent/3`, `replay_stored_receiver/7`,
+`receiver_terminal?/2`, `live_receiver_session?/2`, `handoff_effect/6`,
+`run_handoff_effect/7`, `append_handoff_created/5`, `replay_identity/1`,
+`handoff_request/4`, `invoke_start/3`, `handoff_transition/1`,
+`adapter_identity/1` and `latest_lease_id/2` are deleted. A flag would have
+left the same bypass one keyword away, so there is no flag; a test asserts
+that none of the old options re-opens it.
+
+Same-provider resume is byte-for-byte unchanged, and the continuation
+validation still runs FIRST, so a stale or superseded continuation reports
+its own precise reason rather than being masked by the refusal.
+
+Tests and evals were moved onto the production path rather than weakened.
+`ablation_test`, `demo_test` and `semantic_fixture_test` now drive
+`Eval.production_handoff!/4` — a durable command, a real receiver
+observation, a persisted admission decision, the receiver's own lease and a
+durable dispatch — which is *stronger* eval evidence than the previous
+inline adapter start. Their leg-B evidence moved from "what the Fake
+recorded" to "what was persisted", and `drive_leg_to_terminal!/2` gained a
+`:request_log` so leg-B adapter tax is still observed, now inside the Elf
+where the start actually happens.
+
+Two eval consequences worth naming, both real rather than cosmetic:
+
+* the receiver now holds a lease, so the Elf also writes a lease-boundary
+  checkpoint. The ablation's terminal-checkpoint assertion now selects by
+  KIND instead of by position, which is what it always meant;
+* the evals pass a larger lease budget so renewal does not fire mid-leg.
+  The lease is still granted, still bound to the receiver run and still
+  carried on `handoff.created`; only the budget changed, and the reason is
+  recorded in the helper.
+
+### B3 — effects before authorization
+
+`perform/3` observed the provider, persisted `capacity.snapshot_observed`,
+evaluated admission and persisted `admission.decided` **before** checking
+the claim or resolving the receiver identity. Observing a provider is an
+effect: it reaches a CLI and writes an auditable capacity claim.
+
+Authorization and identity now run first, and both are re-validated
+immediately before the receiver row — the first irreversible step — so a
+claim lost or a sender Elf started *during* admission is caught.
+
+The tests assert absence with a **counting probe**, not only event absence:
+event absence alone cannot distinguish "never observed" from "observed but
+the append failed". A twin test asserts the normal admitted path still
+reaches the provider exactly once and dispatches, so the reordering did not
+make the happy path unreachable.
+
+### B4 — `:decision_superseded` was unreachable
+
+`boundary/5` projected the refs and then validated the projected refs
+against themselves, so `match_decisions/2` compared a list with itself. An
+admission decided between request and perform rode along silently.
+
+The authorized refs are now frozen into the durable command payload at
+request time and compared against projection at perform time. The refusal is
+conservative: a changed set means the authorization no longer describes the
+transfer, so it refuses and the operator re-authorizes with a new command.
+Nothing re-authorizes on the operator's behalf and no "divergence accepted"
+is recorded.
+
+Because the refs are digest-covered, re-submitting the same command id with
+different refs is a `:command_conflict`, not a silent widening — asserted,
+along with the durable payload being the only input the perform side reads
+(the Oban job args carry `goal_id`, `command_id`, `handoff_id` and nothing
+else), so a restart reconstructs the authorized set from the row.
+
+### N1 — incoherent observation/decision identity
+
+The snapshot key carried the fresh snapshot id while the decision key
+carried only the handoff id. On a retry that observed something new, the
+observation appended and the decision collapsed onto the first one, leaving
+a history that showed a new reading beside a verdict never taken on it.
+
+Both keys now share `(handoff_id, snapshot_id)`. A crash-retry that
+re-observes the same reading collapses BOTH appends; a retry that genuinely
+observes something new appends a new observation AND the decision taken on
+it. Freshness semantics are unchanged — the pairing is what was fixed.
+
+### N2 — overclaimed lock ledgers
+
+`handoff_production_test.exs` claimed every test was a true baseline lock.
+Corrected: against `01f2a54` these are **DOCUMENTATION** (missing module,
+rejected command-type enum — a missing surface is not evidence that base did
+the wrong thing at that surface). The genuine behavioural locks are stated
+against `335b56a`, group by group, with their exact failure output in §7.
+`handoff_correction_test.exs` got the same treatment.
+
+### N3 — vacuous guard
+
+`session_ids(stored_run) != [] and Enum.any?(...)` — `Enum.any?/2` on an
+empty list is already `false`. Removed with the whole of
+`live_receiver_session?/2` under B2.
+
+### N4 — check-then-act on sender status
+
+The guard is a check, not a lock, and the moduledoc now says so instead of
+implying otherwise. It runs before the observation and again immediately
+before the receiver row. That narrows the window; it does not close it,
+because nothing here holds a lock on the Elf registry or the claim row.
+
+What backstops the residual window is named explicitly and is not this
+module: `Dispatches.prepare_for_effect/2` claims the dispatch row, and
+`Elves.start_elf/3` registers by run id and returns
+`{:ok, :already_running, pid}` rather than starting a second Elf. Two Elves
+for one run are prevented there. This module still never pauses or cancels
+the sender — a handoff requested while the sender is live is refused, not
+forced.
+
+---
+
+## 7. Fail-on-prior-head proof (review round 2) (`VERIFIED`)
+
+`lib/` reverted to `335b56a` (`git checkout 335b56a -- lib/`), new tests
+kept, then restored and re-run green (50/50 across the four files).
+
+`handoff_production_test.exs` → **32 tests, 16 failures**. Representative,
+one per finding:
+
+```
+B3  "a lost claim refuses BEFORE the provider is observed"
+    assert probe.count.() == 0       left: 1   right: 0
+B3  "an unknown receiver provider refuses BEFORE the provider is observed"
+    right: {:ok, ... reason_code: "snapshot_provider_mismatch"}
+B4  "a decision recorded between request and perform refuses as superseded"
+    left: {:error, :decision_superseded}   right: {:ok, ...}
+B4  "non-UUID refs are refused at request time"
+    left: {:error, changeset}              right: {:ok, ...}
+B1  "the command row exists; no handoff, run, lease or dispatch does"
+    assert [job] = Repo.all(Job)   left: [job]   right: []
+B1  "an intent whose delivery attempt was lost gets one back"
+    ** (UndefinedFunctionError) Shoestring.Cobbler.Handoffs.reconcile/0
+```
+
+Left 1 on the probe counter IS the defect: the prior head reached the
+provider before checking authorization. `snapshot_provider_mismatch` is the
+same defect for identity — it observed and admitted a provider it could not
+even identify.
+
+`handoff_worker_test.exs` → **6 tests, 5 failures**, all because no delivery
+attempt exists to perform (`{:ok, %{job: handoff_job}}` does not match, and
+`reconcile/0` is undefined). The sixth is the config file contract, which
+passes at both heads (DOCUMENTATION).
+
+`handoff_correction_test.exs` → **6 tests, 3 failures**. All three
+cross-provider refusal tests fail with `right: {:ok, ...}` — the prior head
+returned success and started a Fake session. That is the bypass itself.
+
+`safe_stop_session_lookup_test.exs` → **6 tests, 2 failures** at BOTH
+`335b56a` and `01f2a54`:
+
+```
+"a session registered under the dispatch id is reachable"
+    left: {:ok, :stop_requested}   right: {:error, :session_not_found}
+"the run row's own ids are what get probed, in dispatch-first order"
+    assert_receive {:safe_stop_requested, ^dispatch_session}
+```
+
+This is the R4.2 twin, still a TRUE behavioural lock. The round-1 commit
+fixed `resolve_session/2` for the default Codex lookup but still handed a
+custom `:session_resolver` only the run row id; a test registry therefore
+could not behave like the real one. Both now probe dispatch id first, run
+row id second.
+
+The four remaining tests in that file (run-row-id registration, no session,
+explicit `:session_pid`, deduplicated probe) pass at both heads —
+DOCUMENTATION.
+
+---
+
+## 8. Twin checks performed
+
+- **Session lookup**: `live_receiver_session?/2` is gone with the
+  unsupervised path; `resolve_session/2` was fixed for BOTH its lookup
+  shapes — the default Codex table and a caller-supplied
+  `:session_resolver`, which round 1 had left probing the run row id only.
+  `Elf.lookup_session_ids/2` already held the correct form and is untouched
+  (Elf-owned, PR72).
 - **Capability mapping**: `Handoffs.receiver_capabilities/1` is the third
   copy of the same string→atom mapping (`Elves.resume_capabilities/1`,
   `Wakeups.wake_capabilities/1`). Kept local for the same file-ownership
   reason `Wakeups` records, and noted in the code so the triplet is visible.
+- **Refusal twins**: every "refuses with no effect" test has an admitted
+  twin asserting the normal path still works — the reordering in B3 and the
+  supersede check in B4 are each covered in both directions.
+- **Delivery twins**: `request/3`'s enqueue and `reconcile/1`'s re-enqueue
+  build the same job through one `delivery_changeset/1`, so the two paths
+  cannot drift apart.
 - **Migration up/down**: `down/0` narrows the check back. Rows of the new
   type would then violate it; none exist pre-MVP. Stated in the migration.
