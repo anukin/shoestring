@@ -264,6 +264,228 @@
         </div>
       <% end %>
 
+      <%!-- Execution provider: who is running now vs who admission weighed --%>
+      <div
+        id="cobbler-provider"
+        class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4"
+      >
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
+          <.icon name="hero-cpu-chip" class="w-4 h-4 text-zinc-500" /> Execution Provider
+        </h3>
+
+        <%= if @execution.executing_run do %>
+          <p
+            id="cobbler-active-provider"
+            data-status={@execution.executing_run.presentation.status}
+            class="font-mono text-base font-semibold text-zinc-900 break-all"
+          >
+            {recorded_or(@execution.executing_run.provider_id, "Provider not recorded")}
+          </p>
+          <p class="text-sm text-zinc-600">
+            Owns the live turn on run
+            <span
+              id="cobbler-active-provider-run"
+              class="font-mono text-xs text-zinc-700 break-all"
+            >
+              {@execution.executing_run.id}
+            </span>
+          </p>
+        <% else %>
+          <p
+            id="cobbler-active-provider"
+            data-status="none"
+            class="text-sm text-zinc-700"
+          >
+            No provider is executing for this goal. No
+            <code
+              class="font-mono text-xs"
+              phx-no-curly-interpolation
+            >
+              harness_runs
+            </code>
+            row is in a starting, running, pausing, or cancelling state.
+          </p>
+        <% end %>
+
+        <div class="border-t border-zinc-100 pt-4 space-y-3">
+          <p class="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            Latest run on record
+          </p>
+          <%= if @execution.latest_run do %>
+            <dl class="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+              <dt class="text-zinc-500">Run</dt>
+              <dd id="cobbler-latest-run" class="font-mono text-xs text-zinc-900 break-all">
+                {@execution.latest_run.id}
+              </dd>
+              <dt class="text-zinc-500">Run status</dt>
+              <dd>
+                <span
+                  id="cobbler-latest-run-status"
+                  data-status={@execution.latest_run.presentation.status}
+                  class={[
+                    "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-medium text-sm",
+                    @execution.latest_run.presentation.badge_class
+                  ]}
+                >
+                  <.icon name={@execution.latest_run.presentation.icon} class="w-3.5 h-3.5" />
+                  {@execution.latest_run.presentation.label}
+                </span>
+              </dd>
+              <dt class="text-zinc-500">Provider on record</dt>
+              <dd
+                id="cobbler-latest-run-provider"
+                class={mono_value_class(@execution.latest_run.provider_id)}
+              >
+                {recorded_or(@execution.latest_run.provider_id, "Not recorded")}
+              </dd>
+              <dt class="text-zinc-500">Provider-reported session</dt>
+              <dd
+                id="cobbler-provider-session"
+                class={mono_value_class(@execution.latest_run.provider_session_id)}
+              >
+                {recorded_or(@execution.latest_run.provider_session_id, "Not reported")}
+              </dd>
+            </dl>
+          <% else %>
+            <p id="cobbler-latest-run-empty" class="text-sm text-zinc-500 italic">
+              No harness run is recorded for this goal.
+            </p>
+          <% end %>
+        </div>
+
+        <div class="border-t border-zinc-100 pt-4 space-y-3">
+          <p class="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            Admission candidate &mdash; evaluated, not executed
+          </p>
+          <%= if @execution.candidate do %>
+            <dl class="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+              <dt class="text-zinc-500">Candidate provider</dt>
+              <dd
+                id="cobbler-candidate-provider"
+                class={mono_value_class(@execution.candidate.provider_id)}
+              >
+                {recorded_or(@execution.candidate.provider_id, "Not recorded")}
+              </dd>
+              <dt class="text-zinc-500">Candidate adapter</dt>
+              <dd
+                id="cobbler-candidate-adapter"
+                class={mono_value_class(@execution.candidate.adapter_id)}
+              >
+                {recorded_or(@execution.candidate.adapter_id, "Not recorded")}
+              </dd>
+              <dt class="text-zinc-500">Support tier</dt>
+              <dd
+                id="cobbler-candidate-tier"
+                class={value_class(@execution.candidate.support_tier)}
+              >
+                {recorded_or(@execution.candidate.support_tier, "Not recorded")}
+              </dd>
+              <dt class="text-zinc-500">Compatibility</dt>
+              <dd
+                id="cobbler-candidate-compatibility"
+                class={value_class(@execution.candidate.compatibility_state)}
+              >
+                {recorded_or(@execution.candidate.compatibility_state, "Not recorded")}
+              </dd>
+            </dl>
+          <% else %>
+            <p id="cobbler-candidate-empty" class="text-sm text-zinc-500 italic">
+              No admission decision records a candidate provider for this goal.
+            </p>
+          <% end %>
+        </div>
+
+        <p class="border-t border-zinc-100 pt-4 text-xs text-zinc-500">
+          A candidate is what admission weighed, never evidence that it ran. Every value
+          above is read from a persisted row; the provider-reported session is diagnostic
+          evidence only and is never canonical state. This page contacts no provider.
+        </p>
+      </div>
+
+      <%!-- Isolated worktree identity (durable record; nothing inferred) --%>
+      <div
+        id="cobbler-worktree"
+        class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
+            <.icon name="hero-folder" class="w-4 h-4 text-zinc-500" /> Isolated Worktree
+          </h3>
+          <%= if @worktree.record do %>
+            <span
+              id="cobbler-worktree-status"
+              data-status={@worktree.record.presentation.status}
+              class={[
+                "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-medium text-sm",
+                @worktree.record.presentation.badge_class
+              ]}
+            >
+              <.icon name={@worktree.record.presentation.icon} class="w-3.5 h-3.5" />
+              {@worktree.record.presentation.label}
+            </span>
+          <% end %>
+        </div>
+
+        <%= if @worktree.run_id do %>
+          <dl class="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+            <dt class="text-zinc-500">Worktree run key</dt>
+            <dd id="cobbler-worktree-run" class="font-mono text-xs text-zinc-900 break-all">
+              {@worktree.run_id}
+            </dd>
+            <dt class="text-zinc-500">Workspace reference</dt>
+            <dd
+              id="cobbler-worktree-workspace-ref"
+              class={mono_value_class(@worktree.workspace_ref)}
+            >
+              {recorded_or(@worktree.workspace_ref, "Not recorded")}
+            </dd>
+          </dl>
+        <% end %>
+
+        <%= if @worktree.record do %>
+          <dl class="grid grid-cols-1 gap-x-4 gap-y-2 text-sm border-t border-zinc-100 pt-4">
+            <dt class="text-zinc-500">Worktree path</dt>
+            <dd id="cobbler-worktree-path" class={mono_value_class(@worktree.record.path)}>
+              {recorded_or(@worktree.record.path, "Not recorded")}
+            </dd>
+            <dt class="text-zinc-500">Branch</dt>
+            <dd id="cobbler-worktree-branch" class={mono_value_class(@worktree.record.branch)}>
+              {recorded_or(@worktree.record.branch, "Not recorded")}
+            </dd>
+            <dt class="text-zinc-500">Base commit</dt>
+            <dd
+              id="cobbler-worktree-base-commit"
+              class={mono_value_class(@worktree.record.base_commit)}
+            >
+              {recorded_or(@worktree.record.base_commit, "Not recorded")}
+            </dd>
+            <dt class="text-zinc-500">Source repository</dt>
+            <dd
+              id="cobbler-worktree-repo-path"
+              class={mono_value_class(@worktree.record.repo_path)}
+            >
+              {recorded_or(@worktree.record.repo_path, "Not recorded")}
+            </dd>
+            <dt class="text-zinc-500">Repository id</dt>
+            <dd id="cobbler-worktree-repo-id" class={mono_value_class(@worktree.record.repo_id)}>
+              {recorded_or(@worktree.record.repo_id, "Not recorded")}
+            </dd>
+          </dl>
+          <p class="text-xs text-zinc-500">
+            Read from the durable worktree record for this run. The source repository is
+            never modified; Shoestring works only inside the isolated worktree above.
+          </p>
+        <% else %>
+          <p
+            id="cobbler-worktree-unknown"
+            data-state={to_string(@worktree.state)}
+            class="text-sm text-zinc-500 italic"
+          >
+            {worktree_unknown_text(@worktree.state)}
+          </p>
+        <% end %>
+      </div>
+
       <%!-- Handoff (read-only; a handoff targets a new run of the same goal) --%>
       <%= if @handoffs != [] do %>
         <div
