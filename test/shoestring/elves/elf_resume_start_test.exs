@@ -1,3 +1,17 @@
+defmodule Shoestring.Elves.NoResumeFake do
+  @moduledoc false
+  # Fake transport surface without resume/3 (like ClaudeHeadless): exercises
+  # the fresh-start branch for requests that carry a continuation.
+  @behaviour Shoestring.Harness.Adapter
+  alias Shoestring.Harness.Fake
+  def identity, do: Fake.identity()
+  def capabilities, do: Fake.capabilities() |> MapSet.delete(:resume)
+  def probe(opts), do: Fake.probe(opts)
+  def start(request, opts), do: Fake.start(request, opts)
+  def status(identity, opts), do: Fake.status(identity, opts)
+  def stream(identity, opts), do: Fake.stream(identity, opts)
+end
+
 defmodule Shoestring.Elves.ElfResumeStartTest do
   @moduledoc """
   Hermetic Elf tests for resume-first adapter start (round-2 finding 5
@@ -145,6 +159,52 @@ defmodule Shoestring.Elves.ElfResumeStartTest do
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, @terminal_timeout
     assert RequestLog.starts(log) != []
     assert RequestLog.resumes(log) == []
+  end
+
+  test "fresh start without resume support still carries the continuation", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    # Adapters without resume/3 (like ClaudeHeadless) take the fresh branch
+    # even when the request carries a prior session: the started request
+    # must still carry the composed checkpoint prompt, not the original.
+    # (Base: original prompt verbatim.)
+    {:ok, log} = RequestLog.start()
+    run_id = Ecto.UUID.generate()
+    base = ElvesHelpers.run_request(goal, task, dispatch_id: run_id)
+
+    request = %{
+      base
+      | extensions: %{"wakeup:resume_prior_session_id" => "fake-session-x"},
+        continuation: %{
+          checkpoint_id: Ecto.UUID.generate(),
+          next_action: "FRESH-NEXT-42 finish the widget",
+          decision_refs: []
+        }
+    }
+
+    scenario =
+      ElvesHelpers.custom_scenario(:fresh_composed, [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               run_id: run_id,
+               adapter: Shoestring.Elves.NoResumeFake,
+               adapter_opts: %{scenario: scenario, request_log: log},
+               command: ["sleep", "30"],
+               runner_opts: [kill_grace_ms: 200, reap_timeout_ms: 2_000],
+               notify: self()
+             )
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, @terminal_timeout
+    [started] = RequestLog.starts(log)
+    assert started.prompt =~ "FRESH-NEXT-42"
+    refute started.prompt == "Do the deterministic thing."
   end
 
   defp resume_request(goal, task, run_id) do

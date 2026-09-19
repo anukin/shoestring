@@ -107,6 +107,7 @@ defmodule Shoestring.Elves.Elf do
           lease_settled?: boolean(),
           lease_checkpointed?: boolean(),
           lease_checkpoint_id: Ecto.UUID.t() | nil,
+          lease_checkpoint_error: term(),
           lease_declined?: boolean()
         }
 
@@ -152,6 +153,7 @@ defmodule Shoestring.Elves.Elf do
     lease_settled?: false,
     lease_checkpointed?: false,
     lease_checkpoint_id: nil,
+    lease_checkpoint_error: nil,
     lease_declined?: false
   ]
 
@@ -604,15 +606,17 @@ defmodule Shoestring.Elves.Elf do
   defp start_adapter(state) do
     adapter_opts = Map.merge(%{clock: state.clock}, state.adapter_opts)
     adapter_opts = maybe_mark_elf_owned_group(adapter_opts, state.process_owner)
+    request = ensure_composed_prompt(state)
 
     # Same-provider continuations resume the prior session when the adapter
     # supports it: the request carries `wakeup:resume_prior_session_id`
     # (set by the wake dispatch for the suspended run's session). A failed
     # resume falls back to a fresh start — a dead session must not fail a
-    # wake that fresh capacity just admitted.
+    # wake that fresh capacity just admitted. Both paths use the composed
+    # request: the original prompt alone never carries recovery context.
     case resume_prior(state) do
       {:resume, prior} ->
-        case state.adapter.resume(prior, state.request, adapter_opts) do
+        case state.adapter.resume(prior, request, adapter_opts) do
           {:ok, _identity} = ok ->
             ok
 
@@ -623,20 +627,20 @@ defmodule Shoestring.Elves.Elf do
               reason: inspect(reason)
             )
 
-            state.adapter.start(fallback_request(state), adapter_opts)
+            state.adapter.start(request, adapter_opts)
         end
 
       :fresh ->
-        state.adapter.start(state.request, adapter_opts)
+        state.adapter.start(request, adapter_opts)
     end
   end
 
-  # A fresh start after a failed resume still carries recovery context:
-  # when the request holds a continuation triple, the replacement prompt is
+  # Every start carries recovery context when the request holds a
+  # continuation triple (wake continuations always do): the prompt is
   # composed from it (checkpoint sections when the record loads, pointer +
   # next action otherwise) instead of the stale original prompt. Without a
   # continuation the original prompt stands (non-wake runs).
-  defp fallback_request(state) do
+  defp ensure_composed_prompt(state) do
     case state.request.continuation do
       %{checkpoint_id: checkpoint_id} = continuation
       when is_binary(checkpoint_id) ->
@@ -1414,20 +1418,31 @@ defmodule Shoestring.Elves.Elf do
       {:error, {:lease_not_renewable, status}} ->
         # Already terminal elsewhere: still ensure checkpoint contents when
         # the allowance is exhausted, then settle so later items stay quiet.
+        # A failed checkpoint never settles: the run stays unlatched so the
+        # next boundary retries instead of going quiet without contents.
         Logger.warning("elf lease not renewable at boundary",
           run_id: state.run_id,
           dispatch_id: state.dispatch_id,
           lease_status: status
         )
 
-        state =
-          if exhausted?(state) do
-            write_reactive_checkpoint(state, "lease_exhausted")
-          else
-            state
-          end
+        if exhausted?(state) do
+          case write_reactive_checkpoint(state, "lease_exhausted") do
+            {:ok, state} ->
+              %{state | lease_settled?: true}
 
-        %{state | lease_settled?: true}
+            {:error, failed_state, write_reason} ->
+              Logger.error("elf lease checkpoint failed at terminal boundary, retry left open",
+                run_id: state.run_id,
+                dispatch_id: state.dispatch_id,
+                reason: inspect(write_reason)
+              )
+
+              %{failed_state | lease_checkpoint_error: write_reason}
+          end
+        else
+          %{state | lease_settled?: true}
+        end
 
       {:error, reason} ->
         Logger.warning("elf lease renewal failed at boundary",
@@ -1464,20 +1479,40 @@ defmodule Shoestring.Elves.Elf do
     %{state | lease_bounds: bounds, lease_settled?: false, lease_stop_requested?: false}
   end
 
-  # The decline path (lease re-loop P2): checkpoint contents through the T3
-  # writer (existing, used as-is), then the run sleeps — `run.pausing` /
+  # The decline path (lease re-loop P2): checkpoint contents through the
+  # deterministic evidence collector, then the run sleeps — `run.pausing` /
   # `run.suspended` through the Elf's existing run-event helper — then a
   # durable sleep wake for the delayed recheck, then settle. Every step is
   # idempotent (checkpoint id, run-event keys, wakeup key are all stable per
   # dispatch), so a retry between steps replays instead of duplicating.
+  #
+  # Checkpoint persistence failure is durable and recoverable: no suspend,
+  # no wake, no settle, and no stop on a failed checkpoint — the run stays
+  # active so the next safe boundary retries the checkpoint instead of
+  # sleeping without recovery context. The failure is kept in
+  # `lease_checkpoint_error` and logged with run/dispatch identity; the
+  # already-appended `lease.checkpoint_required` transition is the durable
+  # marker that contents are still owed. Nothing is interrupted mid-item
+  # and the owned process group is untouched here.
   defp decline_lease(state, reason) do
-    state
-    |> write_reactive_checkpoint(reason)
-    |> suspend_run_for_decline()
-    |> schedule_decline_wakeup()
-    |> settle_on_checkpoint()
-    |> request_decline_stop()
-    |> Map.put(:lease_declined?, true)
+    case write_reactive_checkpoint(state, reason) do
+      {:ok, state} ->
+        state
+        |> suspend_run_for_decline()
+        |> schedule_decline_wakeup()
+        |> settle_on_checkpoint()
+        |> request_decline_stop()
+        |> Map.put(:lease_declined?, true)
+
+      {:error, failed_state, write_reason} ->
+        Logger.error("elf lease decline checkpoint failed, run stays active for retry",
+          run_id: state.run_id,
+          dispatch_id: state.dispatch_id,
+          reason: inspect(write_reason)
+        )
+
+        %{failed_state | lease_checkpoint_error: write_reason, lease_declined?: false}
+    end
   end
 
   # A declined run sleeps durably — no further execution may start. Ask a
@@ -1616,22 +1651,22 @@ defmodule Shoestring.Elves.Elf do
   defp settle_on_checkpoint(state), do: state
 
   # The reactive checkpoint path: deterministic, model-free checkpoint
-  # contents through the T3 writer (used as-is, read-only), then the run
+  # contents through the shared repository-evidence collector
+  # (`TerminalCheckpoint.record_reactive/3`: goal/task acceptance contract,
+  # worktree identity, base/current revision, branch, dirty diff stat and
+  # changed-file list, verification trajectory, last safe boundary, lease
+  # snapshot, stop/lease reason, deterministic next step), then the run
   # continues to the safe boundary — the item that just completed is durable
   # before this append, and ingestion is never interrupted mid-item.
+  #
+  # Returns `{:ok, state}` with `lease_checkpointed?` set and the stable
+  # `lease_checkpoint_id` retained, or `{:error, state, reason}` with the id
+  # retained for retry but nothing suspended. Callers must not suspend,
+  # schedule a wake, settle, or stop on `{:error, _, _}`: without a
+  # persisted structural checkpoint there is no recovery context for a
+  # continuation. Never raises.
   defp write_reactive_checkpoint(state, reason) do
-    bounds = state.lease_bounds
-
-    spent =
-      case bounds do
-        %Shoestring.Cobbler.LeaseBounds{} = bounds ->
-          "spent #{bounds.responses} responses and #{bounds.tools} tools"
-
-        _other ->
-          "allowance exhausted"
-      end
-
-    {state, checkpoint_id} =
+    {state, _checkpoint_id} =
       case state.lease_checkpoint_id do
         nil ->
           id = Ecto.UUID.generate()
@@ -1641,36 +1676,29 @@ defmodule Shoestring.Elves.Elf do
           {state, id}
       end
 
-    inputs = %{
-      checkpoint_id: checkpoint_id,
-      goal_id: state.goal_id,
-      run_id: state.run_id,
-      acceptance_criteria: ["complete the supervised task per the goal acceptance contract"],
-      repository_revision: "unknown",
-      stop_reason: reason,
-      provider_session_id: state.provider_session_id,
-      evidence: ["reactive checkpoint for lease #{state.lease_grant_id}: #{spent}"],
-      extensions: %{"shoestring.elf:lease_grant_id" => state.lease_grant_id}
-    }
+    case Shoestring.Elves.TerminalCheckpoint.record_reactive(state, reason,
+           repo: state.repo,
+           clock: state.clock
+         ) do
+      {:ok, recorded_id} ->
+        {:ok,
+         %{
+           state
+           | lease_checkpointed?: true,
+             lease_checkpoint_error: nil,
+             lease_checkpoint_id: recorded_id
+         }}
 
-    case Shoestring.Harness.CheckpointFallback.build(inputs) do
-      {:ok, checkpoint} ->
-        case Shoestring.Harness.Checkpoints.record(state.goal_id, checkpoint,
-               repo: state.repo,
-               now: Clock.now(state.clock),
-               actor: "elf"
-             ) do
-          {:ok, _recorded} -> %{state | lease_checkpointed?: true}
-          {:error, _reason} -> state
-        end
-
-      {:error, _reason} ->
-        state
+      {:error, write_reason} ->
+        {:error, %{state | lease_checkpointed?: false}, write_reason}
     end
   rescue
-    _error -> state
+    error ->
+      {:error, %{state | lease_checkpointed?: false}, {:reactive_checkpoint_crashed, error}}
   catch
-    _kind, _reason -> state
+    kind, reason ->
+      {:error, %{state | lease_checkpointed?: false},
+       {:reactive_checkpoint_caught, {kind, reason}}}
   end
 
   # Fresh observable capacity through the running adapter only (Fake in
