@@ -34,9 +34,12 @@ defmodule Shoestring.Cobbler.Commands do
     release command against the owning goal. There is no expiry, no
     staleness trigger, and no release on ambiguous restart.
   - **Execution disabled.** Submitting, responding to, or inspecting commands
-    never spawns a process, enqueues a job, or dispatches at startup. The
-    first gated consumer is `Shoestring.Cobbler.Dispatcher`, which reads
-    command rows and stops at an explicit execution-disabled boundary.
+    never spawns a process, enqueues a job, or dispatches at startup. This
+    holds for `run.handoff` too: the store records the transfer INTENT and
+    stops. `Shoestring.Cobbler.Handoffs.perform/3` is the separate executor
+    and is never reached from here. The first gated consumer is
+    `Shoestring.Cobbler.Dispatcher`, which reads command rows and stops at an
+    explicit execution-disabled boundary.
     Direct run paths (Elves, harness adapters, dispatch) accept an opt-in
     `require_cobbler_command: true` guard
     (`Shoestring.Cobbler.DispatchGate`); without the flag they still do not
@@ -60,7 +63,7 @@ defmodule Shoestring.Cobbler.Commands do
   require Logger
 
   alias Shoestring.Cobbler.{Command, CommandRecord, TaskClaimRecord}
-  alias Shoestring.Harness.Contract
+  alias Shoestring.Harness.{CheckpointRecord, Contract, RunRecord}
   alias Shoestring.Repo
   alias Shoestring.Trajectory.Goal
   alias Shoestring.Trajectory.{EventRegistry, TrajectoryEvent}
@@ -181,6 +184,40 @@ defmodule Shoestring.Cobbler.Commands do
     end
   end
 
+  # `run.handoff` records intent ONLY. It observes no capacity, evaluates no
+  # admission, grants no lease and dispatches nothing: the durable row is
+  # what `Shoestring.Cobbler.Handoffs.perform/3` later replays against, and
+  # the row must therefore exist before any effect. Validation is
+  # structural and goal-scoped — the sender run and the named checkpoint
+  # boundary must both belong to this goal, and the checkpoint must belong
+  # to that run. Anything else is a terminal `:rejected` under this command
+  # id, never a silently widened boundary.
+  defp evaluate(%Command{type: "run.handoff"} = command, repo, goal_id, _now) do
+    case validate_handoff_reference(repo, goal_id, command) do
+      {:ok, checkpoint} ->
+        {:resolved,
+         %{
+           "kind" => "handoff_requested",
+           "run_id" => command.payload["run_id"],
+           "checkpoint_id" => checkpoint.id,
+           "to_provider_id" => command.payload["to_provider_id"],
+           "to_adapter_id" => command.payload["to_adapter_id"],
+           "scope" => command.payload["scope"],
+           "reason" => command.payload["reason"],
+           "requested_by" => command.payload["requested_by"]
+         }, [], nil}
+
+      {:rejected, reason} ->
+        {:rejected,
+         %{
+           "kind" => "rejected",
+           "reason" => reason,
+           "run_id" => command.payload["run_id"],
+           "checkpoint_id" => command.payload["checkpoint_id"]
+         }, [], nil}
+    end
+  end
+
   defp evaluate(%Command{type: "task.release"} = command, repo, goal_id, now) do
     case do_active_claim(repo) do
       nil ->
@@ -280,6 +317,36 @@ defmodule Shoestring.Cobbler.Commands do
       "reason" => reason,
       "admission_event_id" => command.payload["admission_event_id"]
     }
+  end
+
+  @doc """
+  Validates the run and checkpoint boundary referenced by a `run.handoff`
+  command: both must belong to this goal, and the checkpoint must belong to
+  the named sender run. A handoff at a checkpoint that is not the run's own
+  is not a boundary — it is a different run's state.
+  """
+  @spec validate_handoff_reference(module(), Ecto.UUID.t(), Command.t()) ::
+          {:ok, CheckpointRecord.t()} | {:rejected, String.t()}
+  def validate_handoff_reference(repo, goal_id, command) do
+    run_id = command.payload["run_id"]
+    checkpoint_id = command.payload["checkpoint_id"]
+
+    run =
+      repo.one(from run in RunRecord, where: run.id == ^run_id and run.goal_id == ^goal_id)
+
+    checkpoint =
+      repo.one(
+        from checkpoint in CheckpointRecord,
+          where: checkpoint.id == ^checkpoint_id and checkpoint.goal_id == ^goal_id
+      )
+
+    cond do
+      is_nil(run) -> {:rejected, "handoff_run_not_found"}
+      is_nil(checkpoint) -> {:rejected, "handoff_checkpoint_not_found"}
+      checkpoint.run_id != run.id -> {:rejected, "handoff_checkpoint_run_mismatch"}
+      run.provider_id == command.payload["to_provider_id"] -> {:rejected, "handoff_same_provider"}
+      true -> {:ok, checkpoint}
+    end
   end
 
   @doc """

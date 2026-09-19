@@ -196,7 +196,7 @@ defmodule Shoestring.Elves do
     session =
       Keyword.get(opts, :session) ||
         Keyword.get(opts, :session_pid) ||
-        resolve_session(run.id, opts)
+        resolve_session(run, opts)
 
     case session do
       nil ->
@@ -211,16 +211,23 @@ defmodule Shoestring.Elves do
     end
   end
 
-  defp resolve_session(run_id, opts) do
+  # `run` is passed so the dispatch id can be tried before the run row id:
+  # sessions register under `request.dispatch_id` (see
+  # `live_receiver_session?/2`), so a dispatched continuation run is only
+  # findable by its dispatch id. A custom `:session_resolver` still receives
+  # the run row id, preserving the existing test/caller contract.
+  defp resolve_session(%RunRecord{} = run, opts) do
     case Keyword.get(opts, :session_resolver) do
       resolver when is_function(resolver, 1) ->
-        resolver.(run_id)
+        resolver.(run.id)
 
       _ ->
-        case Shoestring.Harness.CodexAppServer.lookup_session(run_id) do
-          {:ok, pid} when is_pid(pid) -> if Process.alive?(pid), do: pid, else: nil
-          _ -> nil
-        end
+        Enum.find_value(session_ids(run), fn id ->
+          case Shoestring.Harness.CodexAppServer.lookup_session(id) do
+            {:ok, pid} when is_pid(pid) -> if Process.alive?(pid), do: pid, else: nil
+            _ -> nil
+          end
+        end)
     end
   rescue
     _ -> nil
@@ -662,12 +669,22 @@ defmodule Shoestring.Elves do
   # Live-session read only: never starts, probes, or mutates session state,
   # and never touches session turn logic. Adapters without
   # `lookup_session/1` (e.g. Fake) report no live session.
+  #
+  # Both real adapters register a session under `RunIdentity.run_id`, which
+  # `start/2` and `resume/3` set to `request.dispatch_id` — NOT the run row
+  # id. Looking up only `stored_run.id` therefore missed every real receiver
+  # session, and the replay tree fell through to "no evidence" and started a
+  # SECOND session for the same receiver run. Dispatch id first, run row id
+  # second, matching `Shoestring.Elves.Elf.lookup_session_ids/2`.
   defp live_receiver_session?(adapter, %RunRecord{} = stored_run) do
     if adapter_exports?(adapter, :lookup_session, 1) do
-      case apply(adapter, :lookup_session, [stored_run.id]) do
-        {:ok, pid} when is_pid(pid) -> Process.alive?(pid)
-        _other -> false
-      end
+      session_ids(stored_run) != [] and
+        Enum.any?(session_ids(stored_run), fn id ->
+          case apply(adapter, :lookup_session, [id]) do
+            {:ok, pid} when is_pid(pid) -> Process.alive?(pid)
+            _other -> false
+          end
+        end)
     else
       false
     end
@@ -675,6 +692,14 @@ defmodule Shoestring.Elves do
     _error -> false
   catch
     _kind, _reason -> false
+  end
+
+  # Session registration ids for a run row, most specific first. Deduplicated
+  # so a run whose dispatch id equals its row id is probed once.
+  defp session_ids(%RunRecord{} = run) do
+    [run.dispatch_id, run.id]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
   end
 
   # Single effect path: bare run row (writer trusted-reference requirement)
