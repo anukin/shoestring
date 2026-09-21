@@ -173,7 +173,7 @@ defmodule Shoestring.Harness.Continuation do
     repo = Keyword.get(opts, :repo, Shoestring.Repo)
 
     with {:ok, record} <- latest_checkpoint(repo, goal_id, opts) do
-      refs = decision_refs(repo, goal_id)
+      refs = decision_refs(repo, goal_id, Keyword.take(opts, [:exclude_key_prefix]))
       project_latest([record], refs)
     end
   end
@@ -223,19 +223,46 @@ defmodule Shoestring.Harness.Continuation do
   Returns goal-correlated decision ids from `admission.decided` payloads,
   latest 32 in chronological order. Checkpoint free-text decisions are
   never ids: no decided events means `[]`.
+
+  Options: `:exclude_key_prefix` drops decisions whose idempotency key starts
+  with the given prefix (see the note below the function body). Omitted, the
+  full history is returned.
   """
-  @spec decision_refs(module(), Ecto.UUID.t()) :: [String.t()]
-  def decision_refs(repo, goal_id) do
-    repo.all(
+  @spec decision_refs(module(), Ecto.UUID.t(), keyword()) :: [String.t()]
+  def decision_refs(repo, goal_id, opts \\ []) do
+    query =
       from event in TrajectoryEvent,
         where: event.goal_id == ^goal_id and event.type == "admission.decided",
         order_by: [desc: event.sequence],
         limit: ^@max_decision_refs,
         select: event.payload
-    )
+
+    query
+    |> exclude_own_decisions(Keyword.get(opts, :exclude_key_prefix))
+    |> repo.all()
     |> Enum.map(&payload_decision_id/1)
     |> Enum.reject(&is_nil/1)
     |> Enum.reverse()
+  end
+
+  # `:exclude_key_prefix` drops decisions a caller itself recorded, matched by
+  # idempotency-key prefix. It exists for one specific, narrow purpose: a
+  # multi-step operation that persists its OWN `admission.decided` and then
+  # re-reads the goal's refs on a crash-retry would otherwise see its own
+  # decision as an external change and refuse itself forever. Excluding by
+  # key prefix removes only that caller's decisions; every other decision,
+  # from any other source, still counts, so a genuinely external change is
+  # still visible. Callers with no such re-entrancy pass nothing and get the
+  # unfiltered history.
+  defp exclude_own_decisions(query, nil), do: query
+
+  defp exclude_own_decisions(query, prefix) when is_binary(prefix) do
+    pattern = prefix <> "%"
+
+    from event in query,
+      where:
+        is_nil(event.idempotency_key) or
+          not like(event.idempotency_key, ^pattern)
   end
 
   @doc """

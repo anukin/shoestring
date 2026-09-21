@@ -2,12 +2,15 @@ defmodule ShoestringWeb.CobblerPresentation do
   @moduledoc """
   Presentational mapping for the Cobbler UI boundary.
 
-  Maps goal lifecycle states, admission results, command statuses, and
-  lease/renewal states to distinct visual presentations (label + dot +
-  badge + icon + `data-status` tag). Every mapper has an honest `:unknown`
+  Maps goal lifecycle states, admission results, command statuses,
+  lease/renewal states, harness run execution states, and durable worktree
+  record states to distinct visual presentations (label + dot + badge +
+  icon + `data-status` tag). Every mapper has an honest `:unknown`
   fallback so unrecognized values from future T1–T4 work never crash
   rendering: unknown inputs render as "Unknown", never as an invented
-  concrete state.
+  concrete state. `run_provider_presentation/1` additionally carries an
+  `:executing?` predicate so the UI can separate a provider that actually
+  owns a live turn from one that merely appears on a durable run row.
 
   Lifecycle state derivation folds one sequence-ordered timeline through
   the pure `Shoestring.Cobbler.GoalLifecycle` machine. The timeline is the
@@ -549,11 +552,235 @@ defmodule ShoestringWeb.CobblerPresentation do
         "unknown"
       )
 
+  @doc """
+  Visual presentation for a harness run's execution state, used to separate a
+  provider that is actually executing from one that merely appears on a
+  durable run row.
+
+  The `:executing?` flag is the honest predicate the UI reads: it is true only
+  while the provider owns a live turn (`starting`, `running`, `pausing`,
+  `cancelling`). A `requested` run is dispatched but not executing, and every
+  terminal or suspended state is not executing. Unrecognized statuses fall
+  back to `:unknown`, which is never treated as executing.
+  """
+  @spec run_provider_presentation(atom() | String.t()) :: %{
+          label: String.t(),
+          badge_class: String.t(),
+          icon: String.t(),
+          status: String.t(),
+          executing?: boolean()
+        }
+  def run_provider_presentation(:requested),
+    do:
+      run_provider_status(
+        "Requested; not executing yet.",
+        "bg-zinc-100 text-zinc-800",
+        "hero-inbox-arrow-down",
+        "requested",
+        false
+      )
+
+  def run_provider_presentation(:starting),
+    do:
+      run_provider_status(
+        "Starting.",
+        "bg-blue-100 text-blue-800",
+        "hero-play",
+        "starting",
+        true
+      )
+
+  def run_provider_presentation(:running),
+    do:
+      run_provider_status(
+        "Executing.",
+        "bg-emerald-100 text-emerald-800",
+        "hero-bolt",
+        "running",
+        true
+      )
+
+  def run_provider_presentation(:pausing),
+    do:
+      run_provider_status(
+        "Pausing; still executing.",
+        "bg-amber-100 text-amber-800",
+        "hero-pause",
+        "pausing",
+        true
+      )
+
+  def run_provider_presentation(:cancelling),
+    do:
+      run_provider_status(
+        "Cancelling; still executing.",
+        "bg-orange-100 text-orange-800",
+        "hero-x-circle",
+        "cancelling",
+        true
+      )
+
+  def run_provider_presentation(:suspended),
+    do:
+      run_provider_status(
+        "Suspended; not executing.",
+        "bg-indigo-100 text-indigo-800",
+        "hero-moon",
+        "suspended",
+        false
+      )
+
+  def run_provider_presentation(:completed),
+    do:
+      run_provider_status(
+        "Completed.",
+        "bg-teal-100 text-teal-800",
+        "hero-check-circle",
+        "completed",
+        false
+      )
+
+  def run_provider_presentation(:failed),
+    do:
+      run_provider_status(
+        "Failed.",
+        "bg-red-100 text-red-800",
+        "hero-exclamation-triangle",
+        "failed",
+        false
+      )
+
+  def run_provider_presentation(:interrupted),
+    do:
+      run_provider_status(
+        "Interrupted.",
+        "bg-yellow-100 text-yellow-800",
+        "hero-bolt-slash",
+        "interrupted",
+        false
+      )
+
+  def run_provider_presentation(:cancelled),
+    do:
+      run_provider_status(
+        "Cancelled.",
+        "bg-zinc-200 text-zinc-800",
+        "hero-no-symbol",
+        "cancelled",
+        false
+      )
+
+  def run_provider_presentation(status) when is_binary(status) do
+    try do
+      run_provider_presentation(String.to_existing_atom(status))
+    rescue
+      ArgumentError -> run_provider_presentation(:unknown)
+    end
+  end
+
+  def run_provider_presentation(_status),
+    do:
+      run_provider_status(
+        "Unknown run state.",
+        "bg-zinc-100 text-zinc-800",
+        "hero-question-mark-circle",
+        "unknown",
+        false
+      )
+
+  @doc """
+  Visual presentation for a durable worktree record's lifecycle status.
+
+  Unrecognized statuses fall back to `:unknown` rather than being rendered as
+  a concrete state.
+  """
+  @spec worktree_presentation(atom() | String.t()) :: %{
+          label: String.t(),
+          badge_class: String.t(),
+          icon: String.t(),
+          status: String.t()
+        }
+  def worktree_presentation(:active),
+    do:
+      worktree_status(
+        "Active.",
+        "bg-emerald-100 text-emerald-800",
+        "hero-folder-open",
+        "active"
+      )
+
+  def worktree_presentation(:completed),
+    do:
+      worktree_status(
+        "Completed.",
+        "bg-teal-100 text-teal-800",
+        "hero-check-circle",
+        "completed"
+      )
+
+  def worktree_presentation(:failed),
+    do:
+      worktree_status(
+        "Failed; preserved for inspection.",
+        "bg-red-100 text-red-800",
+        "hero-exclamation-triangle",
+        "failed"
+      )
+
+  def worktree_presentation(:suspended),
+    do:
+      worktree_status(
+        "Suspended; preserved for inspection.",
+        "bg-indigo-100 text-indigo-800",
+        "hero-pause",
+        "suspended"
+      )
+
+  def worktree_presentation(:cancelled),
+    do:
+      worktree_status(
+        "Cancelled.",
+        "bg-zinc-200 text-zinc-800",
+        "hero-no-symbol",
+        "cancelled"
+      )
+
+  def worktree_presentation(status) when is_binary(status) do
+    try do
+      worktree_presentation(String.to_existing_atom(status))
+    rescue
+      ArgumentError -> worktree_presentation(:unknown)
+    end
+  end
+
+  def worktree_presentation(_status),
+    do:
+      worktree_status(
+        "Unknown worktree state.",
+        "bg-zinc-100 text-zinc-800",
+        "hero-question-mark-circle",
+        "unknown"
+      )
+
   defp lease_status(label, dot_class, badge_class, icon, status) do
     %{label: label, dot_class: dot_class, badge_class: badge_class, icon: icon, status: status}
   end
 
   defp renewal_status(label, badge_class, icon, status) do
+    %{label: label, badge_class: badge_class, icon: icon, status: status}
+  end
+
+  defp run_provider_status(label, badge_class, icon, status, executing?) do
+    %{
+      label: label,
+      badge_class: badge_class,
+      icon: icon,
+      status: status,
+      executing?: executing?
+    }
+  end
+
+  defp worktree_status(label, badge_class, icon, status) do
     %{label: label, badge_class: badge_class, icon: icon, status: status}
   end
 

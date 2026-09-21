@@ -29,13 +29,35 @@ defmodule Shoestring.Cobbler.Command do
 
   Direct run paths (Elves, harness adapters, dispatch) are not routed through
   commands and gain no protection from this module.
+
+  ## `run.handoff`
+
+  `run.handoff` is the explicit production intent to transfer a run to a
+  different provider at a NAMED checkpoint boundary. The command records
+  intent only — it observes no capacity, evaluates no admission, grants no
+  lease and dispatches nothing. `Shoestring.Cobbler.Handoffs.perform/3` is
+  the separate, gated executor; the command row that this module persists
+  is the durable intent it replays against, which is what makes a handoff
+  retry converge instead of transferring twice.
+
+  The payload names the sender run, the checkpoint boundary the operator is
+  transferring at, the decision refs the transfer was authorized against,
+  the receiver provider/adapter, a reason, and the attributable
+  `requested_by` identity (never silently defaulted — an
+  automated caller passes an explicit `system:`-prefixed identity, matching
+  the `respond/4` attribution rule).
   """
 
   alias Shoestring.Harness.Contract
 
   @version 1
-  @types ["task.claim", "task.release"]
+  @types ["task.claim", "task.release", "run.handoff"]
   @statuses [:pending, :needs_user, :resolved, :rejected]
+
+  # Read from `Shoestring.Harness.Continuation` at compile time rather than
+  # restated, so the authorized ref set and what projection can produce
+  # cannot drift apart.
+  @max_decision_refs Shoestring.Harness.Continuation.max_decision_refs()
 
   @enforce_keys [:version, :command_id, :type, :payload, :digest]
   defstruct [:version, :command_id, :type, :payload, :digest]
@@ -209,6 +231,29 @@ defmodule Shoestring.Cobbler.Command do
     end
   end
 
+  defp normalize_payload(raw, "run.handoff") do
+    with {:ok, run_id} <- uuid_field(raw, :run_id),
+         {:ok, checkpoint_id} <- uuid_field(raw, :checkpoint_id),
+         {:ok, decision_refs} <- decision_refs_field(raw),
+         {:ok, to_provider_id} <- text_field(raw, :to_provider_id, max: 200),
+         {:ok, to_adapter_id} <- text_field(raw, :to_adapter_id, max: 200),
+         {:ok, scope} <- text_field(raw, :scope, max: 200),
+         {:ok, reason} <- text_field(raw, :reason, max: 500),
+         {:ok, requested_by} <- text_field(raw, :requested_by, max: 200) do
+      {:ok,
+       %{
+         "run_id" => run_id,
+         "checkpoint_id" => checkpoint_id,
+         "decision_refs" => decision_refs,
+         "to_provider_id" => to_provider_id,
+         "to_adapter_id" => to_adapter_id,
+         "scope" => scope,
+         "reason" => reason,
+         "requested_by" => requested_by
+       }}
+    end
+  end
+
   defp normalize_payload(raw, "task.release") do
     with {:ok, reason} <- text_field(raw, :reason, max: 500) do
       {:ok, %{"reason" => reason}}
@@ -239,6 +284,50 @@ defmodule Shoestring.Cobbler.Command do
 
       :error ->
         Contract.invalid(:candidate, "can't be blank")
+    end
+  end
+
+  # The decision refs the operator authorized the transfer against, frozen
+  # into the durable intent. `Shoestring.Cobbler.Handoffs.perform/3` compares
+  # them against the refs projected at perform time and refuses a superseded
+  # set, so an admission decided between request and perform cannot be
+  # silently carried past. They are digest-covered, so a re-submission under
+  # the same command id carrying different refs is a conflict, not a
+  # replacement.
+  defp decision_refs_field(raw) do
+    case Contract.fetch(raw, :decision_refs) do
+      {:ok, value} when is_list(value) -> normalize_decision_refs(value)
+      {:ok, _other} -> Contract.invalid(:decision_refs, "must be a list")
+      :error -> Contract.invalid(:decision_refs, "can't be blank")
+    end
+  end
+
+  defp normalize_decision_refs(value) when length(value) > @max_decision_refs,
+    do: Contract.invalid(:decision_refs, "contains too many entries")
+
+  defp normalize_decision_refs(value) do
+    Enum.reduce_while(value, {:ok, []}, fn ref, {:ok, acc} ->
+      case Ecto.UUID.cast(ref) do
+        {:ok, uuid} -> {:cont, {:ok, [uuid | acc]}}
+        :error -> {:halt, Contract.invalid(:decision_refs, "must contain only UUIDs")}
+      end
+    end)
+    |> case do
+      {:ok, refs} -> {:ok, Enum.reverse(refs)}
+      error -> error
+    end
+  end
+
+  defp uuid_field(raw, key) do
+    case Contract.fetch(raw, key) do
+      {:ok, value} ->
+        case Ecto.UUID.cast(value) do
+          {:ok, uuid} -> {:ok, uuid}
+          :error -> Contract.invalid(key, "must be a UUID")
+        end
+
+      :error ->
+        Contract.invalid(key, "can't be blank")
     end
   end
 

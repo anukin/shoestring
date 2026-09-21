@@ -59,6 +59,13 @@ if config_env() == :prod do
   # when nothing is configured.
   config :shoestring, :wakeup_observe, {Shoestring.Cobbler.WakeupObserve, :observe, []}
 
+  # Production RECEIVER probe for cross-provider handoff: `handoff`-queue
+  # deliveries observe the target provider's capacity through the same
+  # Observatory ledger, scoped to the receiver's provider/scope, before any
+  # admission decision is recorded. Same MFA shape and same fail-closed
+  # default (`missing_observe_fun`) as the wake probe.
+  config :shoestring, :handoff_observe, {Shoestring.Cobbler.WakeupObserve, :observe, []}
+
   # Production dispatch-worker effect (loop-closure W2): Oban `dispatch`-queue
   # deliveries (wakeup continuations, crash-recovery requeues) start the
   # supervising Elf through `Shoestring.Harness.Dispatch.ElfEffect`, which

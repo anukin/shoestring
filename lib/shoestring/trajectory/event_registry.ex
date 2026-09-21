@@ -217,6 +217,17 @@ defmodule Shoestring.Trajectory.EventRegistry do
         }
       }
     },
+    "handoff.failed" => %{
+      1 => %{
+        required: [:handoff_id, :contract_version, :reason, :detail, :extensions],
+        optional: [:run_id, :checkpoint_id],
+        uuid_fields: [:handoff_id, :run_id, :checkpoint_id],
+        types: %{
+          contract_version: :integer,
+          extensions: :map
+        }
+      }
+    },
     "capacity.snapshot_observed" => %{
       1 => %{
         required: [
@@ -757,6 +768,23 @@ defmodule Shoestring.Trajectory.EventRegistry do
            Contract.text(Map.get(payload, "from_provider_id"), :from_provider_id, max: 200),
          {:ok, _to} <-
            Contract.text(Map.get(payload, "to_provider_id"), :to_provider_id, max: 200) do
+      :ok
+    else
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
+
+  # A permanently failed handoff intent. Carries the machine-readable
+  # `reason` an operator surface can branch on plus a bounded human `detail`,
+  # and nothing else: no transcript, no adapter output. The `handoff.` prefix
+  # subjects the payload to `Contract.safe_term?/1` like the pointer.
+  defp validate_handoff("handoff.failed", 1, payload, _opts) do
+    with {:ok, _handoff_id} <- handoff_uuid(payload, "handoff_id"),
+         :ok <- handoff_optional_uuid(payload, "run_id"),
+         :ok <- handoff_optional_uuid(payload, "checkpoint_id"),
+         {:ok, _version} <- handoff_contract_version(payload),
+         {:ok, _reason} <- Contract.text(Map.get(payload, "reason"), :reason, max: 200),
+         {:ok, _detail} <- Contract.text(Map.get(payload, "detail"), :detail, max: 500) do
       :ok
     else
       {:error, changeset} -> {:error, changeset}
