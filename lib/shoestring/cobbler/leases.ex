@@ -26,7 +26,7 @@ defmodule Shoestring.Cobbler.Leases do
 
   import Ecto.Query
 
-  alias Shoestring.Cobbler.{AdmissionDecision, Command, CommandRecord, LeaseGrant}
+  alias Shoestring.Cobbler.{AdmissionDecision, Command, CommandRecord, LeaseBounds, LeaseGrant}
   alias Shoestring.Harness.{EventPayload, ExecutionLease, Fake, LeaseStateMachine, RunRequest}
   alias Shoestring.Harness.{ExecutionLeaseRecord, RunRecord}
   alias Shoestring.Harness.Runs
@@ -80,6 +80,93 @@ defmodule Shoestring.Cobbler.Leases do
   @doc "Returns the lease row for a grant id, or nil."
   @spec get(module(), Ecto.UUID.t()) :: ExecutionLeaseRecord.t() | nil
   def get(repo \\ Repo, grant_id), do: repo.get(ExecutionLeaseRecord, grant_id)
+
+  @doc """
+  Consumed spend for a lease's current epoch, rebuilt from the trajectory log.
+
+  A read model, not new state: the durable `harness.event_recorded`
+  payloads for the lease's run are folded through the shared pure
+  `Shoestring.Cobbler.LeaseBounds` counting rules
+  (`LeaseBounds.drain_persisted/3`), so the projection and the live fold
+  apply the same spend semantics. The epoch is the count of durable
+  `lease.renewed` events for the grant, and only events after the most
+  recent renewal are counted — matching `LeaseBounds.new_epoch/1`, which
+  resets the counters on renewal. (`consumed/2` adds this epoch scoping;
+  the Elf's own rebuild runs once before any renewal because
+  `ensure_lease_bounds/1` memoizes, so it shares the counting rules via
+  `drain/3`, not this path.)
+
+  Returns `nil` when the spend cannot be rebuilt (no run, or the log is
+  unreadable); callers render that as "not recorded" rather than as zero.
+  """
+  @spec consumed(ExecutionLeaseRecord.t(), keyword()) ::
+          %{
+            epoch: non_neg_integer(),
+            responses: non_neg_integer(),
+            tools: non_neg_integer(),
+            next_boundary: LeaseBounds.boundary()
+          }
+          | nil
+  def consumed(lease, opts \\ [])
+
+  # Defensive-only: persisted rows always carry a run id (`run_id` is
+  # `validate_required`), so this clause is unreachable from the store —
+  # it exists so a run-less struct fails closed instead of querying.
+  def consumed(%ExecutionLeaseRecord{run_id: nil}, _opts), do: nil
+
+  def consumed(%ExecutionLeaseRecord{} = lease, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+    {epoch, since_sequence} = epoch_start(repo, lease)
+
+    bounds =
+      LeaseBounds.new(%{
+        grant_id: lease.id,
+        run_id: lease.run_id,
+        response_budget: lease.response_budget,
+        tool_budget: lease.tool_budget,
+        response_reserve: lease.response_reserve,
+        tool_reserve: lease.tool_reserve,
+        checkpoint_cadence: lease.checkpoint_cadence
+      })
+
+    payloads =
+      repo.all(
+        from event in TrajectoryEvent,
+          where:
+            event.goal_id == ^lease.goal_id and event.run_id == ^lease.run_id and
+              event.type == "harness.event_recorded" and event.sequence > ^since_sequence,
+          order_by: [asc: event.sequence],
+          select: event.payload
+      )
+
+    {bounds, _effects} = LeaseBounds.drain_persisted(bounds, lease.run_id, payloads)
+
+    %{
+      epoch: epoch,
+      responses: bounds.responses,
+      tools: bounds.tools,
+      next_boundary: LeaseBounds.next_boundary(bounds)
+    }
+  rescue
+    _error -> nil
+  end
+
+  # The current epoch begins after the grant's most recent durable
+  # `lease.renewed`. Grant matching happens in Elixir, consistent with
+  # `find_by_decision/3` above: the per-goal lease event count is small.
+  defp epoch_start(repo, %ExecutionLeaseRecord{} = lease) do
+    repo.all(
+      from event in TrajectoryEvent,
+        where: event.goal_id == ^lease.goal_id and event.type == "lease.renewed",
+        order_by: [asc: event.sequence],
+        select: {event.sequence, event.payload}
+    )
+    |> Enum.filter(fn {_sequence, payload} -> payload["grant_id"] == lease.id end)
+    |> case do
+      [] -> {0, 0}
+      renewals -> {length(renewals), renewals |> List.last() |> elem(0)}
+    end
+  end
 
   @doc """
   Looks up the existing grant for `(goal_id, admission decision_id)`.

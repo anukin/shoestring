@@ -30,6 +30,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
 
   alias Shoestring.Cobbler
   alias Shoestring.Cobbler.AdmissionDecision
+  alias Shoestring.Cobbler.Leases
   alias Shoestring.Cobbler.{WakeupRecord, Wakeups}
   alias Shoestring.Harness.{CheckpointRecord, ExecutionLeaseRecord, RunRecord}
   alias Shoestring.Repo
@@ -703,6 +704,8 @@ defmodule ShoestringWeb.CobblerGoalLive do
   defp lease_display(nil), do: nil
 
   defp lease_display(%ExecutionLeaseRecord{} = lease) do
+    consumed = Leases.consumed(lease, repo: Repo)
+
     %{
       id: lease.id,
       status_presentation: CobblerPresentation.lease_presentation(lease.status || :unknown),
@@ -713,16 +716,41 @@ defmodule ShoestringWeb.CobblerGoalLive do
       response_reserve: lease.response_reserve,
       tool_reserve: lease.tool_reserve,
       deadline: lease.deadline,
-      checkpoint_cadence: lease.checkpoint_cadence
+      checkpoint_cadence: lease.checkpoint_cadence,
+      consumed: consumed,
+      next_boundary_text: next_boundary_text(consumed)
     }
   end
+
+  # "Which bound is nearest, and how far away" — rendered straight from
+  # `LeaseBounds.next_boundary/1` so the page never restates the D7 rule.
+  # Absent spend is stated as absent, never as zero consumed.
+  defp next_boundary_text(nil), do: "Not recorded (no rebuildable spend for this lease)."
+
+  defp next_boundary_text(%{next_boundary: %{reached?: true, bound: bound}}) do
+    "Reached — #{boundary_label(bound)}; renewal is due."
+  end
+
+  defp next_boundary_text(%{next_boundary: %{bound: bound, unit: unit, remaining: remaining}}) do
+    "#{boundary_label(bound)} — #{remaining} #{unit_label(unit, remaining)} away."
+  end
+
+  defp boundary_label(:checkpoint_cadence), do: "Checkpoint cadence"
+  defp boundary_label(:response_budget), do: "Response budget (one reserve early)"
+  defp boundary_label(:tool_budget), do: "Tool budget (one reserve early)"
+
+  defp unit_label(:responses, 1), do: "response"
+  defp unit_label(:responses, _remaining), do: "responses"
+  defp unit_label(:tools, 1), do: "tool call"
+  defp unit_label(:tools, _remaining), do: "tool calls"
 
   defp latest_checkpoint(goal_id) do
     Repo.one(
       from checkpoint in CheckpointRecord,
         where: checkpoint.goal_id == ^goal_id,
         order_by: [desc: checkpoint.inserted_at],
-        limit: 1
+        limit: 1,
+        preload: [:artifact_references]
     )
   rescue
     _error -> nil
@@ -746,9 +774,21 @@ defmodule ShoestringWeb.CobblerGoalLive do
       id: checkpoint.id,
       next_action: RunPresentation.redact_text(checkpoint.next_action || ""),
       stop_reason: RunPresentation.redact_text(checkpoint.stop_reason || ""),
-      contents_text: text
+      contents_text: text,
+      artifact_ids: checkpoint_artifact_ids(checkpoint)
     }
   end
+
+  # The checkpoint's artifacts, from the already-persisted
+  # `harness_checkpoint_artifact_references` join. An unloaded association
+  # (a rescued read) yields `[]`, which the card renders as "none recorded"
+  # rather than as a dangling empty list.
+  defp checkpoint_artifact_ids(%CheckpointRecord{artifact_references: references})
+       when is_list(references) do
+    references |> Enum.map(& &1.artifact_id) |> Enum.sort()
+  end
+
+  defp checkpoint_artifact_ids(_checkpoint), do: []
 
   defp projection_state(nil), do: %{status: "not_projected", error_detail: nil}
 

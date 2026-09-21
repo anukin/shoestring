@@ -379,6 +379,116 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
   end
 
   # ----------------------------------------------------------------------------
+  # Next-boundary projection and durable rehydration (package G read model)
+  #
+  # Locking note: `LeaseBounds.next_boundary/1` and
+  # `LeaseBounds.drain_persisted/3` do not exist on the base commit, so
+  # these tests error there with `UndefinedFunctionError` — documentation
+  # of the new surface, not behavior-change locks. The goal-page LiveView
+  # tests alongside them are the behavioral locks: each fails on the base
+  # commit on its missing DOM id.
+  # ----------------------------------------------------------------------------
+
+  test "next_boundary reports the nearest of the three due conditions" do
+    # bounds(): cadence 100, response 10-1, tool 25-1.
+    boundary = LeaseBounds.next_boundary(bounds())
+
+    assert boundary == %{bound: :response_budget, unit: :responses, remaining: 9, reached?: false}
+  end
+
+  test "next_boundary follows spend toward each bound in turn" do
+    state = bounds(%{checkpoint_cadence: 5})
+
+    assert LeaseBounds.next_boundary(state).bound == :checkpoint_cadence
+
+    {state, _} = LeaseBounds.drain(state, @run_id, Enum.map(1..4, &output/1))
+
+    # Cadence 5-4=1 still beats response 9-4=5 and tool 24.
+    assert LeaseBounds.next_boundary(state) == %{
+             bound: :checkpoint_cadence,
+             unit: :responses,
+             remaining: 1,
+             reached?: false
+           }
+  end
+
+  test "next_boundary ties resolve cadence, then response budget, then tool budget" do
+    tied = bounds(%{checkpoint_cadence: 5, response_budget: 6, tool_budget: 6})
+
+    # Cadence 5, response 6-1=5, tool 6-1=5: three-way tie goes to cadence.
+    assert LeaseBounds.next_boundary(tied).bound == :checkpoint_cadence
+
+    # Cadence out of the race; response 9 ties tool 24-15=9: response wins.
+    tools = Enum.map(1..15, &event(:tool, &1, %{}))
+    {tooled, _} = LeaseBounds.drain(bounds(), @run_id, tools)
+
+    assert LeaseBounds.next_boundary(tooled).bound == :response_budget
+  end
+
+  test "next_boundary reached? mirrors due? and remaining clamps at zero" do
+    {state, _} = LeaseBounds.drain(bounds(), @run_id, Enum.map(1..9, &output/1))
+    assert state.due == true
+
+    assert LeaseBounds.next_boundary(state) == %{
+             bound: :response_budget,
+             unit: :responses,
+             remaining: 0,
+             reached?: true
+           }
+
+    {past, _} = LeaseBounds.drain(state, @run_id, Enum.map(10..12, &output/1))
+    boundary = LeaseBounds.next_boundary(past)
+
+    assert boundary.remaining == 0
+    assert boundary.reached? == true
+  end
+
+  test "drain_persisted counts like the live drain" do
+    live = Enum.map(1..3, &output/1) ++ Enum.map(4..5, &event(:tool, &1, %{}))
+    {expected, expected_effects} = LeaseBounds.drain(bounds(), @run_id, live)
+
+    persisted = Enum.map(live, &durable_payload/1)
+    {actual, actual_effects} = LeaseBounds.drain_persisted(bounds(), @run_id, persisted)
+
+    assert {actual.responses, actual.tools, actual.due} ==
+             {expected.responses, expected.tools, expected.due}
+
+    assert actual_effects == expected_effects
+  end
+
+  test "drain_persisted skips rows the Elf would not count" do
+    valid_tool = durable_payload(event(:tool, 1, %{}))
+
+    payloads = [
+      valid_tool,
+      # No extensions map: the Elf requires a map and drops the event.
+      Map.delete(valid_tool, "extensions") |> Map.put("source_event_id", "evt-dropped-1"),
+      # Unknown kind never rehydrates.
+      %{valid_tool | "kind" => "nonsense_kind", "source_event_id" => "evt-dropped-2"},
+      # Missing identity never rehydrates.
+      %{valid_tool | "source_event_id" => nil},
+      # Not a map at all.
+      "not-a-payload"
+    ]
+
+    {state, _} = LeaseBounds.drain_persisted(bounds(), @run_id, payloads)
+
+    assert state.tools == 1
+    assert state.responses == 0
+  end
+
+  defp durable_payload(event) do
+    %{
+      "run_id" => event.run_id,
+      "source_event_id" => event.source_event_id,
+      "ordinal" => event.ordinal,
+      "occurred_at" => DateTime.to_iso8601(event.occurred_at),
+      "kind" => Atom.to_string(event.kind),
+      "extensions" => event.extensions
+    }
+  end
+
+  # ----------------------------------------------------------------------------
   # Helpers
   # ----------------------------------------------------------------------------
 

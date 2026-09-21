@@ -8,13 +8,15 @@ defmodule ShoestringWeb.CobblerGoalLiveTest do
 
   alias Shoestring.Harness.{
     CapacitySnapshotRecord,
+    CheckpointArtifactReference,
     CheckpointRecord,
     ExecutionLeaseRecord,
     RunRecord
   }
 
   alias Shoestring.Repo
-  alias Shoestring.Trajectory.{Goal, ProjectorPosition, Task, TrajectoryEvent}
+  alias Shoestring.Trajectory
+  alias Shoestring.Trajectory.{Artifact, Goal, ProjectorPosition, Task, TrajectoryEvent}
 
   @now ~U[2026-09-07 12:00:00.000000Z]
 
@@ -158,6 +160,127 @@ defmodule ShoestringWeb.CobblerGoalLiveTest do
     # ... and required content is still present.
     assert html =~ "Checkpoint visible summary"
     assert has_element?(view, "#cobbler-checkpoint", "Next checkpoint action")
+  end
+
+  test "checkpoint artifacts render referenced ids with stable DOM ids", %{conn: conn} do
+    goal = create_goal!(Repo, "Checkpoint artifacts goal")
+    _admission = append_admission_event!(goal.id)
+    checkpoint = insert_checkpoint(goal, %{"summary" => "artifacts present"})
+
+    task = insert_task(goal)
+    artifact_one = insert_artifact(goal, task)
+    artifact_two = insert_artifact(goal, task)
+
+    insert_artifact_reference(checkpoint.id, artifact_one.id)
+    insert_artifact_reference(checkpoint.id, artifact_two.id)
+
+    {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+
+    assert has_element?(view, "#cobbler-checkpoint-artifacts")
+    assert has_element?(view, "#cobbler-checkpoint-artifact-#{artifact_one.id}", artifact_one.id)
+    assert has_element?(view, "#cobbler-checkpoint-artifact-#{artifact_two.id}", artifact_two.id)
+  end
+
+  test "checkpoint with no artifacts states that none are referenced", %{conn: conn} do
+    goal = create_goal!(Repo, "Checkpoint bare goal")
+    _admission = append_admission_event!(goal.id)
+    insert_checkpoint(goal, %{"summary" => "no artifacts"})
+
+    {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+
+    assert has_element?(view, "#cobbler-checkpoint-artifacts")
+    assert has_element?(view, "#cobbler-checkpoint-artifacts", "No artifacts are referenced")
+  end
+
+  test "lease card renders consumed spend and the nearest boundary", %{conn: conn} do
+    goal = create_goal!(Repo, "Lease spend goal")
+    _admission = append_admission_event!(goal.id)
+    {_lease, task, run} = insert_lease_full(goal, status: "active", renewal_state: "eligible")
+
+    append_spend_event!(goal, task, run.id, "spend-out-1", "output", %{"test:text" => "one"}, 1)
+    append_spend_event!(goal, task, run.id, "spend-out-2", "output", %{"test:text" => "two"}, 2)
+    append_spend_event!(goal, task, run.id, "spend-tool-1", "tool", %{}, 3)
+
+    {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+
+    # Budgets 10/25, reserves 2/5, cadence 5: 2 responses and 1 tool leave
+    # the cadence nearest (3 responses away).
+    assert has_element?(view, "#cobbler-lease", "Next spend boundary")
+    assert has_element?(view, "#cobbler-lease-responses-consumed", "2")
+    assert has_element?(view, "#cobbler-lease-tools-consumed", "1")
+    assert has_element?(view, "#cobbler-lease-epoch", "0")
+
+    assert has_element?(
+             view,
+             "#cobbler-lease-next-boundary[data-bound='checkpoint_cadence'][data-reached='false']"
+           )
+
+    assert has_element?(view, "#cobbler-lease-next-boundary", "3 responses away")
+  end
+
+  test "lease next boundary reports reached once spend hits the cadence", %{conn: conn} do
+    goal = create_goal!(Repo, "Lease reached goal")
+    _admission = append_admission_event!(goal.id)
+    {_lease, task, run} = insert_lease_full(goal, status: "active", renewal_state: "due")
+
+    for n <- 1..5 do
+      append_spend_event!(
+        goal,
+        task,
+        run.id,
+        "reach-out-#{n}",
+        "output",
+        %{
+          "test:text" => "response #{n}"
+        },
+        n
+      )
+    end
+
+    {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+
+    assert has_element?(view, "#cobbler-lease-responses-consumed", "5")
+
+    assert has_element?(
+             view,
+             "#cobbler-lease-next-boundary[data-bound='checkpoint_cadence'][data-reached='true']"
+           )
+
+    assert has_element?(view, "#cobbler-lease-next-boundary", "Reached")
+    assert has_element?(view, "#cobbler-lease-next-boundary", "renewal is due")
+  end
+
+  test "lease spend skips rows the Elf would not count", %{conn: conn} do
+    goal = create_goal!(Repo, "Lease strict goal")
+    _admission = append_admission_event!(goal.id)
+    {_lease, task, run} = insert_lease_full(goal, status: "active", renewal_state: "eligible")
+
+    append_spend_event!(goal, task, run.id, "strict-tool-1", "tool", %{}, 1)
+    # A durable tool row with no extensions map: the Elf requires a map and
+    # drops the event, so the page must not count it either.
+    append_spend_event!(goal, task, run.id, "strict-tool-2", "tool", nil, 2)
+
+    {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+
+    assert has_element?(view, "#cobbler-lease-tools-consumed", "1")
+  end
+
+  test "lease spend restarts after a renewal epoch", %{conn: conn} do
+    goal = create_goal!(Repo, "Lease epoch goal")
+    _admission = append_admission_event!(goal.id)
+    {lease, task, run} = insert_lease_full(goal, status: "active", renewal_state: "renewed")
+
+    append_spend_event!(goal, task, run.id, "epoch-out-1", "output", %{"test:text" => "old"}, 1)
+    append_spend_event!(goal, task, run.id, "epoch-out-2", "output", %{"test:text" => "old"}, 2)
+    append_renewal_event!(goal, lease.id)
+
+    append_spend_event!(goal, task, run.id, "epoch-out-3", "output", %{"test:text" => "new"}, 3)
+
+    {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+
+    # Only the post-renewal response counts, in epoch 1.
+    assert has_element?(view, "#cobbler-lease-responses-consumed", "1")
+    assert has_element?(view, "#cobbler-lease-epoch", "1")
   end
 
   test "claim card shows the owning goal claim and an empty state otherwise", %{conn: conn} do
@@ -484,30 +607,108 @@ defmodule ShoestringWeb.CobblerGoalLiveTest do
   end
 
   defp insert_lease(%Goal{} = goal, opts) do
+    {lease, _task, _run} = insert_lease_full(goal, opts)
+    lease
+  end
+
+  defp insert_lease_full(%Goal{} = goal, opts) do
     task = insert_task(goal)
     run = insert_run(goal, task)
     snapshot = insert_snapshot(goal)
 
-    %ExecutionLeaseRecord{
-      id: Ecto.UUID.generate(),
-      goal_id: goal.id,
-      run_id: run.id,
-      admitted_snapshot_id: snapshot.id
-    }
-    |> ExecutionLeaseRecord.changeset(%{
-      contract_version: 1,
-      response_reserve: 2,
-      tool_reserve: 5,
-      response_budget: 10,
-      tool_budget: 25,
-      deadline: DateTime.add(@now, 3600, :second),
-      checkpoint_cadence: 5,
-      renewal_state: Keyword.get(opts, :renewal_state, "none"),
-      status: Keyword.get(opts, :status, "active"),
-      extensions: %{},
-      projection_sequence: 0
+    lease =
+      %ExecutionLeaseRecord{
+        id: Ecto.UUID.generate(),
+        goal_id: goal.id,
+        run_id: run.id,
+        admitted_snapshot_id: snapshot.id
+      }
+      |> ExecutionLeaseRecord.changeset(%{
+        contract_version: 1,
+        response_reserve: 2,
+        tool_reserve: 5,
+        response_budget: 10,
+        tool_budget: 25,
+        deadline: DateTime.add(@now, 3600, :second),
+        checkpoint_cadence: 5,
+        renewal_state: Keyword.get(opts, :renewal_state, "none"),
+        status: Keyword.get(opts, :status, "active"),
+        extensions: %{},
+        projection_sequence: 0
+      })
+      |> Repo.insert!()
+
+    {lease, task, run}
+  end
+
+  defp insert_artifact(%Goal{} = goal, %Task{} = task) do
+    %Artifact{}
+    |> Artifact.changeset(%{
+      "sha256" => String.duplicate("a", 64),
+      "byte_size" => 12,
+      "media_type" => "text/plain",
+      "location" => "evidence/note-#{System.unique_integer([:positive])}.txt"
     })
+    |> Ecto.Changeset.put_change(:goal_id, goal.id)
+    |> Ecto.Changeset.put_change(:task_id, task.id)
     |> Repo.insert!()
+  end
+
+  defp insert_artifact_reference(checkpoint_id, artifact_id) do
+    %CheckpointArtifactReference{}
+    |> CheckpointArtifactReference.changeset(checkpoint_id, artifact_id)
+    |> Repo.insert!()
+  end
+
+  defp append_spend_event!(
+         %Goal{} = goal,
+         %Task{} = task,
+         run_id,
+         source_id,
+         kind,
+         extensions,
+         ordinal
+       ) do
+    payload =
+      %{
+        "run_id" => run_id,
+        "source_event_id" => source_id,
+        "ordinal" => ordinal,
+        "occurred_at" => DateTime.to_iso8601(@now),
+        "kind" => kind
+      }
+      |> maybe_put_extensions(extensions)
+
+    {:ok, event} =
+      Trajectory.append(
+        goal.id,
+        %{
+          "type" => "harness.event_recorded",
+          "schema_version" => 1,
+          "actor" => "elf",
+          "occurred_at" => @now,
+          "payload" => payload
+        },
+        trusted: [task_id: task.id, run_id: run_id]
+      )
+
+    event
+  end
+
+  defp maybe_put_extensions(payload, nil), do: payload
+  defp maybe_put_extensions(payload, extensions), do: Map.put(payload, "extensions", extensions)
+
+  defp append_renewal_event!(%Goal{} = goal, grant_id) do
+    {:ok, event} =
+      Trajectory.append(goal.id, %{
+        "type" => "lease.renewed",
+        "schema_version" => 1,
+        "actor" => "cobbler",
+        "occurred_at" => @now,
+        "payload" => %{"grant_id" => grant_id}
+      })
+
+    event
   end
 
   defp insert_checkpoint(%Goal{} = goal, evidence) do
