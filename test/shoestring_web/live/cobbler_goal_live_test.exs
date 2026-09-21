@@ -205,6 +205,7 @@ defmodule ShoestringWeb.CobblerGoalLiveTest do
 
     # Budgets 10/25, reserves 2/5, cadence 5: 2 responses and 1 tool leave
     # the cadence nearest (3 responses away).
+    assert has_element?(view, "#cobbler-lease", "Next spend boundary")
     assert has_element?(view, "#cobbler-lease-responses-consumed", "2")
     assert has_element?(view, "#cobbler-lease-tools-consumed", "1")
     assert has_element?(view, "#cobbler-lease-epoch", "0")

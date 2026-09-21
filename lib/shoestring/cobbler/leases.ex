@@ -109,6 +109,9 @@ defmodule Shoestring.Cobbler.Leases do
           | nil
   def consumed(lease, opts \\ [])
 
+  # Defensive-only: persisted rows always carry a run id (`run_id` is
+  # `validate_required`), so this clause is unreachable from the store —
+  # it exists so a run-less struct fails closed instead of querying.
   def consumed(%ExecutionLeaseRecord{run_id: nil}, _opts), do: nil
 
   def consumed(%ExecutionLeaseRecord{} = lease, opts) do
