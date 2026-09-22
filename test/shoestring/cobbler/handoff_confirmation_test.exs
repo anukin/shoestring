@@ -1,8 +1,8 @@
 defmodule Shoestring.Cobbler.HandoffConfirmationTest do
   @moduledoc """
-  The operator's attributable confirmation travels on the durable
-  `run.handoff` intent, so a confirmation-class receiver refusal is
-  answerable through the PRODUCTION delivery path.
+  The operator's confirmation travels on the durable `run.handoff` intent, so
+  a confirmation-class receiver refusal is answerable through the PRODUCTION
+  delivery path — and it carries no caller-authored identity.
 
   Hermetic: `Fake` sender, injected snapshots, no provider CLI, no network,
   no Elf, no quota. The receiver dispatch is asserted as a persisted row and
@@ -24,39 +24,68 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
   it. Observed live: see
   `plans/evidence/05-quota-aware-mvp/live-cross-provider-handoff.md`.
 
+  ## The attribution rule these tests hold
+
+  The payload says THAT it confirms (`intent`) and nothing about WHO. A
+  string in a request body is an assertion by the requester, not an
+  authenticated identity, and admission treats `confirmed_by` as attribution
+  that can lift a refusal — so accepting one would let a caller mint an
+  operator, or a `system:` principal, for itself. `confirmed_by` is derived
+  in `Shoestring.Cobbler.Commands` from the goal's durable `owner_id`; the
+  target provider and scope are derived from the same payload's receiver.
+  A goal with no owner is refused rather than attributed to nobody.
+
   ## Lock-vs-documentation ledger
 
-  Measured against base `6f1653fed931d120d463676ec40e95e6b8ad7327`.
+  Measured against base `6f1653fed931d120d463676ec40e95e6b8ad7327`, where the
+  `confirmation` key is silently dropped from the payload — accepted, then
+  ignored.
 
   **TRUE behavioural locks** (base reaches the same surface and does the
-  wrong thing there — it silently drops the `confirmation` key from the
-  payload rather than rejecting it, so the operator's decision is accepted
-  and then ignored):
+  wrong thing there):
 
-    * `"the production worker admits a confirmation-class receiver when the
-      intent carries an attributable confirmation"` — base refuses with
+    * `"the production worker admits a confirmation-class receiver …"` and
+      `"a matching intent is not blocked"` — base refuses with
       `require_confirmation` and writes no `handoff.created`.
-    * `"an unattributed confirmation is rejected at request time"` — base
-      records the intent as `resolved`.
-    * `"a confirmation naming a different provider is rejected at request
-      time"` / `"... a different scope ..."` — base records both as
-      `resolved`.
+    * `"confirmed_by is derived from the goal owner, not from the request"` —
+      base writes no `handoff.created`, so there is no decision to carry an
+      attribution and no confirmation on the intent either.
+    * `"a goal with no usable owner … is refused"` — base records the intent
+      as `resolved`.
+    * every test in `"the confirmation is rejected at request time"` — base
+      records each of these intents as `resolved`, silently discarding the
+      field it should have refused.
     * `"re-submitting the same command id with a different confirmation is a
-      conflict"` — base computes the same digest for both, so the second
-      submission replays instead of conflicting.
+      conflict"` and `"adding a confirmation to a previously unconfirmed
+      command id is a conflict"` — base computes the same digest either way,
+      so the second submission replays instead of conflicting.
+    * `"a confirmation whose intent is not the requested capability refuses
+      permanently"` — base never reaches the check and settles nothing.
 
   **DOCUMENTATION, not locks** (these pass on base too; they are the
   both-directions controls that keep the fix from being fail-open):
 
     * `"without a confirmation the same intent is refused, and leaves no
       effect behind"` — the control the locks are measured against.
-    * `"a confirmation never lifts a hard stop"` — base also refuses, for the
-      different reason that it has no confirmation at all.
+    * every test in `"a confirmation never lifts a hard stop"` — base also
+      refuses, for the different reason that it has no confirmation at all.
+      They are here so the fix cannot later be widened into one that does
+      lift a hard stop. Two of them (`scope_mismatch`,
+      `unsupported_capability`) assert against `AdmissionEvaluation`
+      directly, because `Handoffs.perform/3` derives both sides of each
+      comparison from the same intent and cannot construct the mismatch;
+      the moduledoc of that group says so.
+    * `"a null owner is impossible at the schema, so the nil branch stays
+      defensive"` — a schema fact, true on base too.
     * `"an explicit :override option still wins over the intent"` — the
       in-process path base already had.
+    * `"an intent with no confirmation keeps the payload it always had"` and
+      `"an identical re-submission replays with no duplicate effects"` — base
+      behaves the same; they lock the no-churn and idempotence properties of
+      the change, not a repaired defect.
 
-  The exact base output for each is recorded in
-  `plans/evidence/05-quota-aware-mvp/live-cross-provider-handoff.md`.
+  The exact base output is recorded in
+  `plans/evidence/05-quota-aware-mvp/live-cross-provider-handoff.md` §7.1.
   """
   use Shoestring.DataCase, async: false
 
@@ -64,7 +93,7 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
   import Shoestring.Test.CobblerHelpers
 
   alias Oban.Job
-  alias Shoestring.Cobbler.{Commands, HandoffWorker}
+  alias Shoestring.Cobbler.{Command, CommandRecord, Commands, Handoffs, HandoffWorker}
 
   alias Shoestring.Harness.{
     CapacitySnapshot,
@@ -76,7 +105,7 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
 
   alias Shoestring.Test.Fixtures.FakeHelpers
   alias Shoestring.Trajectory
-  alias Shoestring.Trajectory.TrajectoryEvent
+  alias Shoestring.Trajectory.{Goal, TrajectoryEvent}
 
   @t0 ~U[2026-09-21 12:00:00.000000Z]
 
@@ -84,8 +113,6 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
   @receiver_provider "claude"
   @receiver_adapter "claude_headless_stream_json"
   @receiver_scope "subscription"
-
-  @confirmed_by "user:operator-live"
 
   setup do
     previous = Application.get_env(:shoestring, :handoff_observe)
@@ -128,15 +155,69 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
       assert dispatch.run_id == receiver.id
 
       # And it happened as an ATTRIBUTED confirmation, not as an automatic
-      # admit: the persisted decision names who confirmed and says the
-      # admission was not automatically safe.
+      # admit: the persisted decision says the admission was not
+      # automatically safe.
       assert [decision] = handoff_decisions(fixture.goal.id)
       assert decision.payload["result"] == "admit"
       assert decision.payload["reason_code"] == "confirmed_support_tier_conservative_partial"
-      assert decision.payload["override"]["confirmed_by"] == @confirmed_by
       assert decision.payload["override"]["valid"] == true
       assert decision.payload["override"]["target_provider_id"] == @receiver_provider
       assert decision.payload["override"]["target_scope"] == @receiver_scope
+    end
+
+    test "confirmed_by is derived from the goal owner, not from the request" do
+      fixture = fixture()
+      observe!(conservative_partial_snapshot!())
+
+      {:ok, _handoff_id} = request!(fixture, confirmation: confirmation())
+      assert :ok = HandoffWorker.perform(job!(handoff_id_of(fixture.goal.id)))
+
+      expected = "owner:" <> fixture.goal.owner_id
+
+      # On the durable intent…
+      command = handoff_command(fixture.goal.id)
+      assert command.result["confirmation"]["confirmed_by"] == expected
+      # …and on the decision admission actually took.
+      assert [decision] = handoff_decisions(fixture.goal.id)
+      assert decision.payload["override"]["confirmed_by"] == expected
+
+      # The request never mentioned it, and the payload still does not.
+      assert command.payload["confirmation"] == %{"intent" => "supervised_execution"}
+    end
+
+    test "a goal with no usable owner has no principal to attribute to, and is refused" do
+      fixture = fixture()
+
+      # The protected Observatory principal is not an operator. Written with
+      # `update_all` deliberately: `Goal.changeset/2` refuses observatory
+      # identity, so this is the state a direct write could still produce.
+      {1, _} =
+        Repo.update_all(
+          from(goal in Goal, where: goal.id == ^fixture.goal.id),
+          set: [owner_id: Shoestring.Harness.Observatory.observatory_owner_id()]
+        )
+
+      assert {:ok, %{command: command, job: nil}} = submit(fixture, confirmation: confirmation())
+      assert command.status == "rejected"
+      assert command.result["reason"] == "handoff_confirmation_unattributable"
+      assert job_count() == 0
+      assert events(fixture.goal.id, "handoff.created") == []
+    end
+
+    test "a null owner is impossible at the schema, so the nil branch stays defensive" do
+      fixture = fixture()
+
+      # `goals.owner_id` is `null: false`
+      # (`20260830012112_create_trajectory_foundation.exs`), so the nil arm of
+      # `trusted_confirmed_by/2` cannot be reached through the database. It is
+      # kept as belt-and-braces, and this test records WHY it has no
+      # behavioural row of its own rather than leaving the gap unexplained.
+      assert_raise Exqlite.Error, fn ->
+        Repo.update_all(
+          from(goal in Goal, where: goal.id == ^fixture.goal.id),
+          set: [owner_id: nil]
+        )
+      end
     end
 
     test "without a confirmation the same intent is refused, and leaves no effect behind" do
@@ -153,26 +234,89 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
       assert decision.payload["result"] == "require_confirmation"
       assert decision.payload["reason_code"] == "support_tier_conservative_partial"
 
-      assert events(fixture.goal.id, "handoff.created") == []
-      assert run_ids(fixture.goal.id) == [fixture.run.id]
-      assert Repo.all(DispatchRecord) == []
-      assert Repo.aggregate(ExecutionLeaseRecord, :count, :id) == 0
+      assert no_transfer_effects!(fixture)
+    end
+  end
+
+  # ----------------------------------------------------------------------------
+  # A confirmation never lifts a hard stop
+  # ----------------------------------------------------------------------------
+
+  # One row per unbypassable constraint in
+  # `AdmissionEvaluation.check_hard_constraints/6` that a handoff can reach,
+  # each driven with a VALID confirmation present, so the fix can never be
+  # widened into one that lifts any of them.
+  describe "a confirmation never lifts a hard stop" do
+    test "an incompatible receiver CLI still refuses" do
+      assert_hard_stop(incompatible_snapshot!(), "incompatible_cli")
     end
 
-    test "a confirmation never lifts a hard stop" do
+    test "an unsupported receiver tier still refuses" do
+      assert_hard_stop(unsupported_tier_snapshot!(), "unsupported_tier")
+    end
+
+    test "a snapshot recorded for another provider still refuses" do
+      assert_hard_stop(foreign_provider_snapshot!(), "snapshot_provider_mismatch")
+    end
+
+    test "a snapshot recorded for another scope still refuses" do
+      assert_hard_stop(foreign_scope_snapshot!(), "snapshot_provider_mismatch")
+    end
+
+    test "a breached five-hour reserve still refuses" do
       fixture = fixture()
-      observe!(incompatible_snapshot!())
+      observe!(reserve_breach_snapshot!())
 
       {:ok, handoff_id} = request!(fixture, confirmation: confirmation())
-
       assert :ok = HandoffWorker.perform(job!(handoff_id))
 
       assert [decision] = handoff_decisions(fixture.goal.id)
       refute decision.payload["result"] == "admit"
+      assert no_transfer_effects!(fixture)
+    end
 
-      assert events(fixture.goal.id, "handoff.created") == []
-      assert Repo.all(DispatchRecord) == []
-      assert Repo.aggregate(ExecutionLeaseRecord, :count, :id) == 0
+    test "an occupied scope still refuses" do
+      fixture = fixture()
+
+      {:ok, _handoff_id} = request!(fixture, confirmation: confirmation())
+
+      # `occupancy: true` is exactly what `Commands.active_claim/1` reports
+      # when another goal holds the live claim.
+      assert {:ok, %{outcome: :refused, decision_result: :defer_until, reason_code: reason}} =
+               Handoffs.perform(fixture.goal.id, command_id_of(fixture.goal.id),
+                 observe: fn _scoping -> {:ok, conservative_partial_snapshot!()} end,
+                 occupancy: true
+               )
+
+      assert reason == "scope_occupied"
+      assert no_transfer_effects!(fixture)
+    end
+
+    # `scope_mismatch` and `unsupported_capability` are STRUCTURALLY
+    # unreachable through `Handoffs.perform/3`: it builds the request scope
+    # and the candidate scope from the same `intent["scope"]`, and the
+    # candidate's capability list from the very capability it requests
+    # (`handoffs.ex`, `admit/8`). There is no handoff input that makes either
+    # disagree, so forcing one through the handoff path would test a shape
+    # production cannot produce. They are asserted one layer down instead,
+    # against the evaluator that owns the rule, with a valid confirmation in
+    # hand — which is the claim that matters: a confirmation cannot lift them.
+    test "a scope mismatch is not liftable by a confirmation" do
+      assert {:ok, decision} =
+               evaluate_with_confirmation(request_overrides: %{scope: "account:somewhere-else"})
+
+      assert decision.result == :reject
+      assert decision.reason_code == "scope_mismatch"
+      assert decision.override["valid"] == true
+    end
+
+    test "an unsupported capability is not liftable by a confirmation" do
+      assert {:ok, decision} =
+               evaluate_with_confirmation(candidate_overrides: %{capabilities: ["read_only"]})
+
+      assert decision.result == :reject
+      assert decision.reason_code == "unsupported_capability"
+      assert decision.override["valid"] == true
     end
   end
 
@@ -180,45 +324,131 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
   # Fail-closed at request time
   # ----------------------------------------------------------------------------
 
-  describe "the confirmation is validated where the intent is recorded" do
-    test "an unattributed confirmation is rejected at request time" do
-      fixture = fixture()
-
-      assert {:error, changeset} =
-               submit(fixture, confirmation: %{"intent" => "supervised_execution"})
-
-      assert %{confirmed_by: ["can't be blank"]} = errors_on(changeset)
-      assert command_rows(fixture.goal.id) == []
-    end
-
-    test "a confirmation naming a different provider is rejected at request time" do
+  describe "the confirmation is rejected at request time" do
+    test "a caller-authored confirmed_by is an unsupported field, not an identity" do
       fixture = fixture()
 
       assert {:error, changeset} =
                submit(fixture,
                  confirmation: %{
-                   "confirmed_by" => @confirmed_by,
-                   "target_provider_id" => "some-other-provider"
+                   "intent" => "supervised_execution",
+                   "confirmed_by" => "user:someone"
                  }
                )
 
-      assert %{target_provider_id: ["must match the handoff receiver"]} = errors_on(changeset)
+      assert %{confirmation: ["contains unsupported fields: confirmed_by"]} = errors_on(changeset)
       assert command_rows(fixture.goal.id) == []
     end
 
-    test "a confirmation naming a different scope is rejected at request time" do
+    test "a forged system principal is rejected the same way" do
       fixture = fixture()
 
       assert {:error, changeset} =
                submit(fixture,
                  confirmation: %{
-                   "confirmed_by" => @confirmed_by,
+                   "intent" => "supervised_execution",
+                   "confirmed_by" => "system:handoff"
+                 }
+               )
+
+      assert %{confirmation: ["contains unsupported fields: confirmed_by"]} = errors_on(changeset)
+      assert command_rows(fixture.goal.id) == []
+    end
+
+    test "a caller-chosen target provider or scope is rejected" do
+      fixture = fixture()
+
+      assert {:error, changeset} =
+               submit(fixture,
+                 confirmation: %{
+                   "intent" => "supervised_execution",
+                   "target_provider_id" => "some-other-provider",
                    "target_scope" => "account:someone-else"
                  }
                )
 
-      assert %{target_scope: ["must match the handoff receiver"]} = errors_on(changeset)
+      assert %{confirmation: ["contains unsupported fields: target_provider_id, target_scope"]} =
+               errors_on(changeset)
+
       assert command_rows(fixture.goal.id) == []
+    end
+
+    test "a confirmation that is not an object is rejected" do
+      fixture = fixture()
+
+      for value <- ["yes", 1, [%{"intent" => "supervised_execution"}], true] do
+        assert {:error, changeset} = submit(fixture, confirmation: value)
+        assert %{confirmation: ["must be an object"]} = errors_on(changeset)
+      end
+
+      assert command_rows(fixture.goal.id) == []
+    end
+
+    test "an intent outside the capability vocabulary is rejected" do
+      fixture = fixture()
+
+      assert {:error, changeset} = submit(fixture, confirmation: %{"intent" => "anything_at_all"})
+      assert %{intent: ["must be one of supervised_execution, read_only"]} = errors_on(changeset)
+      assert command_rows(fixture.goal.id) == []
+    end
+
+    test "a missing, blank, non-string or overlong intent is rejected" do
+      fixture = fixture()
+
+      assert {:error, blank} = submit(fixture, confirmation: %{})
+      assert %{intent: ["can't be blank"]} = errors_on(blank)
+
+      assert {:error, nil_intent} = submit(fixture, confirmation: %{"intent" => nil})
+      assert %{intent: ["can't be blank"]} = errors_on(nil_intent)
+
+      assert {:error, non_string} = submit(fixture, confirmation: %{"intent" => 7})
+      assert Map.has_key?(errors_on(non_string), :intent)
+
+      assert {:error, overlong} =
+               submit(fixture, confirmation: %{"intent" => String.duplicate("a", 201)})
+
+      assert Map.has_key?(errors_on(overlong), :intent)
+
+      assert command_rows(fixture.goal.id) == []
+    end
+
+    test "an unknown key alongside a valid intent is still rejected" do
+      fixture = fixture()
+
+      assert {:error, changeset} =
+               submit(fixture,
+                 confirmation: %{"intent" => "supervised_execution", "escalate" => true}
+               )
+
+      assert %{confirmation: ["contains unsupported fields: escalate"]} = errors_on(changeset)
+      assert command_rows(fixture.goal.id) == []
+    end
+  end
+
+  # ----------------------------------------------------------------------------
+  # Digest, replay, conflict
+  # ----------------------------------------------------------------------------
+
+  describe "replay and conflict" do
+    test "an identical re-submission replays with no duplicate effects" do
+      fixture = fixture()
+      command_id = "cmd-handoff-" <> Ecto.UUID.generate()
+
+      assert {:ok, %{command: first, outcome: :recorded}} =
+               submit(fixture, command_id: command_id, confirmation: confirmation())
+
+      before = command_event_count(fixture.goal.id)
+
+      assert {:ok, %{command: second, outcome: :replayed}} =
+               submit(fixture, command_id: command_id, confirmation: confirmation())
+
+      assert second.id == first.id
+      assert second.digest == first.digest
+      assert second.result["confirmation"] == first.result["confirmation"]
+      assert command_event_count(fixture.goal.id) == before
+      # Oban uniqueness on handoff_id: one delivery attempt, not two.
+      assert job_count() == 1
+      assert length(command_rows(fixture.goal.id)) == 1
     end
 
     test "re-submitting the same command id with a different confirmation is a conflict" do
@@ -233,10 +463,21 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
       assert {:error, {:command_conflict, detail}} =
                submit(fixture,
                  command_id: command_id,
-                 confirmation: confirmation(confirmed_by: "user:someone-else")
+                 confirmation: confirmation(intent: "read_only")
                )
 
       assert detail["command_id"] == command_id
+      assert length(command_rows(fixture.goal.id)) == 1
+    end
+
+    test "adding a confirmation to a previously unconfirmed command id is a conflict" do
+      fixture = fixture()
+      command_id = "cmd-handoff-" <> Ecto.UUID.generate()
+
+      assert {:ok, %{command: _}} = submit(fixture, command_id: command_id)
+
+      assert {:error, {:command_conflict, _detail}} =
+               submit(fixture, command_id: command_id, confirmation: confirmation())
     end
 
     test "an intent with no confirmation keeps the payload it always had" do
@@ -245,6 +486,52 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
       assert {:ok, %{command: command}} = submit(fixture)
       refute Map.has_key?(command.payload, "confirmation")
       refute Map.has_key?(command.result, "confirmation")
+
+      # The digest of an unconfirmed payload is the digest of exactly those
+      # fields, so a command id submitted before this field existed still
+      # replays rather than conflicting.
+      assert command.digest == Command.digest("run.handoff", command.payload)
+    end
+  end
+
+  # ----------------------------------------------------------------------------
+  # Intent must be the capability admission is deciding
+  # ----------------------------------------------------------------------------
+
+  describe "the confirmed intent must be the requested capability" do
+    test "a confirmation whose intent is not the requested capability refuses permanently" do
+      fixture = fixture()
+      observe!(conservative_partial_snapshot!())
+
+      {:ok, handoff_id} = request!(fixture, confirmation: confirmation(intent: "read_only"))
+
+      assert {:error, {:handoff_confirmation_intent_mismatch, detail}} =
+               Handoffs.perform(fixture.goal.id, command_id_of(fixture.goal.id),
+                 observe: fn _scoping -> {:ok, conservative_partial_snapshot!()} end
+               )
+
+      assert detail["confirmed_intent"] == "read_only"
+      assert detail["requested_capability"] == "supervised_execution"
+
+      # Permanent: durably settled, so reconcile never resurrects it and the
+      # worker cancels the attempt instead of burning retries.
+      assert Handoffs.permanent_error?({:handoff_confirmation_intent_mismatch, detail})
+      assert [failed] = events(fixture.goal.id, "handoff.failed")
+      assert failed.payload["handoff_id"] == handoff_id
+
+      # Nothing was observed, admitted or transferred.
+      assert handoff_decisions(fixture.goal.id) == []
+      assert events(fixture.goal.id, "capacity.snapshot_observed") == []
+      assert no_transfer_effects!(fixture)
+    end
+
+    test "a matching intent is not blocked" do
+      fixture = fixture()
+      observe!(conservative_partial_snapshot!())
+
+      {:ok, handoff_id} = request!(fixture, confirmation: confirmation())
+      assert :ok = HandoffWorker.perform(job!(handoff_id))
+      assert [_pointer] = events(fixture.goal.id, "handoff.created")
     end
   end
 
@@ -260,17 +547,45 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
 
       {:ok, _handoff_id} = request!(fixture, confirmation: confirmation())
 
-      command_id = command_id_of(fixture.goal.id)
-
       assert {:ok, %{outcome: :dispatched}} =
-               Shoestring.Cobbler.Handoffs.perform(fixture.goal.id, command_id,
+               Handoffs.perform(fixture.goal.id, command_id_of(fixture.goal.id),
                  observe: fn _scoping -> {:ok, snapshot} end,
-                 override: confirmation(confirmed_by: "user:option-wins")
+                 override: %{
+                   "confirmed_by" => "user:option-wins",
+                   "intent" => "supervised_execution",
+                   "target_provider_id" => @receiver_provider,
+                   "target_scope" => @receiver_scope
+                 }
                )
 
       assert [decision] = handoff_decisions(fixture.goal.id)
       assert decision.payload["override"]["confirmed_by"] == "user:option-wins"
     end
+  end
+
+  # ----------------------------------------------------------------------------
+  # Shared assertions
+  # ----------------------------------------------------------------------------
+
+  defp assert_hard_stop(snapshot, reason_code) do
+    fixture = fixture()
+    observe!(snapshot)
+
+    {:ok, handoff_id} = request!(fixture, confirmation: confirmation())
+    assert :ok = HandoffWorker.perform(job!(handoff_id))
+
+    assert [decision] = handoff_decisions(fixture.goal.id)
+    refute decision.payload["result"] == "admit"
+    assert decision.payload["reason_code"] == reason_code
+    assert no_transfer_effects!(fixture)
+  end
+
+  defp no_transfer_effects!(fixture) do
+    assert events(fixture.goal.id, "handoff.created") == []
+    assert run_ids(fixture.goal.id) == [fixture.run.id]
+    assert Repo.all(DispatchRecord) == []
+    assert Repo.aggregate(ExecutionLeaseRecord, :count, :id) == 0
+    true
   end
 
   # ----------------------------------------------------------------------------
@@ -304,7 +619,12 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
     append_checkpoint!(goal, run, checkpoint_id)
     {:ok, _} = Projector.project(goal.id)
 
-    %{goal: goal, task: task, run: Repo.get!(RunRecord, run.id), checkpoint_id: checkpoint_id}
+    %{
+      goal: Repo.get!(Goal, goal.id),
+      task: task,
+      run: Repo.get!(RunRecord, run.id),
+      checkpoint_id: checkpoint_id
+    }
   end
 
   defp append_checkpoint!(goal, run, checkpoint_id) do
@@ -340,12 +660,7 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
   end
 
   defp confirmation(opts \\ []) do
-    %{
-      "confirmed_by" => Keyword.get(opts, :confirmed_by, @confirmed_by),
-      "intent" => "supervised_execution",
-      "target_provider_id" => @receiver_provider,
-      "target_scope" => @receiver_scope
-    }
+    %{"intent" => Keyword.get(opts, :intent, "supervised_execution")}
   end
 
   defp submit(fixture, opts \\ []) do
@@ -361,9 +676,9 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
     }
 
     payload =
-      case Keyword.get(opts, :confirmation) do
-        nil -> payload
-        confirmation -> Map.put(payload, "confirmation", confirmation)
+      case Keyword.fetch(opts, :confirmation) do
+        :error -> payload
+        {:ok, confirmation} -> Map.put(payload, "confirmation", confirmation)
       end
 
     attrs = %{
@@ -372,7 +687,7 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
       "payload" => payload
     }
 
-    Shoestring.Cobbler.Handoffs.request(fixture.goal.id, attrs)
+    Handoffs.request(fixture.goal.id, attrs)
   end
 
   defp request!(fixture, opts \\ []) do
@@ -398,20 +713,32 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
 
   defp decision_refs(goal_id), do: Shoestring.Harness.Continuation.decision_refs(Repo, goal_id)
 
-  defp command_id_of(goal_id) do
+  defp handoff_command(goal_id) do
     Repo.one!(
-      from command in Shoestring.Cobbler.CommandRecord,
-        where: command.goal_id == ^goal_id and command.type == "run.handoff",
-        select: command.command_id
-    )
-  end
-
-  defp command_rows(goal_id) do
-    Repo.all(
-      from command in Shoestring.Cobbler.CommandRecord,
+      from command in CommandRecord,
         where: command.goal_id == ^goal_id and command.type == "run.handoff"
     )
   end
+
+  defp command_id_of(goal_id), do: handoff_command(goal_id).command_id
+  defp handoff_id_of(goal_id), do: handoff_command(goal_id).id
+
+  defp command_rows(goal_id) do
+    Repo.all(
+      from command in CommandRecord,
+        where: command.goal_id == ^goal_id and command.type == "run.handoff"
+    )
+  end
+
+  defp command_event_count(goal_id) do
+    Repo.one!(
+      from event in TrajectoryEvent,
+        where: event.goal_id == ^goal_id and like(event.type, "cobbler.command.%"),
+        select: count()
+    )
+  end
+
+  defp job_count, do: Repo.aggregate(Job, :count, :id)
 
   defp events(goal_id, type) do
     Repo.all(
@@ -435,6 +762,58 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
     Repo.all(from run in RunRecord, where: run.goal_id == ^goal_id, select: run.id)
   end
 
+  # ----------------------------------------------------------------------------
+  # Policies and snapshots
+  # ----------------------------------------------------------------------------
+
+  # Evaluates one admission directly, with a VALID confirmation present, so a
+  # hard stop that `Handoffs.perform/3` cannot construct is still proven
+  # unliftable at the layer that decides it.
+  defp evaluate_with_confirmation(opts) do
+    now = DateTime.utc_now()
+    snapshot = conservative_partial_snapshot!()
+
+    candidate =
+      Map.merge(
+        %{
+          provider_id: @receiver_provider,
+          adapter_id: @receiver_adapter,
+          support_tier: snapshot.support_tier,
+          compatibility_state: snapshot.compatibility_state,
+          scope: @receiver_scope,
+          capabilities: ["supervised_execution"]
+        },
+        Keyword.get(opts, :candidate_overrides, %{})
+      )
+
+    request =
+      Map.merge(
+        %{
+          requested_capability: "supervised_execution",
+          scope: @receiver_scope,
+          goal_id: Ecto.UUID.generate(),
+          task_id: Ecto.UUID.generate(),
+          run_id: Ecto.UUID.generate(),
+          override: %{
+            "confirmed_by" => "owner:" <> Ecto.UUID.generate(),
+            "intent" => "supervised_execution",
+            "target_provider_id" => candidate.provider_id,
+            "target_scope" => candidate.scope
+          }
+        },
+        Keyword.get(opts, :request_overrides, %{})
+      )
+
+    Shoestring.Cobbler.AdmissionEvaluation.evaluate(
+      request,
+      candidate,
+      snapshot,
+      Shoestring.Cobbler.AdmissionPolicy.default(),
+      now: now,
+      occupancy: false
+    )
+  end
+
   # The receiver observation shape the real passive Claude source produces:
   # `conservative_partial` support, which is confirmation-class rather than a
   # hard stop.
@@ -450,18 +829,9 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
   end
 
   defp incompatible_snapshot! do
-    now = DateTime.utc_now()
-
     snapshot!(
       capacity_state: :degraded,
-      windows: [
-        %{
-          kind: "five_hour",
-          state: :observed,
-          used_percent: 10.0,
-          reset_at: DateTime.add(now, 7_200, :second)
-        }
-      ],
+      windows: [observed_window(10.0)],
       support_tier: :conservative_partial,
       compatibility_state: :incompatible,
       confidence: :medium,
@@ -469,11 +839,68 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
     )
   end
 
-  # `observed_at` is real `now`: the production worker judges freshness with
-  # `SystemClock`, so a fixed past timestamp would be refused as stale and
-  # the test would measure the wrong refusal.
+  defp unsupported_tier_snapshot! do
+    snapshot!(
+      capacity_state: :unknown,
+      windows: [],
+      support_tier: :unsupported,
+      compatibility_state: :degraded,
+      confidence: :none,
+      reason: "receiver exposes no usable capacity surface"
+    )
+  end
+
+  defp foreign_provider_snapshot! do
+    snapshot!(
+      capacity_state: :unknown,
+      windows: [],
+      support_tier: :conservative_partial,
+      compatibility_state: :degraded,
+      confidence: :none,
+      reason: "rate limits absent before the first response",
+      provider_id: "codex"
+    )
+  end
+
+  defp foreign_scope_snapshot! do
+    snapshot!(
+      capacity_state: :unknown,
+      windows: [],
+      support_tier: :conservative_partial,
+      compatibility_state: :degraded,
+      confidence: :none,
+      reason: "rate limits absent before the first response",
+      scope: "account:someone-else"
+    )
+  end
+
+  defp reserve_breach_snapshot! do
+    snapshot!(
+      capacity_state: :observed,
+      windows: [observed_window(95.0)],
+      support_tier: :proactive,
+      compatibility_state: :compatible,
+      confidence: :high,
+      reason: nil
+    )
+  end
+
+  defp observed_window(used_percent) do
+    %{
+      kind: "five_hour",
+      state: :observed,
+      used_percent: used_percent,
+      reset_at: DateTime.add(DateTime.utc_now(), 7_200, :second)
+    }
+  end
+
+  # `observed_at` tracks real `now`: the production worker judges freshness
+  # with `SystemClock`, so a fixed past timestamp would be refused as stale
+  # and the test would measure the wrong refusal. One second in the past,
+  # because `Handoffs.perform/3` reads its `now` before it observes and a
+  # snapshot stamped after that reads as future-dated.
   defp snapshot!(opts) do
-    now = DateTime.utc_now()
+    now = DateTime.add(DateTime.utc_now(), -1, :second)
 
     attrs = %{
       version: 2,
@@ -484,11 +911,11 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
       freshness: %{max_age_seconds: 300},
       source: %{
         adapter_id: "claude_interactive_status_line",
-        provider_id: @receiver_provider,
+        provider_id: Keyword.get(opts, :provider_id, @receiver_provider),
         invocation_mode: "interactive_status_line",
         event: :status_line_input
       },
-      scope: @receiver_scope,
+      scope: Keyword.get(opts, :scope, @receiver_scope),
       confidence: Keyword.fetch!(opts, :confidence),
       support_tier: Keyword.fetch!(opts, :support_tier),
       compatibility_state: Keyword.fetch!(opts, :compatibility_state),

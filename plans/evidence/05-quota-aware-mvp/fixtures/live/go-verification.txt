@@ -1,0 +1,36 @@
+
+=== go vet ./...
+PASS  go vet
+
+=== go test ./...
+ok  	example.com/tictactoe	0.177s
+ok  	example.com/tictactoe/game	(cached)
+PASS  go test (exit 0)
+
+=== go build .
+PASS  go build
+
+=== gameplay: X wins on the top row
+--- row-win: exit=0 final=X\ wins
+PASS  row-win -> X wins
+
+=== gameplay: O wins on the middle column
+--- column-win: exit=0 final=O\ wins
+PASS  column-win -> O wins
+
+=== gameplay: X wins on the main diagonal
+--- diagonal-win: exit=0 final=X\ wins
+PASS  diagonal-win -> X wins
+
+=== gameplay: a full board draws
+--- draw: exit=0 final=Draw
+PASS  draw -> Draw
+
+=== invalid input is reported and re-prompted, not fatal
+invalid: move is outside the board
+invalid: want two numbers "row col", got 1
+--- invalid-input: exit=0 final=X\ wins
+PASS  invalid input printed a line beginning "invalid"
+PASS  the game recovered from invalid input and finished with X wins
+
+=== summary: 0 failure(s)

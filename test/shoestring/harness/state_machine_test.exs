@@ -31,6 +31,14 @@ defmodule Shoestring.Harness.StateMachineTest do
   @run_transitions %{
     {:requested, :request} => :requested,
     {:requested, :begin} => :starting,
+    # A run may end before it ever starts: the Elf commits `run.failed` when
+    # the launch aborts before `run.starting` is appended, and
+    # `Elves.cancel_run/2` appends `run.cancelling` whatever the row's state.
+    # Without these two the projector rejected the Elf's own terminal and
+    # left the goal's projector position permanently `failed`. See
+    # `Shoestring.Harness.RunTerminalBeforeStartTest`.
+    {:requested, :fail} => :failed,
+    {:requested, :cancel} => :cancelling,
     {:starting, :started} => :running,
     {:starting, :fail} => :failed,
     {:starting, :cancel} => :cancelling,

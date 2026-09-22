@@ -162,14 +162,29 @@ locks the behaviour; these live turns are the confirmation that the shape it
 locks is the shape the real provider emits** (the fixture was captured from a
 real run, but a fixture cannot prove the provider still emits that shape).
 
-### Redaction
+### Committed evidence and redaction
 
-Provider-generated identifiers (Codex `thread_id` / `turn_id` / `item_id`,
-Claude `session_id`), OS process-group ids, operator paths, raw provider
-output and prompts are not reproduced here. Where an identifier's *shape*
-matters it is described, not quoted. The committed summaries under
-`fixtures/harness/` carry derived counts, classifications and boolean
-assertions only.
+The assertions above are checkable against committed bytes, not only against
+this narrative:
+
+- `plans/evidence/05-quota-aware-mvp/fixtures/live/normalized-sender-codex.md`
+  — turn B's full lifecycle/terminal event list and one line per normalized
+  event (ordinal, kind, bounded detail), including ordinal 98: the
+  `fileChange` item with `codex-app-server:status: "completed"` and each
+  `changes[]` entry carrying a scalar `"kind": "add"`. It lives under
+  milestone 05's fixtures because that is where the rest of the same
+  session's material is, and is not duplicated here;
+- `fixtures/harness/codex-live-smoke-summary-postfix.json` — the derived
+  counts, classifications and boolean assertions for both turns.
+
+Redaction is deterministic, format-valid synthetic substitution applied 1:1
+(Codex UUIDv7 keeps version nibble `7` and variant `8`; UUIDv4-shaped ids
+keep version `4`; `exec-`/`msg_` keep prefix, length and character class;
+process-group ids become a synthetic series; absolute paths collapse to
+`$WORKSPACE`). Counts, ordinals, kinds and statuses are byte-faithful. No
+credential, no operator path, no real provider identifier and no hidden
+reasoning appears in any committed file. Where an identifier's *shape*
+matters in this prose it is described, not quoted.
 
 ### What this addendum does not claim
 

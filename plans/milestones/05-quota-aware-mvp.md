@@ -382,22 +382,31 @@ Demonstrate the complete MVP with fakes, then one live path if capacity permits:
 are the earlier measurement and are left exactly as written; this addendum
 records only what changed, and only where the change was actually verified.*
 
-- **Live handoff result — no longer skipped.** A real Codex → Claude handoff
-  was evaluated live under explicit operator authorization, through the
-  durable `run.handoff` intent, a real receiver capacity observation, a real
-  `admission.decided`, the receiver's own lease grant, the canonical
-  `handoff.created` pointer and the durable dispatch pipeline. Sender
-  terminal `completed` (374 normalized events); receiver terminal `completed`
-  (52 normalized events). The acceptance gate's preferred branch for item 7
-  is now **met**, not satisfied by the escape clause.
-- **Receiver semantic behavior — partially real, ablation still not.** Real
-  receiver behavior on the trajectory-projection input is now evidenced from
-  canonical normalized events: the receiver read the sender's package before
-  writing, reused it rather than reimplementing it, and repaired its own
-  violation of an acceptance clause carried in the checkpoint. **The
-  three-arm ablation and the handoff-tax metrics remain fixture-authored**;
-  nothing here measures one arm against another, so the semantic half of the
-  acceptance gate is **still unmet**.
+- **Live handoff result — a real transfer ran; acceptance 7 stays OPEN.** A
+  real Codex → Claude handoff was evaluated live under explicit operator
+  authorization, through the durable `run.handoff` intent, a real receiver
+  capacity observation, a real `admission.decided`, the receiver's own lease
+  grant, the canonical `handoff.created` pointer and the durable dispatch
+  pipeline. Sender terminal `completed` (374 normalized events); receiver
+  terminal `completed` (52 normalized events).
+  **The acceptance gate is NOT closed by it.** Two parts of the run were not
+  the production-configured path: the receiver observation bypassed the
+  `:prod` probe (`WakeupObserve` → Observatory ledger), because a
+  ledger-owned snapshot cannot be projected under a work goal — an open
+  defect; and the completing receiver leg bypassed `HandoffWorker`'s
+  decision step, because the worker has no per-transfer policy channel and
+  the default 300-second lease deadline stopped the first leg mid-task. A
+  gate is a statement about the production path, and a workaround does not
+  close one.
+- **Receiver semantic behavior — one real arm; acceptance 8 stays OPEN.**
+  Real receiver behavior on the trajectory-projection input is now evidenced
+  from canonical normalized events, committed redacted under
+  `plans/evidence/05-quota-aware-mvp/fixtures/live/`: the receiver read the
+  sender's package before writing, reused it rather than reimplementing it,
+  and repaired its own violation of an acceptance clause carried in the
+  checkpoint. **The three-arm ablation and the handoff-tax metrics remain
+  fixture-authored**; nothing here measures one arm against another, so the
+  gate is not closed.
 - **Terminal classification and cancellation.** An explicit
   `Elves.cancel_run/1` on a live Codex run with an observed-alive owned
   process group produced terminal class `cancelled`, exactly one
@@ -414,46 +423,75 @@ records only what changed, and only where the change was actually verified.*
 - **Package G blockers.** G-BLOCK-1 and G-BLOCK-2 were closed in the base by
   PR #77 (`adf8269`, REPO-INSPECTION). This run did not re-audit them.
 - **One production defect fixed here.** The durable `run.handoff` intent had
-  no channel for the operator's attributable confirmation, and
-  `HandoffWorker` — the only production consumer — passes none. Because the
-  Claude capacity source declares `support_tier: :conservative_partial`
-  unconditionally, every Claude receiver was confirmation-class and the
-  transfer was unreachable in production. The confirmation now travels on the
-  intent, validated where the intent is recorded, and lifts only a
-  confirmation-class refusal. Locked by
-  `test/shoestring/cobbler/handoff_confirmation_test.exs` (9 tests; 5 fail at
-  base `6f1653f` for the right behavioural reason).
-- **Three production defects found and NOT fixed.** (1) The `:prod`-configured
-  receiver probe serves Observatory-ledger snapshots, which the work goal's
-  projector refuses under its deliberate same-goal ownership boundary,
-  failing the handoff after its effects have committed and leaving the goal's
-  projector position `failed`. (2) An Elf launch failure occurring before
-  `run.starting` still commits `run.failed`, an illegal `requested → fail`
-  transition that wedges the goal's projection permanently. (3) After a lease
-  decline, a ClaudeHeadless receiver Elf had not quiesced when a 25-minute
-  observation bound expired. Details, reproductions and the reason each was
-  left unfixed are in the live evidence §7.
+  no channel for the operator's confirmation, and `HandoffWorker` — the only
+  production consumer — passes none. Because the Claude capacity source
+  declares `support_tier: :conservative_partial` unconditionally, every
+  Claude receiver was confirmation-class and the transfer was unreachable in
+  production. The confirmation now travels on the intent, validated where the
+  intent is recorded. The caller supplies only an allow-listed `intent`;
+  `confirmed_by` is **derived from the goal's durable `owner_id`** and the
+  target provider/scope from the same payload's receiver, so no identity is
+  caller-authored, and a goal with no usable owner is refused. The confirmed
+  intent must be the capability admission is deciding, and every hard stop
+  stays a hard stop. Locked by
+  `test/shoestring/cobbler/handoff_confirmation_test.exs` (27 tests; 14 fail
+  at base `6f1653f` for the right behavioural reason).
+  **Honest limit:** this application has no accounts domain and no
+  per-request authenticated principal, so the attribution names the goal's
+  owner, not the individual who acted. Recorded as an open item rather than
+  claimed as an authentication guarantee.
+- **A second production defect fixed.** An Elf launch failure occurring
+  before `run.starting` committed `run.failed`, an illegal
+  `requested → fail` transition that wedged the goal's projection
+  permanently — every later run, checkpoint and lease of that goal stopped
+  projecting too. Its twin, `Shoestring.Elves.cancel_run/2` on a run with no
+  live Elf, wedged a goal the same way through `requested → cancel`. Both
+  edges were added to `Shoestring.Harness.RunStateMachine` and locked by
+  `test/shoestring/harness/run_terminal_before_start_test.exs` (6 tests; 5
+  fail at base `6f1653f` with `run_transition_rejected`).
+- **Defects found and NOT fixed, each keeping something open.** (1) The
+  `:prod`-configured receiver probe serves Observatory-ledger snapshots,
+  which the work goal's projector refuses under its deliberate same-goal
+  ownership boundary, failing the handoff after its effects have committed
+  and leaving the projector position `failed`. (2) `HandoffWorker` has no
+  per-transfer policy channel, so the default lease deadline cannot be
+  answered for a specific transfer. (3) After a lease decline, a
+  ClaudeHeadless receiver Elf had not quiesced when a 25-minute observation
+  bound expired; the mechanism is a hypothesis that was not confirmed.
+  (4) A hard quota refusal is not covered by the hard-stop matrix.
+  Details, reproductions and the reason each was left unfixed are in the
+  live evidence §7 and §8.
 - **One unexplained launch failure.** Recorded as
   `transport/process_launch_failed`, the catch-all code; the concrete reason
   is swallowed by `Elf.launch_fresh/1`. It did not reproduce under tracing.
   **Cause not established.**
 - **Verification commands:** `mix precommit` in the verification worktree with
-  a fresh state directory under `System.tmp_dir!()`, five runs: one
-  `1311 tests, 1 failure, 1 skipped (6 excluded)` and four
-  `1311 tests, 0 failures, 1 skipped (6 excluded)` with Node
-  `tests 52 / pass 52 / fail 0`; the last of those ran on the committed tree.
-  **Reported as intermittent, 1 of 5 runs.**
-  The failure was `Exqlite.Error: Database busy` in the setup of
-  `Shoestring.Cobbler.LeaseGrantTest`, an unrelated suite, and did not
-  reproduce in three runs at base (`1302 tests, 0 failures, 1 skipped`).
-  Cause not established. Count accounting: base 1302 + 9 new tests = 1311.
-- **Instructions for iteration 6 — still do not start it.** One of the two
-  conditions the closeout named is now satisfied (the iteration-4 live turn),
-  and one is not: the eval gate's semantic half is still fixture-authored.
-  Beyond that, this run added three production defects in the exact path
-  iteration 6 would build on, two of which leave a goal's projection
-  permanently failed. To unlock iteration 6: obtain semantic evidence that is
-  not fixture-authored (the three-arm ablation run live), repair the `:prod`
-  receiver-observation path so a handoff projects under the configured probe,
-  make a pre-`run.starting` launch failure projectable, and settle the
-  declined-lease quiescence of a ClaudeHeadless Elf.
+  a fresh state directory under `System.tmp_dir!()`, five runs on the
+  committed tree: four `1335 tests, 0 failures, 1 skipped (6 excluded)` and
+  one `1335 tests, 1 failure`, with Node `tests 52 / pass 52 / fail 0`.
+  **Reported as intermittent, 1 of 5 runs.** The failure was the
+  load-sensitive `group_leader_unverifiable` spawn/reap race in
+  `Shoestring.Harness.ClaudeHeadless.TransportTest`, in code this branch does
+  not touch; 0 failures in 10 isolated runs on the branch and 10 at base.
+  An earlier round of this branch saw a different one-in-five flake
+  (`Exqlite.Error: Database busy` in `Shoestring.Cobbler.LeaseGrantTest`'s
+  setup). Neither cause was established; both are reported.
+  Five runs at base `6f1653f`: `1302 tests, 0 failures, 1 skipped` each.
+  Count accounting: base 1302 + 27 + 6 new tests = 1335.
+  Focused suites: `mix test test/shoestring/cobbler/ test/shoestring/harness/
+  test/shoestring/elves/` → 989 tests, 0 failures, 1 skipped (6 excluded).
+- **Instructions for iteration 6 — still do not start it.** Of the two
+  conditions the closeout named, the iteration-4 live turn is satisfied and
+  the eval gates are **both still open**: acceptance 7 because the live
+  transfer bypassed the production observation path, and acceptance 8
+  because the ablation is still fixture-authored. Beyond that, this run left
+  open defects in the exact path iteration 6 would build on, one of which
+  leaves a goal's projection permanently failed in the deployed
+  configuration. To unlock iteration 6: repair the `:prod`
+  receiver-observation path so a handoff projects under the configured
+  probe, give `HandoffWorker` a per-transfer lease-policy channel (or
+  establish that the default is right and re-run the handoff through the
+  worker end to end), re-run the cross-provider handoff on the unmodified
+  production path, obtain semantic evidence that is not fixture-authored
+  (the three-arm ablation run live), and settle the declined-lease
+  quiescence of a ClaudeHeadless Elf.

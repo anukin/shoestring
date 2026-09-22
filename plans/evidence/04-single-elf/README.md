@@ -94,4 +94,8 @@ substitute, or by role ("the session id") with no value at all.
   Codex turns).
 - The cross-provider, semantic-continuation and cancellation legs run in the
   same 2026-09-21 session are recorded under milestone 05
-  (`plans/evidence/05-quota-aware-mvp/live-cross-provider-handoff.md`).
+  (`plans/evidence/05-quota-aware-mvp/live-cross-provider-handoff.md`). The
+  redacted canonical normalized-event transcript backing the post-fix Codex
+  turns — including the `fileChange` completion at ordinal 98 with its
+  scalar `kind` — is committed there as
+  `fixtures/live/normalized-sender-codex.md` rather than duplicated here.

@@ -499,19 +499,27 @@ In summary, against this document's own §5–§7:
   Two post-fix live Codex turns ran; the file-change completion is durably
   recorded with a scalar `changes[].kind` and contiguous, duplicate-free
   ordinals. No other iteration-4 claim is re-labelled.
-- **§7 unmet 1 — a real cross-provider handoff has now been evaluated.**
-  Codex → Claude, live, through the durable intent and the dispatch pipeline.
+- **§7 unmet 1 — a real cross-provider handoff ran, but acceptance 7 stays
+  OPEN.** Codex → Claude, live, through the durable intent and the dispatch
+  pipeline — with the receiver observation taken from the capacity source
+  directly rather than from the `:prod`-configured Observatory probe, and
+  the completing leg's decision step bypassing `HandoffWorker`. Both are
+  workarounds for open defects, and a workaround does not close a gate.
 - **§7 unmet 2 — real semantic evidence exists for one arm only.** Real
   receiver behavior on the trajectory-projection input is now evidenced from
-  canonical normalized events. **The three-arm ablation and the handoff-tax
-  metrics remain fixture-authored, so this item stays unmet.**
+  canonical normalized events, committed redacted under `fixtures/live/`.
+  **The three-arm ablation and the handoff-tax metrics remain
+  fixture-authored, so acceptance 8 stays OPEN.**
 - **§7 unmet 3 — package G's two blockers** were closed in the base by PR #77
   (`adf8269`); the live run did not re-audit them.
 - **§7 unmet 4 — UI visual validation is still not performed.** Unchanged.
-- **§6 residual risk 1 is retired; three new production defects replace it.**
-  The `:prod` receiver-observation wiring cannot be projected by the work
-  goal; a launch failure before `run.starting` wedges the goal's projector;
-  a declined lease did not quiesce a ClaudeHeadless Elf. All three are
-  reported and deliberately unfixed, with reproductions.
+- **§6 residual risk 1 is narrowed, not retired, and new defects replace
+  it.** Fixed in the live branch: the handoff intent's missing confirmation
+  channel, and the launch-failure/cancel-before-start terminals that wedged
+  a goal's projector. Still open, with reproductions: the `:prod`
+  receiver-observation wiring cannot be projected by the work goal;
+  `HandoffWorker` has no per-transfer lease-policy channel; a declined lease
+  did not quiesce a ClaudeHeadless Elf; and one launch failure's cause was
+  never established.
 
 **Iteration 6 remains locked**, for the reasons given in the live evidence §8.
