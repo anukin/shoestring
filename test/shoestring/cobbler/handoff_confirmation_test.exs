@@ -275,6 +275,10 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
       assert no_transfer_effects!(fixture)
     end
 
+    test "a hard quota refusal still refuses" do
+      assert_hard_stop(refused_snapshot!(), "hard_quota_refusal_delayed")
+    end
+
     test "an occupied scope still refuses" do
       fixture = fixture()
 
@@ -882,6 +886,21 @@ defmodule Shoestring.Cobbler.HandoffConfirmationTest do
       compatibility_state: :compatible,
       confidence: :high,
       reason: nil
+    )
+  end
+
+  # A provider-reported hard quota refusal: `capacity_state: :refused` with a
+  # reason, non-high confidence, and no observed windows (the only shape
+  # `CapacitySnapshot` accepts as refused). `AdmissionEvaluation.is_refused?/1`
+  # hard-stops it before any confirmation-class rule runs.
+  defp refused_snapshot! do
+    snapshot!(
+      capacity_state: :refused,
+      windows: [],
+      support_tier: :conservative_partial,
+      compatibility_state: :compatible,
+      confidence: :medium,
+      reason: "rate_limit_exceeded"
     )
   end
 
