@@ -466,20 +466,28 @@ records only what changed, and only where the change was actually verified.*
   is swallowed by `Elf.launch_fresh/1`. It did not reproduce under tracing.
   **Cause not established.**
 - **Verification commands:** `mix precommit` in the verification worktree with
-  a fresh state directory under `System.tmp_dir!()`, five runs on the
-  committed tree: four `1335 tests, 0 failures, 1 skipped (6 excluded)` and
-  one `1335 tests, 1 failure`, with Node `tests 52 / pass 52 / fail 0`.
-  **Reported as intermittent, 1 of 5 runs.** The failure was the
-  load-sensitive `group_leader_unverifiable` spawn/reap race in
-  `Shoestring.Harness.ClaudeHeadless.TransportTest`, in code this branch does
-  not touch; 0 failures in 10 isolated runs on the branch and 10 at base.
-  An earlier round of this branch saw a different one-in-five flake
-  (`Exqlite.Error: Database busy` in `Shoestring.Cobbler.LeaseGrantTest`'s
-  setup). Neither cause was established; both are reported.
-  Five runs at base `6f1653f`: `1302 tests, 0 failures, 1 skipped` each.
-  Count accounting: base 1302 + 27 + 6 new tests = 1335.
-  Focused suites: `mix test test/shoestring/cobbler/ test/shoestring/harness/
-  test/shoestring/elves/` → 989 tests, 0 failures, 1 skipped (6 excluded).
+  a fresh state directory under `System.tmp_dir!()`. On the committed tree,
+  three runs, all `1340 tests, 0 failures, 1 skipped (6 excluded)` with Node
+  `tests 52 / pass 52 / fail 0`. Earlier heads of this branch each saw one
+  intermittent failure in five runs, in different unrelated suites
+  (`ClaudeHeadless.TransportTest`'s load-sensitive
+  `group_leader_unverifiable` spawn/reap race, 0/10 isolated on branch and
+  base; and `Exqlite.Error: Database busy` in `Cobbler.LeaseGrantTest`'s
+  setup). Neither cause was established; both are reported rather than
+  discarded. Five runs at base `6f1653f`: `1302 tests, 0 failures, 1 skipped`
+  each. Count accounting: base 1302 + 27 + 6 + 5 new tests = 1340.
+  Focused: evidence invariants plus this branch's locks -> 42 tests, 0
+  failures; `test/shoestring/cobbler/ test/shoestring/harness/
+  test/shoestring/elves/` -> 989 tests, 0 failures, 1 skipped (6 excluded).
+- **Evidence redaction.** The committed live transcripts were re-generated
+  after a real miss: redaction had been applied field by field, and Codex
+  spells an agent message out one `item/agentMessage/delta` fragment at a
+  time, so an absolute worktree path -- macOS machine shard and run UUID
+  included -- reassembled from events that individually matched nothing.
+  Substitution is now same-length and applied to the reassembled stream, and
+  `test/shoestring/evidence/live_evidence_redaction_test.exs` enforces it
+  (verified to fail against the pre-fix fixture). A scan of all 20 files this
+  branch touches, raw and reassembled, reports 0 issues.
 - **Instructions for iteration 6 — still do not start it.** Of the two
   conditions the closeout named, the iteration-4 live turn is satisfied and
   the eval gates are **both still open**: acceptance 7 because the live

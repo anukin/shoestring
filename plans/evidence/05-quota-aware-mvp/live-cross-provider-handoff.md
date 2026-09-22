@@ -712,30 +712,65 @@ checkable against committed bytes under `fixtures/live/`:
 | `cross-provider-handoff-summary.json` | the derived counts and boolean assertions |
 
 Each normalized file carries the run's full lifecycle/terminal event list and
-one line per normalized event: ordinal, kind, and the bounded detail. Per-event
-`provider_session_id` and `source_event_id` are **omitted rather than
-substituted** — they add nothing the ordinal does not, and omission is the
-safer choice — so the files prove counts, ordering, kinds, statuses and
-payload shape, not session correlation.
+one line per normalized event: ordinal, kind, and the bounded detail (capped
+at 600 characters). Per-event `provider_session_id`, `source_event_id`,
+`claude-headless:session_id`, `claude-headless:cwd` and
+`codex-app-server:item_id` are **omitted rather than substituted** — they add
+nothing the ordinal does not, and omission is the safer choice — so the files
+prove counts, ordering, kinds, statuses and payload shape, not session
+correlation.
+
+`test/shoestring/evidence/live_evidence_redaction_test.exs` re-checks all of
+this on every run: it scans each fixture's raw bytes **and** three
+contiguously reassembled views (the delta stream, the plain-text stream and
+the raw detail stream) for host paths, credentials, reasoning content and
+non-synthetic UUIDs, and asserts that each file's declared event counts match
+the lines it actually holds.
 
 ### Redaction scheme
 
-Deterministic, format-valid synthetic substitution, assigned in first-seen
-order and applied 1:1, so the committed bytes still exercise real structure:
+**Applied to the reassembled stream, not to each field.** This is the
+correction of a real miss: the first version of these fixtures redacted every
+event's fields independently, and Codex emits `item/agentMessage/delta`
+frames one fragment at a time. An absolute worktree path — macOS machine
+shard and run UUID included — was spelled across roughly two hundred
+consecutive delta events. No single event matched any pattern, every
+per-field scan passed, and the path reassembled perfectly from the committed
+bytes. It is the same failure this directory's `README.md` §7 already records
+in another form (*"prose is inside the redaction boundary"*), and the general
+rule it implies is now enforced by a test rather than by care:
+`test/shoestring/evidence/live_evidence_redaction_test.exs`.
 
+Every substitution is **same-length**, and the joined stream is sliced back
+with the original per-fragment lengths, so the character offsets are the
+identity mapping and no count can drift:
+
+- a Shoestring-managed worktree path, however it was spelled, becomes
+  `$WORKSPACE` padded with `x` to the original length;
+- any other absolute host path — including the macOS per-user temp shard —
+  becomes `$REDACTED_PATH`, padded the same way;
 - Codex UUIDv7 identifiers (thread/turn) → `01950000-0000-7000-8000-…`,
   preserving version nibble `7` and variant nibble `8`;
-- UUIDv4-shaped identifiers (Claude `session_id`, frame uuids, and
-  Shoestring row ids, in separate series) → `aaaaaaaa-0000-4000-a000-…` and
-  `55555555-0000-4000-9000-…`, preserving version `4` and a valid variant;
-- prefixed provider ids (`exec-…`, `msg_…`) keep prefix, length and
-  character class;
-- OS process-group ids → a synthetic five-digit series;
-- absolute paths → `$WORKSPACE` (worktree-relative tail preserved) or
-  `$REDACTED_PATH`.
+- UUIDv4-shaped identifiers (Claude session/frame ids and Shoestring row
+  ids, in separate series) → `aaaaaaaa-0000-4000-a000-…` and
+  `55555555-0000-4000-9000-…`, preserving version `4` and a valid variant.
+  All are 36 characters, so length is preserved by construction;
+- `exec-…` keeps its prefix and length; `msg_…` and `pgid:…` are reduced to
+  their prefix plus `x` padding.
 
-Nothing else is altered: the counts, ordinals, kinds, statuses, reason codes,
-rate-limit telemetry and model output text are byte-faithful.
+**The `x` runs are padding, not data.** Each fixture's header says so too.
+
+### What is byte-faithful, and what is not
+
+- **Byte-faithful:** event counts, ordinals, kinds, statuses, reason codes,
+  lifecycle and terminal event sequences, idempotency-key *shapes*, and
+  rate-limit telemetry.
+- **Not byte-faithful:** any text span that contained a path or an
+  identifier, which carries its same-length substitute instead; and newlines
+  inside a model-output detail, which are escaped as `\n` so that one event
+  is always exactly one line (the invariant the count check rests on).
+- Quoted model output elsewhere in this document (§5) is unaffected: none of
+  those spans contained a path or identifier.
 
 ### What is deliberately absent
 
@@ -767,19 +802,20 @@ platform temp root each time:
 
     mix precommit
 
-### This tree (the review-round head)
+### This tree (the redaction-fix head)
 
-Five runs (VERIFIED). Run 5 is the last one, on the committed tree:
+Three runs on the committed tree (VERIFIED), all green:
 
 | Run | Elixir | Node | Exit |
 |---|---|---|---:|
-| 1 | 1335 tests, 0 failures, 1 skipped (6 excluded) | 52 pass, 0 fail | 0 |
-| 2 | 1335 tests, 0 failures, 1 skipped (6 excluded) | 52 pass, 0 fail | 0 |
-| 3 | 1335 tests, **1 failure**, 1 skipped (6 excluded) | 52 pass, 0 fail | 2 |
-| 4 | 1335 tests, 0 failures, 1 skipped (6 excluded) | 52 pass, 0 fail | 0 |
-| 5 | 1335 tests, 0 failures, 1 skipped (6 excluded) | 52 pass, 0 fail | 0 |
+| 1 | 1340 tests, 0 failures, 1 skipped (6 excluded) | 52 pass, 0 fail | 0 |
+| 2 | 1340 tests, 0 failures, 1 skipped (6 excluded) | 52 pass, 0 fail | 0 |
+| 3 | 1340 tests, 0 failures, 1 skipped (6 excluded) | 52 pass, 0 fail | 0 |
 
-**Reported as intermittent: 1 failure in 5 runs.** Run 3's failure:
+### Previous head (the review round)
+
+Five runs, one failure — reported as **intermittent, 1 in 5**, at
+`1335 tests`. Run 3's failure:
 
     1) test fast-exiting children never fail spawn (already-exited reconciliation)
        (Shoestring.Harness.ClaudeHeadless.TransportTest)
@@ -794,9 +830,9 @@ reproduce: **0 failures in 10 isolated runs on this branch and 0 in 10 at
 base** (VERIFIED). **Cause not established**, and the failing run is
 reported rather than discarded.
 
-### Previous round (the pre-review head of this branch)
+### The round before that (the pre-review head)
 
-Also five runs, also one failure, a *different* one:
+Also five runs, also one failure, a *different* one, at `1311 tests`:
 
     1) test an admitted claim issues a lease and commits proposed→granted→active
        (Shoestring.Cobbler.LeaseGrantTest)
@@ -817,8 +853,9 @@ failure reproduced there.
 ### Test-count accounting
 
 Base 1302 + 27 (`handoff_confirmation_test.exs`) + 6
-(`run_terminal_before_start_test.exs`) = **1335**. No other test file gained
-or lost a test; `state_machine_test.exs` gained two rows in its
+(`run_terminal_before_start_test.exs`) + 5
+(`live_evidence_redaction_test.exs`) = **1340**. No other test file gained or
+lost a test; `state_machine_test.exs` gained two rows in its
 `@run_transitions` spec map, which the existing tests iterate rather than
 count separately.
 
@@ -835,12 +872,44 @@ moduledoc names its controls separately from its locks.
 
 ### Focused suites
 
-`mix test test/shoestring/cobbler/ test/shoestring/harness/ test/shoestring/elves/`
-→ **989 tests, 0 failures, 1 skipped (6 excluded)** (VERIFIED). This range
-covers every module this branch changed plus the suites that specify them:
-`observatory_lease_reference_test.exs` (the ownership boundary §7.2 declines
-to move), `state_machine_test.exs` (the exhaustive transition spec), and the
-whole Elf and Cobbler surface.
+- Evidence invariants plus this branch's locks:
+  `mix test test/shoestring/evidence/ test/shoestring/cobbler/handoff_confirmation_test.exs
+  test/shoestring/harness/run_terminal_before_start_test.exs
+  test/shoestring/harness/state_machine_test.exs`
+  → **42 tests, 0 failures** (VERIFIED).
+- The whole surface this branch touches:
+  `mix test test/shoestring/cobbler/ test/shoestring/harness/ test/shoestring/elves/`
+  → **989 tests, 0 failures, 1 skipped (6 excluded)** (VERIFIED), measured at
+  the previous head and unchanged by the redaction fix, which touches no
+  module in that range. It covers `observatory_lease_reference_test.exs` (the
+  ownership boundary §7.2 declines to move), `state_machine_test.exs` (the
+  exhaustive transition spec), and the whole Elf and Cobbler surface.
+
+### Redaction scan
+
+A scan over **every file this PR touches** (20 files), checking raw bytes and
+— for the four transcripts — three contiguously reassembled views, for
+absolute host paths, the macOS temp shard, credentials, reasoning content,
+real run identifiers and non-synthetic UUIDs:
+
+    scanned 20 PR files (4 transcripts, reassembled too); issues=0
+
+The same checks run in CI as `test/shoestring/evidence/live_evidence_redaction_test.exs`
+(5 tests). That suite was verified to **fail** against the pre-fix fixture —
+`[delta stream]: absolute host path (reassembled) found at offset 705` — so
+it is a guard, not documentation.
+
+**Out of scope, reported not fixed.** Widening the same scan to the whole
+`plans/evidence/` tree flags pre-existing files this PR does not touch, most
+of them legitimate (older synthetic series such as `bbbbbbbb-…` /
+`cccccccc-…`, and prose that quotes the conventions it describes). Two
+iteration-4 demo captures are worth a second look by someone whose scope
+includes them —
+`plans/evidence/04-single-elf/fixtures/demo/capture-run1.jsonl`,
+`capture-run2.jsonl`, `crash-session-run2.log` and `trajectory-run2.json`
+contain UUIDs that match no declared synthetic series. I did not inspect
+their provenance and I make **no claim** about whether they are real; they
+are simply outside this blocker and were left untouched.
 
 ### What the gate does not run
 

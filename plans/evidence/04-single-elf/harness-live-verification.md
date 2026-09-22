@@ -177,14 +177,20 @@ this narrative:
 - `fixtures/harness/codex-live-smoke-summary-postfix.json` — the derived
   counts, classifications and boolean assertions for both turns.
 
-Redaction is deterministic, format-valid synthetic substitution applied 1:1
-(Codex UUIDv7 keeps version nibble `7` and variant `8`; UUIDv4-shaped ids
-keep version `4`; `exec-`/`msg_` keep prefix, length and character class;
-process-group ids become a synthetic series; absolute paths collapse to
-`$WORKSPACE`). Counts, ordinals, kinds and statuses are byte-faithful. No
-credential, no operator path, no real provider identifier and no hidden
-reasoning appears in any committed file. Where an identifier's *shape*
-matters in this prose it is described, not quoted.
+Redaction is deterministic, same-length, format-valid synthetic substitution
+applied 1:1 **to the reassembled stream**, not field by field: Codex spells
+an agent message out one `item/agentMessage/delta` fragment at a time, so a
+path can be reconstructed across events that individually match nothing. The
+full scheme, and the miss that made it necessary, are documented in
+`plans/evidence/05-quota-aware-mvp/live-cross-provider-handoff.md` §9, and
+enforced by `test/shoestring/evidence/live_evidence_redaction_test.exs`.
+
+Counts, ordinals, kinds and statuses are byte-faithful; text spans that
+contained a path or identifier carry a same-length substitute, whose `x`
+padding is padding rather than data. No credential, no operator path, no
+real provider identifier and no hidden reasoning appears in any committed
+file. Where an identifier's *shape* matters in this prose it is described,
+not quoted.
 
 ### What this addendum does not claim
 
