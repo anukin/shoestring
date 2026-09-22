@@ -1,0 +1,63 @@
+{
+  "fixture_kind": "harness_live_smoke_summary",
+  "evidence_status": "live_observed",
+  "provider": "codex",
+  "captured_at": "2026-09-21",
+  "source_head": "6f1653fed931d120d463676ec40e95e6b8ad7327",
+  "supersedes_gap_in": "codex-live-smoke-summary.json#persistence_gap",
+  "turns": [
+    {
+      "turn": "A",
+      "terminal_class": "completed",
+      "terminal_types": ["run.completed"],
+      "terminal_count": 1,
+      "normalized_event_count": 345,
+      "normalized_kinds": {
+        "command": 10,
+        "lifecycle": 19,
+        "output": 313,
+        "result": 1,
+        "tool": 2
+      },
+      "normalized_ordinal_first": 1,
+      "normalized_ordinal_last": 345,
+      "normalized_ordinals_contiguous": true,
+      "normalized_ordinals_unique": true,
+      "elapsed_ms": 162342
+    },
+    {
+      "turn": "B",
+      "terminal_class": "completed",
+      "terminal_types": ["run.completed"],
+      "terminal_count": 1,
+      "normalized_event_count": 374,
+      "normalized_kinds": {
+        "command": 6,
+        "lifecycle": 17,
+        "output": 348,
+        "result": 1,
+        "tool": 2
+      },
+      "normalized_ordinal_first": 1,
+      "normalized_ordinal_last": 374,
+      "normalized_ordinals_contiguous": true,
+      "normalized_ordinals_unique": true,
+      "elapsed_ms": 166444
+    }
+  ],
+  "file_change_item": {
+    "kind": "tool",
+    "completion_event_durable": true,
+    "completion_status_field": "completed",
+    "changes_kind_is_scalar": true,
+    "changes_kind_value_observed": "add",
+    "nested_kind_object_present": false,
+    "dropped_or_reoffered_ordinals": 0
+  },
+  "goal_verification": {
+    "go_test_in_worktree": "pass"
+  },
+  "expected_files_only_worktree_change": true,
+  "source_checkout_unchanged": true,
+  "error_codes": []
+}

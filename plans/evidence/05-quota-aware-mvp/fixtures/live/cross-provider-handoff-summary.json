@@ -1,0 +1,132 @@
+{
+  "fixture_kind": "live_cross_provider_handoff_summary",
+  "evidence_status": "live_observed",
+  "captured_at": "2026-09-21",
+  "source_head": "6f1653fed931d120d463676ec40e95e6b8ad7327",
+  "goal": "disposable Go CLI Tic-Tac-Toe (example.com/tictactoe)",
+  "legs": [
+    {
+      "leg": "sender",
+      "provider_id": "codex",
+      "adapter_id": "codex_app_server_stdio",
+      "terminal_class": "completed",
+      "terminal_types": ["run.completed"],
+      "terminal_count": 1,
+      "normalized_event_count": 374,
+      "normalized_kinds": {
+        "command": 6,
+        "lifecycle": 17,
+        "output": 348,
+        "result": 1,
+        "tool": 2
+      },
+      "normalized_ordinals_contiguous": true,
+      "normalized_ordinals_unique": true,
+      "file_change_completion_durable": true,
+      "file_change_kind_is_scalar": true,
+      "elapsed_ms": 166444
+    },
+    {
+      "leg": "receiver_default_policy",
+      "provider_id": "claude",
+      "adapter_id": "claude_headless_stream_json",
+      "terminal_class": null,
+      "terminal_count": 0,
+      "stopped_at": "lease_boundary",
+      "lease_sequence": [
+        "lease.renewal_due",
+        "lease.expired",
+        "lease.checkpoint_required",
+        "checkpoint.created",
+        "run.pausing",
+        "run.suspended"
+      ],
+      "lease_deadline_seconds": 300,
+      "normalized_event_count": 2,
+      "elf_quiesced_within_observation_bound": false,
+      "observation_bound_ms": 1500050
+    },
+    {
+      "leg": "receiver_operator_policy",
+      "provider_id": "claude",
+      "adapter_id": "claude_headless_stream_json",
+      "terminal_class": "completed",
+      "terminal_types": ["run.completed"],
+      "terminal_count": 1,
+      "normalized_event_count": 52,
+      "normalized_kinds": {
+        "command": 26,
+        "lifecycle": 19,
+        "output": 6,
+        "result": 1
+      },
+      "lease_deadline_seconds": 2700,
+      "elapsed_ms": 47448
+    },
+    {
+      "leg": "cancellation_probe",
+      "provider_id": "codex",
+      "adapter_id": "codex_app_server_stdio",
+      "terminal_class": "cancelled",
+      "terminal_types": ["run.cancelled"],
+      "terminal_count": 1,
+      "normalized_event_count": 2,
+      "trigger": "explicit_cancel_run",
+      "staleness_or_timer_involved": false,
+      "owned_process_group_alive_before_cancel": true,
+      "owned_process_group_alive_after_cancel": false,
+      "elf_alive_after_cancel": false,
+      "adapter_session_registered_after_cancel": false,
+      "second_cancel_result": "already_terminal",
+      "cancel_latency_ms": 123
+    }
+  ],
+  "admission": {
+    "receiver_observation": {
+      "capacity_state": "unknown",
+      "support_tier": "conservative_partial",
+      "compatibility_state": "degraded",
+      "confidence": "none"
+    },
+    "without_confirmation": {
+      "result": "require_confirmation",
+      "reason_code": "support_tier_conservative_partial",
+      "handoff_created": false,
+      "receiver_runs": 0,
+      "leases": 0,
+      "dispatches": 0
+    },
+    "with_attributable_confirmation": {
+      "result": "admit",
+      "reason_code": "confirmed_support_tier_conservative_partial",
+      "override_valid": true,
+      "handoff_created": true
+    }
+  },
+  "handoff_pointer": {
+    "from_provider_id": "codex_app_server_stdio",
+    "to_provider_id": "claude",
+    "contract_version": 1,
+    "carries_prior_run_id": true,
+    "carries_receiver_lease_grant": true,
+    "receiver_prompt_contains_sender_transcript": false,
+    "receiver_prompt_contains_sender_session_id": false,
+    "receiver_continuation_keys": ["checkpoint_id", "decision_refs", "next_action"]
+  },
+  "goal_verification": {
+    "go_vet": "pass",
+    "go_test": "pass",
+    "go_build": "pass",
+    "gameplay_row_win": "X wins",
+    "gameplay_column_win": "O wins",
+    "gameplay_diagonal_win": "X wins",
+    "gameplay_draw": "Draw",
+    "invalid_input_reported_and_recovered": true,
+    "failures": 0
+  },
+  "isolation": {
+    "user_source_checkout_unchanged": true,
+    "provider_cli_invoked_directly": false,
+    "hidden_reasoning_persisted": false
+  }
+}

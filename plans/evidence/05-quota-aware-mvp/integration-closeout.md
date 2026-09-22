@@ -481,3 +481,37 @@ should not be started on the strength of this integration.
   from the "docs only" scope of the task that restored it.
 - Pre-existing nits in the included slices were left alone; no cosmetic
   cleanup was attempted.
+
+---
+
+## 8. Forward pointer — bounded live verification (2026-09-21)
+
+This document is a measurement of the 2026-09-19 integration and is left
+exactly as written. Three of the items it recorded as unmet have since been
+addressed, and the record of what changed lives in
+[`live-cross-provider-handoff.md`](live-cross-provider-handoff.md) and in the
+2026-09-21 addendum to
+`plans/evidence/04-single-elf/harness-live-verification.md`, not here.
+
+In summary, against this document's own §5–§7:
+
+- **§5 / §6.3 / §7.5 — the un-rerun iteration-4 Codex live turn is closed.**
+  Two post-fix live Codex turns ran; the file-change completion is durably
+  recorded with a scalar `changes[].kind` and contiguous, duplicate-free
+  ordinals. No other iteration-4 claim is re-labelled.
+- **§7 unmet 1 — a real cross-provider handoff has now been evaluated.**
+  Codex → Claude, live, through the durable intent and the dispatch pipeline.
+- **§7 unmet 2 — real semantic evidence exists for one arm only.** Real
+  receiver behavior on the trajectory-projection input is now evidenced from
+  canonical normalized events. **The three-arm ablation and the handoff-tax
+  metrics remain fixture-authored, so this item stays unmet.**
+- **§7 unmet 3 — package G's two blockers** were closed in the base by PR #77
+  (`adf8269`); the live run did not re-audit them.
+- **§7 unmet 4 — UI visual validation is still not performed.** Unchanged.
+- **§6 residual risk 1 is retired; three new production defects replace it.**
+  The `:prod` receiver-observation wiring cannot be projected by the work
+  goal; a launch failure before `run.starting` wedges the goal's projector;
+  a declined lease did not quiesce a ClaudeHeadless Elf. All three are
+  reported and deliberately unfixed, with reproductions.
+
+**Iteration 6 remains locked**, for the reasons given in the live evidence §8.

@@ -195,18 +195,29 @@ defmodule Shoestring.Cobbler.Commands do
   defp evaluate(%Command{type: "run.handoff"} = command, repo, goal_id, _now) do
     case validate_handoff_reference(repo, goal_id, command) do
       {:ok, checkpoint} ->
-        {:resolved,
-         %{
-           "kind" => "handoff_requested",
-           "run_id" => command.payload["run_id"],
-           "checkpoint_id" => checkpoint.id,
-           "decision_refs" => command.payload["decision_refs"],
-           "to_provider_id" => command.payload["to_provider_id"],
-           "to_adapter_id" => command.payload["to_adapter_id"],
-           "scope" => command.payload["scope"],
-           "reason" => command.payload["reason"],
-           "requested_by" => command.payload["requested_by"]
-         }, [], nil}
+        result = %{
+          "kind" => "handoff_requested",
+          "run_id" => command.payload["run_id"],
+          "checkpoint_id" => checkpoint.id,
+          "decision_refs" => command.payload["decision_refs"],
+          "to_provider_id" => command.payload["to_provider_id"],
+          "to_adapter_id" => command.payload["to_adapter_id"],
+          "scope" => command.payload["scope"],
+          "reason" => command.payload["reason"],
+          "requested_by" => command.payload["requested_by"]
+        }
+
+        # `Shoestring.Cobbler.Handoffs.perform/3` reads the resolved result,
+        # not the payload, so a confirmation that stopped at the payload would
+        # never reach admission. Carried only when the operator supplied one:
+        # an unconfirmed intent keeps its previous result shape exactly.
+        result =
+          case command.payload["confirmation"] do
+            nil -> result
+            confirmation -> Map.put(result, "confirmation", confirmation)
+          end
+
+        {:resolved, result, [], nil}
 
       {:rejected, reason} ->
         {:rejected,

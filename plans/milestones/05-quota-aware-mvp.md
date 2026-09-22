@@ -372,3 +372,88 @@ Demonstrate the complete MVP with fakes, then one live path if capacity permits:
   that is not fixture-authored, and close package G's two audited blockers
   (G-BLOCK-1 checkpoint artifacts, G-BLOCK-2 next boundary), each of which has
   a bounded fix specified in the closeout evidence §4.7.
+
+### Completion-record addendum — bounded live verification (2026-09-21)
+
+*Measured on `polly/iter45-live-verification`, base `6f1653f`. Full working in
+`plans/evidence/05-quota-aware-mvp/live-cross-provider-handoff.md` and the
+2026-09-21 addendum in
+`plans/evidence/04-single-elf/harness-live-verification.md`. The bullets above
+are the earlier measurement and are left exactly as written; this addendum
+records only what changed, and only where the change was actually verified.*
+
+- **Live handoff result — no longer skipped.** A real Codex → Claude handoff
+  was evaluated live under explicit operator authorization, through the
+  durable `run.handoff` intent, a real receiver capacity observation, a real
+  `admission.decided`, the receiver's own lease grant, the canonical
+  `handoff.created` pointer and the durable dispatch pipeline. Sender
+  terminal `completed` (374 normalized events); receiver terminal `completed`
+  (52 normalized events). The acceptance gate's preferred branch for item 7
+  is now **met**, not satisfied by the escape clause.
+- **Receiver semantic behavior — partially real, ablation still not.** Real
+  receiver behavior on the trajectory-projection input is now evidenced from
+  canonical normalized events: the receiver read the sender's package before
+  writing, reused it rather than reimplementing it, and repaired its own
+  violation of an acceptance clause carried in the checkpoint. **The
+  three-arm ablation and the handoff-tax metrics remain fixture-authored**;
+  nothing here measures one arm against another, so the semantic half of the
+  acceptance gate is **still unmet**.
+- **Terminal classification and cancellation.** An explicit
+  `Elves.cancel_run/1` on a live Codex run with an observed-alive owned
+  process group produced terminal class `cancelled`, exactly one
+  `run.cancelled`, a dead process group, a deregistered adapter session, and
+  `{:ok, :already_terminal}` on a second call. No timer, lease deadline,
+  heartbeat or staleness signal was involved.
+- **Hard dependency (iteration 4).** The specific gap the closeout named —
+  the open UNVERIFIED second Codex live turn after the normalization fix — is
+  **closed**: two post-fix live Codex turns ran, both terminal `completed`,
+  both showing the file-change completion durably recorded with a scalar
+  `changes[].kind` and contiguous, duplicate-free normalized ordinals. This
+  addendum does not audit iteration 4 as a whole and makes no claim about it
+  beyond that one item.
+- **Package G blockers.** G-BLOCK-1 and G-BLOCK-2 were closed in the base by
+  PR #77 (`adf8269`, REPO-INSPECTION). This run did not re-audit them.
+- **One production defect fixed here.** The durable `run.handoff` intent had
+  no channel for the operator's attributable confirmation, and
+  `HandoffWorker` — the only production consumer — passes none. Because the
+  Claude capacity source declares `support_tier: :conservative_partial`
+  unconditionally, every Claude receiver was confirmation-class and the
+  transfer was unreachable in production. The confirmation now travels on the
+  intent, validated where the intent is recorded, and lifts only a
+  confirmation-class refusal. Locked by
+  `test/shoestring/cobbler/handoff_confirmation_test.exs` (9 tests; 5 fail at
+  base `6f1653f` for the right behavioural reason).
+- **Three production defects found and NOT fixed.** (1) The `:prod`-configured
+  receiver probe serves Observatory-ledger snapshots, which the work goal's
+  projector refuses under its deliberate same-goal ownership boundary,
+  failing the handoff after its effects have committed and leaving the goal's
+  projector position `failed`. (2) An Elf launch failure occurring before
+  `run.starting` still commits `run.failed`, an illegal `requested → fail`
+  transition that wedges the goal's projection permanently. (3) After a lease
+  decline, a ClaudeHeadless receiver Elf had not quiesced when a 25-minute
+  observation bound expired. Details, reproductions and the reason each was
+  left unfixed are in the live evidence §7.
+- **One unexplained launch failure.** Recorded as
+  `transport/process_launch_failed`, the catch-all code; the concrete reason
+  is swallowed by `Elf.launch_fresh/1`. It did not reproduce under tracing.
+  **Cause not established.**
+- **Verification commands:** `mix precommit` in the verification worktree with
+  a fresh state directory under `System.tmp_dir!()`, five runs: one
+  `1311 tests, 1 failure, 1 skipped (6 excluded)` and four
+  `1311 tests, 0 failures, 1 skipped (6 excluded)` with Node
+  `tests 52 / pass 52 / fail 0`; the last of those ran on the committed tree.
+  **Reported as intermittent, 1 of 5 runs.**
+  The failure was `Exqlite.Error: Database busy` in the setup of
+  `Shoestring.Cobbler.LeaseGrantTest`, an unrelated suite, and did not
+  reproduce in three runs at base (`1302 tests, 0 failures, 1 skipped`).
+  Cause not established. Count accounting: base 1302 + 9 new tests = 1311.
+- **Instructions for iteration 6 — still do not start it.** One of the two
+  conditions the closeout named is now satisfied (the iteration-4 live turn),
+  and one is not: the eval gate's semantic half is still fixture-authored.
+  Beyond that, this run added three production defects in the exact path
+  iteration 6 would build on, two of which leave a goal's projection
+  permanently failed. To unlock iteration 6: obtain semantic evidence that is
+  not fixture-authored (the three-arm ablation run live), repair the `:prod`
+  receiver-observation path so a handoff projects under the configured probe,
+  make a pre-`run.starting` launch failure projectable, and settle the
+  declined-lease quiescence of a ClaudeHeadless Elf.

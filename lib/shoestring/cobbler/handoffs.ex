@@ -187,7 +187,9 @@ defmodule Shoestring.Cobbler.Handoffs do
 
   `attrs` is a command map (`"command_id"` optional, `"payload"` required);
   the type is set here. Payload keys: `run_id`, `checkpoint_id`,
-  `to_provider_id`, `to_adapter_id`, `scope`, `reason`, `requested_by`.
+  `to_provider_id`, `to_adapter_id`, `scope`, `reason`, `requested_by`, and
+  the optional attributable `confirmation` the operator answers a
+  confirmation-class receiver refusal with.
 
   Nothing executes. Re-submitting the same command id with an identical
   digest replays the recorded intent and appends no events, so the caller
@@ -1004,7 +1006,7 @@ defmodule Shoestring.Cobbler.Handoffs do
         task_id: sender.task_id,
         run_id: sender.id
       }
-      |> maybe_put(:override, Keyword.get(opts, :override))
+      |> maybe_put(:override, override(intent, opts))
 
     policy = Keyword.get(opts, :policy, AdmissionPolicy.default())
 
@@ -1017,6 +1019,24 @@ defmodule Shoestring.Cobbler.Handoffs do
 
   defp requested_capability(opts),
     do: Keyword.get(opts, :requested_capability, "supervised_execution")
+
+  # The operator's attributable confirmation for THIS transfer, read off the
+  # durable intent. `Shoestring.Cobbler.HandoffWorker` — the only production
+  # consumer of a handoff intent — passes no `:override`, so before this the
+  # only confirmation channel was an in-process caller option and a receiver
+  # whose measured capacity was less than automatically safe could never be
+  # handed off in production, whatever the operator decided.
+  #
+  # Precedence is caller option first, intent second, so an in-process caller
+  # (and every existing test) keeps its exact previous behaviour. This lifts
+  # nothing on its own: `Shoestring.Cobbler.AdmissionEvaluation` re-validates
+  # attribution and target, and a hard stop remains a hard stop.
+  defp override(intent, opts) do
+    case Keyword.get(opts, :override) do
+      nil -> intent["confirmation"]
+      override -> override
+    end
+  end
 
   defp evaluate(request, candidate, snapshot, policy, eval_opts) do
     case AdmissionEvaluation.evaluate(request, candidate, snapshot, policy, eval_opts) do
