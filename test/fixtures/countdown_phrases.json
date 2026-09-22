@@ -1,0 +1,27 @@
+{
+  "comment": [
+    "Shared parity table for the countdown phrase format.",
+    "`ShoestringWeb.TimeDisplay.humanize/2` (Elixir, authoritative, rendered by",
+    "the server) and the enhancer in priv/static/assets/js/app.js (browser,",
+    "re-renders the same phrase every second) are both asserted against this",
+    "file, so neither can drift from the other without a red test.",
+    "`offset_seconds` is the signed distance from `now` to the rendered instant."
+  ],
+  "cases": [
+    {"offset_seconds": 0, "direction": "now", "text": "now", "label": "now"},
+    {"offset_seconds": 1, "direction": "future", "text": "in 1s", "label": "in 1 second"},
+    {"offset_seconds": 42, "direction": "future", "text": "in 42s", "label": "in 42 seconds"},
+    {"offset_seconds": -42, "direction": "past", "text": "42s ago", "label": "42 seconds ago"},
+    {"offset_seconds": 59, "direction": "future", "text": "in 59s", "label": "in 59 seconds"},
+    {"offset_seconds": 60, "direction": "future", "text": "in 1m 00s", "label": "in 1 minute 0 seconds"},
+    {"offset_seconds": 272, "direction": "future", "text": "in 4m 32s", "label": "in 4 minutes 32 seconds"},
+    {"offset_seconds": -272, "direction": "past", "text": "4m 32s ago", "label": "4 minutes 32 seconds ago"},
+    {"offset_seconds": 3599, "direction": "future", "text": "in 59m 59s", "label": "in 59 minutes 59 seconds"},
+    {"offset_seconds": 3600, "direction": "future", "text": "in 1h 00m", "label": "in 1 hour 0 minutes"},
+    {"offset_seconds": 11220, "direction": "future", "text": "in 3h 07m", "label": "in 3 hours 7 minutes"},
+    {"offset_seconds": 86399, "direction": "future", "text": "in 23h 59m", "label": "in 23 hours 59 minutes"},
+    {"offset_seconds": 86400, "direction": "future", "text": "in 1d 00h", "label": "in 1 day 0 hours"},
+    {"offset_seconds": 224400, "direction": "future", "text": "in 2d 14h", "label": "in 2 days 14 hours"},
+    {"offset_seconds": -224400, "direction": "past", "text": "2d 14h ago", "label": "2 days 14 hours ago"}
+  ]
+}

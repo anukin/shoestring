@@ -107,19 +107,24 @@
             <dt class="text-zinc-500">Explanation</dt>
             <dd class="font-medium text-zinc-900">{@latest_decision.explanation}</dd>
             <dt class="text-zinc-500">Proposed reserves</dt>
-            <dd id="cobbler-decision-reserves" class="font-mono text-xs text-zinc-900">
+            <dd id="cobbler-decision-reserves" class="font-mono text-xs text-zinc-900 break-all">
               {Jason.encode!(@latest_decision.reserves)}
             </dd>
             <dt class="text-zinc-500">Capacity evidence</dt>
-            <dd id="cobbler-decision-observation" class="font-mono text-xs text-zinc-900">
+            <dd
+              id="cobbler-decision-observation"
+              class="font-mono text-xs text-zinc-900 break-all"
+            >
               {Jason.encode!(@latest_decision.observation)}
             </dd>
             <%= if @latest_decision.defer_until do %>
               <dt class="text-zinc-500">Deferred until</dt>
               <dd id="cobbler-decision-defer-until" class="font-medium text-zinc-900">
-                <time datetime={to_string(@latest_decision.defer_until)}>
-                  {to_string(@latest_decision.defer_until)}
-                </time>
+                <.countdown
+                  id="cobbler-decision-defer-until-time"
+                  at={@latest_decision.defer_until}
+                  now={@now}
+                />
               </dd>
             <% end %>
           </dl>
@@ -163,7 +168,7 @@
               {@lease.renewal_presentation.label}
             </span>
           </div>
-          <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4">
+          <dl class="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2 md:grid-cols-4">
             <dt class="text-zinc-500">Response budget</dt>
             <dd class="font-medium text-zinc-900">{@lease.response_budget}</dd>
             <dt class="text-zinc-500">Tool budget</dt>
@@ -208,10 +213,8 @@
               {@lease.next_boundary_text}
             </dd>
             <dt class="text-zinc-500">Deadline</dt>
-            <dd class="font-medium text-zinc-900">
-              <time datetime={DateTime.to_iso8601(@lease.deadline)}>
-                {DateTime.to_iso8601(@lease.deadline)}
-              </time>
+            <dd id="cobbler-lease-deadline" class="font-medium text-zinc-900">
+              <.countdown id="cobbler-lease-deadline-time" at={@lease.deadline} now={@now} />
             </dd>
           </dl>
         </div>
@@ -253,7 +256,7 @@
                 No artifacts are referenced by this checkpoint.
               </p>
             <% else %>
-              <ul class="space-y-1 text-xs font-mono text-zinc-700">
+              <ul class="space-y-1 text-xs font-mono text-zinc-700 break-all">
                 <li
                   :for={artifact_id <- @checkpoint.artifact_ids}
                   id={"cobbler-checkpoint-artifact-#{artifact_id}"}
@@ -607,12 +610,13 @@
           <.icon name="hero-moon" class="w-4 h-4 text-zinc-500" /> Deferred / Sleep State
         </h3>
         <%= if @lifecycle_state == :sleeping and @latest_decision && @latest_decision.defer_until do %>
-          <p class="text-sm text-zinc-700">
-            Deferred by admission decision until <time datetime={
-              to_string(@latest_decision.defer_until)
-            }>
-              {to_string(@latest_decision.defer_until)}
-            </time>.
+          <p id="cobbler-sleep-defer" class="text-sm text-zinc-700">
+            Deferred by admission decision until
+            <.countdown
+              id="cobbler-sleep-defer-time"
+              at={@latest_decision.defer_until}
+              now={@now}
+            />.
             Waking happens only through a durable wake intent: an Oban wakeup-queue
             delivery for this goal's cobbler_wakeups row, which re-observes capacity
             before acting. No timer wakes this goal.
@@ -628,9 +632,11 @@
         <%= if @pending_wakeup do %>
           <p id="cobbler-pending-wake" class="text-sm text-zinc-700">
             Next wake intent:
-            <time datetime={DateTime.to_iso8601(@pending_wakeup.wake_at)}>
-              {DateTime.to_iso8601(@pending_wakeup.wake_at)}
-            </time>
+            <.countdown
+              id="cobbler-pending-wake-time"
+              at={@pending_wakeup.wake_at}
+              now={@now}
+            />
             <span class="text-zinc-500">
               ({@pending_wakeup.reason}, {@pending_wakeup.status})
             </span>
