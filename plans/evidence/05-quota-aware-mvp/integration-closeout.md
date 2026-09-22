@@ -481,3 +481,45 @@ should not be started on the strength of this integration.
   from the "docs only" scope of the task that restored it.
 - Pre-existing nits in the included slices were left alone; no cosmetic
   cleanup was attempted.
+
+---
+
+## 8. Forward pointer — bounded live verification (2026-09-21)
+
+This document is a measurement of the 2026-09-19 integration and is left
+exactly as written. Three of the items it recorded as unmet have since been
+addressed, and the record of what changed lives in
+[`live-cross-provider-handoff.md`](live-cross-provider-handoff.md) and in the
+2026-09-21 addendum to
+`plans/evidence/04-single-elf/harness-live-verification.md`, not here.
+
+In summary, against this document's own §5–§7:
+
+- **§5 / §6.3 / §7.5 — the un-rerun iteration-4 Codex live turn is closed.**
+  Two post-fix live Codex turns ran; the file-change completion is durably
+  recorded with a scalar `changes[].kind` and contiguous, duplicate-free
+  ordinals. No other iteration-4 claim is re-labelled.
+- **§7 unmet 1 — a real cross-provider handoff ran, but acceptance 7 stays
+  OPEN.** Codex → Claude, live, through the durable intent and the dispatch
+  pipeline — with the receiver observation taken from the capacity source
+  directly rather than from the `:prod`-configured Observatory probe, and
+  the completing leg's decision step bypassing `HandoffWorker`. Both are
+  workarounds for open defects, and a workaround does not close a gate.
+- **§7 unmet 2 — real semantic evidence exists for one arm only.** Real
+  receiver behavior on the trajectory-projection input is now evidenced from
+  canonical normalized events, committed redacted under `fixtures/live/`.
+  **The three-arm ablation and the handoff-tax metrics remain
+  fixture-authored, so acceptance 8 stays OPEN.**
+- **§7 unmet 3 — package G's two blockers** were closed in the base by PR #77
+  (`adf8269`); the live run did not re-audit them.
+- **§7 unmet 4 — UI visual validation is still not performed.** Unchanged.
+- **§6 residual risk 1 is narrowed, not retired, and new defects replace
+  it.** Fixed in the live branch: the handoff intent's missing confirmation
+  channel, and the launch-failure/cancel-before-start terminals that wedged
+  a goal's projector. Still open, with reproductions: the `:prod`
+  receiver-observation wiring cannot be projected by the work goal;
+  `HandoffWorker` has no per-transfer lease-policy channel; a declined lease
+  did not quiesce a ClaudeHeadless Elf; and one launch failure's cause was
+  never established.
+
+**Iteration 6 remains locked**, for the reasons given in the live evidence §8.

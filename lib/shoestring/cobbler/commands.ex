@@ -195,18 +195,38 @@ defmodule Shoestring.Cobbler.Commands do
   defp evaluate(%Command{type: "run.handoff"} = command, repo, goal_id, _now) do
     case validate_handoff_reference(repo, goal_id, command) do
       {:ok, checkpoint} ->
-        {:resolved,
-         %{
-           "kind" => "handoff_requested",
-           "run_id" => command.payload["run_id"],
-           "checkpoint_id" => checkpoint.id,
-           "decision_refs" => command.payload["decision_refs"],
-           "to_provider_id" => command.payload["to_provider_id"],
-           "to_adapter_id" => command.payload["to_adapter_id"],
-           "scope" => command.payload["scope"],
-           "reason" => command.payload["reason"],
-           "requested_by" => command.payload["requested_by"]
-         }, [], nil}
+        result = %{
+          "kind" => "handoff_requested",
+          "run_id" => command.payload["run_id"],
+          "checkpoint_id" => checkpoint.id,
+          "decision_refs" => command.payload["decision_refs"],
+          "to_provider_id" => command.payload["to_provider_id"],
+          "to_adapter_id" => command.payload["to_adapter_id"],
+          "scope" => command.payload["scope"],
+          "reason" => command.payload["reason"],
+          "requested_by" => command.payload["requested_by"]
+        }
+
+        # `Shoestring.Cobbler.Handoffs.perform/3` reads the resolved result,
+        # not the payload, so a confirmation that stopped at the payload would
+        # never reach admission. Carried only when the operator supplied one:
+        # an unconfirmed intent keeps its previous result shape exactly.
+        case bind_handoff_confirmation(repo, goal_id, command) do
+          {:ok, nil} ->
+            {:resolved, result, [], nil}
+
+          {:ok, confirmation} ->
+            {:resolved, Map.put(result, "confirmation", confirmation), [], nil}
+
+          {:rejected, reason} ->
+            {:rejected,
+             %{
+               "kind" => "rejected",
+               "reason" => reason,
+               "run_id" => command.payload["run_id"],
+               "checkpoint_id" => command.payload["checkpoint_id"]
+             }, [], nil}
+        end
 
       {:rejected, reason} ->
         {:rejected,
@@ -359,6 +379,70 @@ defmodule Shoestring.Cobbler.Commands do
 
       true ->
         {:ok, checkpoint}
+    end
+  end
+
+  # Binds the confirmation's ATTRIBUTION from a trusted context, never from
+  # the request.
+  #
+  # `Shoestring.Cobbler.Command` accepts only `intent` on a confirmation: the
+  # caller states that it confirms and for what capability, and nothing about
+  # who. Everything admission treats as attribution is derived here:
+  #
+  #   * `confirmed_by` from the goal's durable `owner_id`, which
+  #     `Shoestring.Trajectory.Goal` documents as supplied by the
+  #     authenticated application boundary and refuses from ordinary
+  #     attribute maps. It is not in the command payload and cannot be
+  #     influenced by one;
+  #   * `target_provider_id` / `target_scope` from this same payload's
+  #     receiver and scope, so a confirmation cannot authorize a different
+  #     provider or scope than the transfer it rides on.
+  #
+  # Fail-closed: a goal with no owner has no trusted principal to attribute
+  # to, so the command is rejected rather than admitted under an invented or
+  # empty identity. The Observatory goal cannot reach here (it holds no runs),
+  # and its owner is excluded regardless.
+  #
+  # Honest limit, recorded rather than implied: this application has no
+  # accounts domain and no per-request authenticated principal, so `owner:` is
+  # the strongest trusted identity available. It attributes a confirmation to
+  # the goal's owner, not to the individual who made the request.
+  #
+  # Replay durability: the derived value depends only on the goal and on
+  # digest-covered payload fields, all immutable for a given command id, so
+  # an identical re-submission rebuilds an identical result.
+  defp bind_handoff_confirmation(repo, goal_id, command) do
+    case command.payload["confirmation"] do
+      nil ->
+        {:ok, nil}
+
+      %{"intent" => intent} ->
+        case trusted_confirmed_by(repo, goal_id) do
+          {:ok, confirmed_by} ->
+            {:ok,
+             %{
+               "confirmed_by" => confirmed_by,
+               "intent" => intent,
+               "target_provider_id" => command.payload["to_provider_id"],
+               "target_scope" => command.payload["scope"]
+             }}
+
+          :error ->
+            {:rejected, "handoff_confirmation_unattributable"}
+        end
+    end
+  end
+
+  defp trusted_confirmed_by(repo, goal_id) do
+    observatory_owner = Shoestring.Harness.Observatory.observatory_owner_id()
+
+    case repo.get(Goal, goal_id) do
+      %Goal{owner_id: owner_id}
+      when is_binary(owner_id) and owner_id != "" and owner_id != observatory_owner ->
+        {:ok, "owner:" <> owner_id}
+
+      _unattributable ->
+        :error
     end
   end
 

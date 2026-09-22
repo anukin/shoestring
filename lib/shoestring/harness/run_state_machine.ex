@@ -83,6 +83,22 @@ defmodule Shoestring.Harness.RunStateMachine do
   defp target(:running, :fail), do: {:ok, :failed}
   defp target(:starting, :fail), do: {:ok, :failed}
   defp target(:pausing, :fail), do: {:ok, :failed}
+  # A run may end before it ever starts, and the Elf already reports it that
+  # way. `Shoestring.Elves.Elf.launch_fresh/1` commits `run.failed` when the
+  # launch aborts BEFORE `run.starting` could be appended, and
+  # `Shoestring.Elves.cancel_run/2` on a run with no live Elf appends
+  # `run.cancelling`/`run.cancelled` whatever the row's state. Without these
+  # two edges the projector rejected the Elf's own terminal as an illegal
+  # transition and the goal's projector position stayed `failed` forever, so
+  # NOTHING for that goal projected again — a terminal the projector can
+  # never apply is worse than a missing one. Observed live; see
+  # `plans/evidence/05-quota-aware-mvp/live-cross-provider-handoff.md`.
+  #
+  # `:interrupt` from `:requested` is deliberately NOT added: no production
+  # path was found that emits `run.interrupted` for a run that never started,
+  # and an edge with no reachable producer is speculation, not a fix.
+  defp target(:requested, :fail), do: {:ok, :failed}
+  defp target(:requested, :cancel), do: {:ok, :cancelling}
   defp target(:starting, :interrupt), do: {:ok, :interrupted}
   defp target(:running, :interrupt), do: {:ok, :interrupted}
   defp target(:pausing, :interrupt), do: {:ok, :interrupted}

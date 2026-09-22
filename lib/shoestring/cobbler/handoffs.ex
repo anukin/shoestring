@@ -187,7 +187,9 @@ defmodule Shoestring.Cobbler.Handoffs do
 
   `attrs` is a command map (`"command_id"` optional, `"payload"` required);
   the type is set here. Payload keys: `run_id`, `checkpoint_id`,
-  `to_provider_id`, `to_adapter_id`, `scope`, `reason`, `requested_by`.
+  `to_provider_id`, `to_adapter_id`, `scope`, `reason`, `requested_by`, and
+  the optional attributable `confirmation` the operator answers a
+  confirmation-class receiver refusal with.
 
   Nothing executes. Re-submitting the same command id with an identical
   digest replays the recorded intent and appends no events, so the caller
@@ -457,6 +459,7 @@ defmodule Shoestring.Cobbler.Handoffs do
          # auditable capacity claim into the goal's history.
          :ok <- authorize(goal, opts),
          {:ok, identity} <- receiver_identity(intent, opts),
+         :ok <- ensure_confirmation_intent(intent, opts),
          :ok <- ensure_no_active_elf(sender, opts) do
       handoff_id = command.id
 
@@ -522,6 +525,7 @@ defmodule Shoestring.Cobbler.Handoffs do
   ]
 
   @permanent_tags [
+    :handoff_confirmation_intent_mismatch,
     :unknown_provider,
     :handoff_not_allowed,
     :handoff_receiver_missing,
@@ -1004,7 +1008,7 @@ defmodule Shoestring.Cobbler.Handoffs do
         task_id: sender.task_id,
         run_id: sender.id
       }
-      |> maybe_put(:override, Keyword.get(opts, :override))
+      |> maybe_put(:override, override(intent, opts))
 
     policy = Keyword.get(opts, :policy, AdmissionPolicy.default())
 
@@ -1017,6 +1021,60 @@ defmodule Shoestring.Cobbler.Handoffs do
 
   defp requested_capability(opts),
     do: Keyword.get(opts, :requested_capability, "supervised_execution")
+
+  defp ensure_confirmation_intent(intent, opts) do
+    if confirmation_intent_matches?(intent, opts) do
+      :ok
+    else
+      {:error,
+       {:handoff_confirmation_intent_mismatch,
+        %{
+          "confirmed_intent" => get_in(intent, ["confirmation", "intent"]),
+          "requested_capability" => requested_capability(opts)
+        }}}
+    end
+  end
+
+  # The operator's attributable confirmation for THIS transfer, read off the
+  # durable intent. `Shoestring.Cobbler.HandoffWorker` — the only production
+  # consumer of a handoff intent — passes no `:override`, so before this the
+  # only confirmation channel was an in-process caller option and a receiver
+  # whose measured capacity was less than automatically safe could never be
+  # handed off in production, whatever the operator decided.
+  #
+  # Precedence is caller option first, intent second, so an in-process caller
+  # (and every existing test) keeps its exact previous behaviour. This lifts
+  # nothing on its own: `Shoestring.Cobbler.AdmissionEvaluation` re-validates
+  # attribution and target, and a hard stop remains a hard stop.
+  defp override(intent, opts) do
+    case Keyword.get(opts, :override) do
+      nil -> intent["confirmation"]
+      override -> override
+    end
+  end
+
+  # The confirmation names the capability it confirms, and admission decides
+  # a specific requested capability. They must be the same one.
+  #
+  # Without this, a confirmation given for `read_only` would lift a
+  # `supervised_execution` refusal: `AdmissionEvaluation` validates the
+  # confirmation's responder and target provider/scope, but not its intent
+  # against the request. Refusing here is fail-closed and, unlike silently
+  # dropping the confirmation, distinguishable in the record from "no
+  # confirmation was given" — the mismatch is durably settled as
+  # `handoff.failed` rather than replayed forever.
+  #
+  # Only the intent carried on the durable intent is checked. An in-process
+  # `:override` is a caller that already chose both values in one call.
+  defp confirmation_intent_matches?(intent, opts) do
+    case {Keyword.get(opts, :override), intent["confirmation"]} do
+      {nil, %{"intent" => confirmed_intent}} ->
+        confirmed_intent == requested_capability(opts)
+
+      _other ->
+        true
+    end
+  end
 
   defp evaluate(request, candidate, snapshot, policy, eval_opts) do
     case AdmissionEvaluation.evaluate(request, candidate, snapshot, policy, eval_opts) do

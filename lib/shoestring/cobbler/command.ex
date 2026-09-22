@@ -46,6 +46,14 @@ defmodule Shoestring.Cobbler.Command do
   `requested_by` identity (never silently defaulted — an
   automated caller passes an explicit `system:`-prefixed identity, matching
   the `respond/4` attribution rule).
+
+  It may also carry an optional `confirmation` object — the operator's
+  attributable single-decision answer to a confirmation-class admission
+  refusal for the named receiver. It is validated here against this same
+  payload's receiver and scope, digest-covered like every other field, and
+  authorizes nothing by itself: `Shoestring.Cobbler.AdmissionEvaluation`
+  re-validates it and can only lift a confirmation-class refusal, never a
+  hard stop.
   """
 
   alias Shoestring.Harness.Contract
@@ -239,18 +247,26 @@ defmodule Shoestring.Cobbler.Command do
          {:ok, to_adapter_id} <- text_field(raw, :to_adapter_id, max: 200),
          {:ok, scope} <- text_field(raw, :scope, max: 200),
          {:ok, reason} <- text_field(raw, :reason, max: 500),
-         {:ok, requested_by} <- text_field(raw, :requested_by, max: 200) do
-      {:ok,
-       %{
-         "run_id" => run_id,
-         "checkpoint_id" => checkpoint_id,
-         "decision_refs" => decision_refs,
-         "to_provider_id" => to_provider_id,
-         "to_adapter_id" => to_adapter_id,
-         "scope" => scope,
-         "reason" => reason,
-         "requested_by" => requested_by
-       }}
+         {:ok, requested_by} <- text_field(raw, :requested_by, max: 200),
+         {:ok, confirmation} <- confirmation_field(raw) do
+      payload = %{
+        "run_id" => run_id,
+        "checkpoint_id" => checkpoint_id,
+        "decision_refs" => decision_refs,
+        "to_provider_id" => to_provider_id,
+        "to_adapter_id" => to_adapter_id,
+        "scope" => scope,
+        "reason" => reason,
+        "requested_by" => requested_by
+      }
+
+      # Absent stays absent: an intent carrying no confirmation keeps exactly
+      # the payload shape — and therefore exactly the digest — it had before
+      # this field existed, so an already-submitted command id still replays.
+      case confirmation do
+        nil -> {:ok, payload}
+        value -> {:ok, Map.put(payload, "confirmation", value)}
+      end
     end
   end
 
@@ -262,6 +278,122 @@ defmodule Shoestring.Cobbler.Command do
 
   defp normalize_payload(_raw, _type),
     do: Contract.invalid(:payload, "must match the command type")
+
+  # The operator's single-decision confirmation, frozen into the durable
+  # handoff intent alongside the boundary and the authorized refs.
+  #
+  # It exists because a receiver whose measured capacity is anything less than
+  # automatically safe produces a confirmation-class admission refusal, and
+  # `Shoestring.Cobbler.HandoffWorker` — the only production consumer of a
+  # handoff intent — has no channel of its own for an operator answer. Without
+  # this field, such a transfer is unreachable in production no matter what
+  # the operator decides.
+  #
+  # ## The caller says THAT it confirms, never WHO confirms
+  #
+  # The payload carries one field, `intent`, and nothing else. `confirmed_by`
+  # is deliberately NOT accepted here: a string in a request body is an
+  # assertion by the requester, not an authenticated identity, and admission
+  # treats `confirmed_by` as attribution that can lift a refusal. Accepting it
+  # would let any caller mint an operator — or a `system:` principal — for
+  # itself.
+  #
+  # The attribution is bound in `Shoestring.Cobbler.Commands` from the goal's
+  # durable `owner_id`, which `Shoestring.Trajectory.Goal` documents as
+  # "supplied by the authenticated application boundary and … not accepted
+  # from ordinary user attribute maps". That is the strongest trusted
+  # authorization context this application has; it has no accounts domain and
+  # no per-request authenticated principal, and a goal with no owner is
+  # refused rather than attributed to nobody. The honest limit is recorded in
+  # `plans/evidence/05-quota-aware-mvp/live-cross-provider-handoff.md`: this
+  # binds to the goal's owner, not to the individual who pressed the button.
+  #
+  # `target_provider_id` / `target_scope` are likewise not accepted; they are
+  # derived from this same payload's receiver and scope, so a confirmation
+  # cannot be written to authorize anything other than the transfer it rides
+  # on.
+  #
+  # Fail-closed at request time, so an operator learns immediately rather than
+  # at delivery: a non-object, an unknown key, a non-string `intent`, an
+  # overlong `intent`, or an `intent` outside the capability vocabulary is a
+  # rejected command, not a silently ignored field.
+  #
+  # It authorizes nothing by itself. `Shoestring.Cobbler.AdmissionEvaluation`
+  # re-validates it and can only lift a confirmation-class refusal with it —
+  # every hard stop (unsupported capability, incompatible CLI, unsupported
+  # tier, scope mismatch, snapshot provider mismatch, active occupancy, hard
+  # quota refusal, reserve breach) stays a hard stop.
+  @confirmation_keys ~w(intent)
+
+  # The capability vocabulary admission evaluates against
+  # (`AdmissionPolicy.supported_capabilities`). An allow-list, so a
+  # confirmation can never name a capability the policy does not know.
+  @confirmation_intents ~w(supervised_execution read_only)
+
+  @doc "Intents a `run.handoff` confirmation may name."
+  @spec confirmation_intents() :: [String.t()]
+  def confirmation_intents, do: @confirmation_intents
+
+  defp confirmation_field(raw) do
+    case Contract.fetch(raw, :confirmation) do
+      :error ->
+        {:ok, nil}
+
+      {:ok, nil} ->
+        {:ok, nil}
+
+      {:ok, confirmation} when is_map(confirmation) ->
+        normalize_confirmation(confirmation)
+
+      {:ok, _other} ->
+        Contract.invalid(:confirmation, "must be an object")
+    end
+  end
+
+  defp normalize_confirmation(confirmation) do
+    with :ok <- reject_unknown_confirmation_keys(confirmation),
+         {:ok, intent} <- confirmation_intent(confirmation) do
+      {:ok, %{"intent" => intent}}
+    end
+  end
+
+  # Unknown keys are refused rather than dropped. Dropping is what made the
+  # pre-fix behaviour dangerous: the field was accepted and then ignored, so
+  # a caller writing `confirmed_by` had no way to learn it carried no weight.
+  defp reject_unknown_confirmation_keys(confirmation) do
+    unknown =
+      confirmation
+      |> Map.keys()
+      |> Enum.map(&to_string/1)
+      |> Enum.reject(&(&1 in @confirmation_keys))
+      |> Enum.sort()
+
+    case unknown do
+      [] ->
+        :ok
+
+      keys ->
+        Contract.invalid(
+          :confirmation,
+          "contains unsupported fields: #{Enum.join(keys, ", ")}"
+        )
+    end
+  end
+
+  defp confirmation_intent(confirmation) do
+    case Contract.fetch(confirmation, :intent) do
+      :error ->
+        Contract.invalid(:intent, "can't be blank")
+
+      {:ok, nil} ->
+        Contract.invalid(:intent, "can't be blank")
+
+      {:ok, value} ->
+        with {:ok, text} <- Contract.text(value, :intent, max: 200) do
+          Contract.enum(text, :intent, @confirmation_intents)
+        end
+    end
+  end
 
   defp text_field(raw, key, opts) do
     case Contract.fetch(raw, key) do

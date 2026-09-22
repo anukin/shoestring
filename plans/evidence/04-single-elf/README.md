@@ -87,5 +87,15 @@ substitute, or by role ("the session id") with no value at all.
 - Associated execution fixtures are tracked under `test/fixtures/codex/execution/`.
 - `codex-app-server.md`: Spike B and Work Package C writeup analyzing `codex app-server --stdio` transport, event streaming, in-band cancellation, safe lease boundary, and post-turn resume.
 - Associated app-server fixtures are tracked under `test/fixtures/codex/app_server/`.
-- `harness-live-verification.md`: end-to-end Claude and Codex runs through the Elf, including the hermetically reproduced and fixed Codex file-change completion persistence gap.
-- Sanitized live-run summaries are tracked under `fixtures/harness/`.
+- `harness-live-verification.md`: end-to-end Claude and Codex runs through the Elf, including the hermetically reproduced and fixed Codex file-change completion persistence gap, plus the 2026-09-21 addendum that runs the post-fix Codex turn live and confirms the fixed shape against real provider output.
+- Sanitized live-run summaries are tracked under `fixtures/harness/`:
+  `claude-live-smoke-summary.json` and `codex-live-smoke-summary.json` (2026-09-07),
+  and `codex-live-smoke-summary-postfix.json` (2026-09-21, the two post-fix
+  Codex turns).
+- The cross-provider, semantic-continuation and cancellation legs run in the
+  same 2026-09-21 session are recorded under milestone 05
+  (`plans/evidence/05-quota-aware-mvp/live-cross-provider-handoff.md`). The
+  redacted canonical normalized-event transcript backing the post-fix Codex
+  turns — including the `fileChange` completion at ordinal 98 with its
+  scalar `kind` — is committed there as
+  `fixtures/live/normalized-sender-codex.md` rather than duplicated here.
