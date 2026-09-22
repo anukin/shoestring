@@ -513,8 +513,14 @@ defmodule Shoestring.Elves.Elf do
       state = %{state | provider_session_id: identity.provider_session_id}
 
       case append_running(state) do
-        :ok -> begin_streaming(state)
-        {:error, reason} -> abort_launch(state, Classifier.launch_failed(), reason)
+        :ok ->
+          begin_streaming(state)
+
+        {:error, %Shoestring.Harness.Error{} = error} ->
+          abort_launch(state, Classifier.classify({:error, error}, :unknown, false), error.code)
+
+        {:error, reason} ->
+          abort_launch(state, Classifier.launch_failed(launch_code(reason)), reason)
       end
     else
       {:error, %Shoestring.Harness.Error{} = error} ->
@@ -551,7 +557,12 @@ defmodule Shoestring.Elves.Elf do
   defp launch_code({:writer_unavailable, _detail}), do: "writer_unavailable"
   defp launch_code(%Ecto.Changeset{}), do: "trajectory_changeset_invalid"
   defp launch_code(reason) when is_atom(reason), do: sanitize_launch_code(Atom.to_string(reason))
-  defp launch_code(reason) when is_binary(reason), do: sanitize_launch_code(reason)
+
+  # Bare binaries are out-of-contract adapter text: never derive persisted
+  # domain state from them (they can carry paths, secrets, or unbounded
+  # text). They land in the redacted server-side log via `abort_launch/3`
+  # instead.
+  defp launch_code(reason) when is_binary(reason), do: "launch_failed_unclassified"
 
   defp launch_code(reason) when is_tuple(reason) and tuple_size(reason) > 0 do
     case elem(reason, 0) do
@@ -577,10 +588,13 @@ defmodule Shoestring.Elves.Elf do
   end
 
   defp abort_launch(state, terminal, reason) do
+    # `Map.get/2`, not dot access: `:cancelled` terminals carry no
+    # `:error_code` key, and crashing the launch handler on a legitimate
+    # adapter cancellation would misreport it as `elf_launch_crashed`.
     Logger.warning("elf launch aborted",
       run_id: state.run_id,
       dispatch_id: state.dispatch_id,
-      error_code: terminal.error_code,
+      error_code: Map.get(terminal, :error_code),
       reason: inspect(Redaction.redact(inspect(reason)))
     )
 

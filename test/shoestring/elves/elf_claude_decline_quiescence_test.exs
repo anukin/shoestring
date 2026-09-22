@@ -30,6 +30,9 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
     a merely quiet but non-terminal session never triggers the quiet exit
     (staleness is evidence, never a trigger), and explicit cancellation
     still owns and terminates the whole group.
+  - `"adapter-owned quiet exit releases the adapter session"` — **lock**.
+    Base never exits (DOWN timeout) and never releases, so the adapter
+    registry entry is still present where absence is asserted.
 
   Hermetic: `Fake` adapter legs, trivial local commands, ETS session
   doubles — never a provider CLI, never the network. No sleeps; Elf exit
@@ -41,15 +44,111 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
   alias Shoestring.Cobbler.{Leases, WakeupRecord}
   alias Shoestring.Elves
   alias Shoestring.Elves.Elf
+  alias Shoestring.Elves.PortRunner
   alias Shoestring.Harness.{CapacitySnapshot, ExecutionLease, ExecutionLeaseRecord}
   alias Shoestring.Harness.{Projector, RunRecord}
   alias Shoestring.Harness.Fake.Scenario
   alias Shoestring.Repo
-  alias Shoestring.Elves.PortRunner
   alias Shoestring.Test.CobblerHelpers
+  alias Shoestring.Test.ElfWorktreeFixture
   alias Shoestring.Test.ElvesHelpers
   alias Shoestring.Test.Fixtures.FakeHelpers
   alias Shoestring.Test.FixedClock
+
+  defmodule AdapterOwnedDeclineAdapter do
+    @moduledoc false
+    @behaviour Shoestring.Harness.Adapter
+
+    alias Shoestring.Elves.PortRunner
+    alias Shoestring.Harness.{Fake, Identity, RunIdentity, RunRequest}
+
+    @table :elf_decline_adapter_owned_sessions
+
+    def identity do
+      {:ok, identity} =
+        Identity.new(%{
+          adapter_id: "shoestring.test.adapter_owned_decline",
+          provider: "test",
+          adapter_version: "1",
+          schema_version: 1,
+          invocation_mode: :process
+        })
+
+      identity
+    end
+
+    def capabilities, do: MapSet.new([:cancel])
+    def probe(opts), do: Fake.probe(opts)
+
+    def status(%RunIdentity{} = identity, _opts) do
+      case lookup(identity.run_id) do
+        {:ok, _runner} -> {:ok, %{status: :running}}
+        :error -> {:ok, %{status: :unknown}}
+      end
+    end
+
+    def start(%RunRequest{} = request, opts) do
+      ensure_table()
+      workdir = Map.get(opts, :workdir) || File.cwd!()
+
+      with {:ok, runner} <-
+             PortRunner.spawn(["sleep", "30"],
+               cd: workdir,
+               kill_grace_ms: 200,
+               reap_timeout_ms: 2_000
+             ),
+           {:ok, identity} <-
+             RunIdentity.new(%{
+               run_id: request.dispatch_id,
+               harness_id: "shoestring.test.adapter_owned_decline",
+               process_id: to_string(runner.pgid),
+               provider_session_id: "test-session-decline"
+             }) do
+        true = :ets.insert(@table, {identity.run_id, runner})
+
+        if pid = Map.get(opts, :test_pid) do
+          send(pid, {:adapter_owned_started, identity.run_id, runner.pgid})
+        end
+
+        {:ok, identity}
+      end
+    end
+
+    def stream(%RunIdentity{} = identity, opts), do: Fake.stream(identity, opts)
+
+    # Mirrors the production adapter contract: releasing the session drops
+    # its registry entry. The quiet-exit path is the only caller here, so
+    # the entry's absence afterwards proves the release ran.
+    def release(%RunIdentity{run_id: run_id}) do
+      :ets.delete(@table, run_id)
+      :ok
+    rescue
+      _error -> :ok
+    end
+
+    def lookup(run_id) do
+      ensure_table()
+
+      case :ets.lookup(@table, run_id) do
+        [{^run_id, runner}] -> {:ok, runner}
+        [] -> :error
+      end
+    end
+
+    defp ensure_table do
+      case :ets.whereis(@table) do
+        :undefined ->
+          try do
+            :ets.new(@table, [:named_table, :public, read_concurrency: true])
+          rescue
+            ArgumentError -> @table
+          end
+
+        table ->
+          table
+      end
+    end
+  end
 
   @runner_opts [kill_grace_ms: 200, reap_timeout_ms: 2_000]
   @interval_ms 200
@@ -98,10 +197,11 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
     assert Repo.get_by!(RunRecord, id: run_id).status == "suspended"
 
-    # No owned process group left running: the reaped pgid is gone.
-    if pgid = ElvesHelpers.recorded_pgid(goal.id, run_id) do
-      refute PortRunner.alive_id?(pgid)
-    end
+    # No owned process group left running: the run recorded a pgid at
+    # `run.running`, and it is reaped.
+    pgid = ElvesHelpers.recorded_pgid(goal.id, run_id)
+    assert is_integer(pgid)
+    refute PortRunner.alive_id?(pgid)
   end
 
   test "a declined run with a terminal Codex session exits quietly", %{
@@ -137,6 +237,105 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
 
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
     assert Repo.get_by!(RunRecord, id: run_id).status == "suspended"
+  end
+
+  test "adapter-owned quiet exit releases the adapter session and reaps the group", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    dispatch_id = Ecto.UUID.generate()
+    fixture = ElfWorktreeFixture.create!(dispatch_id)
+    on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:decline_adapter_owned, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.output_event("one", source_event_id: "evt-out-1"),
+        Scenario.output_event("two", source_event_id: "evt-out-2"),
+        Scenario.output_event("three", source_event_id: "evt-out-3")
+      ])
+
+    request =
+      ElvesHelpers.run_request(goal, task,
+        workspace_ref: fixture.worktree.workspace_ref,
+        dispatch_id: dispatch_id
+      )
+
+    assert {:ok, elf_pid} =
+             Elves.start_run(request, AdapterOwnedDeclineAdapter.identity(),
+               supervisor: sup,
+               run_id: dispatch_id,
+               adapter: AdapterOwnedDeclineAdapter,
+               adapter_opts: %{scenario: scenario, test_pid: self()},
+               process_owner: :adapter,
+               command: ["sleep", "30"],
+               runner_opts: [
+                 cd: fixture.worktree.path,
+                 kill_grace_ms: 200,
+                 reap_timeout_ms: 2_000
+               ],
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    # Session double registered before the lease: race-free by construction.
+    double =
+      register_terminal_session_double(
+        :claude_headless_sessions,
+        dispatch_id,
+        &Shoestring.Harness.ClaudeHeadless.lookup_session/1,
+        :cancelled
+      )
+
+    assert_receive {:adapter_owned_started, ^dispatch_id, pgid}, 10_000
+
+    run_id = wait_running(goal, dispatch_id)
+
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 2,
+      tool_budget: 25,
+      reserves: %{response: 0, tool: 0},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), 3_600, :second)
+    )
+
+    # The adapter owns a real group that the Elf adopts.
+    assert ElvesHelpers.recorded_pgid(goal.id, run_id) == pgid
+    assert {:ok, _runner} = AdapterOwnedDeclineAdapter.lookup(dispatch_id)
+
+    ref = Process.monitor(elf_pid)
+    assert_receive {:DOWN, ^ref, :process, ^elf_pid, :normal}, 15_000
+    assert_received :safe_stop_requested
+    refute_received {:elf_terminal, ^run_id, _terminal}
+
+    assert count_types(goal.id, run_id, ["run.pausing"]) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+    assert ElvesHelpers.terminal_event(goal.id, run_id) == nil
+
+    wakeup = Repo.get_by!(WakeupRecord, run_id: run_id)
+    assert wakeup.command_id == "elf-lease-decline:#{request.dispatch_id}"
+    assert wakeup.status == "scheduled"
+
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+    assert Repo.get_by!(RunRecord, id: run_id).status == "suspended"
+
+    # The whole owned process group is reaped, unconditionally: the setup
+    # guarantees the pgid.
+    refute PortRunner.alive_id?(pgid)
+
+    # The adapter session registry entry is gone while the double is still
+    # alive: only the quiet-exit's `release_adapter/1` could have removed
+    # it (test teardown has not run yet).
+    assert AdapterOwnedDeclineAdapter.lookup(dispatch_id) == :error
+    assert Process.alive?(double)
   end
 
   test "a declined run with a working session keeps supervising", %{
@@ -182,8 +381,10 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
 
   # Starts a Fake leg that declines at its boundary (response_budget 2, zero
   # reserve, breached capacity) with a verdict-free stream, registers the
-  # given session double, and waits until the run is streaming. Returns the
-  # run id, Elf pid, and request for the caller's settle assertions.
+  # given session double BEFORE the lease exists (registration is
+  # independent of the grant, so the decline can never race it), and waits
+  # until the run is streaming. Returns the run id, Elf pid, and request
+  # for the caller's settle assertions.
   defp start_declined_run(sup, goal, task, name, register_session) do
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
@@ -210,6 +411,8 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
                notify: self()
              )
 
+    register_session.(request.dispatch_id)
+
     run_id = wait_running(goal, request.dispatch_id)
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
@@ -220,8 +423,6 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
       checkpoint_cadence: 100,
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
-
-    register_session.(request.dispatch_id)
 
     %{run_id: run_id, elf_pid: elf_pid, request: request}
   end
@@ -251,6 +452,8 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
   # A session double that answers the decline's safe-stop request and then
   # reports the given status: terminal (`:cancelled` / `:interrupted`) for
   # the quiescence locks, still-working (`:running`) for the control.
+  # Returns the double pid so callers can distinguish liveness from
+  # registry cleanup.
   defp register_terminal_session_double(table, id, ensure_lookup, status) do
     _ = ensure_lookup.(Ecto.UUID.generate())
 
@@ -267,7 +470,7 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
       if Process.alive?(double), do: Process.exit(double, :kill)
     end)
 
-    :ok
+    double
   end
 
   defp terminal_session_loop(test, status) do
