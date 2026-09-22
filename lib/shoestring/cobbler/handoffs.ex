@@ -45,7 +45,10 @@ defmodule Shoestring.Cobbler.Handoffs do
        trigger.
     3. **Fresh admission for the RECEIVER.** A fresh capacity observation is
        taken for the receiver provider and persisted as
-       `capacity.snapshot_observed`; `AdmissionEvaluation.evaluate/5` judges
+       `capacity.snapshot_observed` under THIS goal, re-identified to a
+       deterministic goal-local snapshot id (see `localize_snapshot/3`) so
+       the receiver's lease can chain to a snapshot its own goal owns without
+       weakening the locked same-goal ownership rule; `AdmissionEvaluation.evaluate/5` judges
        the receiver candidate and the verdict is persisted as
        `admission.decided`. Support tier and compatibility state come from
        that observation — never from `AdmissionEvaluation`'s candidate
@@ -62,7 +65,13 @@ defmodule Shoestring.Cobbler.Handoffs do
        bounded, deterministic, transcript-free prompt composed from the
        checkpoint projection, and gets its OWN `ExecutionLease` grant from
        the fresh admit decision's proposed bounds, chained to the fresh
-       snapshot. The receiver never executes on the sender's allowance.
+       snapshot. The receiver never executes on the sender's allowance. Those
+       bounds come from the durable intent's `lease_policy`
+       (`Shoestring.Cobbler.HandoffLeasePolicy`) — allow-listed,
+       range-bounded and digest-covered at request time — so every delivery
+       attempt on one intent proposes identical bounds. Its default deadline
+       is 2700 seconds, wide enough to survive a cold cross-provider harness
+       startup; the 300-second wake default was not.
     5. **`handoff.created`.** The canonical pointer event, carrying source
        provider, receiver provider, projection version (`contract_version`),
        checkpoint id, decision refs, the receiver's lease grant id and the
@@ -125,6 +134,7 @@ defmodule Shoestring.Cobbler.Handoffs do
     Commands,
     DispatchGate,
     GoalLifecycle,
+    HandoffLeasePolicy,
     HandoffWorker,
     Leases
   }
@@ -429,7 +439,12 @@ defmodule Shoestring.Cobbler.Handoffs do
       `:working`); the `:handoff_requested` transition must be legal from it.
     * `:sender_elf` - explicit sender-Elf liveness for callers that already
       know it; defaults to reading the Elf registry.
-    * `:policy`, `:occupancy`, `:now`, `:clock`, `:repo`, `:writer_opts`,
+    * `:policy` - an explicit `AdmissionPolicy`. When omitted (as
+      `Shoestring.Cobbler.HandoffWorker` omits it), the policy is built from
+      the intent's own `lease_policy` via
+      `Shoestring.Cobbler.HandoffLeasePolicy`, whose default deadline is 2700
+      seconds rather than the wake-shaped 300.
+    * `:occupancy`, `:now`, `:clock`, `:repo`, `:writer_opts`,
       `:identity` - as in `Shoestring.Cobbler.Wakeups.perform_wakeup/2`.
   """
   @spec perform(Ecto.UUID.t(), String.t(), keyword()) ::
@@ -530,6 +545,10 @@ defmodule Shoestring.Cobbler.Handoffs do
     :handoff_not_allowed,
     :handoff_receiver_missing,
     :invalid_handoff_request,
+    # A durable lease policy that no longer validates will not start
+    # validating on the next attempt: the row is fixed. Settle it as
+    # `handoff.failed` rather than burning five deliveries on it.
+    :invalid_handoff_lease_policy,
     :handoff_command_not_found,
     :handoff_command_type_invalid,
     :handoff_not_requested,
@@ -901,7 +920,8 @@ defmodule Shoestring.Cobbler.Handoffs do
          opts
        ) do
     with {:ok, :handing_off} <- lifecycle(opts),
-         {:ok, snapshot} <- observe(intent, opts),
+         {:ok, observed} <- observe(intent, opts),
+         {:ok, snapshot} <- localize_snapshot(goal, handoff_id, observed),
          {:ok, _event} <- persist_snapshot(goal, sender, snapshot, handoff_id, now, opts),
          {:ok, decision_event, decision} <-
            admit(repo, goal, sender, intent, snapshot, handoff_id, now, opts) do
@@ -964,6 +984,100 @@ defmodule Shoestring.Cobbler.Handoffs do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Goal-local observation identity
+  # ---------------------------------------------------------------------------
+  #
+  # WHY THIS EXISTS. The production receiver probe is
+  # `Shoestring.Cobbler.WakeupObserve.observe/1`, which serves a snapshot out
+  # of the `Shoestring.Harness.Observatory` ledger. Every snapshot in that
+  # ledger is ALREADY projected as a `CapacitySnapshotRecord` owned by the
+  # protected observatory singleton goal.
+  #
+  # `persist_snapshot/6` then re-appends that reading as a
+  # `capacity.snapshot_observed` under the USER's goal, because the receiver's
+  # lease must chain to a snapshot its own goal owns — the locked
+  # "Strict Same-Goal Lease Ownership" rule, enforced by
+  # `Shoestring.Harness.Projector`. Re-appending it under the ORIGINAL
+  # snapshot id made the projector find a row owned by another goal and fail
+  # with `{:capacity_snapshot_not_owned, id}`.
+  #
+  # That failure is not confined to the handoff. The event is durable, so the
+  # goal's `harness` projector position is left at `status: "failed"` and
+  # every later projection of that goal re-reads the same poisoned event and
+  # fails again: ONE production handoff wedged the goal's projector
+  # permanently. The receiver run row and dispatch row are written directly
+  # and still existed, so the goal was left half-transferred and unprojectable.
+  #
+  # THE FIX IS RE-IDENTIFICATION, NOT RELAXATION. Ownership is not weakened
+  # anywhere: the projector's check is untouched, and no unowned snapshot is
+  # accepted. Instead the goal records its OWN observation of the same
+  # reading, under an id derived from `(goal_id, handoff_id, observed
+  # snapshot_id)`. Every field of the reading is preserved byte for byte; only
+  # the identity is goal-local.
+  #
+  # Two properties make that safe:
+  #
+  #   * **Deterministic.** The same handoff re-observing the same reading
+  #     derives the same id, so a crash-retry collapses on the existing
+  #     idempotency key instead of appending a second observation — which is
+  #     exactly the N1 coherence property `append_decision/7` documents, and
+  #     it now holds for the Observatory-backed probe too.
+  #   * **Unforgeably goal-local.** The id is a function of this goal and this
+  #     handoff, so it can only ever name a row this goal owns. It cannot
+  #     collide with the observatory's row, with another goal's, or with
+  #     another handoff's in the same goal.
+  #
+  # Provenance is not lost, because losing it would make the ledger lie about
+  # where the reading came from. The observatory's own id is recorded in the
+  # snapshot extensions under `cobbler.handoff:observed_snapshot_id`, so an
+  # operator reading the goal's timeline can still join the goal-local
+  # observation back to the ledger entry it was taken from.
+  #
+  # A snapshot that is already goal-local (the in-process `:observe` injection
+  # every test and dev caller uses, which mints a fresh id nobody else owns)
+  # is re-identified by the same rule. Deriving unconditionally keeps one code
+  # path and one set of idempotency keys: a rule that fires only when a
+  # foreign row happens to exist would be a race, not an invariant.
+  defp localize_snapshot(goal, handoff_id, %CapacitySnapshot{} = observed) do
+    local_id = local_snapshot_id(goal.id, handoff_id, observed.snapshot_id)
+
+    extensions =
+      (observed.extensions || %{})
+      |> Map.put("cobbler.handoff:observed_snapshot_id", observed.snapshot_id)
+
+    {:ok, %CapacitySnapshot{observed | snapshot_id: local_id, extensions: extensions}}
+  end
+
+  # Unreachable while `observe/2` keeps its `{:ok, %CapacitySnapshot{}}`
+  # guarantee; kept as a fail-closed tuple rather than a FunctionClauseError
+  # so a future change to that guarantee refuses a transfer instead of
+  # crashing a delivery mid-flight.
+  defp localize_snapshot(_goal, _handoff_id, other),
+    do: {:error, {:observation_failed, {:unexpected_observe_result, other}}}
+
+  # A UUIDv5-shaped digest of the three identities. Formatted with the RFC
+  # 4122 version and variant bits so it is a well-formed UUID and
+  # `Ecto.UUID.cast/1` — which the projector runs on the payload — accepts it.
+  defp local_snapshot_id(goal_id, handoff_id, observed_snapshot_id) do
+    <<head::binary-size(6), version_byte::8, mid::binary-size(1), variant_byte::8,
+      tail::binary-size(7), _discard::binary>> =
+      :crypto.hash(
+        :sha256,
+        "handoff-observation:#{goal_id}:#{handoff_id}:#{observed_snapshot_id}"
+      )
+
+    raw =
+      head <>
+        <<Bitwise.bor(0x50, Bitwise.band(version_byte, 0x0F))>> <>
+        mid <>
+        <<Bitwise.bor(0x80, Bitwise.band(variant_byte, 0x3F))>> <>
+        tail
+
+    {:ok, uuid} = Ecto.UUID.load(raw)
+    uuid
+  end
+
   defp persist_snapshot(goal, sender, snapshot, handoff_id, now, opts) do
     attrs = %{
       "type" => "capacity.snapshot_observed",
@@ -1010,12 +1124,57 @@ defmodule Shoestring.Cobbler.Handoffs do
       }
       |> maybe_put(:override, override(intent, opts))
 
-    policy = Keyword.get(opts, :policy, AdmissionPolicy.default())
-
-    with {:ok, occupancy} <- occupancy(repo, goal, opts),
+    with {:ok, policy} <- admission_policy(intent, opts),
+         {:ok, occupancy} <- occupancy(repo, goal, opts),
          {:ok, evaluation} <-
            evaluate(request, candidate, snapshot, policy, now: now, occupancy: occupancy) do
       append_decision(goal, sender, evaluation, snapshot, handoff_id, now, opts)
+    end
+  end
+
+  # The receiver's proposed lease bounds, resolved from the DURABLE intent.
+  #
+  # `proposed_bounds` on the admit decision is what `build_lease/5` turns into
+  # the receiver's `ExecutionLease`, and it is copied verbatim off this
+  # policy. Reading it from the intent rather than from an option is what
+  # makes it reachable in production at all: `Shoestring.Cobbler.HandoffWorker`
+  # passes no `:policy`, so before this every production receiver was granted
+  # `AdmissionPolicy.default()` — including its 300-second deadline, which a
+  # cold cross-provider session spends on harness startup alone.
+  #
+  # It is also what makes the bounds stable across delivery. The intent is the
+  # authority; the Oban job carries no bounds. An enqueue, a retry, an Oban
+  # table wipe and a `reconcile/1` re-enqueue at boot all rebuild from this
+  # same row, so every attempt at a given handoff proposes the identical
+  # bounds and a replay converges instead of re-bounding the transfer.
+  #
+  # Precedence is caller option first, intent second, mirroring `override/2`:
+  # an in-process caller that passed an explicit `:policy` (every existing
+  # test, and `perform/3`'s documented option) keeps its exact behaviour.
+  #
+  # A malformed durable policy is an ERROR, not a fall back to the default.
+  # It is validated at request time, so a policy that no longer validates
+  # means the stored intent and this code disagree, and granting a lease on a
+  # guess is how a receiver executes under bounds nobody authorized. The
+  # reason is permanent (see `@permanent_tags`): no retry re-validates a row
+  # that will not change, so it settles as `handoff.failed` instead of
+  # burning attempts.
+  defp admission_policy(intent, opts) do
+    case Keyword.fetch(opts, :policy) do
+      # Passed through unexamined, exactly as `Keyword.get(opts, :policy, ...)`
+      # did before: whatever a caller hands in is the caller's policy, and
+      # `AdmissionEvaluation.evaluate/5` is what judges its shape.
+      {:ok, policy} ->
+        {:ok, policy}
+
+      :error ->
+        case HandoffLeasePolicy.from_intent(intent) do
+          {:ok, lease_policy} ->
+            {:ok, HandoffLeasePolicy.to_admission_policy(lease_policy, AdmissionPolicy.default())}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 

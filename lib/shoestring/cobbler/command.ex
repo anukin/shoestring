@@ -54,8 +54,18 @@ defmodule Shoestring.Cobbler.Command do
   authorizes nothing by itself: `Shoestring.Cobbler.AdmissionEvaluation`
   re-validates it and can only lift a confirmation-class refusal, never a
   hard stop.
+
+  It may also carry an optional `lease_policy` object — the bounds the
+  RECEIVER's own execution lease is proposed under. Absent, the transfer uses
+  `Shoestring.Cobbler.HandoffLeasePolicy.default/0`, whose deadline is 2700
+  seconds rather than the wake-shaped 300. Present, every field is
+  allow-listed and range-bounded there, and an unknown or out-of-range field
+  rejects the command instead of being dropped. Like `confirmation` it is
+  digest-covered and authorizes nothing: it proposes lease bounds, and
+  admission still decides.
   """
 
+  alias Shoestring.Cobbler.HandoffLeasePolicy
   alias Shoestring.Harness.Contract
 
   @version 1
@@ -248,7 +258,8 @@ defmodule Shoestring.Cobbler.Command do
          {:ok, scope} <- text_field(raw, :scope, max: 200),
          {:ok, reason} <- text_field(raw, :reason, max: 500),
          {:ok, requested_by} <- text_field(raw, :requested_by, max: 200),
-         {:ok, confirmation} <- confirmation_field(raw) do
+         {:ok, confirmation} <- confirmation_field(raw),
+         {:ok, lease_policy} <- lease_policy_field(raw) do
       payload = %{
         "run_id" => run_id,
         "checkpoint_id" => checkpoint_id,
@@ -260,13 +271,14 @@ defmodule Shoestring.Cobbler.Command do
         "requested_by" => requested_by
       }
 
-      # Absent stays absent: an intent carrying no confirmation keeps exactly
-      # the payload shape — and therefore exactly the digest — it had before
-      # this field existed, so an already-submitted command id still replays.
-      case confirmation do
-        nil -> {:ok, payload}
-        value -> {:ok, Map.put(payload, "confirmation", value)}
-      end
+      # Absent stays absent, for both optional objects: an intent carrying
+      # neither keeps exactly the payload shape — and therefore exactly the
+      # digest — it had before these fields existed, so an already-submitted
+      # command id still replays.
+      {:ok,
+       payload
+       |> put_optional("confirmation", confirmation)
+       |> put_optional("lease_policy", lease_policy)}
     end
   end
 
@@ -278,6 +290,9 @@ defmodule Shoestring.Cobbler.Command do
 
   defp normalize_payload(_raw, _type),
     do: Contract.invalid(:payload, "must match the command type")
+
+  defp put_optional(payload, _key, nil), do: payload
+  defp put_optional(payload, key, value), do: Map.put(payload, key, value)
 
   # The operator's single-decision confirmation, frozen into the durable
   # handoff intent alongside the boundary and the authorized refs.
@@ -392,6 +407,46 @@ defmodule Shoestring.Cobbler.Command do
         with {:ok, text} <- Contract.text(value, :intent, max: 200) do
           Contract.enum(text, :intent, @confirmation_intents)
         end
+    end
+  end
+
+  # The per-transfer lease bounds the receiver will be granted under, frozen
+  # into the durable handoff intent beside the boundary, the authorized refs
+  # and the confirmation.
+  #
+  # It exists because the receiver's lease is minted from the admission
+  # decision's `proposed_bounds`, which come off the `AdmissionPolicy`, and
+  # `Shoestring.Cobbler.HandoffWorker` passes no policy option — so in
+  # production every receiver got the wake-shaped defaults and no operator
+  # could say otherwise. In particular the 300-second default deadline
+  # expired during harness startup on a cold cross-provider session.
+  #
+  # Validation (allow-list, bounds, and the reserve-below-budget rule) lives
+  # in `Shoestring.Cobbler.HandoffLeasePolicy` next to the documented
+  # rationale for each bound. It runs HERE, at request time, so an operator
+  # learns about a bad policy immediately rather than at delivery, and so the
+  # stored object is already normalized — which matters because the digest
+  # covers it and a replay must compare equal.
+  #
+  # Fail-closed, exactly like `confirmation`: a non-object, an unknown key,
+  # a non-integer, an out-of-range bound, or a reserve at or above its budget
+  # is a rejected command, never a silently ignored field.
+  defp lease_policy_field(raw) do
+    case Contract.fetch(raw, :lease_policy) do
+      :error ->
+        {:ok, nil}
+
+      {:ok, nil} ->
+        {:ok, nil}
+
+      {:ok, lease_policy} when is_map(lease_policy) ->
+        case HandoffLeasePolicy.new(lease_policy) do
+          {:ok, policy} -> {:ok, HandoffLeasePolicy.to_map(policy)}
+          {:error, changeset} -> {:error, changeset}
+        end
+
+      {:ok, _other} ->
+        Contract.invalid(:lease_policy, "must be an object")
     end
   end
 
