@@ -513,8 +513,14 @@ defmodule Shoestring.Elves.Elf do
       state = %{state | provider_session_id: identity.provider_session_id}
 
       case append_running(state) do
-        :ok -> begin_streaming(state)
-        {:error, reason} -> abort_launch(state, Classifier.launch_failed(), reason)
+        :ok ->
+          begin_streaming(state)
+
+        {:error, %Shoestring.Harness.Error{} = error} ->
+          abort_launch(state, Classifier.classify({:error, error}, :unknown, false), error.code)
+
+        {:error, reason} ->
+          abort_launch(state, Classifier.launch_failed(launch_code(reason)), reason)
       end
     else
       {:error, %Shoestring.Harness.Error{} = error} ->
@@ -526,19 +532,72 @@ defmodule Shoestring.Elves.Elf do
   end
 
   # Launch failures persist their concrete cause (`setsid_unavailable`,
-  # `executable_not_found`, ...) instead of an opaque default, so an operator
-  # on a minimal host can diagnose the run from the trajectory alone.
+  # `executable_not_found`, `invalid_workdir`, ...) instead of an opaque
+  # default, so an operator on a minimal host can diagnose the run from the
+  # trajectory alone. Only the attributable head of a structured reason ever
+  # reaches the trajectory — tuple payloads (paths, raw port errors,
+  # changesets) stay server-side in the warning log below, redacted — so
+  # terminal projection stays safe (`run.failed` requires string
+  # error_category/error_code and the registry rejects secrets/transcripts).
   defp launch_code(:setsid_unavailable), do: "setsid_unavailable"
   defp launch_code({:executable_not_found, _exe}), do: "executable_not_found"
   defp launch_code({:port_open_failed, _reason}), do: "port_open_failed"
   defp launch_code(:os_pid_unavailable), do: "os_pid_unavailable"
   defp launch_code(:not_group_leader), do: "not_group_leader"
   defp launch_code(:group_leader_unverifiable), do: "group_leader_unverifiable"
-  defp launch_code(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp launch_code(reason) when is_binary(reason), do: reason
-  defp launch_code(_reason), do: "process_launch_failed"
+  defp launch_code({:invalid_workdir, _dir}), do: "invalid_workdir"
+  defp launch_code({:invalid_goal_id, _goal_id}), do: "invalid_goal_id"
+  defp launch_code({:invalid_append_input, _changeset}), do: "trajectory_append_invalid"
 
-  defp abort_launch(state, terminal, _reason) do
+  defp launch_code({:invalid_payload, _type, _version, _changeset}),
+    do: "trajectory_payload_invalid"
+
+  defp launch_code({:invalid_envelope, _changeset}), do: "trajectory_envelope_invalid"
+  defp launch_code({:validation, _changeset}), do: "trajectory_validation_failed"
+  defp launch_code({:writer_unavailable, _detail}), do: "writer_unavailable"
+  defp launch_code(%Ecto.Changeset{}), do: "trajectory_changeset_invalid"
+  defp launch_code(reason) when is_atom(reason), do: sanitize_launch_code(Atom.to_string(reason))
+
+  # Bare binaries are out-of-contract adapter text: never derive persisted
+  # domain state from them (they can carry paths, secrets, or unbounded
+  # text). They land in the redacted server-side log via `abort_launch/3`
+  # instead.
+  defp launch_code(reason) when is_binary(reason), do: "launch_failed_unclassified"
+
+  defp launch_code(reason) when is_tuple(reason) and tuple_size(reason) > 0 do
+    case elem(reason, 0) do
+      head when is_atom(head) -> sanitize_launch_code(Atom.to_string(head))
+      _head -> "launch_failed_unclassified"
+    end
+  end
+
+  defp launch_code(_reason), do: "launch_failed_unclassified"
+
+  # Error codes are persisted domain state: lowercase identifier characters
+  # only, bounded, never a raw path or secret-bearing value.
+  defp sanitize_launch_code(code) when is_binary(code) do
+    safe =
+      code
+      |> Redaction.redact()
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9]+/, "_")
+      |> String.trim("_")
+      |> String.slice(0, 64)
+
+    if safe == "", do: "launch_failed_unclassified", else: safe
+  end
+
+  defp abort_launch(state, terminal, reason) do
+    # `Map.get/2`, not dot access: `:cancelled` terminals carry no
+    # `:error_code` key, and crashing the launch handler on a legitimate
+    # adapter cancellation would misreport it as `elf_launch_crashed`.
+    Logger.warning("elf launch aborted",
+      run_id: state.run_id,
+      dispatch_id: state.dispatch_id,
+      error_code: Map.get(terminal, :error_code),
+      reason: inspect(Redaction.redact(inspect(reason)))
+    )
+
     _ = terminate_owned_group(state)
     stop_with_terminal(state, terminal)
   end
@@ -860,8 +919,11 @@ defmodule Shoestring.Elves.Elf do
       {:overflow, events} ->
         schedule_next(%{state | pending_events: events, events_overflow?: true})
 
+      {:error, %Shoestring.Harness.Error{} = error} ->
+        abort_launch(state, Classifier.classify({:error, error}, :unknown, false), error.code)
+
       {:error, reason} ->
-        abort_launch(state, Classifier.launch_failed(), reason)
+        abort_launch(state, Classifier.launch_failed(launch_code(reason)), reason)
     end
   end
 
@@ -1388,6 +1450,38 @@ defmodule Shoestring.Elves.Elf do
         :none
     end
   end
+
+  # Quiet-exit liveness for declined runs: no session at all, or a session
+  # that already reports a terminal status. The status probe is fail-safe
+  # toward supervision — an unreachable session, an uninterpretable answer,
+  # or a non-terminal status all count as still useful, so the Elf keeps
+  # supervising exactly as before. Only a session that declares itself done
+  # lets the Elf reap its owned group and stop.
+  defp no_useful_session?(state) do
+    case resolve_live_session(state) do
+      :none -> true
+      {_provider, pid} -> session_settled?(pid)
+    end
+  end
+
+  defp session_settled?(pid) when is_pid(pid) do
+    try do
+      case GenServer.call(pid, :status, 1_000) do
+        {:ok, %{status: status}} ->
+          status in [:completed, :interrupted, :failed, :cancelled]
+
+        {:ok, _other} ->
+          false
+
+        _other ->
+          false
+      end
+    catch
+      :exit, _reason -> false
+    end
+  end
+
+  defp session_settled?(_pid), do: false
 
   # Runs the T2 renewal sequence at the item.completed boundary only: fresh
   # snapshot + re-evaluate → renewed, or expired → decline (checkpoint +
@@ -1934,9 +2028,17 @@ defmodule Shoestring.Elves.Elf do
       # terminal, the run is suspended (not over) and the scheduled wake
       # owns its future. The runner group is reaped (the boundary item
       # already completed, so nothing in flight is interrupted). A live
-      # session keeps the existing supervision paths until it winds down.
-      state.lease_declined? and resolve_live_session(state) == :none ->
+      # session keeps the existing supervision paths until it winds down —
+      # unless it already reports a terminal status (completed, interrupted,
+      # failed, cancelled): such a session can do no more useful work, so
+      # waiting on it is not protecting work (notably the ClaudeHeadless
+      # immediate safe-stop, which kills the group and marks the session
+      # cancelled without emitting a further stream event). Staleness alone
+      # still never triggers this: a merely quiet but non-terminal session
+      # keeps the Elf supervising exactly as before.
+      state.lease_declined? and no_useful_session?(state) ->
         _ = terminate_owned_group(state)
+        _ = release_adapter(state)
         {:stop, :normal, state}
 
       state.events_overflow? or state.output_overflowed? ->
