@@ -308,6 +308,95 @@ too: a gate is not closed by fixing the wiring and never running it. Acceptance
 
 ---
 
+## GitHub CI: two red runs on `8ac3d71`, both pre-existing intermittents
+
+**VERIFIED.** Both CI runs for this branch's head failed, each with **exactly
+one failure out of 1375**, in two **different** tests, neither of which this
+branch touches. Diagnosed rather than re-run to green: no test here was
+retried, slept on, skipped, or had an assertion weakened.
+
+| run | test | failure |
+|---|---|---|
+| [35688724736](https://github.com/anukin/shoestring/actions/runs/35688724736) | `Shoestring.Elves.ElfTerminalCheckpointTest` (setup, `elf_terminal_checkpoint_test.exs:37`) | `** (Exqlite.Error) Database busy` on `INSERT INTO "goals"` |
+| [35688738935](https://github.com/anukin/shoestring/actions/runs/35688738935) | `Shoestring.Harness.EvalMatrix.AblationTest` (`ablation_test.exs:59`) | `assert_receive {:elf_terminal, ^run_id, terminal}` — no matching message after 10000 ms |
+
+### Why these are not branch-caused
+
+1. **The AblationTest failure predates this branch, provably.** The identical
+   test with the identical message failed on `af43f617`
+   ([run 35673479881](https://github.com/anukin/shoestring/actions/runs/35673479881)),
+   and `git merge-base --is-ancestor af43f617 733c39b` **succeeds** — that
+   commit is an ancestor of this branch's base, so the defect exists in code
+   this branch strictly builds on. The same test with the same message also
+   failed on the earlier, unrelated branch `c5763f1d`
+   ([run 35475309187](https://github.com/anukin/shoestring/actions/runs/35475309187)).
+2. **The suite has a standing ~10% per-run flake rate.** 6 failures in the
+   last 60 runs, every one of them a single failure out of ~1300, spread over
+   five distinct tests — `ElfTest`, `AblationTest` (×2), `TaskClaimRaceTest`,
+   `ElfTerminalCheckpointTest`. CI runs in pairs per SHA, and several other
+   branches show one of the pair red and the other green on the **identical**
+   SHA (`polly/iter5-lifecycle` `942846d0`, `polly/iter45-live-verification`
+   `af43f617`, `polly/iter5-goal-ui-blockers` `c5763f1d`,
+   `polly/iter5-checkpoint-resume-muse` `63d1839b`). At a 10% per-run rate,
+   both halves of one pair failing is ≈1% — the unlucky tail, not a signal.
+3. **The two failures are different tests.** A branch-caused defect is
+   reproducible and would hit the same test in both runs. Two different,
+   independently-flaky tests is the signature of two independent flakes.
+4. **Neither failure mode can be reached from this diff.** The `lib/` change
+   is confined to four Cobbler handoff files. `ElfTerminalCheckpointTest`
+   never references them. The only shared surface with `AblationTest` is
+   `test/support/eval_matrix_helpers.ex`, which calls `Handoffs.perform/3`
+   passing an **explicit** `:policy` — and `admission_policy/2` returns a
+   caller-supplied policy unexamined, exactly as the previous
+   `Keyword.get(opts, :policy, AdmissionPolicy.default())` did, so the eval
+   arms' lease bounds are unchanged. The other reachable change,
+   `localize_snapshot/3`, re-derives a snapshot UUID that nothing on that
+   path asserts on, and is pure computation (SHA-256 plus bit operations) —
+   no I/O, no lock, nothing that can make an Elf miss a 10-second terminal.
+5. **This branch's own new tests start nothing.** Neither
+   `handoff_prod_observer_test.exs` nor `handoff_lease_policy_test.exs`
+   starts a supervisor, spawns an Elf or an OS process, sleeps, or leaves a
+   process running; both restore every `Application` key in `on_exit`. They
+   cannot leak the DB connection or the process-group timing that these two
+   failures turn on.
+
+### Both failure mechanisms are known, documented, pre-existing hazards
+
+The `Database busy` run shows `Client #PID<...> (:healthy_codex_storm) is
+still using a connection` — a capacity monitor from
+`SupervisionStormEvalTest` still holding a sandbox connection as a later
+test's setup inserts. That file already carries a long comment about exactly
+this hazard ("owner exited while client still holds a connection") and its
+`stop_root_synchronously/2` mitigation; what CI caught is the residual race
+that mitigation narrows but does not close.
+
+The AblationTest wait is on a **real OS process group** (`python3` launched
+through `Shoestring.Elves.PortRunner`) reaching terminal inside 10 s. Both CI
+runs also log `spawn: Could not cd to …` from that launcher. On a loaded
+shared macOS runner that budget is genuinely tight; it is a timing
+dependency in the test, not a logic error in the code under test.
+
+Both sit in test infrastructure this packet does not own, so neither is
+repaired here. Reported, not fixed — and deliberately not papered over with a
+retry or a longer timeout, either of which would hide a real regression later.
+
+### Local evidence on this branch (`8ac3d71`)
+
+| run | result |
+|---|---|
+| `mix test` on the two CI-failing files, ×5 | **5 of 5 green** (7 tests each run) |
+| `mix test` full suite, ×3 | **3 of 3 green** — 1375 tests, 0 failures, 1 skipped (6 excluded) |
+| `mix precommit` | exit 0 |
+
+Stated plainly: local green does not *prove* the branch is innocent of
+scheduling influence — adding 35 synchronous tests does lengthen the run and
+shift which test follows which. What the evidence above establishes is that
+both failing mechanisms exist in code this branch builds on, that one of them
+is proven to have failed identically on an ancestor commit, and that no
+causal path runs from this diff to either failure.
+
+---
+
 ## Honest limitations
 
 - **UNVERIFIED — no live cross-provider run.** The 2700-second deadline is
