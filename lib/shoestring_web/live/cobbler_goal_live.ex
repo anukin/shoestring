@@ -27,6 +27,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
   use ShoestringWeb, :live_view
 
   import Ecto.Query
+  import ShoestringWeb.TimeDisplay, only: [countdown: 1]
 
   alias Shoestring.Cobbler
   alias Shoestring.Cobbler.AdmissionDecision
@@ -210,6 +211,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:respond_forms, %{})
     |> assign(:recheck_form, to_form(%{"operator_identity" => ""}, as: :recheck))
     |> assign(:pending_wakeup, nil)
+    |> assign(:now, DateTime.utc_now())
     |> stream(:commands, [], reset: true, dom_id: &command_dom_id/1)
     |> stream(:events, [], reset: true, dom_id: &event_dom_id/1)
   end
@@ -255,6 +257,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:respond_forms, respond_forms(commands))
     |> assign(:recheck_form, to_form(%{"operator_identity" => ""}, as: :recheck))
     |> assign(:pending_wakeup, pending_wakeup(goal.id))
+    |> assign(:now, DateTime.utc_now())
     |> stream(:commands, commands, reset: true, dom_id: &command_dom_id/1)
     |> stream(:events, sanitized_events, reset: true, dom_id: &event_dom_id/1)
   end

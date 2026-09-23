@@ -1,1 +1,209 @@
-/* This file is for your main application CSS */
+/* This file is for your main application CSS.
+ *
+ * This project was generated with --no-tailwind and has no asset build step,
+ * so `default.css` only carries the daisyUI/Tailwind subset needed by the
+ * generated CoreComponents. Everything below is the hand-maintained subset of
+ * Tailwind utilities that the Cobbler goal page uses; the values match
+ * Tailwind v4 defaults so the markup means the same thing it would under a
+ * real build. `test/shoestring_web/goal_page_stylesheet_test.exs` fails if the
+ * page starts using a utility that has no rule here.
+ *
+ * Rules are unlayered on purpose: `default.css` puts its utilities in
+ * @layer utilities, and unlayered rules win, so a class defined in both
+ * resolves to the value below.
+ */
+
+/* -- Layout ------------------------------------------------------------- */
+
+.flex { display: flex; }
+.inline-flex { display: inline-flex; }
+.grid { display: grid; }
+.hidden { display: none; }
+.only\:block:only-child { display: block; }
+
+.flex-wrap { flex-wrap: wrap; }
+.items-center { align-items: center; }
+.items-baseline { align-items: baseline; }
+.justify-between { justify-content: space-between; }
+
+.grid-cols-1 { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+.grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+@media (min-width: 40rem) {
+  .sm\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sm\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+@media (min-width: 48rem) {
+  .md\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+.mx-auto { margin-inline: auto; }
+.max-w-4xl { max-width: 56rem; }
+.max-w-6xl { max-width: 72rem; }
+.max-h-48 { max-height: 12rem; }
+.max-h-72 { max-height: 18rem; }
+.w-3\.5 { width: 0.875rem; }
+.w-4 { width: 1rem; }
+.h-3\.5 { height: 0.875rem; }
+.h-4 { height: 1rem; }
+
+.overflow-auto { overflow: auto; }
+
+/* -- Spacing ------------------------------------------------------------ */
+
+.gap-1 { gap: 0.25rem; }
+.gap-1\.5 { gap: 0.375rem; }
+.gap-2 { gap: 0.5rem; }
+.gap-3 { gap: 0.75rem; }
+.gap-4 { gap: 1rem; }
+.gap-x-2 { column-gap: 0.5rem; }
+.gap-x-4 { column-gap: 1rem; }
+.gap-y-0\.5 { row-gap: 0.125rem; }
+.gap-y-2 { row-gap: 0.5rem; }
+
+.p-2\.5 { padding: 0.625rem; }
+.p-4 { padding: 1rem; }
+.p-6 { padding: 1.5rem; }
+.px-1\.5 { padding-inline: 0.375rem; }
+.px-2\.5 { padding-inline: 0.625rem; }
+.px-3 { padding-inline: 0.75rem; }
+.px-4 { padding-inline: 1rem; }
+.py-0\.5 { padding-block: 0.125rem; }
+.py-1\.5 { padding-block: 0.375rem; }
+.py-3 { padding-block: 0.75rem; }
+.pl-5 { padding-left: 1.25rem; }
+.pt-4 { padding-top: 1rem; }
+
+.mt-1 { margin-top: 0.25rem; }
+.mt-2 { margin-top: 0.5rem; }
+.mt-3 { margin-top: 0.75rem; }
+
+.space-y-1 > :not(:last-child) { margin-bottom: 0.25rem; }
+.space-y-2 > :not(:last-child) { margin-bottom: 0.5rem; }
+.space-y-3 > :not(:last-child) { margin-bottom: 0.75rem; }
+.space-y-4 > :not(:last-child) { margin-bottom: 1rem; }
+.space-y-8 > :not(:last-child) { margin-bottom: 2rem; }
+
+/* -- Typography --------------------------------------------------------- */
+
+.text-\[11px\] { font-size: 11px; line-height: 1.45; }
+.text-xs { font-size: 0.75rem; line-height: 1.3333333; }
+.text-sm { font-size: 0.875rem; line-height: 1.4285714; }
+.text-base { font-size: 1rem; line-height: 1.5; }
+.text-2xl { font-size: 1.5rem; line-height: 1.3333333; }
+
+.font-medium { font-weight: 500; }
+.font-semibold { font-weight: 600; }
+.font-bold { font-weight: 700; }
+.italic { font-style: italic; }
+.uppercase { text-transform: uppercase; }
+.tracking-wider { letter-spacing: 0.05em; }
+.tracking-\[0\.2em\] { letter-spacing: 0.2em; }
+.tabular-nums { font-variant-numeric: tabular-nums; }
+.list-disc { list-style-type: disc; }
+
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+}
+
+/* Long identifiers, JSON payloads and ISO timestamps must wrap rather than
+ * push the page sideways on a narrow viewport. */
+.break-all { word-break: break-all; }
+.whitespace-nowrap { white-space: nowrap; }
+.whitespace-pre-wrap { white-space: pre-wrap; overflow-wrap: break-word; }
+
+/* -- Borders ------------------------------------------------------------ */
+
+.border { border-width: 1px; border-style: solid; border-color: #e4e4e7; }
+.border-t { border-top-width: 1px; border-top-style: solid; border-top-color: #e4e4e7; }
+.border-dashed { border-style: dashed; }
+
+.rounded { border-radius: 0.25rem; }
+.rounded-md { border-radius: 0.375rem; }
+.rounded-lg { border-radius: 0.5rem; }
+.rounded-full { border-radius: 9999px; }
+
+.shadow-sm {
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+}
+
+/* Colour utilities follow the width utilities so an explicit border colour
+ * always beats the fallback above. */
+.border-zinc-100 { border-color: #f4f4f5; }
+.border-zinc-200 { border-color: #e4e4e7; }
+.border-zinc-300 { border-color: #d4d4d8; }
+.border-red-200 { border-color: #fecaca; }
+.border-sky-200 { border-color: #bae6fd; }
+.border-amber-300 { border-color: #fcd34d; }
+.border-purple-200 { border-color: #e9d5ff; }
+
+/* -- Colours ------------------------------------------------------------ */
+
+.bg-white { background-color: #fff; }
+.bg-zinc-50 { background-color: #fafafa; }
+.bg-zinc-100 { background-color: #f4f4f5; }
+.bg-zinc-900 { background-color: #18181b; }
+.bg-red-50 { background-color: #fef2f2; }
+.bg-sky-50 { background-color: #f0f9ff; }
+.bg-sky-700 { background-color: #0369a1; }
+.bg-amber-50 { background-color: #fffbeb; }
+.bg-purple-50 { background-color: #faf5ff; }
+.bg-purple-700 { background-color: #7e22ce; }
+
+.text-white { color: #fff; }
+.text-zinc-400 { color: #a1a1aa; }
+.text-zinc-500 { color: #71717a; }
+.text-zinc-600 { color: #52525b; }
+.text-zinc-700 { color: #3f3f46; }
+.text-zinc-800 { color: #27272a; }
+.text-zinc-900 { color: #18181b; }
+.text-red-700 { color: #b91c1c; }
+.text-red-800 { color: #991b1b; }
+.text-amber-800 { color: #92400e; }
+.text-amber-900 { color: #78350f; }
+
+.hover\:bg-zinc-700:hover { background-color: #3f3f46; }
+
+/* -- Form controls on the goal page ------------------------------------- */
+
+/* The `<.input>` component from CoreComponents is a daisyUI control: it wants
+ * to be 20rem wide and sits inside a label that is a grid item with
+ * `min-width: auto`. Together those push the sleep card, and with it the
+ * whole page, past a 375px viewport. Letting the label and the control shrink
+ * keeps the page from scrolling sideways on a phone without restyling the
+ * shared component. */
+form[id^="cobbler-"] label,
+form[id^="cobbler-"] .input,
+form[id^="cobbler-"] select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* daisyUI's `.label` never wraps, and these labels are full sentences
+ * ("Operator identity (required for manual wake/recheck)"). */
+form[id^="cobbler-"] .label {
+  white-space: normal;
+}
+
+/* `default.css` ships daisyUI's dark theme, so an untouched `<.input>` renders
+ * a dark control with a near-white label -- on this page that label sits on
+ * `bg-sky-50` and is effectively invisible. These forms carry the operator
+ * identity behind every attributable action, so their labels are restated in
+ * the page's own light palette rather than left unreadable. */
+form[id^="cobbler-"] .label {
+  color: #3f3f46;
+  opacity: 1;
+}
+
+form[id^="cobbler-"] .input,
+form[id^="cobbler-"] .select,
+form[id^="cobbler-"] .textarea {
+  background-color: #fff;
+  color: #18181b;
+  border-color: #d4d4d8;
+}
+
+.hover\:bg-sky-800:hover { background-color: #075985; }
+.hover\:bg-purple-800:hover { background-color: #6b21a8; }

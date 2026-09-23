@@ -76,7 +76,8 @@ defmodule Shoestring.MixProject do
         "format --check-formatted",
         "compile --warnings-as-errors",
         "test",
-        "gate_0a.node_test"
+        "gate_0a.node_test",
+        "ui.node_test"
       ]
     ]
   end

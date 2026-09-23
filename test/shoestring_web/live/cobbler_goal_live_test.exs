@@ -136,6 +136,18 @@ defmodule ShoestringWeb.CobblerGoalLiveTest do
     assert has_element?(view, "#cobbler-lease", "10")
     assert has_element?(view, "#cobbler-lease", "25")
     refute has_element?(view, "#cobbler-lease-empty")
+
+    # The deadline reads as a distance without losing the exact instant.
+    deadline = DateTime.to_iso8601(DateTime.add(@now, 3600, :second))
+
+    assert has_element?(view, "#cobbler-lease-deadline-time[datetime='#{deadline}']")
+
+    assert has_element?(
+             view,
+             "#cobbler-lease-deadline-time-relative[data-countdown-to='#{deadline}']"
+           )
+
+    assert has_element?(view, "#cobbler-lease-deadline-time-exact", deadline)
   end
 
   test "checkpoint contents are redacted and required content stays visible", %{conn: conn} do
