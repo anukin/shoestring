@@ -57,7 +57,8 @@ defmodule Shoestring.Elves.LaunchFailureCodeTest do
     @behaviour Shoestring.Harness.Adapter
 
     def identity, do: Fake.identity()
-    def capabilities, do: Fake.capabilities()
+    # Advertises nothing: implements neither cancel, resume, nor send.
+    def capabilities, do: MapSet.new([])
     def probe(opts), do: Fake.probe(opts)
     def start(%RunRequest{} = request, opts), do: Fake.start(request, opts)
     def status(%RunIdentity{} = identity, opts), do: Fake.status(identity, opts)
@@ -71,7 +72,8 @@ defmodule Shoestring.Elves.LaunchFailureCodeTest do
     @behaviour Shoestring.Harness.Adapter
 
     def identity, do: Fake.identity()
-    def capabilities, do: Fake.capabilities()
+    # Advertises nothing: implements neither cancel, resume, nor send.
+    def capabilities, do: MapSet.new([])
     def probe(opts), do: Fake.probe(opts)
     def status(%RunIdentity{} = identity, opts), do: Fake.status(identity, opts)
     def stream(%RunIdentity{} = identity, opts), do: Fake.stream(identity, opts)
@@ -79,12 +81,15 @@ defmodule Shoestring.Elves.LaunchFailureCodeTest do
     # Blocks the Elf mid-launch (inside `start_adapter/1`) until the test
     # releases it, so the test can deterministically rearrange durable state
     # that `append_running/1` will then observe. Synchronized by messages,
-    # never by sleeps.
+    # never by sleeps; the bounded wait turns a lost release into a loud
+    # launch crash instead of a hung test.
     def start(%RunRequest{} = request, opts) do
       send(opts.test_pid, {:adapter_start_entered, self()})
 
       receive do
         :release_adapter -> Fake.start(request, opts)
+      after
+        10_000 -> raise "BlockingStartAdapter timed out waiting for :release_adapter"
       end
     end
   end

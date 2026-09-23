@@ -31,8 +31,14 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
     (staleness is evidence, never a trigger), and explicit cancellation
     still owns and terminates the whole group.
   - `"adapter-owned quiet exit releases the adapter session"` — **lock**.
-    Base never exits (DOWN timeout) and never releases, so the adapter
-    registry entry is still present where absence is asserted.
+    Base never exits (DOWN timeout) and never releases. The release claim
+    is exact: the adapter registry table is created and owned by the test
+    process before the Elf starts, so it survives Elf death, and the
+    entry's absence afterwards — with the session double still alive —
+    proves the quiet-exit's `release_adapter/1` delete ran. Verified by
+    mutation: with the `release_adapter/1` call bypassed, the Elf still
+    exits quietly but the entry remains, failing exactly at the lookup
+    assertion.
 
   Hermetic: `Fake` adapter legs, trivial local commands, ETS session
   doubles — never a provider CLI, never the network. No sleeps; Elf exit
@@ -77,7 +83,8 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
       identity
     end
 
-    def capabilities, do: MapSet.new([:cancel])
+    # Advertises nothing: implements neither cancel, resume, nor send.
+    def capabilities, do: MapSet.new([])
     def probe(opts), do: Fake.probe(opts)
 
     def status(%RunIdentity{} = identity, _opts) do
@@ -117,8 +124,9 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
     def stream(%RunIdentity{} = identity, opts), do: Fake.stream(identity, opts)
 
     # Mirrors the production adapter contract: releasing the session drops
-    # its registry entry. The quiet-exit path is the only caller here, so
-    # the entry's absence afterwards proves the release ran.
+    # its registry entry. The test process owns the table (created on first
+    # `lookup/1` below, before the Elf starts), so the table outlives the
+    # Elf and the entry's absence afterwards proves this delete ran.
     def release(%RunIdentity{run_id: run_id}) do
       :ets.delete(@table, run_id)
       :ok
@@ -266,6 +274,12 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
         dispatch_id: dispatch_id
       )
 
+    # The test process creates and owns the adapter registry table BEFORE
+    # the Elf starts, so the table survives Elf death: entry absence below
+    # can only come from the quiet-exit's `release_adapter/1` delete, never
+    # from table destruction on Elf exit.
+    assert AdapterOwnedDeclineAdapter.lookup(dispatch_id) == :error
+
     assert {:ok, elf_pid} =
              Elves.start_run(request, AdapterOwnedDeclineAdapter.identity(),
                supervisor: sup,
@@ -332,8 +346,9 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
     refute PortRunner.alive_id?(pgid)
 
     # The adapter session registry entry is gone while the double is still
-    # alive: only the quiet-exit's `release_adapter/1` could have removed
-    # it (test teardown has not run yet).
+    # alive: the table is test-owned (see above), so only the quiet-exit's
+    # `release_adapter/1` delete could have removed it (test teardown has
+    # not run yet).
     assert AdapterOwnedDeclineAdapter.lookup(dispatch_id) == :error
     assert Process.alive?(double)
   end
