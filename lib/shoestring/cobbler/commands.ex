@@ -208,9 +208,18 @@ defmodule Shoestring.Cobbler.Commands do
         }
 
         # `Shoestring.Cobbler.Handoffs.perform/3` reads the resolved result,
-        # not the payload, so a confirmation that stopped at the payload would
-        # never reach admission. Carried only when the operator supplied one:
-        # an unconfirmed intent keeps its previous result shape exactly.
+        # not the payload, so a confirmation or a lease policy that stopped at
+        # the payload would never reach admission. Both are carried only when
+        # the operator supplied one: an intent with neither keeps its previous
+        # result shape exactly.
+        #
+        # The lease policy rides the RESULT, not the Oban job args, and that
+        # is what makes it survive delivery: a retry, an Oban table wipe, or
+        # `Shoestring.Cobbler.HandoffReconciler` re-enqueueing at boot all
+        # rebuild the job from this row, so every attempt reaches the same
+        # bounds. A job that carried its own copy could drift from the intent.
+        result = maybe_put_result(result, "lease_policy", command.payload["lease_policy"])
+
         case bind_handoff_confirmation(repo, goal_id, command) do
           {:ok, nil} ->
             {:resolved, result, [], nil}
@@ -256,6 +265,13 @@ defmodule Shoestring.Cobbler.Commands do
          }, [], nil}
     end
   end
+
+  # A validated lease policy rides the resolved result only when the operator
+  # supplied one; an intent without one keeps its previous result shape, and
+  # `Shoestring.Cobbler.HandoffLeasePolicy.from_intent/1` supplies the
+  # 2700-second default for it.
+  defp maybe_put_result(result, _key, nil), do: result
+  defp maybe_put_result(result, key, value), do: Map.put(result, key, value)
 
   defp acquire_claim(repo, goal_id, command, decision, now) do
     claim_changeset =
