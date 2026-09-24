@@ -37,6 +37,17 @@ with `stdin` closed, and killed after its first stream-json frame:
     {'type': 'system', 'subtype': 'init', 'model': 'claude-opus-5-5',
      'claude_code_version': '2.1.281', 'apiKeySource': 'none'}
 
+**What this does and does not prove.** It proves that the **receiver command**
+Shoestring launches (`claude --print …`, no `--model`, resolved through
+`~/.claude/settings.json`) resolves to `claude-opus-5-5` on this machine. It does
+**not** prove the runtime model of the orchestrated worker (the agent that ran
+this rerun and wrote this document). That worker's model is **UNVERIFIED** from
+runtime metadata: its process argv carries no `--model` flag, and no model
+environment variable is set. The harness-supplied session context names
+`claude-opus-5-5`, but that is configuration text the worker was given, not an
+observation. The worker resolving through the same `settings.json` is an
+inference, not a measurement.
+
 **Honest limit.** The process was killed after the `init` frame. I did not
 verify whether an API request had already been sent. The receiver never ran
 (§3), so no receiver `claude-headless:model` event exists to corroborate this.
@@ -379,7 +390,59 @@ time: `mix precommit`. Two runs, both exit 0 (VERIFIED):
 | 1 | 4 doctests, 1402 tests, 0 failures, 1 skipped (6 excluded) | 52 / 52 pass | 7 / 7 pass |
 | 2 | 4 doctests, 1402 tests, 0 failures, 1 skipped (6 excluded) | 52 / 52 pass | 7 / 7 pass |
 
-No intermittent was observed in these 2 runs. No test was added. The one test
+No intermittent was observed in these 2 runs. That statement covers these 2
+runs only. The independent review run below was red.
+
+### 9.1 Independent exact-SHA gate: RED (reported by the reviewer, not reproduced away)
+
+At `1a00cb9`, an independent `mix precommit` exited **2**:
+`4 doctests, 1402 tests, 1 failure, 1 skipped (6 excluded)`, Node 52/52 and
+UI 7/7. The failure (ExUnit seed 630171) was:
+
+    test killing the Claude monitor leaves Codex and the observatory UI healthy
+      (Shoestring.Harness.Capacity.DisconnectEvalTest)
+      disconnect_eval_test.exs:128  CodexMonitor.status(codex_pid)
+      left: :sink_error   right: :connected
+
+**Diagnosis: an existing intermittent, not caused by this branch (VERIFIED as
+far as stated below).**
+
+- **The branch cannot reach that code.** `git diff --stat 0f96798 1a00cb9`
+  touches no file under `lib/` or `config/`. The only test change is
+  `live_evidence_redaction_test.exs`, which reads committed files, touches no
+  database and starts no process.
+- **Mechanism, from the reviewer's log.** Just before the failure, the Codex
+  capacity sink logged `rejected snapshot: {:database_error, "Database busy
+INSERT
+  INTO "trajectory_events" …"}`. A leaked `:healthy_codex_storm` monitor from
+  `SupervisionStormEvalTest` was still holding a sandbox connection at that
+  moment. That is the residual race `prod-handoff-lease-policy.md` already
+  records for CI. A busy `Observatory.ingest` in the test's sink makes
+  `CodexMonitor` report `:sink_error` instead of `:connected`. The busy error
+  is non-retryable only because of §3.3's misclassification (`Trajectory.Writer`
+  does not recognise `"Database busy"`), a production defect this PR reports
+  and, per scope, does not fix.
+- **Bounded head/base checks** in an additional isolated worktree at base
+  `0f96798` (and this worktree at head `1a00cb9`), fresh state dir each time:
+
+| Check | Head `1a00cb9` | Base `0f96798` |
+|---|---|---|
+| `mix test --seed 630171` (full suite, 1 run each) | exit 2: 1402 tests, **1 failure**: `ObservatoryTest` `observation_summary returns exact windows…`, `{:database_error, "Database busy …"}` from `Observatory.ingest` | exit 2: 1402 tests, **1 failure**: `ElfTerminalCheckpointTest` `interrupted run checkpoints…`, `Exqlite.Error Database busy` in setup |
+| `disconnect_eval_test.exs` + `supervision_storm_eval_test.exs` together, ×5 | 5 of 5 green (4 tests, 0 failures) | 5 of 5 green (4 tests, 0 failures) |
+
+  The seed does not reproduce the same test, because the timing is
+  load-dependent. Every observed failure, the reviewer's and both of mine, head
+  and base, is SQLite `Database busy` under full-suite concurrency. Base fails
+  the same way without this branch.
+
+**Hard limitation.** The gate is **not reliably green** at this SHA or at its
+base. Across the full-suite runs recorded here the tally is **3 of 5 red**:
+the independent run, the seeded head run and the seeded base run, against the
+two green precommit runs above. The red runs span head and base. No test was
+retried to green, skipped, slept on, or had an assertion weakened, and no fix
+was made: the fault is not introduced by this PR, and its root (§3.3 plus the
+storm test's connection leak) is out of this round's scope. The two green runs
+are real, but they do not make this SHA green. No test was added. The one test
 changed is `live_evidence_redaction_test.exs`: it gained the new fixture glob,
 and its "reassembled to nothing" stale-parser guard now applies only to
 transcripts that declare more than 0 normalized events. Three committed

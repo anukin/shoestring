@@ -529,8 +529,9 @@ bullets are left exactly as written.*
      `handoff_checkpoint_not_found`;
   3. `Trajectory.Writer` never classifies Exqlite's `"Database busy"` as
      retryable, so 3 of 5 Codex launches failed before `run.starting`.
-- **Established live:** the runtime model is `claude-opus-5-5` (from the CLI
-  `init` frame); one Codex turn completed with a verified Go `game` package;
+- **Established live:** the receiver command Shoestring launches resolves to
+  `claude-opus-5-5` (from the CLI `init` frame; the orchestrating worker's own
+  runtime model is UNVERIFIED); one Codex turn completed with a verified Go `game` package;
   a node crash after `run.starting` was redelivered by the dispatch queue to
   exactly one Elf; explicit cancellation of that live Elf gave `cancelled`,
   then `already_terminal`; and three pre-start launch failures projected
