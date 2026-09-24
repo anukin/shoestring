@@ -506,7 +506,7 @@ account. It is UNVERIFIED as any actual charge.
 | 1 | `8587b7f` | `mix precommit` | 703209 | **2** | 4 doctests, 1432 tests, **2 failures**, 1 skipped (6 excluded) | 52/52 | 7/7 |
 | 2 | `22c1e72` | `mix precommit` | 895679 | **0** | 4 doctests, 1433 tests, 0 failures, 1 skipped (6 excluded) | 52/52 | 7/7 |
 | 3 | `061a39e` | `mix precommit` | 214605 | **0** | 4 doctests, 1433 tests, 0 failures, 1 skipped (6 excluded) | 52/52 | 7/7 |
-| 4 | final SHA | `mix precommit` | §5.1 | — | recorded in §5.1 | — | — |
+| 4 | `6e3f021` | `mix precommit` | 258132 | **0** | 4 doctests, 1433 tests, 0 failures, 1 skipped (6 excluded) | 52/52 | 7/7 |
 
 **Run 1 diagnosis (VERIFIED).** It had two failures:
 - `RepoTest`: my state dir was not under `System.tmp_dir!()`. The fault was in
@@ -542,8 +542,13 @@ Directory bisection with the shim found the launch only under
 
 ### 5.1 Final-SHA gate
 
-Recorded in the follow-up commit that only edits this section. See the PR
-description for the exact line.
+Run 4 is the gate for the last code-and-test commit, `6e3f021`. The commit
+after it changes only this document; `git diff --stat 6e3f021..HEAD` lists
+this file alone. That commit was not re-gated.
+
+Run 4 printed 0 `codex_core` lines. That does **not** show the real Codex
+launch in §6.9 stopped: the test is unchanged, and whether that process
+writes to stderr varies.
 
 ## 6. Residual findings (open; none fixed here unless stated)
 
