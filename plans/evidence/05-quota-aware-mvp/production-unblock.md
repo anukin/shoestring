@@ -1045,3 +1045,59 @@ after the busy wait or at once, so this is **UNVERIFIED**.
 
 So: **intermittent, 1 of 3 runs of this code SHA** (2 CI runs and 1 local
 full-suite run at that seed). **Not fixed**, and nothing was loosened.
+
+### 9.8 CI on `ce74ebb` (docs only, code `4153d1a`), and the follow-up fix `06465c6`
+
+| Run | Event | Seed | Result |
+|---|---|---|---|
+| 36068247668 | push | — | recorded in the PR body once complete |
+| 36068253487 | pull_request | 752121, max_cases 6 | **failure**: 4 doctests, 1442 tests, 2 failures, 1 skipped (6 excluded) |
+
+**`ElfTest:858` "cancel terminates the whole owned group": fixed in `06465c6` (test).**
+- **Failure:** `{:error, :timeout}` waiting for two group members.
+- **Cause (REPO-INSPECTION of `Elf.finish_after_stream/1`):** the test
+  streamed `Scenario.normal_completion/0`, four events 50 ms apart ending in
+  a `completed` verdict. On that verdict the Elf reaps the group itself. So
+  the test had to see the Python spawner's child *and* cancel within about
+  200 ms.
+- **Attribution:** the test predates this branch (`acaa18f`, iteration 4).
+- **Fix:** a stream with events but no verdict, like the file's other cancel
+  tests. No assertion changed.
+- **Proof (VERIFIED; the delay was injected for the proof only):** with a
+  400 ms `Process.sleep` after the pgid read, the base test failed with
+  exactly the CI shape (`right: {:error, :timeout}`) and the fixed test
+  passed.
+
+**`WriterContentionTest:129` "concurrent writers … behind one held lock all land once": OPEN.**
+- **Failure:** one of four writers returned `{:error, {:retry_exhausted, :busy}}`.
+- **Why it matters:** this is **this branch's own test** of the §1.2 writer
+  fix.
+- **CI log:** exactly four `BEGIN IMMEDIATE` "database is locked" lines, one
+  per pool connection. Each failed `BEGIN` *disconnects* its connection. They
+  landed at 25.77 s, 25.90 s, 29.50 s and 33.49 s. The other three writers
+  committed at 25.79 s, 25.90 s and 29.61 s. The last writer then failed
+  about 4 s apart twice more.
+- **Cause: not established.** A second writer's commit (29.61 s) does not
+  obviously account for a write lock held for 2 s. The interaction of
+  reconnect backoff and the busy wait is a candidate, **UNVERIFIED**. One
+  hypothesis, that SQLite was built without `HAVE_USLEEP` and so sleeps in
+  whole seconds, is ruled out: the exqlite `Makefile` sets
+  `-DHAVE_USLEEP=1`.
+- **Local:** 20 of 20 sequential runs of the file green.
+- **Status:** intermittent. It has been seen on CI once this round, and once
+  before under `--trace` (§5, fixed then by `busy_timeout`). **Not fixed.**
+  The reviewer should treat it as a possible defect in the writer's retry
+  path under load, not only as test noise.
+
+### 9.9 Gate at the final code SHA
+
+| Id | SHA | Command | Seed | Exit | Elixir | Node gate_0a | UI |
+|---|---|---|---|---|---|---|---|
+| G1 | `06465c6` | `mix precommit` | 54410 | **0** | 4 doctests, 1442 tests, 0 failures, 1 skipped (6 excluded) | 52/52 | 7/7 |
+
+Open intermittents after this round:
+- `WriterContentionTest:129` (§9.8);
+- `TaskClaimRaceTest:49` (§9.7);
+- the handshake test (§9.5);
+- `ElfLeaseReloopTest:419` (§8.3);
+- the grant-vs-timer race in 12 further sites (§9.5).
