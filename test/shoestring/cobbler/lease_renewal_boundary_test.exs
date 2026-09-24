@@ -18,8 +18,15 @@ defmodule Shoestring.Cobbler.LeaseRenewalBoundaryTest do
   """
   use Shoestring.DataCase, async: false
 
-  alias Shoestring.Cobbler.{Dispatcher, LeaseRenewal}
-  alias Shoestring.Harness.{CapacitySnapshot, ExecutionLeaseRecord, Projector}
+  alias Shoestring.Cobbler.{Dispatcher, GoalLocalObservation, LeaseRenewal}
+
+  alias Shoestring.Harness.{
+    CapacitySnapshot,
+    CapacitySnapshotRecord,
+    ExecutionLeaseRecord,
+    Projector
+  }
+
   alias Shoestring.Trajectory.Goal
   alias Shoestring.Test.FixedClock
 
@@ -86,7 +93,11 @@ defmodule Shoestring.Cobbler.LeaseRenewalBoundaryTest do
     FakeHelpers.append_capacity_snapshot(goal, fresh_id)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
 
-    assert {:ok, %{outcome: :renewed, decision: decision, admitted_snapshot_id: ^fresh_id}} =
+    # The fresh reading is chained under this goal's OWN observation of it
+    # (derived per grant), never under the observed id itself.
+    local_id = GoalLocalObservation.snapshot_id("lease-renewal", goal.id, grant_id, fresh_id)
+
+    assert {:ok, %{outcome: :renewed, decision: decision, admitted_snapshot_id: ^local_id}} =
              LeaseRenewal.maybe_renew(goal.id, grant_id,
                now: @now,
                stop: :already_requested,
@@ -95,12 +106,14 @@ defmodule Shoestring.Cobbler.LeaseRenewalBoundaryTest do
              )
 
     assert decision.result == :admit
+    assert decision.observation["snapshot_id"] == local_id
 
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
     record = Repo.get!(ExecutionLeaseRecord, grant_id)
     assert record.status == "renewed"
-    assert record.admitted_snapshot_id == fresh_id
+    assert record.admitted_snapshot_id == local_id
     assert record.admitted_snapshot_id != snapshot_id
+    assert Repo.get!(CapacitySnapshotRecord, local_id).goal_id == goal.id
   end
 
   test "a refused renewal expires before it requires a checkpoint" do

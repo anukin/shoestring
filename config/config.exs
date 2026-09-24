@@ -30,8 +30,15 @@ config :shoestring,
 # Independently supervised Claude and Codex capacity monitors. Each entry
 # supports `enabled:` plus any monitor start_link option passed through to the
 # provider monitor. Disabled (e.g. in test) by setting `enabled: false`.
+# `auto_ingest_initial` puts the Claude monitor's honest pre-first-response
+# reading (`unknown / conservative_partial`, no windows, no `observed_at`)
+# into the Observatory ledger at boot. Nothing else in the deployed node
+# writes a Claude reading there (no statusLine route exists), so without it
+# the Observatory-backed handoff/wake probe could never observe Claude at all.
+# Admission turns this reading into `require_confirmation`: it is never
+# capacity, and never admits without an attributable confirmation.
 config :shoestring, :capacity_monitors,
-  claude: [enabled: true],
+  claude: [enabled: true, auto_ingest_initial: true],
   codex: [enabled: true]
 
 config :shoestring, Oban,

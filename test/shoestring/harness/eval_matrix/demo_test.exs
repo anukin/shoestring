@@ -30,7 +30,7 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
   import Shoestring.Test.CobblerHelpers
 
   alias Oban.Job
-  alias Shoestring.Cobbler.{Dispatcher, Wakeups}
+  alias Shoestring.Cobbler.{Dispatcher, GoalLocalObservation, Wakeups}
   alias Shoestring.Elves
 
   alias Shoestring.Harness.{
@@ -165,7 +165,9 @@ defmodule Shoestring.Harness.EvalMatrix.DemoTest do
 
     assert summary.branch == :admitted
     assert summary.lease == :renewed
-    assert Repo.get!(ExecutionLeaseRecord, grant_id).admitted_snapshot_id == fresh.snapshot_id
+
+    assert Repo.get!(ExecutionLeaseRecord, grant_id).admitted_snapshot_id ==
+             GoalLocalObservation.snapshot_id("wakeup", goal.id, wakeup.id, fresh.snapshot_id)
 
     {:ok, log_b} = RequestLog.start()
     decision_id = admission.payload["decision_id"]

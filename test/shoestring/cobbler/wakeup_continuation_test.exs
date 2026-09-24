@@ -24,7 +24,15 @@ defmodule Shoestring.Cobbler.WakeupContinuationTest do
   import Shoestring.Test.CobblerHelpers
 
   alias Oban.Job
-  alias Shoestring.Cobbler.{Dispatcher, Leases, TaskClaimRecord, Wakeups, WakeupRecord}
+
+  alias Shoestring.Cobbler.{
+    Dispatcher,
+    GoalLocalObservation,
+    Leases,
+    TaskClaimRecord,
+    Wakeups,
+    WakeupRecord
+  }
 
   alias Shoestring.Harness.{
     CheckpointRecord,
@@ -77,7 +85,10 @@ defmodule Shoestring.Cobbler.WakeupContinuationTest do
     # The new run holds its own lease against the fresh snapshot.
     new_grant = Repo.get_by!(ExecutionLeaseRecord, run_id: cont_run_id)
     assert new_grant.status == "active"
-    assert new_grant.admitted_snapshot_id == snapshot.snapshot_id
+
+    assert new_grant.admitted_snapshot_id ==
+             GoalLocalObservation.snapshot_id("wakeup", goal.id, wakeup.id, snapshot.snapshot_id)
+
     assert new_grant.extensions["cobbler.lease:wakeup_id"] == wakeup.id
     assert is_binary(new_grant.extensions["cobbler.lease:admission_decision_id"])
   end
@@ -288,7 +299,9 @@ defmodule Shoestring.Cobbler.WakeupContinuationTest do
 
     new_grant = Repo.get_by!(ExecutionLeaseRecord, run_id: summary.dispatch.run_id)
     assert new_grant.status == "active"
-    assert new_grant.admitted_snapshot_id == snapshot.snapshot_id
+
+    assert new_grant.admitted_snapshot_id ==
+             GoalLocalObservation.snapshot_id("wakeup", goal.id, wakeup.id, snapshot.snapshot_id)
   end
 
   # ----------------------------------------------------------------------------

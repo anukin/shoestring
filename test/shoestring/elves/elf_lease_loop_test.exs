@@ -24,7 +24,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
   import Ecto.Query
 
-  alias Shoestring.Cobbler.Leases
+  alias Shoestring.Cobbler.{GoalLocalObservation, Leases}
   alias Shoestring.Elves
 
   alias Shoestring.Harness.{
@@ -111,8 +111,11 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     assert sequence_before?(ordered, {"lease.renewal_due", nil}, {"lease.renewed", nil})
 
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
-    assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status == "renewed"
-    assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).admitted_snapshot_id == fresh_id
+    record = Repo.get_by!(ExecutionLeaseRecord, run_id: run_id)
+    assert record.status == "renewed"
+
+    assert record.admitted_snapshot_id ==
+             GoalLocalObservation.snapshot_id("lease-renewal", goal.id, record.id, fresh_id)
   end
 
   test "tool and command completions spend exactly once; START frames never spend", %{
@@ -285,7 +288,9 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     record = Repo.get_by!(ExecutionLeaseRecord, run_id: run_id)
     assert record.status == "renewed"
-    assert record.admitted_snapshot_id == fresh_id
+
+    assert record.admitted_snapshot_id ==
+             GoalLocalObservation.snapshot_id("lease-renewal", goal.id, record.id, fresh_id)
   end
 
   test "refused renewal expires then checkpoints at the boundary without interrupting the item",

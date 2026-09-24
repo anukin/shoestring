@@ -29,6 +29,7 @@ defmodule Shoestring.Cobbler.AdmissionRecoveryTest do
     Command,
     Commands,
     Dispatcher,
+    GoalLocalObservation,
     Leases,
     Wakeups,
     WakeupRecord
@@ -421,7 +422,11 @@ defmodule Shoestring.Cobbler.AdmissionRecoveryTest do
   end
 
   defp wake_decision_payloads(goal, wakeup, snapshot) do
-    prefix = "wakeup-decision:#{wakeup.id}:#{snapshot.snapshot_id}:"
+    # Decisions are keyed on the wake's goal-local observation of the reading.
+    local_id =
+      GoalLocalObservation.snapshot_id("wakeup", goal.id, wakeup.id, snapshot.snapshot_id)
+
+    prefix = "wakeup-decision:#{wakeup.id}:#{local_id}:"
 
     Repo.all(
       from event in TrajectoryEvent,

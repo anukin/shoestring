@@ -32,7 +32,7 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
 
   import Ecto.Query
 
-  alias Shoestring.Cobbler.{Leases, WakeupRecord, Wakeups}
+  alias Shoestring.Cobbler.{GoalLocalObservation, Leases, WakeupRecord, Wakeups}
   alias Shoestring.Cobbler
   alias Shoestring.Elves
 
@@ -128,7 +128,10 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     # probes, and the grant ends chained to the SECOND epoch's snapshot.
     # (Base: one probe, chained to fresh_s1.)
     assert ScriptedProbeFake.calls(agent) == 2
-    assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).admitted_snapshot_id == fresh_s2
+    record = Repo.get_by!(ExecutionLeaseRecord, run_id: run_id)
+
+    assert record.admitted_snapshot_id ==
+             GoalLocalObservation.snapshot_id("lease-renewal", goal.id, record.id, fresh_s2)
 
     # Lease events stay idempotent per epoch key: the Elf's legacy
     # observed-due marker plus one due/renewed pair per renewal epoch (each

@@ -42,7 +42,14 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   `LeaseWatcher`, `LeaseBoundary`, and session semantics are untouched.
   """
 
-  alias Shoestring.Cobbler.{AdmissionDecision, AdmissionEvaluation, AdmissionPolicy, Leases}
+  alias Shoestring.Cobbler.{
+    AdmissionDecision,
+    AdmissionEvaluation,
+    AdmissionPolicy,
+    GoalLocalObservation,
+    Leases
+  }
+
   alias Shoestring.Harness.{CapacitySnapshot, EventPayload, ExecutionLeaseRecord, RunRecord}
   alias Shoestring.Harness.Projector
   alias Shoestring.Repo
@@ -141,7 +148,9 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
 
     with {:ok, decision_event} <- admission_event(repo, lease),
          {:ok, decision} <- admission_decision(decision_event),
-         {:ok, snapshot} <- observe(opts),
+         {:ok, observed} <- observe(opts),
+         {:ok, snapshot} <-
+           GoalLocalObservation.localize(observed, "lease-renewal", goal_id, lease.id),
          {:ok, evaluation} <- evaluate(goal_id, lease, run, decision, snapshot, opts),
          {:ok, _snapshot_event} <- persist_renewal_snapshot(repo, goal_id, lease, snapshot, opts),
          {:ok, _position} <- Projector.project(goal_id, clock: renewal_clock(opts)),
@@ -180,7 +189,9 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
 
   # Durable renewal inputs: the fresh snapshot is persisted (snapshot_observed
   # + projection, so the snapshot chain FK that `chain_snapshot/3` enforces
-  # can resolve) and the fresh evaluation is persisted as `admission.decided`
+  # can resolve) under its goal-local id (`GoalLocalObservation`, derived per
+  # grant: the production Codex probe returns a reading the Observatory goal
+  # already owns, and re-appending that id here wedged this goal's projector) and the fresh evaluation is persisted as `admission.decided`
   # (so every renewal's inputs and outcome are auditable, not just its
   # marker events). Both keyed per (grant, snapshot): the same snapshot
   # replays, a fresh snapshot mints a new epoch.

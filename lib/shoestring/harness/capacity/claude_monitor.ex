@@ -106,7 +106,13 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
     * `:sink` - Ingestion sink module or function (defaults to `Observatory`).
     * `:scope` - Default scope identifier (defaults to `"subscription"`).
     * `:freshness_seconds` - Observation max age in seconds (defaults to 300).
-    * `:auto_ingest_initial` - Ingest pre-first-response snapshot to sink on start (default false).
+    * `:auto_ingest_initial` - Ingest the pre-first-response snapshot to the sink on start
+      (default false). The reading is the honest `unknown / conservative_partial` one: no
+      windows, no `observed_at`, confidence `:none`. It is what lets the Observatory-backed
+      handoff/wake probe see that a Claude monitor exists at all; admission still refuses to
+      act on it without an attributable confirmation. When `:version` is not given, the
+      ingest waits for version discovery so the reading carries the discovered
+      compatibility, and never blocks `init/1`.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -217,7 +223,9 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
       sessions: %{}
     }
 
-    if auto_ingest do
+    # With a known version the initial reading is final now; otherwise it is
+    # ingested once discovery settles it (`handle_continue/2`).
+    if auto_ingest and version != nil do
       _ = safe_ingest(sink, initial_snapshot, now)
     end
 
@@ -255,6 +263,13 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
         last_observation_scope: state.scope,
         reason: initial_snapshot.reason
     }
+
+    new_state =
+      if Keyword.get(state.opts, :auto_ingest_initial, false) do
+        %{new_state | sink_status: initial_sink_status(state.sink, initial_snapshot, now)}
+      else
+        new_state
+      end
 
     {:noreply, new_state}
   end
@@ -945,6 +960,17 @@ defmodule Shoestring.Harness.Capacity.ClaudeMonitor do
       {:ok, result} -> result
       {:exit, reason} -> {:error, reason}
       nil -> {:error, :timeout}
+    end
+  end
+
+  # A sink that refuses the initial reading is reported, never retried on a
+  # timer: the monitor stays `:ready`, and the ledger simply has no Claude
+  # reading, which the handoff/wake probe already fails closed on.
+  defp initial_sink_status(sink, snapshot, now) do
+    case safe_ingest(sink, snapshot, now) do
+      {:ok, _outcome, _snapshot} -> :ok
+      {:error, reason} -> {:error, reason}
+      other -> {:error, other}
     end
   end
 
