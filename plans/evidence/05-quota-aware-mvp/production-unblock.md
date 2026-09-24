@@ -1050,7 +1050,7 @@ full-suite run at that seed). **Not fixed**, and nothing was loosened.
 
 | Run | Event | Seed | Result |
 |---|---|---|---|
-| 36068247668 | push | — | recorded in the PR body once complete |
+| 36068247668 | push | — | success |
 | 36068253487 | pull_request | 752121, max_cases 6 | **failure**: 4 doctests, 1442 tests, 2 failures, 1 skipped (6 excluded) |
 
 **`ElfTest:858` "cancel terminates the whole owned group": fixed in `06465c6` (test).**
