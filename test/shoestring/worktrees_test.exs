@@ -137,6 +137,41 @@ defmodule Shoestring.WorktreesTest do
     end
   end
 
+  describe "read-only inspection of a worktree an Elf is writing to" do
+    # CI 36063514995: a `status` / working-tree `diff` refresh writes the
+    # index back under `index.lock`, and the Elf's concurrent `git add` then
+    # fails. On the pre-fix commit this fails on the index identity.
+    test "changed_files and diff never write the index, and report the same files", %{
+      repo_path: repo_path,
+      worktrees_dir: worktrees_dir
+    } do
+      assert {:ok, wt} =
+               Worktrees.create(repo_path, "run-observe", "HEAD", worktrees_dir: worktrees_dir)
+
+      # lib.ex: content unchanged, stat stale, so a refresh would rewrite it.
+      File.touch!(Path.join(wt.path, "lib.ex"), 978_307_200)
+      File.write!(Path.join(wt.path, "README.md"), "# Mutated by Elf\n")
+      File.write!(Path.join(wt.path, "new_file.txt"), "elf created\n")
+
+      {index, 0} = System.cmd("git", ["rev-parse", "--git-path", "index"], cd: wt.path)
+      index = Path.expand(String.trim(index), wt.path)
+      before = File.stat!(index, time: :posix)
+
+      assert {:ok, ["README.md", "new_file.txt"]} =
+               Worktrees.changed_files(wt, worktrees_dir: worktrees_dir)
+
+      assert {:ok, diff} = Worktrees.diff(wt, worktrees_dir: worktrees_dir)
+      assert diff.unstaged_files == ["README.md"]
+      assert diff.untracked_files == ["new_file.txt"]
+      assert Enum.map(diff.status_items, & &1.path) == ["README.md", "new_file.txt"]
+      assert diff.dirty_patch =~ "Mutated by Elf"
+
+      after_stat = File.stat!(index, time: :posix)
+      assert {after_stat.inode, after_stat.mtime} == {before.inode, before.mtime}
+      refute File.exists?(index <> ".lock")
+    end
+  end
+
   describe "SOURCE ISOLATION eval" do
     test "edits, creations, deletions, commits in worktree AND cleanup leave source checkout provably unchanged",
          %{

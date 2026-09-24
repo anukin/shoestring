@@ -189,7 +189,7 @@ defmodule Shoestring.Elves.ElfTest do
     # Simulate the application dying mid-run and the orphaned group dying
     # unobserved with it. The retry relaunches with a dead group, restores
     # seen from durable events, and re-streams the same transport pair.
-    Process.exit(first_pid, :kill)
+    ElvesHelpers.kill_idle(first_pid)
     ref = Process.monitor(first_pid)
     assert_receive {:DOWN, ^ref, :process, ^first_pid, _reason}, 5_000
 
@@ -273,7 +273,7 @@ defmodule Shoestring.Elves.ElfTest do
     # unobserved with it. The retry relaunches with a dead group, restores
     # seen and both counters from durable events, and re-streams the same
     # handshake-only pair.
-    Process.exit(first_pid, :kill)
+    ElvesHelpers.kill_idle(first_pid)
     ref = Process.monitor(first_pid)
     assert_receive {:DOWN, ^ref, :process, ^first_pid, _reason}, 5_000
 
@@ -989,7 +989,7 @@ defmodule Shoestring.Elves.ElfTest do
     assert ElvesHelpers.group_members(pgid) != []
 
     # Simulate the application dying: the Elf is gone, the group survives.
-    Process.exit(first_pid, :kill)
+    ElvesHelpers.kill_idle(first_pid)
     ref = Process.monitor(first_pid)
     assert_receive {:DOWN, ^ref, :process, ^first_pid, _reason}, 5_000
     assert ElvesHelpers.group_members(pgid) != []
@@ -1040,7 +1040,7 @@ defmodule Shoestring.Elves.ElfTest do
     run_id = wait_running(goal, request.dispatch_id)
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
-    Process.exit(first_pid, :kill)
+    ElvesHelpers.kill_idle(first_pid)
     ref = Process.monitor(first_pid)
     assert_receive {:DOWN, ^ref, :process, ^first_pid, _reason}, 5_000
 

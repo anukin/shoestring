@@ -29,6 +29,26 @@ defmodule Shoestring.Test.ElvesHelpers do
     %{goal: goal, task: task}
   end
 
+  @doc """
+  Simulates the application dying under an Elf: kills `pid` between two of
+  its messages, never in the middle of one.
+
+  A bare `Process.exit(pid, :kill)` can land while the Elf is mid-query. In
+  the SQL sandbox's shared mode that client's death shuts down the owner's
+  connection proxy, the pool reverts to `:manual`, and the test's own next
+  query raises `DBConnection.OwnershipError` (CI 36063516494, ElfTest:998).
+  Production has no shared owner to lose, so that failure is an artifact of
+  the test, not of the Elf. `:sys.suspend/2` returns only once the Elf is
+  back in its receive loop, where it holds no connection; the kill that
+  follows is exactly as abrupt for everything the test checks (the OS group
+  survives, no terminal is written, no cleanup runs).
+  """
+  @spec kill_idle(pid()) :: true
+  def kill_idle(pid) when is_pid(pid) do
+    :ok = :sys.suspend(pid, 30_000)
+    Process.exit(pid, :kill)
+  end
+
   @doc "Builds a run request for the given goal/task with a fresh dispatch id."
   @spec run_request(Goal.t(), Task.t(), keyword()) :: RunRequest.t()
   def run_request(goal, task, overrides \\ []) do

@@ -74,7 +74,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     request = ElvesHelpers.run_request(goal, task)
 
-    assert {:ok, _pid} =
+    assert {:ok, pid} =
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                scenario: scenario,
@@ -85,6 +85,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
                notify: self()
              )
 
+    hold_before_first_event(pid)
     run_id = wait_running(goal, request.dispatch_id)
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
@@ -95,6 +96,8 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       checkpoint_cadence: 100,
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
+
+    release_elf(pid)
 
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
@@ -140,7 +143,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     request = ElvesHelpers.run_request(goal, task)
 
-    assert {:ok, _pid} =
+    assert {:ok, pid} =
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                scenario: scenario,
@@ -151,6 +154,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
                notify: self()
              )
 
+    hold_before_first_event(pid)
     run_id = wait_running(goal, request.dispatch_id)
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
@@ -161,6 +165,8 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       checkpoint_cadence: 100,
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
+
+    release_elf(pid)
 
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
@@ -197,7 +203,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     request = ElvesHelpers.run_request(goal, task)
 
-    assert {:ok, _pid} =
+    assert {:ok, pid} =
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                scenario: scenario,
@@ -208,6 +214,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
                notify: self()
              )
 
+    hold_before_first_event(pid)
     run_id = wait_running(goal, request.dispatch_id)
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
@@ -218,6 +225,8 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       checkpoint_cadence: 100,
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
+
+    release_elf(pid)
 
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
@@ -248,7 +257,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     request = ElvesHelpers.run_request(goal, task)
 
-    assert {:ok, _pid} =
+    assert {:ok, pid} =
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                scenario: scenario,
@@ -259,6 +268,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
                notify: self()
              )
 
+    hold_before_first_event(pid)
     run_id = wait_running(goal, request.dispatch_id)
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
@@ -269,6 +279,8 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       checkpoint_cadence: 100,
       deadline: DateTime.add(FixedClock.now(), -60, :second)
     )
+
+    release_elf(pid)
 
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
@@ -312,7 +324,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     request = ElvesHelpers.run_request(goal, task)
 
-    assert {:ok, _pid} =
+    assert {:ok, pid} =
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                scenario: scenario,
@@ -323,6 +335,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
                notify: self()
              )
 
+    hold_before_first_event(pid)
     run_id = wait_running(goal, request.dispatch_id)
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
@@ -333,6 +346,8 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       checkpoint_cadence: 100,
       deadline: DateTime.add(FixedClock.now(), -60, :second)
     )
+
+    release_elf(pid)
 
     assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
 
@@ -390,7 +405,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     request = ElvesHelpers.run_request(goal, task)
 
-    assert {:ok, _pid} =
+    assert {:ok, pid} =
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                scenario: scenario,
@@ -401,6 +416,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
                notify: self()
              )
 
+    hold_before_first_event(pid)
     run_id = wait_running(goal, request.dispatch_id)
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
@@ -411,6 +427,8 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       checkpoint_cadence: 100,
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
+
+    release_elf(pid)
 
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
@@ -458,7 +476,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     request = ElvesHelpers.run_request(goal, task)
 
-    assert {:ok, _pid} =
+    assert {:ok, pid} =
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                scenario: scenario,
@@ -469,6 +487,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
                notify: self()
              )
 
+    hold_before_first_event(pid)
     run_id = wait_running(goal, request.dispatch_id)
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
@@ -479,6 +498,8 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       checkpoint_cadence: 100,
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
+
+    release_elf(pid)
 
     assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
 
@@ -542,7 +563,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     request = ElvesHelpers.run_request(goal, task)
 
-    assert {:ok, _pid} =
+    assert {:ok, pid} =
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                scenario: scenario,
@@ -553,6 +574,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
                notify: self()
              )
 
+    hold_before_first_event(pid)
     run_id = wait_running(goal, request.dispatch_id)
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
@@ -563,6 +585,8 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       checkpoint_cadence: 100,
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
+
+    release_elf(pid)
 
     assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
 
@@ -577,6 +601,19 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
   end
 
   # -- Helpers --
+
+  # Each test grants its lease to the Elf's own run, which exists only once
+  # the Elf has started. The scripted events then arrive on @interval_ms
+  # timers, so a grant racing them could land after the boundary it is
+  # meant to govern (CI 36063514995: ElfLeaseLoopTest:231, no
+  # `lease.renewed`; CI 36062741394: ElfLeaseLoopTest:296, the precondition
+  # read `renewal_due`). `start_run` returns once `init/1` has run, so this
+  # suspend is queued behind the launch continuation and is served before
+  # any event timer message: the Elf ingests nothing until `release_elf/1`,
+  # whatever the machine's load.
+  defp hold_before_first_event(pid), do: :ok = :sys.suspend(pid, 30_000)
+
+  defp release_elf(pid), do: :ok = :sys.resume(pid, 30_000)
 
   defp wait_running(goal, dispatch_id) do
     assert {:ok, run_id} =

@@ -11,6 +11,61 @@ defmodule Shoestring.Worktrees.Git do
 
   @default_runner SystemCommandRunner
 
+  @doc """
+  Runs a read-only git command in a worktree an Elf may be writing to,
+  without ever writing that worktree's index.
+
+  `git status` and a working-tree `git diff` refresh the index and write it
+  back when stat information is stale, which holds `index.lock` for a moment;
+  a `git add` or `git commit` the Elf runs at that moment then fails with
+  "index.lock: File exists". `GIT_OPTIONAL_LOCKS=0` stops `status` doing
+  that but not porcelain `diff`, and `diff.autoRefreshIndex=false` would
+  change `--name-only` output. So the command reads a private copy of the
+  index instead (`GIT_INDEX_FILE`): the output is what it would have been,
+  and any refresh lands in the copy, which is then removed.
+
+  Returns the runner's `{output, exit_status}`.
+  """
+  @spec observe(Path.t(), [String.t()], module()) :: {String.t(), non_neg_integer()}
+  def observe(worktree_path, args, runner \\ @default_runner) do
+    case runner.cmd("git", ["rev-parse", "--git-path", "index"],
+           cd: worktree_path,
+           stderr_to_stdout: true
+         ) do
+      {index, 0} ->
+        index = Path.expand(String.trim(index), worktree_path)
+        copy = observer_index_path()
+
+        try do
+          case File.cp(index, copy) do
+            # No index yet reads the same as an absent private copy: empty.
+            result when result in [:ok, {:error, :enoent}] ->
+              runner.cmd("git", args,
+                cd: worktree_path,
+                env: [{"GIT_INDEX_FILE", copy}, {"GIT_OPTIONAL_LOCKS", "0"}],
+                stderr_to_stdout: true
+              )
+
+            {:error, reason} ->
+              {"cannot copy index: #{inspect(reason)}", 1}
+          end
+        after
+          _ = File.rm(copy)
+          _ = File.rm(copy <> ".lock")
+        end
+
+      failed ->
+        failed
+    end
+  end
+
+  defp observer_index_path do
+    Path.join(
+      System.tmp_dir!(),
+      "shoestring-observer-index-#{System.unique_integer([:positive, :monotonic])}"
+    )
+  end
+
   @spec ensure_git(module()) :: :ok | {:error, {:missing_git_binary, String.t()}}
   def ensure_git(runner \\ @default_runner) do
     case runner.find_executable("git") do
@@ -228,12 +283,7 @@ defmodule Shoestring.Worktrees.Git do
   end
 
   defp files_changed_against_base(worktree_path, base_commit, runner) do
-    case runner.cmd(
-           "git",
-           ["diff", "--name-only", base_commit],
-           cd: worktree_path,
-           stderr_to_stdout: true
-         ) do
+    case observe(worktree_path, ["diff", "--name-only", base_commit], runner) do
       {output, 0} ->
         files =
           output
@@ -270,10 +320,7 @@ defmodule Shoestring.Worktrees.Git do
 
   @spec unstaged_files(Path.t(), module()) :: {:ok, [String.t()]} | {:error, term()}
   def unstaged_files(worktree_path, runner \\ @default_runner) do
-    case runner.cmd("git", ["diff", "--name-only"],
-           cd: worktree_path,
-           stderr_to_stdout: true
-         ) do
+    case observe(worktree_path, ["diff", "--name-only"], runner) do
       {output, 0} ->
         files =
           output
@@ -333,10 +380,7 @@ defmodule Shoestring.Worktrees.Git do
   end
 
   defp parse_status_porcelain(worktree_path, runner) do
-    case runner.cmd("git", ["status", "--porcelain=v1", "-uall"],
-           cd: worktree_path,
-           stderr_to_stdout: true
-         ) do
+    case observe(worktree_path, ["status", "--porcelain=v1", "-uall"], runner) do
       {output, 0} ->
         items =
           output
@@ -376,7 +420,7 @@ defmodule Shoestring.Worktrees.Git do
   end
 
   defp run_git(worktree_path, args, runner) do
-    case runner.cmd("git", args, cd: worktree_path, stderr_to_stdout: true) do
+    case observe(worktree_path, args, runner) do
       {output, 0} -> {:ok, output}
       {output, code} -> {:error, {:git_command_failed, code, String.trim(output)}}
     end
