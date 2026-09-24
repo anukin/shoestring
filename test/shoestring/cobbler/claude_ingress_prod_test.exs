@@ -96,6 +96,17 @@ defmodule Shoestring.Cobbler.ClaudeIngressProdTest do
       assert snapshot.reason =~ "rate_limits_absent_before_first_response"
     end
 
+    test "DOC: a (re)boot's unknown reading never displaces a real last-known reading" do
+      {:ok, :persisted, real} = Observatory.ingest(observed_claude_snapshot!(), now: @t0)
+      start_prod_claude_monitor!()
+
+      # The boot reading has no `observed_at`, so it sorts below any real one.
+      assert {:ok, %CapacitySnapshot{snapshot_id: served}} =
+               WakeupObserve.observe(%{provider_id: "claude", scope: "subscription"})
+
+      assert served == real.snapshot_id
+    end
+
     test "DOC: the test environment still never auto-starts the monitor" do
       configured = Application.get_env(:shoestring, :capacity_monitors)
       assert Keyword.get(configured[:claude], :enabled) == false
@@ -220,6 +231,39 @@ defmodule Shoestring.Cobbler.ClaudeIngressProdTest do
     assert_received {:cli_invoked, "claude", ["--version"]}
     assert ClaudeMonitor.status(pid).sink_status == :ok
     pid
+  end
+
+  defp observed_claude_snapshot! do
+    {:ok, snapshot} =
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: Ecto.UUID.generate(),
+          # The shape a real statusLine produces (partial windows).
+          capacity_state: :degraded,
+          windows: [
+            %{kind: "five_hour", state: :observed, used_percent: 20.0, reset_at: nil},
+            %{kind: "seven_day", state: :unknown, reason: "absent_in_status_line"}
+          ],
+          observed_at: DateTime.add(@t0, -3_600, :second),
+          freshness: %{max_age_seconds: 300},
+          source: %{
+            adapter_id: "claude_interactive_status_line",
+            provider_id: "claude",
+            invocation_mode: "interactive_status_line",
+            event: :status_line_input
+          },
+          scope: @receiver.scope,
+          confidence: :medium,
+          support_tier: :conservative_partial,
+          compatibility_state: :compatible,
+          reason: "partial_window_observation",
+          extensions: %{}
+        },
+        now: @t0
+      )
+
+    snapshot
   end
 
   defp refused_claude_snapshot! do

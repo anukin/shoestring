@@ -22,8 +22,12 @@ config :shoestring, handoff_reconciler: false
 # shell out to a provider CLI there. Tests start monitors explicitly via
 # start_supervised!/1. The capacity supervisor still boots (empty) so the
 # application tree shape matches production.
+# `auto_ingest_initial` is reset too: config entries deep-merge with
+# config.exs, and a test that starts a monitor from the stock entry must see
+# the same monitor it always did. The production value is asserted by
+# `ClaudeIngressProdTest`, which reads the `:prod` config itself.
 config :shoestring, :capacity_monitors,
-  claude: [enabled: false],
+  claude: [enabled: false, auto_ingest_initial: false],
   codex: [enabled: false]
 
 # We don't run a server during test. If one is required,
