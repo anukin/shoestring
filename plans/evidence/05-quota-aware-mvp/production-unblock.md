@@ -579,9 +579,9 @@ writes to stderr varies.
    Busy BEGINs cost a reconnect (§1.2).
 8. **Resolved: the `codex_core` log lines.** They came from the real Codex
    launch described in item 9 (§5).
-9. **The hermetic suite launches the real Codex CLI (pre-existing; not fixed,
-   outside scope).** VERIFIED with a logging shim, at head and at base
-   `d3fa152`.
+9. **The hermetic suite launched the real Codex CLI (pre-existing). FIXED in
+   the gate-correction round, §8.2.** VERIFIED with a logging shim, at
+   `061a39e` and at base `d3fa152`.
    - **Where:**
      `test/shoestring/harness/claude_headless/adapter_isolation_test.exs`
      (since `07a7ff4`) starts `CodexAppServer.Session` with no command
@@ -592,8 +592,8 @@ writes to stderr varies.
      process's stderr, so the Codex process ran and attempted tool execution.
    - **Quota: UNVERIFIED.** Whether a model turn, and therefore provider
      quota, was consumed is not established.
-   - This violates the repository's hermetic-test rule and should be fixed by
-     giving that session a stub command.
+   - This violated the repository's hermetic-test rule. §8.2 records the fix
+     and its proof.
 
 ## 7. Evidence and redaction
 
@@ -631,3 +631,172 @@ zero-event nit.
 - a contiguous `/Users/xyz/w` in a Claude `output_text` failed both the raw
   scan and the reassembled `raw detail stream` scan;
 - a 0-event transcript with `run.running` failed the new check.
+
+## 8. Gate-correction round (before cross-review)
+
+Scope, as the brief extended it:
+- the CI failure on this PR;
+- the real Codex launch in `adapter_isolation_test.exs` (§6.9), with the test
+  support that fix needs;
+- this record and the PR.
+
+No live run happened in this round. The live evidence in §§3–4 is unchanged
+and still describes code SHA `22c1e72`. Acceptance 8 stays OPEN.
+
+### 8.1 CI outcomes at `5cd9de4`, both kept
+
+| Run | Event | Seed | Result |
+|---|---|---|---|
+| 35955255945 | push | 836743 | **failure**: 4 doctests, 1433 tests, 1 failure, 1 skipped (6 excluded) |
+| 35955284981 | pull_request | 427204 | success: 4 doctests, 1433 tests, 0 failures, 1 skipped (6 excluded) |
+
+The failure was `ElfLeaseReloopTest` "decline interrupted provider response
+restarts through the wake" (`elf_lease_reloop_test.exs:419`). At `:455`,
+`wait_running/2` (`:777`) timed out after 10 s waiting for a `run.running`
+pgid.
+
+### 8.2 The real Codex launch: fixed and proved (VERIFIED)
+
+**The fix.** The test's Codex session now runs on the in-memory
+`Capacity.Codex.FakeTransport`. It is still a live session process with a
+connected transport, and it now also asserts that the transport survives the
+Claude crash.
+
+**The guard.** New test support, `Shoestring.Test.ProviderCliGuard`, does two
+things:
+- it call-traces every `:erlang.open_port/2` in the VM, flushed with
+  `:erlang.trace_delivered/1`, so the check is deterministic, with no polling;
+- it puts shim `codex`/`claude` executables first on `PATH`, so a missed spawn
+  runs a shim, never the real CLI.
+
+Both tests in the file assert that no provider CLI was spawned.
+
+**Regression proof, base export with the guard added to the old test body**
+(Codex session on its default transport): 3 of 3 runs, seeds 1–3, failed with
+`a provider CLI was spawned during a hermetic test`. The recorded spawn was
+`args: ["app-server", "--stdio"]` against the guard's shim, so the real CLI
+never ran. At head: 2 tests, 0 failures.
+
+**Suite-wide.** G2 (§8.4) ran with logging `codex`/`claude` shims first on
+`PATH`: **0** invocations of either. The same shim recorded 1 real launch at
+`061a39e`, so it is a working positive control.
+
+### 8.3 The CI failure: diagnosis, attribution, fixes
+
+**Established (VERIFIED):**
+- The failing run logged **11** `elf launch aborted` warnings; the passing run
+  on the same SHA logged **10**. The one extra is this test's own Fake launch,
+  which aborted about 10.04 s before the `recorded_pgid` wait expired.
+- The CI log does not say why. `error_code` and `reason` were Logger
+  metadata, and the default formatter prints none. The durable `run.failed`
+  payload carried the code; the CI log, the only artifact left, did not.
+- No database-side signature distinguishes the two runs. `database is
+  locked` appears 6 times in each, from `WriterContentionTest`'s held lock.
+  `spawn: Could not cd` appears 49 times in every run, both CI and local.
+
+**Bounded reproduction protocol, fixed before running.** The runs used
+scratch copies at `5cd9de4` (CI SHA) and base `d3fa152`, each with only
+`config/test.exs` changed to print the abort metadata:
+
+| Id | Copy | Command | Result |
+|---|---|---|---|
+| D1 ×10 | head | `mix test test/shoestring/elves/elf_lease_reloop_test.exs --seed 836743` | 10 of 10: 10 tests, 0 failures, 0 aborts |
+| D2 ×2 | head | `mix test --seed 836743 --max-cases 6` | 2 of 2: reloop test green, 10 aborts each (all intended by their tests); 1 failure each in `Gate0AGitignoreTest`, an artifact of the copy (it has no `.git`) |
+| D3 ×2 | base | same | 2 of 2: same as D2, with 1402 tests |
+| D4 ×1 | head | `mix test --seed 836743 --trace` | reloop test green; the only failure is the copy artifact |
+
+D4 also recovered the seeded module order. The failing module ran after
+`CommandsIntegrationTest`, `SnapshotBindingTest`, `TaskClaimRaceTest` and
+`RunLiveTest`: all pre-existing, all synchronous. That the sync order matches
+CI's under `max_cases 6` is an INFERENCE.
+
+**Attribution (REPO-INSPECTION).**
+- On the failing test's pre-`run.running` path, this branch's only change is
+  the writer's `mode: :immediate`.
+- Under the test sandbox that change is inert:
+  `Ecto.Adapters.SQL.Sandbox.Connection.handle_begin/2` prepends
+  `mode: :savepoint`.
+- The branch also retries `"Database busy"`, which is strictly additive.
+
+Nothing on that path behaves differently from base under test. **The failure
+is not attributed to this branch, and not proven to be pre-existing either:
+0 of 14 local runs reproduced it at head or base.**
+
+**Root cause: NOT established.** The strongest candidate is confirmed by
+source and by nothing else:
+- In OTP 28.3.1 `erl_child_setup.c`, the forker reports the child's `os_pid`
+  to the BEAM right after `fork()`. The child calls `setsid()` only after the
+  BEAM's acknowledgement, just before `execve`.
+- `PortRunner.spawn/2` checked leadership with a single `ps` read as soon as
+  the pid was known, so on a loaded host it can see the parent's pgid and
+  abort a good launch as `not_group_leader`.
+- **Hypothesis H1** stressed this, and both runs came back clean:
+  - 400 spawns, 8 concurrent, idle and then with 2× cores CPU burners:
+    400 of 400 ok each;
+  - H1b: 1000 spawns, 32 concurrent, 4× cores burners: 1000 of 1000 ok.
+
+**Fixes made (genuine defects, each on this path):**
+
+1. **The abort log names its code.** `"elf launch aborted: <error_code>"`.
+   The raw reason, which can carry host paths, stays in metadata.
+   `elf_launch_abort_log_test.exs` is a **LOCK**: on base it fails with
+   `left: "… [warning] elf launch aborted\n"`. It asserts both directions:
+   the code is present, the path is absent.
+2. **Leadership handshake** (`PortRunner`, and its twin
+   `ClaudeHeadless.Transport`, which now uses the same wrapper).
+   - The wrapper `setsid`s, verifies `getpgid(0) == getpid()`, writes one line
+     `SHOESTRING-SETSID-READY <pid>`, and blocks for a go byte.
+   - The launcher waits for that line, bounded by 15 s and fail-closed, and
+     checks the pid in it.
+   - It then runs the existing `ps` check while the child provably leads its
+     group, and only then releases the wrapper to redirect stdin and `exec`.
+   - No target output can precede or mix with the handshake line.
+
+   `port_runner_handshake_test.exs` is **DOCUMENTATION**, not a race lock: the
+   race could not be forced. On base it fails on the missing
+   `handshake_prefix/0` and on the new `:handshake_timeout_ms` option.
+3. **Exposed by (2):** `Elf.finish_after_stream/1` classified a runner whose
+   group had already exited, but whose guaranteed `{:exit_status, _}` message
+   had not yet arrived, as `missing_terminal_verdict`. Python's ~30 ms startup
+   used to hide this window.
+   - Evidence: with (2) alone, `ElfTest` "immediate OS exit classifies as
+     signal exit" and one `OrchestratorTest` case failed (seed 553646).
+   - The Elf now waits for that one message while its runner port is open;
+     this is not a timer.
+   - With the fix, `test/shoestring/elves`: 156 tests, 0 failures. No lock on
+     base exists, since there python's delay masks the window.
+4. **A defect in my own (2), found by gate G1 at `0cf9e2e`.** After a failed
+   handshake, the killed wrapper's port could close itself before `spawn/2`
+   ran its bare `:erlang.port_close/1`, which raised `ArgumentError`. Both
+   failure branches now close safely and drain that port's messages. The test
+   asserts the caller's mailbox is left empty.
+
+**Open intermittent in the new handshake test file.** Tally after I fixed a
+compile error in the test:
+
+| Batch | Result |
+|---|---|
+| 20 fresh-VM runs | 1 failure (run 12, seed 873467) |
+| 40 fresh-VM capture runs | 0 |
+| 150 fresh-VM capture runs | 0 |
+| 500 repetitions in one VM | 0 |
+
+So it is **intermittent, 1 of 210 fresh-VM runs**. The failing run's output
+was not captured: my loop kept only the counts. Its seed passed 3 of 3
+reruns. The cause is unknown. No assertion was loosened and no retry was
+added.
+
+Also disclosed: an earlier batch of 20 runs all hit a compile error in that
+test (a guard in `refute_received`), so they were not results and are
+excluded.
+
+### 8.4 Gates this round (protocol fixed before running; one run per SHA unless red)
+
+| Id | SHA | Command | Seed | Exit | Elixir | Node gate_0a | UI |
+|---|---|---|---|---|---|---|---|
+| G1 | `0cf9e2e` | `mix precommit` | 620090 | **2** | 4 doctests, 1438 tests, **1 failure** (§8.3 fix 4), 1 skipped (6 excluded) | 52/52 | 7/7 |
+| G1 | `4631f92` | `mix precommit` | 119330 | **0** | 4 doctests, 1438 tests, 0 failures, 1 skipped (6 excluded) | 52/52 | 7/7 |
+| G2 | `4631f92` | `mix test --seed 836743 --max-cases 6`, logging provider shims first on `PATH` | 836743 | **0** | 4 doctests, 1438 tests, 0 failures, 1 skipped (6 excluded); 0 `codex` / 0 `claude` invocations; 10 launch aborts, each naming its code | — | — |
+
+The commit that adds this section changes documentation only. CI on the
+pushed head is recorded in the PR.
