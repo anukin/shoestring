@@ -112,6 +112,25 @@ statement, so there are no sleeps.
 | head | 6 tests, 0 failures (VERIFIED) |
 | base | 6 tests, **5 failures**, each `{:database_error, "Database busy\nINSERT INTO \"trajectory_events\" …"}`, the exact live error (VERIFIED) |
 
+**Intermittent, fixed in the test's design, recorded.** The
+concurrent-writer test first ran every writer with `busy_timeout: 0`. Once
+the held lock cleared, the four writers contended with each other, each
+failure was immediate, and 2 retries could legitimately run out. That was
+observed in **1 of 2** runs that included the file: the `--trace` run at
+`061a39e`, seed 214605. One writer returned `{:retry_exhausted, :busy}`.
+
+The test now runs with SQLite's production busy handler,
+`busy_timeout: 2_000` (`config/config.exs`). The assertion is unchanged, and
+no retry, sleep or skip was added. After the change, each run logged
+separately at head:
+
+| Runs | Seeds | Result |
+|---|---|---|
+| 5 plain runs | 471980, 180193, 857664, 513556, 136754 | 6 tests, 0 failures each |
+| 1 `--trace` run | 802076 | 6 tests, 0 failures (the concurrent test took 2402.9 ms) |
+
+Base: 6 tests, 5 failures, the same 5 LOCK tests.
+
 Covered:
 - one contended append lands exactly once;
 - later-append contention keeps sequences contiguous, and a duplicate key is
@@ -486,7 +505,8 @@ account. It is UNVERIFIED as any actual charge.
 |---|---|---|---|---|---|---|---|
 | 1 | `8587b7f` | `mix precommit` | 703209 | **2** | 4 doctests, 1432 tests, **2 failures**, 1 skipped (6 excluded) | 52/52 | 7/7 |
 | 2 | `22c1e72` | `mix precommit` | 895679 | **0** | 4 doctests, 1433 tests, 0 failures, 1 skipped (6 excluded) | 52/52 | 7/7 |
-| 3 | final evidence SHA | `mix precommit` | see `§5.1` | — | recorded in §5.1 | — | — |
+| 3 | `061a39e` | `mix precommit` | 214605 | **0** | 4 doctests, 1433 tests, 0 failures, 1 skipped (6 excluded) | 52/52 | 7/7 |
+| 4 | final SHA | `mix precommit` | §5.1 | — | recorded in §5.1 | — | — |
 
 **Run 1 diagnosis (VERIFIED).** It had two failures:
 - `RepoTest`: my state dir was not under `System.tmp_dir!()`. The fault was in
@@ -498,10 +518,20 @@ account. It is UNVERIFIED as any actual charge.
   703209: deterministic at `8587b7f`, and 1 test, 0 failures at base. Fixed in
   `22c1e72` by resetting the flag in `config/test.exs`.
 
-Run 1's log also carried two `codex_core::tools::router ERROR exec_command
-failed` lines. Run 2 had none. Their source is **UNVERIFIED**. The only Codex
-process on the host was a pre-existing, unrelated `codex app-server`, which
-was left alone.
+Runs 1 and 3 each carried `codex_core::tools::router ERROR exec_command
+failed` lines (2 and 5 respectively); run 2 had none. **Source identified**
+(VERIFIED, §6.9): a test outside this branch launches the real
+`codex app-server --stdio` binary.
+
+**Diagnostic runs at `061a39e`, not gate runs, each logged separately:**
+
+| Command | Result |
+|---|---|
+| `mix test --seed 214605` with a logging `codex`/`claude` shim first on `PATH` | exit 0, 4 doctests, 1433 tests, 0 failures, 1 skipped (6 excluded); 1 `codex app-server --stdio` invocation, 0 `codex_core` lines |
+| the same with `--trace` | exit 2, 1 failure: the concurrent-writer flake above |
+
+Directory bisection with the shim found the launch only under
+`test/shoestring/harness/claude_headless/adapter_isolation_test.exs`.
 
 **Focused runs** (all 0 failures on their final SHA, fresh state dir):
 - `test/shoestring/cobbler test/shoestring/elves test/shoestring/harness/eval_matrix`:
@@ -542,8 +572,23 @@ description for the exact line.
    today (INFERENCE from the observed commands).
 7. **Busy-path residue.** `Projector.project/1` still raises on busy (§1.2).
    Busy BEGINs cost a reconnect (§1.2).
-8. **Unexplained lines.** Two `codex_core` log lines appeared in gate run 1
-   (§5); unexplained.
+8. **Resolved: the `codex_core` log lines.** They came from the real Codex
+   launch described in item 9 (§5).
+9. **The hermetic suite launches the real Codex CLI (pre-existing; not fixed,
+   outside scope).** VERIFIED with a logging shim, at head and at base
+   `d3fa152`.
+   - **Where:**
+     `test/shoestring/harness/claude_headless/adapter_isolation_test.exs`
+     (since `07a7ff4`) starts `CodexAppServer.Session` with no command
+     override. It assumes "no provider CLI here", but on a host with `codex`
+     on `PATH` it spawns `codex app-server --stdio` in the project directory
+     on every `mix test` / `mix precommit`.
+   - **Evidence of a turn:** the `exec_command failed` lines are that
+     process's stderr, so the Codex process ran and attempted tool execution.
+   - **Quota: UNVERIFIED.** Whether a model turn, and therefore provider
+     quota, was consumed is not established.
+   - This violates the repository's hermetic-test rule and should be fixed by
+     giving that session a stub command.
 
 ## 7. Evidence and redaction
 

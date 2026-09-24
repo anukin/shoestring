@@ -127,13 +127,26 @@ defmodule Shoestring.Trajectory.WriterContentionTest do
   end
 
   test "LOCK: concurrent writers for different goals behind one held lock all land once", %{
+    database: database,
     holder: holder
   } do
+    # Four writers contend with the held lock AND with each other once it
+    # clears. With `busy_timeout: 0` the second kind of contention fails at
+    # once too, so bounded retries could legitimately run out (observed once,
+    # under `--trace`). Production waits on SQLite's busy handler
+    # (`busy_timeout: 2_000`, config/config.exs); so does this test. The first
+    # writer to give up after that wait releases the held lock.
+    :ok = stop_supervised(MigrationRepo)
+
+    start_supervised!(
+      {MigrationRepo,
+       [database: database, pool_size: 4, journal_mode: :wal, busy_timeout: 2_000, log: false]}
+    )
+
     goal_ids = for _ <- 1..4, do: insert_goal!()
     pids = Enum.map(goal_ids, &start_writer!(&1, max_retries: 2))
 
     hold_write_lock!(holder)
-    parent = self()
 
     # Four launches contend at once. The first failed statement (from any
     # writer) releases the lock; every writer that failed retries.
@@ -142,8 +155,7 @@ defmodule Shoestring.Trajectory.WriterContentionTest do
     tasks =
       for {pid, n} <- Enum.with_index(pids) do
         Task.async(fn ->
-          send(parent, {:started, n})
-          GenServer.call(pid, {:append, input("launch #{n}", "k-launch")})
+          GenServer.call(pid, {:append, input("launch #{n}", "k-launch")}, 15_000)
         end)
       end
 
