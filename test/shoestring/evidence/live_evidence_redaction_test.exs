@@ -37,6 +37,7 @@ defmodule Shoestring.Evidence.LiveEvidenceRedactionTest do
 
   @fixture_globs [
     "plans/evidence/05-quota-aware-mvp/fixtures/live/*",
+    "plans/evidence/05-quota-aware-mvp/fixtures/live-prod-rerun/*",
     "plans/evidence/04-single-elf/fixtures/harness/*"
   ]
 
@@ -95,8 +96,13 @@ defmodule Shoestring.Evidence.LiveEvidenceRedactionTest do
       for {path, body} <- fixtures(), transcript?(body) do
         views = reassembled_views(body)
 
-        assert views["raw detail stream"] != "",
-               "#{path}: reassembled to nothing; the parser is stale"
+        # A transcript that declares normalized events must reassemble to
+        # something; one that honestly declares none (a launch that failed
+        # before any provider output) has nothing to reassemble.
+        if declared_count(path, body, "Normalized events") > 0 do
+          assert views["raw detail stream"] != "",
+                 "#{path}: reassembled to nothing; the parser is stale"
+        end
 
         for {name, text} <- views, text != "" do
           where = "#{path} [#{name}]"
@@ -184,12 +190,15 @@ defmodule Shoestring.Evidence.LiveEvidenceRedactionTest do
 
   defp json?(detail), do: match?({:ok, map} when is_map(map), Jason.decode(detail))
 
+  defp declared_count(path, body, heading) do
+    case Regex.run(~r/^## #{Regex.escape(heading)}[^(]*\((\d+)\)/m, body) do
+      [_, n] -> String.to_integer(n)
+      nil -> flunk("#{path}: no declared count for #{inspect(heading)}")
+    end
+  end
+
   defp assert_declared_count(path, body, heading) do
-    declared =
-      case Regex.run(~r/^## #{Regex.escape(heading)}[^(]*\((\d+)\)/m, body) do
-        [_, n] -> String.to_integer(n)
-        nil -> flunk("#{path}: no declared count for #{inspect(heading)}")
-      end
+    declared = declared_count(path, body, heading)
 
     actual = length(detail_lines(body, heading))
 

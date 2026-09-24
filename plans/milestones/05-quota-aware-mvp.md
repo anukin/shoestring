@@ -503,3 +503,42 @@ records only what changed, and only where the change was actually verified.*
   production path, obtain semantic evidence that is not fixture-authored
   (the three-arm ablation run live), and settle the declined-lease
   quiescence of a ClaudeHeadless Elf.
+
+### Completion-record addendum — live production-path rerun (2026-09-23)
+
+*Measured on `polly/iter5-live-production-rerun`, base `0f96798`. Full working
+in `plans/evidence/05-quota-aware-mvp/live-production-rerun.md`. Earlier
+bullets are left exactly as written.*
+
+- **Acceptance 7 stays OPEN; acceptance 8 stays OPEN.** A `MIX_ENV=prod` node
+  (configured `WakeupObserve` probes, `ElfEffect`, live Oban queues, both
+  monitors) was driven only through product entry points: the `/runs/new`
+  submit handler, durable Cobbler commands, `Handoffs.request/3` and
+  `Elves.cancel_run/1`. The Claude receiver was never reached, so no
+  cross-provider transfer, no live three-arm ablation and no handoff-tax
+  measurement exists. Nothing fixture-authored was substituted.
+- **Three production defects block the genuine path. All are reported, none
+  fixed:**
+  1. no production component writes a Claude reading into the Observatory
+     ledger, so `HandoffWorker` fails `{:observation_failed,
+     :no_observation_for_provider}` on every attempt;
+  2. the Elf's lease-renewal boundary re-appends the Observatory-owned Codex
+     snapshot under the work goal with its original id (the D1 twin #79 left in
+     `LeaseRenewal`), so the goal's projector wedges, the canonical checkpoint
+     is never projected, and the `run.handoff` request is rejected
+     `handoff_checkpoint_not_found`;
+  3. `Trajectory.Writer` never classifies Exqlite's `"Database busy"` as
+     retryable, so 3 of 5 Codex launches failed before `run.starting`.
+- **Established live:** the runtime model is `claude-opus-5-5` (from the CLI
+  `init` frame); one Codex turn completed with a verified Go `game` package;
+  a node crash after `run.starting` was redelivered by the dispatch queue to
+  exactly one Elf; explicit cancellation of that live Elf gave `cancelled`,
+  then `already_terminal`; and three pre-start launch failures projected
+  cleanly.
+- **Durable handoff lease policy in force:** default `deadline_seconds: 2700`,
+  `response_budget: 10`, `tool_budget: 25`, `checkpoint_cadence: 1`, reserves
+  1/1. It was never exercised live.
+- **Iteration 6 stays locked.** Unblock in order: localize the renewal/wake
+  snapshot, give the deployed configuration a Claude ledger source, and
+  classify `"Database busy"` as retryable. Then rerun
+  `tools/live_eval/prod_rerun.exs` unchanged.
