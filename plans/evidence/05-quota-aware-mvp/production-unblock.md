@@ -798,5 +798,36 @@ excluded.
 | G1 | `4631f92` | `mix precommit` | 119330 | **0** | 4 doctests, 1438 tests, 0 failures, 1 skipped (6 excluded) | 52/52 | 7/7 |
 | G2 | `4631f92` | `mix test --seed 836743 --max-cases 6`, logging provider shims first on `PATH` | 836743 | **0** | 4 doctests, 1438 tests, 0 failures, 1 skipped (6 excluded); 0 `codex` / 0 `claude` invocations; 10 launch aborts, each naming its code | — | — |
 
-The commit that adds this section changes documentation only. CI on the
-pushed head is recorded in the PR.
+The commit that adds this section changes documentation only.
+
+### 8.5 CI on the pushed heads (each run recorded, none re-run)
+
+| Run | Event | SHA | Seed | Result |
+|---|---|---|---|---|
+| 36062658463 | push | `4631f92` | — | success |
+| 36062663111 | pull_request | `4631f92` | — | success |
+| 36062737245 | push | `eb015e6` | — | success |
+| 36062741394 | pull_request | `eb015e6` | 624480 | **failure**: 4 doctests, 1438 tests, 1 failure, 1 skipped (6 excluded) |
+
+So **3 of 4** CI runs this round are green. The red one is a different test
+from §8.1: `ElfLeaseLoopTest` "refused renewal expires then checkpoints at the
+boundary without interrupting the item" (`elf_lease_loop_test.exs:296`). Its
+helper `grant_for_run!/4` asserts at `:739` that the lease is `active`, and
+got `renewal_due`.
+
+**Mechanism (REPO-INSPECTION; not reproduced).**
+- The test grants a lease whose deadline is already 60 s in the past to an Elf
+  that is still streaming Fake events, one every 200 ms.
+- Between `Leases.grant/2` committing and the helper's projection, the Elf can
+  ingest one event, load the new grant, and append `lease.renewal_due` for the
+  passed deadline.
+- The helper's projection then reads `renewal_due`.
+
+**Attribution: INFERENCE, pre-existing.** The helper and the Elf's due path
+are unchanged by this branch: its edits in that file only change the
+renewal-id assertions of two other tests.
+
+**Not fixed, and left OPEN.** Making it deterministic means changing that
+precondition assertion, which is outside this round's scope and must not be
+done by loosening it. The run's launch-abort lines each name their code, as
+§8.3 fix 1 intended: 10 aborts, all intended by their tests.
