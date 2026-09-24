@@ -436,9 +436,12 @@ INSERT
   the same way without this branch.
 
 **Hard limitation.** The gate is **not reliably green** at this SHA or at its
-base. Across the full-suite runs recorded here the tally is **3 of 5 red**:
+base. Across the full-suite runs recorded here the tally is **3 of 6 red**:
 the independent run, the seeded head run and the seeded base run, against the
-two green precommit runs above. The red runs span head and base. No test was
+two green precommit runs above and one green exact-SHA `mix precommit` on the
+fix-round commit `51b25fd` (seed 268673, exit 0, 4 doctests, 1402 tests,
+0 failures, 1 skipped (6 excluded), Node 52/52, UI 7/7). That commit changed
+documentation and evidence only. The red runs span head and base. No test was
 retried to green, skipped, slept on, or had an assertion weakened, and no fix
 was made: the fault is not introduced by this PR, and its root (§3.3 plus the
 storm test's connection leak) is out of this round's scope. The two green runs
