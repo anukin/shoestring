@@ -1,0 +1,583 @@
+# Production path unblocked: live Codex → Claude handoff and three-arm comparison
+
+Date: 2026-09-23/24. Branch `polly/iter5-production-unblock`, base
+`d3fa1529654bc88397df3d540326069159883b63` (#82 merged). Claim labels follow
+this directory's `README.md` (`VERIFIED`, `REPO-INSPECTION`, `SCHEMA-ONLY`,
+`UNVERIFIED`); a causal explanation that was not isolated is marked
+**INFERENCE**.
+
+This branch fixes the three production blockers #82 recorded (§1), plus two
+more that surfaced once renewal could actually evaluate (§1.4, §1.5). It then
+drove the genuine production path live (§3):
+- two Codex turns;
+- a durable handoff through the configured observation, confirmation,
+  admission, lease and dispatch path to a Claude receiver, which finished the
+  CLI;
+- the three-arm comparison with handoff-tax measures;
+- an explicit cancel, with the owned process group checked before and after.
+
+**What is new versus earlier records.** #78 moved a real transfer, but it
+**bypassed** the production observation path and the worker's decision step
+(`live-cross-provider-handoff.md` §0). #82 ran on the production path and was
+**blocked before the receiver** (`live-production-rerun.md` §3). This branch's
+run went through that path end to end, with nothing bypassed. The branch is
+unmerged and awaiting independent review.
+
+---
+
+## 0. Gate status after this run
+
+| Gate | Status | Why |
+|---|---|---|
+| Acceptance 7: a real cross-provider handoff on the production path | **Demonstrated on this branch** (VERIFIED, §3.3) | `Handoffs.request/3` → live `handoff` queue → `HandoffWorker` with the `:prod` `WakeupObserve` probe → owner-confirmed admission → receiver lease → live `dispatch` queue → Claude Elf → `run.completed`, CLI accepted. Promotion to CLOSED is for the reviewer and merge; it rests on the product changes in §1, which are unreviewed. |
+| Acceptance 8: semantic eval shows receiver behaviour and handoff tax | **Partially demonstrated, stays OPEN** | Three arms ran live on comparable initial states and the measures were fixed in advance (§4). But N=1 per arm, the milestone fixture's interruption / constraint / rejected-approach elements were not exercised, the arms differ in lease regime, and the predefined first-write measure never fired (§4.3). |
+| Iteration-4 hard dependency: owned-group cancellation measured live | **Measured** (VERIFIED, §3.5) | Group alive before `cancel_run/1`, dead after, with the node still running. #82 could not measure this (`live-production-rerun.md` §4.1 limits). |
+
+Iteration 6 stays locked until review and merge. The residual findings in §6
+are open.
+
+## 1. Code changes (each with a base-failure ledger)
+
+The claims in this section rest on committed tests. **Base checks**: each new
+test file was run against a `git archive` export of base `d3fa152`, with only
+the new test file added. For §1.1 the pure helper module was also added, so
+the tests compile; it is called by nothing at base, so base behaviour is
+unchanged. Every run used a fresh state dir and `--seed 0`.
+
+### 1.1 Renewal and wake re-record an Observatory-owned reading under a goal-local id (#82 §3.2)
+
+`Shoestring.Cobbler.GoalLocalObservation` holds #79's derivation as one rule
+for all three flows. Each flow derives the id from its own durable context:
+- `handoff` (per handoff id): the preimage is byte-identical to #79's, so a
+  handoff replayed across this change derives the same id;
+- `lease-renewal` (per lease grant);
+- `wakeup` (per wakeup id).
+
+The observed id is kept as provenance in `cobbler.<flow>:observed_snapshot_id`.
+The projector's ownership check is untouched.
+
+`test/shoestring/cobbler/observatory_snapshot_twins_test.exs`, 10 tests:
+
+| Run | Result |
+|---|---|
+| head | 10 tests, 0 failures (VERIFIED) |
+| base | 10 tests, **9 failures**, every one on `{:capacity_snapshot_not_owned, _}` or zero `lease.renewed` events (VERIFIED) |
+
+The one test that passes at base is DOC: the projector still refuses a work
+goal re-appending a ledger-owned id, i.e. ownership was not relaxed.
+
+The twins covered:
+- renew and expire;
+- chaining to the goal's own row, with provenance;
+- a crash-retry replay: one observation and one decision;
+- two goals renewing on the same ledger reading;
+- the wake through the `:prod` MFA via `WakeupWorker` (admit, defer,
+  performed twice);
+- an Elf whose probe returns the ledger's own snapshot with
+  `checkpoint_cadence: 1` (the #82 shape). The run completes, its terminal
+  `checkpoint.created` projects to a `CheckpointRecord`, and the Observatory
+  row stays owned by the Observatory.
+
+Twelve existing assertions compared a chained or admitted id to the raw
+observed id. Each now asserts equality with the exact derived id
+(`GoalLocalObservation.snapshot_id/4`), and one also asserts the decision's
+`observation.snapshot_id`. None was loosened to inequality or presence.
+
+Not changed, recorded: a re-renewal on an **unchanged** reading replays its
+epoch keys by design, so the lease row can rest at `renewal_due`
+(REPO-INSPECTION, `LeaseRenewal.epoch_opts/3`). This behaviour predates the
+change: the id was already constant for an unchanged reading.
+
+### 1.2 The trajectory writer retries Exqlite's "Database busy" (#82 §3.3)
+
+- `Writer.database_error/1` now also recognises `"Database busy"`, the string
+  `Exqlite.Sqlite3` throws for a busy step.
+- The writer's transaction begins `IMMEDIATE`, so SQLite's `busy_timeout`
+  covers taking the write lock. The previous deferred transaction read first
+  and upgraded at the INSERT, and in WAL mode that upgrade fails at once
+  without waiting.
+- One attempt is still one whole transaction, so a retry re-reads the
+  idempotency key and `max(sequence)`: exactly once, contiguous.
+- Retries stay bounded (`max_retries`, default 2), and non-busy errors are
+  returned unretried.
+
+`test/shoestring/trajectory/writer_contention_test.exs` runs against a real
+WAL file database. A raw Exqlite connection holds the lock with
+`BEGIN IMMEDIATE`, and the writer's repo runs with `busy_timeout: 0`. The lock
+is released from a synchronous telemetry handler after the first failed
+statement, so there are no sleeps.
+
+| Run | Result |
+|---|---|
+| head | 6 tests, 0 failures (VERIFIED) |
+| base | 6 tests, **5 failures**, each `{:database_error, "Database busy\nINSERT INTO \"trajectory_events\" …"}`, the exact live error (VERIFIED) |
+
+Covered:
+- one contended append lands exactly once;
+- later-append contention keeps sequences contiguous, and a duplicate key is
+  not a second row;
+- exhausted contention returns `{:retry_exhausted, :busy}` after exactly 3
+  failed statements and leaves 0 rows;
+- 4 concurrent launches behind one held lock each land once;
+- Exqlite's own message is retryable.
+
+The DOC test (a non-busy `disk I/O error` is returned after 1 attempt) passes
+at base.
+
+Recorded, not changed:
+- **Exqlite disconnects on a busy BEGIN.** When `BEGIN IMMEDIATE` itself is
+  busy, Exqlite disconnects that pooled connection and DBConnection reconnects
+  it (REPO-INSPECTION, `Exqlite.Connection.handle_transaction/3`). The error
+  still classifies as busy. In production this happens only after the 2 s
+  `busy_timeout`.
+- **The projector can still raise on busy.** `Projector.project/1` still
+  raises a raw `Exqlite.Error` on busy. It was traced and **not changed**:
+  - it is not what failed the #82 launches, which failed in the writer;
+  - the Elf's renewal caller rescues it;
+  - the wake and handoff callers run in Oban, which retries on raise;
+  - the new projection in `Handoffs.request/3` catches it as a retryable
+    error.
+
+  It remains a residual risk for `RunNewLive`'s manual-observation projection
+  (§6).
+- **The migration failure #82 noted is not diagnosed.** Migrating a fresh file
+  database with `pool_size: 4, busy_timeout: 0` fails partway ("index … already
+  exists"), so the contention test migrates on one connection first. This
+  resembles #82's unexplained first `mix ecto.migrate` failure, but is
+  UNVERIFIED as the same cause.
+
+### 1.3 A Claude reading reaches the production probe (#82 §3.1)
+
+Smallest supported integration: the monitor's existing
+`auto_ingest_initial`, set in `config/config.exs`. The reading is the
+monitor's honest pre-first-response one: `unknown`, `conservative_partial`,
+no windows, no `observed_at`, confidence `none`.
+
+The ingest now happens after version discovery. It never blocks `init/1`, and
+a refused sink is reported as `sink_status`, not retried on a timer.
+`config/test.exs` resets the flag, because config entries deep-merge (§5,
+gate run 1).
+
+`test/shoestring/cobbler/claude_ingress_prod_test.exs`, 8 tests. It reads the
+`:prod` config with `Config.Reader`, starts the monitor through
+`Capacity.Supervisor.claude_child_spec/1` with a stub version runner (never
+the CLI), and uses the real Observatory and `HandoffWorker`.
+
+| Run | Result |
+|---|---|
+| head | 8 tests, 0 failures (VERIFIED) |
+| base | **4 failures**: config key `nil`; `WakeupObserve` → `{:error, :no_observation}`; both handoff deliveries → `{:observation_failed, :no_observation}` (VERIFIED) |
+
+The base run covered 7 of the 8 tests. The eighth, which checks that a boot
+reading never displaces a real one, was added after that run and is DOC by
+construction: at base nothing is auto-ingested.
+
+What the tests pin:
+- no confirmation → `require_confirmation`
+  (`support_tier_conservative_partial`, confidence `none`), with no receiver,
+  lease or dispatch;
+- the owner-bound confirmation (`confirmed_by: owner:<goal owner>`) → admit,
+  lease and one dispatch job;
+- DOC: a refused Claude reading defers even with a confirmation;
+- DOC: a confirmation for another capability admits nothing;
+- DOC: a boot reading never displaces a real last-known one. `observed_at: nil`
+  sorts last under `DESC` (REPO-INSPECTION, `Observatory` ordering), so a real
+  reading always wins.
+
+### 1.4 `Handoffs.request/3` projects before it validates
+
+Found while tracing, not listed in #82. No product path projects a finished
+Elf's terminal `checkpoint.created`: the only projector callers are
+`/runs/new` at start and the renewal, wake and handoff dispatch steps
+(REPO-INSPECTION, `grep` of `lib/`). So `run.handoff` validation, which reads
+the projected `CheckpointRecord`, rejected a handoff from a run that had
+simply completed (`handoff_checkpoint_not_found`). #82's driver hid this by
+calling `Projector.project/1` itself.
+
+`request/3` now projects the goal first. If projection fails, it returns
+`{:error, {:handoff_projection_failed, _}}` **before** submitting anything, so
+a transient failure never becomes a terminal rejection under the caller's
+command id.
+
+`test/shoestring/cobbler/handoff_request_projection_test.exs`, 4 tests:
+
+| Run | Result |
+|---|---|
+| head | 4 tests, 0 failures (VERIFIED) |
+| base | **2 failures**: the command is `rejected` instead of `resolved`, and a poisoned projector records a command instead of erroring (VERIFIED) |
+
+Two DOC tests pass at base: replay returns the same intent, and a foreign
+checkpoint is still rejected.
+
+Live, the sender's checkpoint was **not** a row before the request and **was**
+a row after it (§3.3).
+
+### 1.5 `/runs/new` proposes `checkpoint_cadence = max_events`
+
+This is a scope deviation, flagged: `lib/shoestring_web/live/run_new_live.ex`
+is outside the brief's file list. It is a one-value change in the admission
+payload, not a UI refactor.
+
+A manual lease is scoped `account:manual`, and no provider reading carries
+that scope. So once §1.1 let renewal evaluate, every manual renewal returned
+`:expired` / `snapshot_provider_mismatch`. That was measured in a throwaway
+experiment and is now pinned by a DOC test. The Elf then declines: checkpoint,
+suspend, stop. With the old cadence of 1, every manual run, including both
+live Codex turns, would have stopped after its **first response**. #82 never
+saw this only because renewal wedged the projector first.
+
+The operator's own envelope (`max_events` and the ≤300 s `lease_seconds`
+deadline) still ends the run through that same safeguard. Renewal itself is
+unchanged.
+
+`test/shoestring_web/live/run_new_manual_lease_test.exs`, 3 tests:
+
+| Run | Result |
+|---|---|
+| head | 3 tests, 0 failures (VERIFIED) |
+| base | **1 failure**: `:renewal_due` fires on the first completed response (VERIFIED) |
+
+The two DOC tests pass at base: `max_events` still ends the lease, and a
+manual renewal is still never admitted.
+
+## 2. Runtime identity
+
+- **Receiver: VERIFIED.** Every Claude receiver run reported
+  `claude-headless:model: "claude-opus-5-5"` in its own normalized system
+  frame. That is 3 of 3 Claude runs (summary `tax.receiver_models`, and the
+  transcripts). `claude --version` on the host prints `2.1.281 (Claude Code)`.
+- **Worker: UNVERIFIED.** The worker that implemented this branch and wrote
+  this document is a separate process. Its session context names Opus 5.5
+  (`claude-opus-5-5`), but that is configuration text, not a runtime
+  observation, and it is not equated with the receiver's reading.
+
+## 3. The live run
+
+### 3.1 Node, isolation and entry points (VERIFIED)
+
+- **Node.** `MIX_ENV=prod` at code SHA `22c1e72` (the gated SHA, §5), with a
+  fresh `SHOESTRING_STATE_DIR` under `$TMPDIR`, outside the source checkout. It
+  was migrated with `Shoestring.Release.migrate/0` and given a random
+  `SECRET_KEY_BASE`, with no web server. Everything production configures was
+  live: the `WakeupObserve` MFAs, `ElfEffect`, both monitors, and the Oban
+  queues.
+- **Workspace.** The disposable Go module is `example.com/tictactoe`. It was
+  created by the driver's `setup` phase with one baseline commit (`go.mod`,
+  `TASK.md`), no remote, and a synthetic git identity.
+- **Source checkout untouched.** `git status --short` shows only the two
+  pre-existing untracked paths, both before and after.
+- **Entry points.** The driver (`tools/live_eval/prod_rerun.exs`) calls only:
+  - the `/runs/new` submit handler;
+  - durable `task.release`;
+  - `Handoffs.request/3`;
+  - `Elves.cancel_run/1`.
+
+  It never calls `Handoffs.perform/3`, never injects an observation, never
+  appends events, and, unlike #82's version, never calls the projector.
+- **Driver changes, each tied to coverage or a defect.** It now:
+  - drops its own projection (§1.4);
+  - carries a per-transfer `lease_policy` (§3.3);
+  - adds `setup` and `arm` phases;
+  - adds the fixed acceptance and tax measures.
+
+  The Codex turn prompts are byte-identical to #82's.
+- **Receiver instructions.** The Claude CLI loads the operator's user-level
+  instructions. Two arm receivers ran `git push`, and one ran `gh pr create`.
+  Both failed: the repository has 0 remotes, giving
+  `fatal: 'origin' does not appear to be a git repository` and
+  `no git remotes found` (VERIFIED from the recorded tool results). Nothing
+  left the machine. This is a confound common to all three arms, and a safety
+  note for §6.
+
+### 3.2 Legs (VERIFIED from the run database; transcripts in `fixtures/live-unblock/`)
+
+| # | Leg | Provider (receiver model) | Terminal | Normalized events | Notes |
+|---|---|---|---|---:|---|
+| 1 | Turn 1 via `/runs/new` | Codex | `run.completed` | 286 | `game/` committed (`cdb51b7`), clean |
+| 2 | Turn 2 via `/runs/new`, from `cdb51b7` | Codex | `run.completed` | 300 | `parseMove` + tests committed (`c06535c`), `main()` placeholder |
+| 3 | Handoff receiver, arm **trajectory_projection** | Claude (`claude-opus-5-5`) | `run.completed` | 50 | in the sender worktree from `c06535c`; committed `a6724ac` |
+| 4 | Arm **worktree_only** via `/runs/new`, from `c06535c` | Claude (`claude-opus-5-5`) | `run.completed` | 28 | committed `185ed31` |
+| 5 | Arm **naive_summary** via `/runs/new`, from `c06535c` | Claude (`claude-opus-5-5`) | `run.completed` | 32 | committed `9d0b1ca` |
+| 6 | Cancel probe via `/runs/new`, from `c06535c` | Codex | `run.cancelled` | 33 | §3.5 |
+
+- **Launches:** 0 of 6 failed before `run.starting` (versus 3 of 5 in #82).
+  INFERENCE: consistent with §1.2, but the #82 contention was load-dependent,
+  so one clean run does not prove it cannot recur.
+- **Per run:** exactly one `run.starting`, one `run.running` and one terminal.
+  All 7 Oban jobs completed on attempt 1, and all 6 dispatch rows are
+  `effect_completed`. `/runs/new` both starts the Elf directly and enqueues
+  its dispatch job, and that duplicate delivery started no second Elf.
+- **Not re-exercised this run:** crash-restart redelivery; #82 §4.1 remains the
+  evidence for it.
+- **No stop was caused by a timer, deadline, heartbeat or staleness.** Every
+  terminal is either completion or the explicit cancel.
+
+### 3.3 The production handoff, step by step (VERIFIED)
+
+1. **Before the request.** The Observatory ledger held
+   `claude / subscription / unknown / conservative_partial`, ingested at boot
+   by the monitor (§1.3), and `codex / subscription / degraded / proactive`.
+   The sender's terminal checkpoint was **not** a `CheckpointRecord`.
+2. **The request.** `Handoffs.request/3` projected the goal. The checkpoint was
+   then a row, and the command resolved `handoff_requested` with
+   `confirmation.confirmed_by = owner:<goal owner>`, the requested
+   `lease_policy`, and one `handoff` job.
+3. **Delivery.** The live queue delivered it to `HandoffWorker` on attempt 1,
+   with 0 errors. The ledger probe served the Claude reading, re-recorded as
+   the goal's own observation (§1.1). Admission then ran with the
+   confirmation, followed by the receiver `ExecutionLease`,
+   `handoff.created`, `dispatch.requested` and the Claude Elf.
+4. **Latency.** Command accepted → `handoff.created`: **48 ms**. Command
+   accepted → receiver `run.starting`: **506 ms**. `run.running` followed at
+   1052 ms.
+5. **Receiver lease.** `response_budget 150`, `tool_budget 300`,
+   `checkpoint_cadence 150`, reserves 1/1, deadline 2700 s, which is the
+   `HandoffLeasePolicy` default deadline. It ended `active`: never due, never
+   renewed, never declined.
+6. **Outcome.** The receiver completed in **72.5 s** and committed the game
+   loop. See §4 and `go-verification.txt`. The goal's projector is `ok` at
+   sequence 322, the dispatch step's projection. The receiver's later events
+   are committed but unprojected (§6.1).
+
+**Why this transfer carried a lease policy.** The durable default is
+`response 10, tool 25, checkpoint_cadence 1`. The Claude receiver's own
+renewal probe (`ClaudeHeadless.probe/1`) reports scope `account` under the
+constant id `…0089` (REPO-INSPECTION), while this transfer is admitted under
+`subscription`. So its renewal can never be admitted, and under the default
+cadence the receiver would be declined after its first response. This is
+REPO-INSPECTION plus the §1.5 mechanism, not exercised live.
+
+The bounds used keep every safeguard:
+- the deadline is unchanged at 2700 s;
+- the budgets are finite, sized from #82's comparable Codex turn (323
+  normalized events);
+- exhaustion still declines.
+
+The receiver used 9 tool starts and 50 events.
+
+### 3.4 Receiver acceptance (VERIFIED, `go-verification.txt`)
+
+All three arms ended with:
+- gofmt clean, `go vet` and `go test -count=1 ./...` passing;
+- a clean, committed tree;
+- `game/` unchanged since turn 1, and `main.go` importing
+  `example.com/tictactoe/game`.
+
+All **5 of 5 scripted games** pass: `X wins` by row, `O wins`, diagonal
+`X wins`, `Draw`, and an invalid-input game with ≥3 `invalid` lines ending
+`X wins`, all with exit 0. `=== RUN` counts are 80, 81 and 84 (projection,
+worktree_only, naive_summary). These counts include tests each receiver added.
+
+### 3.5 Explicit cancellation with owned process-group liveness (VERIFIED)
+
+The driver cancelled only once the owned group was alive (`kill -0 -<pgid>`
+exit 0) and the run had 33 normalized events.
+
+| Check | Result |
+|---|---|
+| `cancel_run/1` | `{:ok, :cancelled}` in 125 ms |
+| group after the run stopped, node still up | **dead** |
+| Elf registered after | no |
+| lifecycle | `run.cancelling` → `checkpoint.created` → `run.cancelled`; exactly 1 `run.cancelled` |
+| second `cancel_run/1` | `{:ok, :already_terminal}` |
+
+The group check ran while the node was still alive, so the death is
+attributable to the cancel. That closes #82 §4.1's measurement gap.
+
+## 4. Three-arm comparison and handoff tax
+
+### 4.1 Design, fixed before execution (REPO-INSPECTION, `prod_rerun.exs`)
+
+- **Same starting state.** All arms start from turn 2's committed head
+  `c06535c`, and the objective reaches every arm only through the committed
+  `TASK.md`. The composed handoff prompt carries **no task statement**, only
+  the checkpoint pointer, decision refs and verification lines
+  (REPO-INSPECTION, `Continuation.compose_handoff_prompt/2`).
+- **The inputs that differ:**
+
+| Arm | Input |
+|---|---|
+| **trajectory_projection** | the real handoff prompt, composed by the product; receiver in the sender worktree |
+| **worktree_only** | `Continuation.compose_handoff_prompt/2` is not used; prompt `"Continue the work in this repository."` via `/runs/new` |
+| **naive_summary** | worktree_only's prompt plus a fixed naive summary sentence |
+
+- **The arms are not fully like-for-like, disclosed.** The product has no
+  handoff mode with ablated context, so two arms are fresh `/runs/new` Claude
+  runs. Their manual lease is capped at a 300 s deadline, versus 2700 s for
+  the handoff receiver. No arm came near either bound.
+- **Order.** Arms ran sequentially in the order C, A, B.
+- **Measures:** acceptance (§3.4) and, per receiver:
+  - normalized events;
+  - tool starts;
+  - wall-clock from `run.starting` to terminal;
+  - events, tool starts, Read starts and Bash starts before the first
+    Write/Edit/MultiEdit/NotebookEdit tool start;
+  - milliseconds to that start;
+  - Bash commands containing `mix `.
+- **Limit of the Read count.** Read file paths are not captured by the
+  normalizer, so "repeated reads of complete files" could only be bounded.
+
+### 4.2 Results (N=1 per arm; anecdotal, not statistical)
+
+| Measure (unit) | trajectory_projection | worktree_only | naive_summary |
+|---|---:|---:|---:|
+| acceptance: vet, test, 5/5 games, `game` reused | pass | pass | pass |
+| normalized events (count) | 50 | 28 | 32 |
+| tool starts (count; all `Bash`) | 9 | 6 | 7 |
+| run wall-clock, `run.starting` → terminal (ms) | 72 544 | 49 378 | 59 815 |
+| CLI-reported turns (count) | 10 | 7 | 8 |
+| CLI-reported `total_cost_usd` (notional USD, subscription account) | 0.357 | 0.240 | 0.324 |
+| predefined: Write/Edit starts before completion (count) | 0 | 0 | 0 |
+| predefined: Read starts (count) | 0 | 0 | 0 |
+| predefined: `mix ` commands (count) | 0 | 0 | 0 |
+| POST-HOC: tool starts before first file mutation (`cat > main.go` heredoc) (count) | 5 | 2 | 2 |
+| POST-HOC: normalized events before that mutation (count) | 25 | 11 | 9 |
+| POST-HOC: `run.starting` → first mutation (ms) | 36 478 | 28 231 | 14 567 |
+
+Handoff tax expressed as arm − trajectory_projection, same units. Negative
+means the arm cost less than the product projection.
+
+| Measure | worktree_only − projection | naive_summary − projection |
+|---|---:|---:|
+| normalized events | −22 | −18 |
+| tool starts | −3 | −2 |
+| run wall-clock (ms) | −23 166 | −12 729 |
+| POST-HOC tool starts before first mutation | −3 | −3 |
+| POST-HOC ms to first mutation | −8 247 | −21 911 |
+
+`total_cost_usd` is the Claude CLI's own reported figure on a subscription
+account. It is UNVERIFIED as any actual charge.
+
+### 4.3 What this does and does not show
+
+- **Every arm finished; the projection arm was the most expensive.** It had
+  more events, more tool starts, more wall-clock and a later first mutation.
+- **INFERENCE (not isolated): two product-prompt contents plausibly
+  contribute.**
+  - The completed-run terminal checkpoint's `next_action` is fixed text,
+    "Verify the worktree with `mix precommit` …" (REPO-INSPECTION,
+    `TerminalCheckpoint.next_action/4`). It is an Elixir command in a Go
+    repository, and the projection receiver's second command probed
+    `ls mix.exs`.
+  - The prompt also leads with checkpoint and decision identifiers rather
+    than the task.
+- **Not established:** that the projection *causes* higher cost. N=1, arm
+  order (C first) and run-to-run variance are not controlled.
+- **The predefined first-write measure never fired.** All three receivers
+  mutated files only through Bash heredocs, never the Write/Edit tools. That
+  measure is reported as defined (0 and "not found" in the summary), and the
+  POST-HOC rows are labelled as derived after execution from the committed
+  commands.
+- **Not exercised live:** the milestone's semantic fixture elements, namely
+  irrelevant files, a recorded constraint or rejected approach, a scripted
+  quota-refusal interruption, and a second failure exposed by a test.
+  Acceptance 8 therefore stays OPEN.
+
+## 5. Gates and focused runs (exact commands, SHAs, counts; logged per run)
+
+**Protocol, fixed before the first gate run:**
+- `mix precommit` runs once per commit SHA with a fresh
+  `SHOESTRING_TEST_STATE_DIR`;
+- on a red run, record it, diagnose it, and allow at most one further run on
+  the same SHA;
+- no pooled "N of M" totals.
+
+| # | SHA | Command | Seed | Exit | Elixir | Node gate_0a | Node UI |
+|---|---|---|---|---|---|---|---|
+| 1 | `8587b7f` | `mix precommit` | 703209 | **2** | 4 doctests, 1432 tests, **2 failures**, 1 skipped (6 excluded) | 52/52 | 7/7 |
+| 2 | `22c1e72` | `mix precommit` | 895679 | **0** | 4 doctests, 1433 tests, 0 failures, 1 skipped (6 excluded) | 52/52 | 7/7 |
+| 3 | final evidence SHA | `mix precommit` | see `§5.1` | — | recorded in §5.1 | — | — |
+
+**Run 1 diagnosis (VERIFIED).** It had two failures:
+- `RepoTest`: my state dir was not under `System.tmp_dir!()`. The fault was in
+  how I set up the gate, not the product; the state dir was moved under
+  `$TMPDIR` for every later run.
+- `Capacity.DemoTest:619`: a real defect in this branch. `config.exs`'s
+  `auto_ingest_initial` deep-merged into the test env's disabled entry, so the
+  demo's supervised monitor ingested an extra reading. Isolated with seed
+  703209: deterministic at `8587b7f`, and 1 test, 0 failures at base. Fixed in
+  `22c1e72` by resetting the flag in `config/test.exs`.
+
+Run 1's log also carried two `codex_core::tools::router ERROR exec_command
+failed` lines. Run 2 had none. Their source is **UNVERIFIED**. The only Codex
+process on the host was a pre-existing, unrelated `codex app-server`, which
+was left alone.
+
+**Focused runs** (all 0 failures on their final SHA, fresh state dir):
+- `test/shoestring/cobbler test/shoestring/elves test/shoestring/harness/eval_matrix`:
+  520 tests, 0 failures, before the new files were added;
+- each new file on its own at head, counts in §1;
+- `test/shoestring/evidence/live_evidence_redaction_test.exs`: 5 tests,
+  0 failures.
+
+### 5.1 Final-SHA gate
+
+Recorded in the follow-up commit that only edits this section. See the PR
+description for the exact line.
+
+## 6. Residual findings (open; none fixed here unless stated)
+
+1. **Nothing projects a finished run.** After start, a `/runs/new` goal's
+   projector stays at sequence 1, and its run and lease rows read `requested`
+   and `null` indefinitely (VERIFIED live, summary `projector` and `lease`).
+   Only `Handoffs.request/3` now closes that for the handoff path. UI and run
+   rows remain stale.
+2. **The terminal checkpoint's advice is Elixir-only.** A completed run's
+   terminal-checkpoint `next_action` says `mix precommit` whatever the
+   repository is, and the handoff prompt carries no task objective (§4.3).
+   This live run relied on `TASK.md`.
+3. **The Claude receiver can never renew.** `ClaudeHeadless.probe/1` reports
+   scope `account` with a constant snapshot id, so a Claude receiver admitted
+   under `subscription` never renews. Only a sized per-transfer
+   `lease_policy` avoids an early decline (REPO-INSPECTION; not exercised
+   live).
+4. **Manual runs are one-epoch.** Manual leases are unrenewable by
+   construction and capped at 300 s (§1.5).
+5. **Fake manual runs crash.** `/runs/new` with provider `fake` crashes at
+   launch, because it passes an atom scenario (#82 §4.4; unchanged).
+6. **Receivers act on the operator's global instructions.** They attempted
+   `git push` and `gh pr create` (§3.1). This was harmless here, since the
+   repository has no remote. A receiver in a repository **with** a remote
+   would act on those instructions, and that is not constrained by Shoestring
+   today (INFERENCE from the observed commands).
+7. **Busy-path residue.** `Projector.project/1` still raises on busy (§1.2).
+   Busy BEGINs cost a reconnect (§1.2).
+8. **Unexplained lines.** Two `codex_core` log lines appeared in gate run 1
+   (§5); unexplained.
+
+## 7. Evidence and redaction
+
+| File | Backs |
+|---|---|
+| `fixtures/live-unblock/normalized-codex-turn{1,2}.md` | §3.2 legs 1–2 |
+| `…/normalized-claude-receiver-trajectory-projection.md` | §3.3, §4 (receiver model frame, commands, `ls mix.exs` probe) |
+| `…/normalized-claude-arm-{worktree-only,naive-summary}.md` | §4, §3.1 push/PR attempts |
+| `…/normalized-codex-cancel.md` | §3.5 |
+| `…/go-verification.txt` | §3.4 (re-run read-only after the live phases) |
+| `…/unblock-run-summary.json` | every recorded phase, with the tax measures, receiver lease, ledger, and cancel liveness |
+
+**How the files were produced.** `tools/live_eval/export_evidence.py` wrote
+the transcripts, unchanged from #82. The new
+`tools/live_eval/export_summary.py` renders the transcripts first, in the same
+process, so the summary uses the identical synthetic id mapping. Both read the
+run database read-only.
+
+**Redaction.**
+- It is applied to the reassembled delta stream and then to each whole line.
+- It is same-length.
+- UUIDs become the declared synthetic series; worktree and other host paths
+  become `$WORKSPACE` and `$STATE`/`$REDACTED_PATH`.
+- `pgid:` digits become `x`.
+- Session, item and source-event ids and cwd are omitted.
+- No reasoning content exists: the Claude normalizer drops thinking blocks,
+  and the only `reasoning` strings are Codex's redacted token counters.
+
+**The redaction test.** `live_evidence_redaction_test.exs` now also globs
+`fixtures/live-unblock/*`. For a 0-event transcript it now requires an
+*exactly empty* reassembly and **no** `run.running` line. That addresses #82's
+zero-event nit.
+
+**Mutation checks.** Each check was planted, run and removed:
+- a contiguous `/Users/xyz/w` in a Claude `output_text` failed both the raw
+  scan and the reassembled `raw detail stream` scan;
+- a 0-event transcript with `run.running` failed the new check.

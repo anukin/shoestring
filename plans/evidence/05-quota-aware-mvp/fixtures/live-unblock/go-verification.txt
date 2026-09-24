@@ -1,0 +1,87 @@
+# Go verification, re-run read-only after the live phases (go1.24.5 darwin/arm64).
+# Worktree paths are shown as $WORKSPACE. Each section: git log, gofmt -l, go vet, go test -count=1 -v summary, scripted CLI games.
+
+## turn1
+$ git log --oneline
+cdb51b7 Implement Tic-Tac-Toe game package with table-driven tests
+609d205 Baseline: module and task
+$ git status --porcelain
+$ gofmt -l .
+(exit 0)
+$ go vet ./...
+(exit 0)
+$ go test -count=1 -v ./... | grep -cE '^=== RUN'
+33
+$ go test -count=1 ./...
+ok  	example.com/tictactoe/game	Xs
+(exit 0)
+(no game loop in main.go at this state; CLI games not applicable)
+
+## turn2 (sender, before handoff = c06535c; receiver then worked here)
+$ git log --oneline
+a6724ac Add interactive game loop in main
+c06535c Add CLI move parsing with table-driven tests
+cdb51b7 Implement Tic-Tac-Toe game package with table-driven tests
+609d205 Baseline: module and task
+$ git status --porcelain
+$ gofmt -l .
+(exit 0)
+$ go vet ./...
+(exit 0)
+$ go test -count=1 -v ./... | grep -cE '^=== RUN'
+80
+$ go test -count=1 ./...
+ok  	example.com/tictactoe	Xs
+ok  	example.com/tictactoe/game	Xs
+(exit 0)
+game x_row: exit=0 last_line="X wins" invalid_lines=0
+game o_row: exit=0 last_line="O wins" invalid_lines=0
+game x_diagonal: exit=0 last_line="X wins" invalid_lines=0
+game draw: exit=0 last_line="Draw" invalid_lines=0
+game invalid_then_x: exit=0 last_line="X wins" invalid_lines=3
+
+## arm worktree_only
+$ git log --oneline
+185ed31 Add interactive game loop to complete the CLI
+c06535c Add CLI move parsing with table-driven tests
+cdb51b7 Implement Tic-Tac-Toe game package with table-driven tests
+609d205 Baseline: module and task
+$ git status --porcelain
+$ gofmt -l .
+(exit 0)
+$ go vet ./...
+(exit 0)
+$ go test -count=1 -v ./... | grep -cE '^=== RUN'
+81
+$ go test -count=1 ./...
+ok  	example.com/tictactoe	Xs
+ok  	example.com/tictactoe/game	Xs
+(exit 0)
+game x_row: exit=0 last_line="X wins" invalid_lines=0
+game o_row: exit=0 last_line="O wins" invalid_lines=0
+game x_diagonal: exit=0 last_line="X wins" invalid_lines=0
+game draw: exit=0 last_line="Draw" invalid_lines=0
+game invalid_then_x: exit=0 last_line="X wins" invalid_lines=3
+
+## arm naive_summary
+$ git log --oneline
+9d0b1ca Implement interactive game loop in main
+c06535c Add CLI move parsing with table-driven tests
+cdb51b7 Implement Tic-Tac-Toe game package with table-driven tests
+609d205 Baseline: module and task
+$ git status --porcelain
+$ gofmt -l .
+(exit 0)
+$ go vet ./...
+(exit 0)
+$ go test -count=1 -v ./... | grep -cE '^=== RUN'
+84
+$ go test -count=1 ./...
+ok  	example.com/tictactoe	Xs
+ok  	example.com/tictactoe/game	Xs
+(exit 0)
+game x_row: exit=0 last_line="X wins" invalid_lines=0
+game o_row: exit=0 last_line="O wins" invalid_lines=0
+game x_diagonal: exit=0 last_line="X wins" invalid_lines=0
+game draw: exit=0 last_line="Draw" invalid_lines=0
+game invalid_then_x: exit=0 last_line="X wins" invalid_lines=3

@@ -543,3 +543,69 @@ bullets are left exactly as written.*
   snapshot, give the deployed configuration a Claude ledger source, and
   classify `"Database busy"` as retryable. Then rerun
   `tools/live_eval/prod_rerun.exs` unchanged.
+
+### Completion-record addendum — production path unblocked (2026-09-24)
+
+*Measured on `polly/iter5-production-unblock`, base `d3fa152`, live code SHA
+`22c1e72`. The full record is
+`plans/evidence/05-quota-aware-mvp/production-unblock.md`. Earlier bullets are
+left exactly as written. This branch is unmerged pending independent review.*
+
+- **The three blockers #82 recorded are fixed, each with tests that fail on
+  base for the behavioural reason:**
+  - renewal and wake re-record an Observatory-owned reading under a
+    deterministic goal-local id (the rule #79 introduced for handoff);
+  - the trajectory writer retries Exqlite's `"Database busy"` and takes its
+    write lock at `BEGIN IMMEDIATE`;
+  - the production config ingests the Claude monitor's honest
+    `unknown / conservative_partial` reading at boot. It still admits only
+    with the goal owner's confirmation.
+- **Two further defects on the same path are fixed:**
+  - `Handoffs.request/3` projects the goal before validating the sender's
+    checkpoint. Nothing else projects a finished run, and #82's driver had done
+    it itself.
+  - `/runs/new` proposes `checkpoint_cadence = max_events`. A manual lease can
+    never renew, so a cadence of 1 ended every manual run at its first
+    response once renewal could evaluate.
+- **Acceptance 7 — demonstrated on this branch (live, production path, no
+  bypass).**
+  - Two Codex turns via `/runs/new` both completed; 0 of 6 launches failed
+    before `run.starting`.
+  - `Handoffs.request/3` → the live `handoff` queue → `HandoffWorker` with the
+    `:prod` `WakeupObserve` probe → owner-confirmed admission → receiver lease
+    → the live `dispatch` queue → Claude Elf (`claude-opus-5-5` from its own
+    events) → `run.completed` in 72.5 s.
+  - The receiver's result: gofmt, vet and test pass, all 5 scripted CLI games
+    pass, and `game` is reused unchanged.
+  - The transfer carried a sized per-transfer `lease_policy`: 150/300/150,
+    reserves 1/1, deadline 2700 s. The reason: the Claude receiver's own
+    renewal probe can never be admitted under the transfer's scope.
+- **Acceptance 8 — partially demonstrated, stays OPEN.**
+  - Three arms ran live from the same committed state; all three passed
+    acceptance.
+  - The product projection arm cost the most: 50 events and 72.5 s, versus 28
+    and 49.4 s for worktree_only and 32 and 59.8 s for naive_summary.
+  - It first mutated a file after 36.5 s, versus 28.2 s and 14.6 s (POST-HOC
+    measure).
+  - It is plausibly slowed by the terminal checkpoint's Elixir-only
+    `next_action`; this is an INFERENCE, not isolated.
+  - Remaining limits: N=1, the arms differ in lease regime, the predefined
+    Write/Edit measure never fired, and the milestone fixture's
+    interruption / constraint / rejected-approach elements were not exercised.
+- **Iteration-4 dependency: owned-group cancellation measured live.** The group
+  was alive before `cancel_run/1` and dead after, with the node up. The first
+  cancel returned `cancelled` in 125 ms and the second `already_terminal`.
+- **Open findings.**
+  - Run rows are never projected after start.
+  - The terminal checkpoint `next_action` is Elixir-only, and the handoff
+    prompt carries no task objective.
+  - `ClaudeHeadless.probe/1`'s scope and constant id make a Claude receiver
+    unrenewable.
+  - Receivers act on the operator's global Claude instructions: they attempted
+    `git push` and `gh pr create`, harmless here with no remote.
+  - The projector still raises on busy.
+- **Gate:** `mix precommit` at `22c1e72`, seed 895679, exit 0: 4 doctests,
+  1433 tests, 0 failures, 1 skipped (6 excluded); Node 52/52; UI 7/7. The
+  earlier red run at `8587b7f` is recorded with its diagnosis in the evidence.
+  Iteration 6 stays locked until review and merge.
+
