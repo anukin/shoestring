@@ -831,3 +831,183 @@ renewal-id assertions of two other tests.
 precondition assertion, which is outside this round's scope and must not be
 done by loosening it. The run's launch-abort lines each name their code, as
 §8.3 fix 1 intended: 10 aborts, all intended by their tests.
+
+## 9. CI-correction round on `2f15676` (recovery worker)
+
+A previous worker stopped mid-round (during a CPU-stress experiment, not
+repeated here). This round starts from the pushed head `2f15676`, changes only
+CI/test correctness and the one product defect the CI evidence points at, and
+makes **no live call**. The live evidence in §3–§4 still describes code SHA
+`22c1e72`; nothing here re-verifies it, and **acceptance 8 stays OPEN**.
+
+### 9.1 CI on `2f15676` (both red, neither re-run)
+
+| Run | Event | Seed | Result | Failing tests |
+|---|---|---|---|---|
+| 36063516494 | pull_request | 557491, max_cases 6 | 1438 tests, **1 failure** | `ElfTest:954` (raised at `:998`) |
+| 36063514995 | push | 609535, max_cases 6 | 1438 tests, **2 failures** | `ElfLeaseLoopTest:231` (`:276`), `OrchestratorTest:90` (`:133`) |
+
+### 9.2 `OrchestratorTest:90`: an evidence probe took the Elf's `index.lock` (product fix)
+
+**Failure.** The test's Elf child (a Python script) runs `git add` and
+`git commit` in its worktree; the test waits 10 s for the commit and got
+`{:error, :timeout}`. There was no launch-abort line, so the Elf did launch.
+
+**Mechanism (VERIFIED locally, git 2.50.1).** `Staleness.collect/2` runs
+`git status --porcelain=v1` and `git diff --stat` in that same worktree. When
+any index entry's stat data is stale, both commands refresh the index and write
+it back, holding `index.lock` while they do. A `git add` that runs in that
+window fails at once with `index.lock: File exists` (exit 128). A scratch-repo
+check showed which commands rewrite the index after a `touch`:
+
+| Command | Rewrites the index |
+|---|---|
+| `status --porcelain=v1` | yes; not with `GIT_OPTIONAL_LOCKS=0` |
+| `diff --stat` / `diff --name-only` / `diff HEAD` / `diff` | yes, **even with `GIT_OPTIONAL_LOCKS=0`** or `--no-optional-locks` |
+| `diff --cached`, `rev-parse HEAD` | no |
+| `-c diff.autoRefreshIndex=false diff --name-only` | no, but it lists stat-only-dirty files as changed, so the output changes |
+
+The test calls `Staleness.collect(run_id, "manual_probe")` just as the child
+starts committing.
+
+**Attribution: INFERENCE.** The child's stderr is not in the CI log, so I
+cannot show that this collision caused this particular timeout. It is the
+only concurrent writer of that index I found. The same test passed in
+36063516494 and passes locally in about 1 s.
+
+**Fix.** `Shoestring.Worktrees.Git.observe/3` runs a read-only git command
+against a private copy of the index (`GIT_INDEX_FILE`, plus
+`GIT_OPTIONAL_LOCKS=0`) and then removes the copy. Output is identical and the
+real index is never written. It is used by:
+- `Staleness` (the evidenced site);
+- its twins that also read a worktree the Elf may be writing to:
+  - `TerminalCheckpoint`'s default git (reactive checkpoints are collected
+    mid-run);
+  - `Worktrees.changed_files/2` and `diff/2` (the run page calls these for a
+    live run).
+
+Limitation (REPO-INSPECTION): a repository using `core.splitIndex` keeps
+shared index files next to the index, and those are not copied. No Shoestring
+path enables it.
+
+**Regression locks.** Each test makes the index stat-stale, then asserts both
+directions: the index identity (inode, mtime) is unchanged and no `.lock`
+exists, *and* the evidence still reports the modified and untracked files.
+- `staleness_test.exs` "evidence reads a live worktree without writing its
+  index";
+- `terminal_checkpoint_test.exs` "collect_reactive/3 reads a live worktree
+  without writing its index";
+- `worktrees_test.exs` "changed_files and diff never write the index, and
+  report the same files". This one also asserts that the stat-only file is
+  *not* reported, which rules out the `autoRefreshIndex` variant.
+
+**Base proof (VERIFIED).** I restored the three lib files from `2f15676`
+(tests unchanged) and ran all three test files: **3 failures of 46**, each on
+the index-identity assertion (inode changed). The output assertions before
+that line passed on base, so the fix does not change reported output.
+
+### 9.3 `ElfTest:998`: the crash simulation killed the Elf mid-query (test fix)
+
+**Failure.** `DBConnection.OwnershipError: cannot find ownership process` for
+the *test* process, raised at `Elves.reconcile/2`. The line logged just
+before it: `Exqlite.Connection … disconnected: client #PID<…> exited`.
+
+**Mechanism (REPO-INSPECTION of `db_connection` 2.10.2; VERIFIED by the lock
+below).** The test simulates the app dying with `Process.exit(elf, :kill)`.
+If the Elf is mid-query at that moment, it dies holding a checkout. In shared
+sandbox mode the owner's `Ownership.Proxy` then shuts down ("client exited"),
+the manager reverts the pool to `:manual`, and the test process's next query
+has no owner. Production has no shared owner, so this is an artifact of the
+test harness.
+
+**Fix.** `ElvesHelpers.kill_idle/1` calls `:sys.suspend/2` and then sends the
+same `:kill`. `:sys.suspend/2` returns only once the Elf is back in its
+receive loop, where it holds no connection. For everything the test checks,
+the kill is just as abrupt: the OS group survives, no terminal is written, and
+no cleanup runs. All four `ElfTest` kill sites use it.
+
+Out of scope: other `Process.exit(…, :kill)` sites under
+`test/shoestring/harness/capacity/` show the same "owner/client exited" noise
+in CI logs but did not fail. They are unchanged.
+
+**Regression lock.** `kill_idle_test.exs` has an Agent hold a sandbox
+transaction and kills it through the helper. The Agent is released once the
+kill is either done or parked as a suspend request (a mailbox check, not a
+timer). The test then asserts that its own `SELECT 1` succeeds.
+
+**Base proof (VERIFIED).** With the helper body replaced by the bare
+`Process.exit(pid, :kill)`, the test failed **3 of 3** runs:
+- once with the exact CI error, `OwnershipError … cannot find ownership
+  process`;
+- twice with the same proxy's `ConnectionError "client … exited"`.
+
+### 9.4 `ElfLeaseLoopTest:231` and `:296`: grant racing the event timers (test fix)
+
+**Failures.**
+- `:231`: `lease.renewed` was 0; `renewal_due` passed.
+- `:296` (CI 36062741394, §8.5): the grant precondition read `renewal_due`.
+
+**Mechanism (REPO-INSPECTION).** Every leased test starts the Elf, then
+grants and projects the lease. Meanwhile the Fake events are already arriving
+every 200 ms after `run.running`. If the grant lands after the boundary it is
+meant to govern, the assertions fail. If the Elf loads the grant between the
+helper's projection and its status read, the precondition fails.
+
+**Fix.** Both CI failures and six other grant tests in the file share this
+race. All eight now suspend the Elf as soon as `start_run` returns and resume
+it once the lease is projected (`hold_before_first_event/1`,
+`release_elf/1`). `start_run` returns after `init/1`, so the suspend is queued
+behind the launch continuation. With `event_interval_ms > 0` that
+continuation only *schedules* the first event, so the Elf ingests nothing
+before the grant, however loaded the machine is. No assertion changed; the
+precondition at `:739` is now deterministic rather than loosened.
+
+**Coverage note.** `Elf.ensure_lease_bounds/1` still calls `rebuild_spend/2`
+on first load, over the event just ingested. What this file no longer
+exercises is a rebuild over events ingested *before* the grant; it was only
+ever reached by chance. I did not check whether another file covers it
+deterministically.
+
+**Base proof (VERIFIED, delay injected for the proof only, not committed).**
+A 600 ms `Process.sleep` before each `grant_for_run!` stands in for CI
+scheduling delay:
+- base test file: **6 failures of 9**, including the `:231`/`:296` family
+  (`lease.renewal_due`/`lease.expired` counts 0);
+- fixed test file with the same delay: **0 failures of 9**.
+
+### 9.5 Still open
+
+- **Handshake test intermittent** (§8.3): 1 of 210 earlier, output lost.
+  This round: 0 of 25 sequential foreground runs of
+  `port_runner_handshake_test.exs` at the working tree of `4153d1a`. There
+  was no CPU stress, by instruction. The cause remains **unknown**; nothing
+  was changed for it.
+- `ElfLeaseReloopTest:419` (§8.3): root cause still not established.
+- `OrchestratorTest:90` attribution is INFERENCE (§9.2).
+- **The same grant-vs-timer shape, not changed (REPO-INSPECTION):**
+  - `elf_lease_reloop_test.exs`, 5 sites;
+  - `elf_checkpoint_resume_test.exs`, 5 sites;
+  - `elf_claude_decline_quiescence_test.exs`, 2 sites.
+
+  Each one starts the Elf with `event_interval_ms`, then waits for it to run
+  and grants. None of them failed in the CI runs above. They were left alone
+  because this round's scope is failures that were actually evidenced. The
+  §9.4 gate should work for them too, but that is unverified.
+- Acceptance 8 stays **OPEN**; no new live run.
+
+### 9.6 Gates this round (one run per command; none re-run)
+
+| Id | SHA | Command | Seed | Exit | Elixir | Node gate_0a | UI |
+|---|---|---|---|---|---|---|---|
+| G1 | `4153d1a` | `mix precommit` | 652405 | **0** | 4 doctests, 1442 tests, 0 failures, 1 skipped (6 excluded) | 52/52 | 7/7 |
+| C1 | `4153d1a` | `mix test --seed 557491 --max-cases 6` (CI 36063516494's seed) | 557491 | **0** | 4 doctests, 1442 tests, 0 failures, 1 skipped (6 excluded) | — | — |
+| C2 | `4153d1a` | `mix test --seed 609535 --max-cases 6` (CI 36063514995's seed) | 609535 | **0** | 4 doctests, 1442 tests, 0 failures, 1 skipped (6 excluded) | — | — |
+
+The four new tests account for 1438 → 1442. The §8.4 provider-shim run (G2)
+was **not** repeated this round. No launch path changed, but that is
+REPO-INSPECTION, not a new measurement. The commit that adds this section
+changes documentation only.
+
+**Runtime identity.** This session's system prompt names the model
+`claude-opus-5-5`. I have no runtime metadata to verify that, so it is
+**UNVERIFIED**.
