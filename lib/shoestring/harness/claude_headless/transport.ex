@@ -37,16 +37,12 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
   @default_kill_grace_ms 2_000
   @default_reap_timeout_ms 5_000
 
-  # Same shape as PortRunner's wrapper: setsid (tolerating EPERM when the
-  # OTP runtime already detached the child), stdin from /dev/null, exec.
-  @setsid_wrapper "import os, sys\n" <>
-                    "try:\n" <>
-                    "    os.setsid()\n" <>
-                    "except PermissionError:\n" <>
-                    "    pass\n" <>
-                    "fd = os.open(os.devnull, os.O_RDONLY)\n" <>
-                    "os.dup2(fd, 0)\n" <>
-                    "os.execvp(sys.argv[1], sys.argv[1:])\n"
+  # PortRunner's wrapper, shared: setsid (tolerating EPERM), verify
+  # leadership, announce it on one stdout line and wait for the go byte,
+  # then stdin from /dev/null and exec. See `Shoestring.Elves.PortRunner`,
+  # "Leadership handshake": the leadership check is synchronised with the
+  # child instead of racing its `setsid`.
+  alias Shoestring.Elves.PortRunner
 
   @doc """
   Starts the transport and spawns the child process.
@@ -126,8 +122,17 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
 
         case Port.info(port, :os_pid) do
           {:os_pid, os_pid} when is_integer(os_pid) and os_pid > 1 ->
+            timeout =
+              Keyword.get(opts, :handshake_timeout_ms, PortRunner.default_handshake_timeout_ms())
+
+            case await_handshake(port, os_pid, timeout) do
+              :ok -> :ok
+              {:error, reason} -> throw({:handshake_failed, port, os_pid, reason})
+            end
+
             case verify_group_leader(os_pid) do
               :ok ->
+                release_wrapper(port)
                 send(owner, {:claude_transport_connected, self()})
 
                 {:ok,
@@ -167,10 +172,45 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
         end
       rescue
         error -> {:stop, {:port_open_failed, error}}
+      catch
+        {:handshake_failed, port, os_pid, reason} ->
+          # The child is still the blocked wrapper (or already gone): none of
+          # the target ever ran. Kill it, close the port, fail closed.
+          _ = System.cmd("kill", ["-KILL", to_string(os_pid)], stderr_to_stdout: true)
+          safe_close_port(port)
+          {:stop, reason}
       end
     else
       {:error, reason} -> {:stop, reason}
     end
+  end
+
+  # The wrapper's one handshake line, in line mode. Nothing else can arrive
+  # first: the wrapper writes nothing before it and the target has not been
+  # executed yet, so stdout stays pure JSONL for everything after it.
+  defp await_handshake(port, os_pid, timeout) do
+    prefix = PortRunner.handshake_prefix()
+
+    receive do
+      {^port, {:data, {:eol, ^prefix <> reported}}} ->
+        case Integer.parse(reported) do
+          {^os_pid, ""} -> :ok
+          _other -> {:error, :setsid_handshake_invalid}
+        end
+
+      {^port, {:data, _other}} ->
+        {:error, :setsid_handshake_invalid}
+
+      {^port, {:exit_status, status}} ->
+        {:error, {:setsid_handshake_failed, status}}
+    after
+      timeout -> {:error, :setsid_handshake_timeout}
+    end
+  end
+
+  defp release_wrapper(port) do
+    true = Port.command(port, "\n")
+    :ok
   end
 
   @impl GenServer
@@ -350,7 +390,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
         {:error, :setsid_unavailable}
 
       python3 ->
-        {:ok, {python3, ["-c", @setsid_wrapper, executable | args]}}
+        {:ok, {python3, ["-c", PortRunner.setsid_wrapper(), executable | args]}}
     end
   end
 
