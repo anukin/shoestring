@@ -1011,3 +1011,37 @@ changes documentation only.
 **Runtime identity.** This session's system prompt names the model
 `claude-opus-5-5`. I have no runtime metadata to verify that, so it is
 **UNVERIFIED**.
+
+### 9.7 CI on `cbcb339` (code `4153d1a`; each run recorded, none re-run)
+
+| Run | Event | Seed | Result |
+|---|---|---|---|
+| 36067413707 | push | — | success |
+| 36067419163 | pull_request | 684726, max_cases 6 | **failure**: 4 doctests, 1442 tests, 1 failure, 1 skipped (6 excluded) |
+
+So **1 of 2** is green. None of the three tests fixed in §9.2–§9.4 failed.
+The red test is new to this record:
+`TaskClaimRaceTest` "concurrent claim commands from competing goals produce
+exactly one winner" (`task_claim_race_test.exs:49`). One of the two
+concurrent `Commands.submit/3` calls raised `Exqlite.Error "database is
+locked"` on `BEGIN IMMEDIATE TRANSACTION` (`commands.ex:102`).
+
+**What the test does.** It uses its own scratch WAL SQLite database, not the
+sandbox, with `busy_timeout: 2_000`. The second writer waits on the first
+writer's immediate transaction.
+
+**Attribution (REPO-INSPECTION).** Neither the test nor `commands.ex` changed
+on this branch; their last change, `8ac3d71`, predates base `d3fa152`.
+
+**Cause: not established.** A lock held past the 2 s busy timeout on a loaded
+runner is a candidate. From the log I could not tell whether the error came
+after the busy wait or at once, so this is **UNVERIFIED**.
+
+**Local attempts:**
+- the CI seed at CI concurrency (`mix test --seed 684726 --max-cases 6` at
+  `4153d1a`): exit 0, 4 doctests, 1442 tests, 0 failures, 1 skipped
+  (6 excluded);
+- the file alone: 20 of 20 sequential runs green.
+
+So: **intermittent, 1 of 3 runs of this code SHA** (2 CI runs and 1 local
+full-suite run at that seed). **Not fixed**, and nothing was loosened.
