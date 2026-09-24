@@ -184,12 +184,12 @@ defmodule Shoestring.Elves.PortRunner do
                }}
 
             {:error, _reason} = error ->
-              _ = :erlang.port_close(port)
+              discard_port(port)
               error
           end
 
         _other ->
-          _ = :erlang.port_close(port)
+          discard_port(port)
           {:error, :os_pid_unavailable}
       end
     end
@@ -508,6 +508,22 @@ defmodule Shoestring.Elves.PortRunner do
       {^port, {:exit_status, status}} -> {:ok, status}
     after
       timeout_ms -> {:timeout, port}
+    end
+  end
+
+  # A failed spawn leaves nothing behind: the port may already have closed
+  # itself (its child died, e.g. killed after a failed handshake), so it is
+  # closed safely, and any message it queued for the caller is discarded.
+  defp discard_port(port) do
+    close_port(port)
+    flush_port(port)
+  end
+
+  defp flush_port(port) do
+    receive do
+      {^port, _message} -> flush_port(port)
+    after
+      0 -> :ok
     end
   end
 

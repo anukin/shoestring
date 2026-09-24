@@ -67,6 +67,19 @@ defmodule Shoestring.Elves.PortRunnerHandshakeTest do
       # The target runs only after the go byte, which was never sent, and a
       # SIGKILLed wrapper cannot exec. So nothing was created.
       refute File.exists?(marker)
+
+      # And the failed spawn left nothing in the caller's mailbox: the killed
+      # wrapper's port may close itself first, and its exit status must not
+      # leak to (or crash) the caller. Gate run G1 at 0cf9e2e hit exactly
+      # that race: `spawn/2` raised `ArgumentError` from `port_close/1`.
+      leftover =
+        receive do
+          {port, message} when is_port(port) -> {port, message}
+        after
+          0 -> nil
+        end
+
+      assert leftover == nil
     end
   end
 
