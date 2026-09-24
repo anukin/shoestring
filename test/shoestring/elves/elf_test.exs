@@ -861,7 +861,19 @@ defmodule Shoestring.Elves.ElfTest do
     task: task
   } do
     request = ElvesHelpers.run_request(goal, task)
-    scenario = Scenario.normal_completion()
+
+    # The stream carries events but no verdict. With a `completed` result
+    # (the old `Scenario.normal_completion/0`, 4 events at 50 ms) the Elf
+    # itself reaps the group about 200 ms in, so the cancel below had to win
+    # a race against the script, and lost on a loaded runner (CI 36068253487:
+    # the group never showed two members). Without a verdict the group lives
+    # until it is cancelled, which is what this test is about.
+    scenario =
+      ElvesHelpers.custom_scenario(:cancel_group, [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.output_event("working", source_event_id: "evt-1")
+      ])
+
     spawner = ~s|import subprocess,time; subprocess.Popen(["sleep","30"]); time.sleep(30)|
 
     assert {:ok, _pid} =
