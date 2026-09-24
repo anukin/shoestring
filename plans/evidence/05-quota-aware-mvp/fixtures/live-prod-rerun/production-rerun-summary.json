@@ -1,0 +1,183 @@
+{
+  "date": "2026-09-23",
+  "base": "0f96798403cbc02ee49f0f951b2f2c6964443ca2",
+  "node": {
+    "mix_env": "prod",
+    "state_dir": "disposable, outside the source checkout",
+    "migrated_with": "Shoestring.Release.migrate/0",
+    "handoff_observe": "{Shoestring.Cobbler.WakeupObserve, :observe, []}",
+    "wakeup_observe": "{Shoestring.Cobbler.WakeupObserve, :observe, []}",
+    "dispatch_effect": "Shoestring.Harness.Dispatch.ElfEffect",
+    "capacity_monitors": {
+      "claude": {
+        "enabled": true
+      },
+      "codex": {
+        "enabled": true
+      }
+    },
+    "oban_queues": {
+      "dispatch": 5,
+      "wakeup": 5,
+      "handoff": 5
+    },
+    "oban_testing": null
+  },
+  "claude_runtime_model": {
+    "source": "first stream-json frame of `claude --print --verbose --output-format stream-json` (no --model), process killed after the frame",
+    "type": "system",
+    "subtype": "init",
+    "model": "claude-opus-5-5",
+    "claude_code_version": "2.1.281",
+    "apiKeySource": "none",
+    "scope": "proves the receiver command's resolved model only; the orchestrating worker's runtime model is UNVERIFIED (no --model on its argv, no model env var)"
+  },
+  "observatory_ledger_after_boot": [
+    {
+      "provider": "codex",
+      "scope": "subscription",
+      "state": "degraded",
+      "support_tier": "proactive",
+      "reason": "untested_cli_version: 0.156.1"
+    }
+  ],
+  "claude_monitor_status": {
+    "status": "ready",
+    "callback_count": 0,
+    "scope": "subscription",
+    "reason": "rate_limits_absent_before_first_response_or_unsupported_subscription",
+    "ingested_to_ledger": false
+  },
+  "p0_handoff_probe_fake_sender": {
+    "provider_turns_consumed": 0,
+    "command_status": "resolved",
+    "command_result_kind": "handoff_requested",
+    "confirmation_confirmed_by_prefix": "owner:",
+    "handoff_job_errors": [
+      "Shoestring.Cobbler.HandoffWorker failed with {:error, {:observation_failed, :no_observation_for_provider}}",
+      "Shoestring.Cobbler.HandoffWorker failed with {:error, {:observation_failed, :no_observation_for_provider}}"
+    ],
+    "handoff_created": 0,
+    "fake_sender_terminal": "run.failed transport/elf_launch_crashed (Fake adapter requires opts[:scenario] as a Scenario struct)"
+  },
+  "codex_launches_via_runs_new": [
+    {
+      "leg": "turn1",
+      "terminal": "run.completed",
+      "normalized_events": 323,
+      "ordinals": "1..323 contiguous, no duplicates",
+      "projector": {
+        "last_sequence": 49,
+        "status": "failed",
+        "error": "{:capacity_snapshot_not_owned, <observatory-owned snapshot id>}"
+      },
+      "run_row_status": "running",
+      "dispatch_worker": "effect_deferred (run_state_advanced)",
+      "lease_renewal_failed_warnings": 14
+    },
+    {
+      "leg": "turn2 attempt 1",
+      "terminal": "run.failed transport/database_error",
+      "normalized_events": 0,
+      "run_starting": false,
+      "error": "Database busy on INSERT INTO trajectory_events"
+    },
+    {
+      "leg": "turn2 attempt 2",
+      "terminal": "run.failed transport/database_error",
+      "normalized_events": 0,
+      "run_starting": false,
+      "error": "Database busy on INSERT INTO trajectory_events"
+    },
+    {
+      "leg": "cancel attempt 1",
+      "terminal": "none on that boot: the driver crashed the node after run.starting (raw Exqlite 'Database busy' raised from Projector.project/1)",
+      "normalized_events": 0
+    },
+    {
+      "leg": "cancel attempt 2",
+      "terminal": "run.failed transport/database_error",
+      "normalized_events": 0,
+      "run_starting": false,
+      "error": "Database busy on INSERT INTO trajectory_events"
+    }
+  ],
+  "launch_failure_rate": "3 of 5 Codex runs started through /runs/new failed at launch with database_error before run.starting",
+  "crash_recovery_relaunch": {
+    "run": "cancel attempt 1",
+    "delivered_by": "Oban dispatch queue on the next boot -> DispatchWorker -> ElfEffect",
+    "dispatch_status": "effect_completed",
+    "elves_started_on_recovery": 1,
+    "normalized_events_before_cancel": 62
+  },
+  "explicit_cancellation": {
+    "run": "cancel attempt 1 (recovered)",
+    "elf_registered_before": true,
+    "first_cancel": "{:ok, :cancelled}",
+    "second_cancel": "{:ok, :already_terminal}",
+    "sequence_tail": [
+      "run.cancelling",
+      "checkpoint.created",
+      "run.cancelled"
+    ],
+    "run_row_status": "cancelled",
+    "projector": {
+      "last_sequence": 76,
+      "status": "ok"
+    },
+    "process_group_before_cancel": "not measured",
+    "process_group_after": "dead when checked after the node exited; not attributable to the cancel alone"
+  },
+  "handoff_from_codex_turn1": {
+    "path": "Shoestring.Cobbler.Handoffs.request/3 (durable run.handoff intent)",
+    "checkpoint": "the sender Elf's terminal checkpoint, id read from the committed checkpoint.created event",
+    "checkpoint_projected": false,
+    "command_status": "rejected",
+    "command_reason": "handoff_checkpoint_not_found",
+    "delivery_attempt": null,
+    "receiver_runs": 0,
+    "lease_policy_default": {
+      "version": 1,
+      "deadline_seconds": 2700,
+      "response_budget": 10,
+      "tool_budget": 25,
+      "checkpoint_cadence": 1,
+      "reserves": {
+        "response": 1,
+        "tool": 1
+      }
+    }
+  },
+  "not_run": {
+    "claude_receiver": "blocked: no production path reaches it (see live-production-rerun.md section 3)",
+    "three_arm_ablation": "blocked: every arm needs the same receiver path",
+    "handoff_tax": "not measured"
+  },
+  "gate": {
+    "author_runs": [
+      {
+        "exit": 0,
+        "elixir": "4 doctests, 1402 tests, 0 failures, 1 skipped (6 excluded)"
+      },
+      {
+        "exit": 0,
+        "elixir": "4 doctests, 1402 tests, 0 failures, 1 skipped (6 excluded)"
+      }
+    ],
+    "independent_run": {
+      "exit": 2,
+      "elixir": "4 doctests, 1402 tests, 1 failure, 1 skipped (6 excluded)",
+      "failure": "DisconnectEvalTest killing the Claude monitor... :sink_error != :connected",
+      "seed": 630171
+    },
+    "diagnosis_seed_630171": {
+      "head_1a00cb9": "1 failure, ObservatoryTest, Database busy",
+      "base_0f96798": "1 failure, ElfTerminalCheckpointTest, Database busy"
+    },
+    "isolated_pair_x5": {
+      "head": "5/5 green",
+      "base": "5/5 green"
+    },
+    "verdict": "existing intermittent (SQLite Database busy under suite load); not branch-caused; gate not reliably green at head or base"
+  }
+}

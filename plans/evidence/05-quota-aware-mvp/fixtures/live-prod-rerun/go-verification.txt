@@ -1,0 +1,32 @@
+$ git log --oneline
+f3ec5e1 Implement Tic-Tac-Toe game package with table-driven tests
+fc8b67e Empty Go module
+$ git status --porcelain
+$ git ls-files
+README.md
+game/game.go
+game/game_test.go
+go.mod
+$ gofmt -l .
+exit=0
+$ go vet ./...
+exit=0
+$ go test -count=1 ./...
+ok  	example.com/tictactoe/game	0.174s
+exit=0
+$ go test -count=1 -v ./game | grep -c "^=== RUN"
+35
+$ test -f main.go
+exit=1 (CLI not part of turn 1; end-to-end game checks not applicable)
+
+$ grep -E "^func |^type |^\s+(X|O) " game/game.go   # required API surface
+type Player rune
+	X Player = 'X'
+	O Player = 'O'
+type Game struct {
+func New() *Game { return &Game{} }
+func (g *Game) Move(row, col int) error {
+func (g *Game) Turn() Player {
+func (g *Game) Winner() (Player, bool) { return g.winner, g.winner != 0 }
+func (g *Game) Full() bool { return g.moves == 9 }
+func (g *Game) Render() string {
