@@ -30,6 +30,7 @@ defmodule Shoestring.Harness.EvalMatrix.MatrixTest do
   alias Shoestring.Cobbler.{
     AdmissionEvaluation,
     Dispatcher,
+    GoalLocalObservation,
     LeaseBounds,
     LeaseRenewal,
     Wakeups
@@ -397,7 +398,9 @@ defmodule Shoestring.Harness.EvalMatrix.MatrixTest do
     assert summary.branch == :admitted
     assert summary.lease == :renewed
     assert summary.run == :starting
-    assert Repo.get!(ExecutionLeaseRecord, grant_id).admitted_snapshot_id == fresh.snapshot_id
+
+    assert Repo.get!(ExecutionLeaseRecord, grant_id).admitted_snapshot_id ==
+             GoalLocalObservation.snapshot_id("wakeup", goal.id, wakeup.id, fresh.snapshot_id)
   end
 
   # ----------------------------------------------------------------------------

@@ -38,6 +38,7 @@ defmodule Shoestring.Evidence.LiveEvidenceRedactionTest do
   @fixture_globs [
     "plans/evidence/05-quota-aware-mvp/fixtures/live/*",
     "plans/evidence/05-quota-aware-mvp/fixtures/live-prod-rerun/*",
+    "plans/evidence/05-quota-aware-mvp/fixtures/live-unblock/*",
     "plans/evidence/04-single-elf/fixtures/harness/*"
   ]
 
@@ -97,11 +98,23 @@ defmodule Shoestring.Evidence.LiveEvidenceRedactionTest do
         views = reassembled_views(body)
 
         # A transcript that declares normalized events must reassemble to
-        # something; one that honestly declares none (a launch that failed
-        # before any provider output) has nothing to reassemble.
+        # something. One that declares none (a launch that failed before any
+        # provider output) must reassemble to EXACTLY nothing, and must not
+        # claim its run ever reached `run.running` — a zero-event transcript
+        # of a running Elf would mean events were dropped, not absent.
         if declared_count(path, body, "Normalized events") > 0 do
           assert views["raw detail stream"] != "",
                  "#{path}: reassembled to nothing; the parser is stale"
+        else
+          for {name, text} <- views do
+            assert text == "", "#{path} [#{name}]: declares 0 events but reassembles to text"
+          end
+
+          refute Enum.any?(
+                   detail_lines(body, "Run lifecycle and terminal events"),
+                   &String.starts_with?(&1, "run.running\t")
+                 ),
+                 "#{path}: declares 0 normalized events for a run that reached run.running"
         end
 
         for {name, text} <- views, text != "" do

@@ -530,6 +530,15 @@ defmodule ShoestringWeb.RunNewLive do
   # explicitly zero (the operator accepts no margin in manual mode — never
   # a fabricated provider reading). Informational `manual_*` keys ride
   # along for explanation; the grant reads only the contract keys.
+  #
+  # The checkpoint cadence is the same envelope, not 1. A manual lease is
+  # scoped `account:manual`, which no provider reading ever carries, so its
+  # renewal can never be admitted (`snapshot_provider_mismatch`): every due
+  # boundary ends the run through decline (checkpoint + suspend). A cadence of
+  # 1 therefore stopped every manual run after its FIRST response, whatever
+  # `max_events` the operator declared. The operator's bounds — `max_events`
+  # and the `lease_seconds` deadline — still end the run through that same
+  # safeguard; nothing about renewal is relaxed.
   defp manual_admission_payload(candidate, bounds, snapshot_id, result, reason_code, explanation) do
     %{
       "decision_id" => Ecto.UUID.generate(),
@@ -555,7 +564,7 @@ defmodule ShoestringWeb.RunNewLive do
       "proposed_bounds" => %{
         "response_budget" => bounds.max_events,
         "tool_budget" => bounds.max_events,
-        "checkpoint_cadence" => 1,
+        "checkpoint_cadence" => bounds.max_events,
         "deadline" =>
           DateTime.to_iso8601(DateTime.add(DateTime.utc_now(), bounds.lease_seconds, :second)),
         "reserves" => %{"response" => 0, "tool" => 0},

@@ -27,7 +27,7 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
   import Shoestring.Test.CobblerHelpers
 
   alias Oban.Job
-  alias Shoestring.Cobbler.{Dispatcher, Wakeups, WakeupRecord}
+  alias Shoestring.Cobbler.{Dispatcher, GoalLocalObservation, Wakeups, WakeupRecord}
 
   alias Shoestring.Harness.{
     CapacitySnapshot,
@@ -112,7 +112,10 @@ defmodule Shoestring.Cobbler.WakeReobserveTest do
 
     lease = Repo.get!(ExecutionLeaseRecord, grant_id)
     assert lease.status == "renewed"
-    assert lease.admitted_snapshot_id == snapshot.snapshot_id
+
+    assert lease.admitted_snapshot_id ==
+             GoalLocalObservation.snapshot_id("wakeup", goal.id, wakeup.id, snapshot.snapshot_id)
+
     assert Repo.get!(RunRecord, run.id).status == "starting"
     assert Repo.get!(WakeupRecord, wakeup.id).status == "woken"
 

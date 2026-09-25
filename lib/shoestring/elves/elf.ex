@@ -591,7 +591,12 @@ defmodule Shoestring.Elves.Elf do
     # `Map.get/2`, not dot access: `:cancelled` terminals carry no
     # `:error_code` key, and crashing the launch handler on a legitimate
     # adapter cancellation would misreport it as `elf_launch_crashed`.
-    Logger.warning("elf launch aborted",
+    # The persisted error code is in the message itself, not only in
+    # metadata: the default formatter (CI's included) prints no metadata, so
+    # an intermittent launch abort was otherwise undiagnosable from its log.
+    # The code is a bounded identifier; the raw reason, which can carry host
+    # paths, stays in metadata only.
+    Logger.warning("elf launch aborted: #{Map.get(terminal, :error_code, "none")}",
       run_id: state.run_id,
       dispatch_id: state.dispatch_id,
       error_code: Map.get(terminal, :error_code),
@@ -2054,6 +2059,16 @@ defmodule Shoestring.Elves.Elf do
 
       state.process_owner == :adapter ->
         Process.send_after(self(), :poll_adapter, state.adapter_poll_ms)
+        {:noreply, state}
+
+      state.runner != nil and state.os_exit == :unknown ->
+        # The runner's port is still open, so its `{:exit_status, _}` is
+        # guaranteed to arrive (the port is opened with `:exit_status`), and
+        # `handle_os_exit/2` re-enters here with the real status. Classifying
+        # now would read `os_exit: :unknown` for a child that merely exited a
+        # moment before its status message landed, and report
+        # `missing_terminal_verdict` instead of the exit it actually had.
+        # This waits on that one message; it is not a timer.
         {:noreply, state}
 
       owned_group_alive?(state) and state.os_exit == :unknown ->

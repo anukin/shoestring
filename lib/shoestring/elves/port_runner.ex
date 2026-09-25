@@ -16,12 +16,33 @@ defmodule Shoestring.Elves.PortRunner do
   target argv. All cancellation then targets `-pgid` (the whole group) and
   reaps with a bounded TERM → KILL escalation.
 
-  Observed behavior (verified, not assumed): the OTP runtime already detaches
-  port children into their own session — a port child's pid == pgid == sid on
-  arrival — so the wrapper's `setsid()` raises `EPERM` there. The wrapper
+  The OTP runtime's `erl_child_setup` also `setsid()`s every port child before
+  `exec`, so the wrapper's own `setsid()` usually raises `EPERM`. The wrapper
   treats that as success (`EPERM` from `setsid` means the caller already leads
   its group, hence pid == pgid either way), and `spawn/2` additionally
   verifies leadership with `ps` and fails closed when it does not hold.
+
+  ## Leadership handshake (why `spawn/2` waits for the child)
+
+  "pid == pgid on arrival" is not true at the moment the BEAM learns the pid.
+  In OTP 28 `erl_child_setup` reports the forked pid to the BEAM right after
+  `fork()`; the child only calls `setsid()` after the BEAM acknowledges, just
+  before `exec` (`erts/emulator/sys/unix/erl_child_setup.c`,
+  `start_new_child/1`). A leadership check that runs as soon as the pid is
+  known is therefore a race: a child the scheduler has not yet run still
+  reports its parent's pgid, and the launch fails closed as
+  `not_group_leader` for a perfectly good child.
+
+  So the check is synchronised instead of hoped for. The wrapper, once it
+  leads its group (it verifies `getpgid(0) == getpid()` itself), writes one
+  line `#{"SHOESTRING-SETSID-READY <pid>"}` to stdout and blocks reading one
+  byte of stdin. `spawn/2` waits (bounded by `:handshake_timeout_ms`,
+  fail-closed) for that line, checks the pid it names, runs the `ps` check
+  while the child is provably alive and leading its group, and only then
+  writes the byte that lets the wrapper redirect stdin and `exec`. No target
+  output can precede or mix with the handshake line, because the target has
+  not been executed yet. A wrapper that sees EOF instead of the byte exits
+  without executing anything.
 
   ## Honest limitations (not terminal-grade control)
 
@@ -72,14 +93,35 @@ defmodule Shoestring.Elves.PortRunner do
   # (the OTP runtime detaches port children into their own session, so this
   # is the common case, not an error): either way pid == pgid afterwards,
   # which `spawn/2` verifies with `ps` before returning.
+  #
+  # Then it announces leadership and waits for the go byte before redirecting
+  # stdin and executing: see "Leadership handshake" in the moduledoc.
+  @handshake_prefix "SHOESTRING-SETSID-READY "
   @setsid_wrapper "import os, sys\n" <>
                     "try:\n" <>
                     "    os.setsid()\n" <>
                     "except PermissionError:\n" <>
                     "    pass\n" <>
+                    "if os.getpgid(0) != os.getpid():\n" <>
+                    "    sys.exit(125)\n" <>
+                    "os.write(1, b'#{@handshake_prefix}%d\\n' % os.getpid())\n" <>
+                    "if os.read(0, 1) != b'\\n':\n" <>
+                    "    sys.exit(125)\n" <>
                     "fd = os.open(os.devnull, os.O_RDONLY)\n" <>
                     "os.dup2(fd, 0)\n" <>
                     "os.execvp(sys.argv[1], sys.argv[1:])\n"
+  @default_handshake_timeout_ms 15_000
+
+  @doc false
+  # The wrapper and its handshake line, shared with the Claude headless
+  # transport so the two launchers cannot drift apart.
+  def setsid_wrapper, do: @setsid_wrapper
+
+  @doc false
+  def handshake_prefix, do: @handshake_prefix
+
+  @doc false
+  def default_handshake_timeout_ms, do: @default_handshake_timeout_ms
 
   @type t :: %__MODULE__{
           port: port() | nil,
@@ -124,12 +166,12 @@ defmodule Shoestring.Elves.PortRunner do
   @spec spawn([binary()], keyword()) :: {:ok, t()} | {:error, term()}
   def spawn(argv, opts \\ []) do
     with {:ok, executable, exec_args} <- validate_argv(argv),
-         {:ok, {launch_exe, launch_args}} <- wrap_argv(executable, exec_args, opts),
+         {:ok, {launch_exe, launch_args}, wrapped?} <- wrap_argv(executable, exec_args, opts),
          {:ok, cd_opt} <- validate_cd(opts),
          {:ok, port} <- open_port(launch_exe, launch_args, opts, cd_opt) do
       case :erlang.port_info(port, :os_pid) do
         {:os_pid, os_pid} when is_integer(os_pid) and os_pid > 0 ->
-          case verify_group_leader(os_pid) do
+          case verify_launched_leader(port, os_pid, wrapped?, opts) do
             :ok ->
               {:ok,
                %__MODULE__{
@@ -142,12 +184,12 @@ defmodule Shoestring.Elves.PortRunner do
                }}
 
             {:error, _reason} = error ->
-              _ = :erlang.port_close(port)
+              discard_port(port)
               error
           end
 
         _other ->
-          _ = :erlang.port_close(port)
+          discard_port(port)
           {:error, :os_pid_unavailable}
       end
     end
@@ -275,17 +317,75 @@ defmodule Shoestring.Elves.PortRunner do
       case System.find_executable("python3") do
         nil ->
           if Keyword.get(opts, :allow_no_setsid, false) do
-            {:ok, {executable, args}}
+            {:ok, {executable, args}, false}
           else
             {:error, :setsid_unavailable}
           end
 
         python3 ->
-          {:ok, {python3, ["-c", @setsid_wrapper, executable | args]}}
+          {:ok, {python3, ["-c", @setsid_wrapper, executable | args]}, true}
       end
     else
-      {:ok, {executable, args}}
+      {:ok, {executable, args}, false}
     end
+  end
+
+  # Unwrapped launches (no `python3` with `allow_no_setsid`, or `setsid:
+  # false`) keep the single immediate check they always had: there is no
+  # wrapper to hand-shake with.
+  defp verify_launched_leader(_port, os_pid, false, _opts), do: verify_group_leader(os_pid)
+
+  defp verify_launched_leader(port, os_pid, true, opts) do
+    timeout = Keyword.get(opts, :handshake_timeout_ms, @default_handshake_timeout_ms)
+
+    with :ok <- await_handshake(port, os_pid, timeout, ""),
+         :ok <- verify_group_leader(os_pid) do
+      release_wrapper(port)
+    else
+      {:error, reason} ->
+        # The child is still the blocked wrapper (or already gone): nothing
+        # of the target ever ran. Kill it before the caller closes the port.
+        _ = System.cmd("kill", ["-KILL", to_string(os_pid)], stderr_to_stdout: true)
+        {:error, reason}
+    end
+  end
+
+  # Waits for the wrapper's one handshake line. Nothing else can arrive
+  # first: the wrapper writes nothing before it, and the target has not been
+  # executed. The line may arrive split across `:stream` chunks.
+  defp await_handshake(port, os_pid, timeout, acc) do
+    receive do
+      {^port, {:data, bytes}} ->
+        buffer = acc <> bytes
+
+        case String.split(buffer, "\n", parts: 2) do
+          [line, ""] -> check_handshake(line, os_pid)
+          [_line, _extra] -> {:error, :setsid_handshake_invalid}
+          [_partial] when byte_size(buffer) > 128 -> {:error, :setsid_handshake_invalid}
+          [_partial] -> await_handshake(port, os_pid, timeout, buffer)
+        end
+
+      {^port, {:exit_status, status}} ->
+        {:error, {:setsid_handshake_failed, status}}
+    after
+      timeout -> {:error, :setsid_handshake_timeout}
+    end
+  end
+
+  defp check_handshake(@handshake_prefix <> reported, os_pid) do
+    case Integer.parse(reported) do
+      {^os_pid, ""} -> :ok
+      _other -> {:error, :setsid_handshake_invalid}
+    end
+  end
+
+  defp check_handshake(_line, _os_pid), do: {:error, :setsid_handshake_invalid}
+
+  defp release_wrapper(port) do
+    true = Port.command(port, "\n")
+    :ok
+  rescue
+    ArgumentError -> {:error, {:setsid_handshake_failed, :port_closed}}
   end
 
   defp validate_cd(opts) do
@@ -408,6 +508,22 @@ defmodule Shoestring.Elves.PortRunner do
       {^port, {:exit_status, status}} -> {:ok, status}
     after
       timeout_ms -> {:timeout, port}
+    end
+  end
+
+  # A failed spawn leaves nothing behind: the port may already have closed
+  # itself (its child died, e.g. killed after a failed handshake), so it is
+  # closed safely, and any message it queued for the caller is discarded.
+  defp discard_port(port) do
+    close_port(port)
+    flush_port(port)
+  end
+
+  defp flush_port(port) do
+    receive do
+      {^port, _message} -> flush_port(port)
+    after
+      0 -> :ok
     end
   end
 

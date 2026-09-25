@@ -46,7 +46,7 @@ defmodule Shoestring.Cobbler.Handoffs do
     3. **Fresh admission for the RECEIVER.** A fresh capacity observation is
        taken for the receiver provider and persisted as
        `capacity.snapshot_observed` under THIS goal, re-identified to a
-       deterministic goal-local snapshot id (see `localize_snapshot/3`) so
+       deterministic goal-local snapshot id (see `GoalLocalObservation`) so
        the receiver's lease can chain to a snapshot its own goal owns without
        weakening the locked same-goal ownership rule; `AdmissionEvaluation.evaluate/5` judges
        the receiver candidate and the verdict is persisted as
@@ -134,6 +134,7 @@ defmodule Shoestring.Cobbler.Handoffs do
     Commands,
     DispatchGate,
     GoalLifecycle,
+    GoalLocalObservation,
     HandoffLeasePolicy,
     HandoffWorker,
     Leases
@@ -205,6 +206,15 @@ defmodule Shoestring.Cobbler.Handoffs do
   digest replays the recorded intent and appends no events, so the caller
   can retry `request/3` freely; a different digest under the same id is a
   conflict, because a handoff intent is not silently editable.
+
+  The goal's projection is brought up to date first. Validation reads the
+  sender's checkpoint from its projected row, and no product path projects a
+  finished Elf's terminal `checkpoint.created` on its own, so without this a
+  handoff from a run that simply completed was rejected as
+  `handoff_checkpoint_not_found`. A projection that cannot run returns
+  `{:error, {:handoff_projection_failed, reason}}` BEFORE anything is
+  submitted: a transient failure must not become a terminal rejection
+  recorded under the caller's command id.
   """
   @spec request(Ecto.UUID.t(), map(), keyword()) ::
           {:ok,
@@ -218,6 +228,12 @@ defmodule Shoestring.Cobbler.Handoffs do
   def request(goal_id, attrs, opts \\ []) when is_map(attrs) do
     attrs = attrs |> stringify_keys() |> Map.put("type", @command_type)
 
+    with :ok <- project_before_validation(goal_id, opts) do
+      submit_intent(goal_id, attrs, opts)
+    end
+  end
+
+  defp submit_intent(goal_id, attrs, opts) do
     case Commands.submit(goal_id, attrs, opts) do
       {:ok, %{command: command, outcome: outcome}} ->
         # INTENT FIRST, ALWAYS. The command row is committed by `submit/3`
@@ -237,6 +253,25 @@ defmodule Shoestring.Cobbler.Handoffs do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # A malformed goal id is left to `Commands.submit/3` to reject as before;
+  # the projector raises on SQLite contention rather than returning, so that
+  # is caught here and reported as the same retryable projection failure.
+  defp project_before_validation(goal_id, opts) do
+    case Ecto.UUID.cast(goal_id) do
+      {:ok, goal_id} ->
+        case Projector.project(goal_id, clock: projector_clock(opts)) do
+          {:ok, _position} -> :ok
+          {:error, reason} -> {:error, {:handoff_projection_failed, reason}}
+        end
+
+      :error ->
+        :ok
+    end
+  rescue
+    error in [Exqlite.Error, DBConnection.ConnectionError] ->
+      {:error, {:handoff_projection_failed, {:database_error, Exception.message(error)}}}
   end
 
   # A rejected command is not an intent and gets no delivery attempt.
@@ -984,99 +1019,14 @@ defmodule Shoestring.Cobbler.Handoffs do
     end
   end
 
-  # ---------------------------------------------------------------------------
-  # Goal-local observation identity
-  # ---------------------------------------------------------------------------
-  #
-  # WHY THIS EXISTS. The production receiver probe is
-  # `Shoestring.Cobbler.WakeupObserve.observe/1`, which serves a snapshot out
-  # of the `Shoestring.Harness.Observatory` ledger. Every snapshot in that
-  # ledger is ALREADY projected as a `CapacitySnapshotRecord` owned by the
-  # protected observatory singleton goal.
-  #
-  # `persist_snapshot/6` then re-appends that reading as a
-  # `capacity.snapshot_observed` under the USER's goal, because the receiver's
-  # lease must chain to a snapshot its own goal owns — the locked
-  # "Strict Same-Goal Lease Ownership" rule, enforced by
-  # `Shoestring.Harness.Projector`. Re-appending it under the ORIGINAL
-  # snapshot id made the projector find a row owned by another goal and fail
-  # with `{:capacity_snapshot_not_owned, id}`.
-  #
-  # That failure is not confined to the handoff. The event is durable, so the
-  # goal's `harness` projector position is left at `status: "failed"` and
-  # every later projection of that goal re-reads the same poisoned event and
-  # fails again: ONE production handoff wedged the goal's projector
-  # permanently. The receiver run row and dispatch row are written directly
-  # and still existed, so the goal was left half-transferred and unprojectable.
-  #
-  # THE FIX IS RE-IDENTIFICATION, NOT RELAXATION. Ownership is not weakened
-  # anywhere: the projector's check is untouched, and no unowned snapshot is
-  # accepted. Instead the goal records its OWN observation of the same
-  # reading, under an id derived from `(goal_id, handoff_id, observed
-  # snapshot_id)`. Every field of the reading is preserved byte for byte; only
-  # the identity is goal-local.
-  #
-  # Two properties make that safe:
-  #
-  #   * **Deterministic.** The same handoff re-observing the same reading
-  #     derives the same id, so a crash-retry collapses on the existing
-  #     idempotency key instead of appending a second observation — which is
-  #     exactly the N1 coherence property `append_decision/7` documents, and
-  #     it now holds for the Observatory-backed probe too.
-  #   * **Unforgeably goal-local.** The id is a function of this goal and this
-  #     handoff, so it can only ever name a row this goal owns. It cannot
-  #     collide with the observatory's row, with another goal's, or with
-  #     another handoff's in the same goal.
-  #
-  # Provenance is not lost, because losing it would make the ledger lie about
-  # where the reading came from. The observatory's own id is recorded in the
-  # snapshot extensions under `cobbler.handoff:observed_snapshot_id`, so an
-  # operator reading the goal's timeline can still join the goal-local
-  # observation back to the ledger entry it was taken from.
-  #
-  # A snapshot that is already goal-local (the in-process `:observe` injection
-  # every test and dev caller uses, which mints a fresh id nobody else owns)
-  # is re-identified by the same rule. Deriving unconditionally keeps one code
-  # path and one set of idempotency keys: a rule that fires only when a
-  # foreign row happens to exist would be a race, not an invariant.
-  defp localize_snapshot(goal, handoff_id, %CapacitySnapshot{} = observed) do
-    local_id = local_snapshot_id(goal.id, handoff_id, observed.snapshot_id)
-
-    extensions =
-      (observed.extensions || %{})
-      |> Map.put("cobbler.handoff:observed_snapshot_id", observed.snapshot_id)
-
-    {:ok, %CapacitySnapshot{observed | snapshot_id: local_id, extensions: extensions}}
-  end
-
-  # Unreachable while `observe/2` keeps its `{:ok, %CapacitySnapshot{}}`
-  # guarantee; kept as a fail-closed tuple rather than a FunctionClauseError
-  # so a future change to that guarantee refuses a transfer instead of
-  # crashing a delivery mid-flight.
-  defp localize_snapshot(_goal, _handoff_id, other),
-    do: {:error, {:observation_failed, {:unexpected_observe_result, other}}}
-
-  # A UUIDv5-shaped digest of the three identities. Formatted with the RFC
-  # 4122 version and variant bits so it is a well-formed UUID and
-  # `Ecto.UUID.cast/1` — which the projector runs on the payload — accepts it.
-  defp local_snapshot_id(goal_id, handoff_id, observed_snapshot_id) do
-    <<head::binary-size(6), version_byte::8, mid::binary-size(1), variant_byte::8,
-      tail::binary-size(7), _discard::binary>> =
-      :crypto.hash(
-        :sha256,
-        "handoff-observation:#{goal_id}:#{handoff_id}:#{observed_snapshot_id}"
-      )
-
-    raw =
-      head <>
-        <<Bitwise.bor(0x50, Bitwise.band(version_byte, 0x0F))>> <>
-        mid <>
-        <<Bitwise.bor(0x80, Bitwise.band(variant_byte, 0x3F))>> <>
-        tail
-
-    {:ok, uuid} = Ecto.UUID.load(raw)
-    uuid
-  end
+  # Goal-local observation identity: the production receiver probe serves a
+  # snapshot the Observatory goal already owns, so it is re-identified to a
+  # deterministic id this goal owns before it is re-appended here. The rule,
+  # and why it is re-identification rather than relaxation, lives in
+  # `Shoestring.Cobbler.GoalLocalObservation`; renewal and wake use the same
+  # rule.
+  defp localize_snapshot(goal, handoff_id, observed),
+    do: GoalLocalObservation.localize(observed, "handoff", goal.id, handoff_id)
 
   defp persist_snapshot(goal, sender, snapshot, handoff_id, now, opts) do
     attrs = %{

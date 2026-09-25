@@ -252,8 +252,22 @@ defmodule Shoestring.Trajectory.Writer do
       {:error, database_error(error)}
   end
 
+  # One attempt is one whole transaction, so a retry re-reads the idempotency
+  # key and the next sequence from scratch: a rolled-back attempt leaves
+  # nothing behind, and a retry after one can neither duplicate an event nor
+  # skip a sequence.
+  #
+  # `mode: :immediate` takes SQLite's write lock at BEGIN, where the
+  # connection's `busy_timeout` applies. A deferred transaction reads first
+  # (the idempotency lookup, `max(sequence)`) and upgrades to a writer at the
+  # INSERT; in WAL mode that upgrade fails at once with "Database busy" when
+  # another connection committed since the read — no wait, so the configured
+  # timeout never helped. Inside an enclosing transaction (the test sandbox)
+  # Exqlite issues a savepoint instead, so this changes nothing there.
   defp default_attempt(input, references, state) do
-    case state.repo.transaction(fn -> transaction_attempt(input, references, state) end) do
+    case state.repo.transaction(fn -> transaction_attempt(input, references, state) end,
+           mode: :immediate
+         ) do
       {:ok, result} ->
         result
 
@@ -438,10 +452,21 @@ defmodule Shoestring.Trajectory.Writer do
   defp retry_reason(:sequence_conflict), do: :sequence_conflict
   defp retry_reason({reason, _details}) when reason in [:busy, :sequence_conflict], do: reason
 
+  # SQLite lock contention, in every form it reaches us: SQLite's own
+  # `SQLITE_BUSY` / `SQLITE_LOCKED` messages, and Exqlite's "Database busy",
+  # which is what a busy step returns (`Exqlite.Sqlite3` throws it verbatim).
+  # Anything else is a real database error and is never retried.
+  @busy_messages [
+    "database is locked",
+    "database table is locked",
+    "SQLITE_BUSY",
+    "Database busy"
+  ]
+
   defp database_error(error) do
     message = Exception.message(error)
 
-    if String.contains?(message, ["database is locked", "database table is locked", "SQLITE_BUSY"]) do
+    if String.contains?(message, @busy_messages) do
       :busy
     else
       {:database_error, message}

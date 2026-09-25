@@ -742,8 +742,10 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
     end
   end
 
+  # Reactive checkpoints run while the Elf's child may still be committing
+  # in this worktree: never write its index (see `Git.observe/3`).
   defp default_git(path, args) do
-    System.cmd("git", ["-C", path | args], stderr_to_stdout: true)
+    Shoestring.Worktrees.Git.observe(path, args)
   end
 
   defp git_value(git, path, args, field) do

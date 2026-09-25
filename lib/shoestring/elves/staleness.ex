@@ -291,8 +291,10 @@ defmodule Shoestring.Elves.Staleness do
     }
   end
 
+  # Evidence is observation only: the Elf may be committing in this very
+  # worktree, so the probe never writes its index (see `Git.observe/3`).
   defp git_output(path, args) do
-    case System.cmd("git", ["-C", path | args], stderr_to_stdout: true) do
+    case Shoestring.Worktrees.Git.observe(path, args) do
       {output, 0} -> String.trim(output)
       {_output, _status} -> "unavailable"
     end

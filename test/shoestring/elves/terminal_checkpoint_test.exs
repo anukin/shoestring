@@ -56,6 +56,33 @@ defmodule Shoestring.Elves.TerminalCheckpointTest do
     assert inputs.extensions["shoestring.elf:terminal_key"] == "elf-terminal:#{state.dispatch_id}"
   end
 
+  # Twin of the Staleness probe fix (CI 36063514995): a reactive checkpoint
+  # is collected mid-run, while the Elf's child may be running `git add` in
+  # the same worktree. On the pre-fix commit the `status` / `diff` here
+  # rewrite the stale index (taking `index.lock`) and this test fails on the
+  # index identity.
+  test "collect_reactive/3 reads a live worktree without writing its index" do
+    run_id = Ecto.UUID.generate()
+    fixture = ElfWorktreeFixture.create!(run_id)
+    on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
+
+    index = ElfWorktreeFixture.stale_index!(fixture.worktree.path)
+    before = ElfWorktreeFixture.index_identity(index)
+
+    state = elf_state(fixture.worktree.workspace_ref)
+
+    assert {:ok, inputs} = TerminalCheckpoint.collect_reactive(state, "renewal_refused")
+
+    assert ElfWorktreeFixture.index_identity(index) == before
+    refute File.exists?(index <> ".lock")
+
+    assert inputs.repository_revision == fixture.base_commit
+    assert inputs.repository_dirty == true
+    evidence = Enum.join(inputs.evidence, "\n")
+    assert evidence =~ "README.md"
+    assert evidence =~ "elf-note.txt"
+  end
+
   test "collect/3 hard-fails to an error on changed-file overflow (never truncated)" do
     run_id = Ecto.UUID.generate()
     fixture = ElfWorktreeFixture.create!(run_id)

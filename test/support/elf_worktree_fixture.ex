@@ -91,6 +91,29 @@ defmodule Shoestring.Test.ElfWorktreeFixture do
     }
   end
 
+  @doc """
+  Leaves the worktree's index with a stale stat entry for `fixture.txt`
+  (content unchanged, mtime moved) so that any git command that refreshes the
+  index would also write it back, which requires `index.lock`. Also leaves
+  one modified and one untracked file for observers to report.
+
+  Returns the absolute index path.
+  """
+  def stale_index!(worktree_path) do
+    File.touch!(Path.join(worktree_path, "fixture.txt"), 978_307_200)
+    File.write!(Path.join(worktree_path, "README.md"), "changed by the Elf\n")
+    File.write!(Path.join(worktree_path, "elf-note.txt"), "untracked\n")
+
+    {index, 0} = System.cmd("git", ["rev-parse", "--git-path", "index"], cd: worktree_path)
+    Path.expand(String.trim(index), worktree_path)
+  end
+
+  @doc "The index file's identity; a write-back replaces it via `index.lock`."
+  def index_identity(index_path) do
+    stat = File.stat!(index_path, time: :posix)
+    {stat.inode, stat.mtime, stat.size}
+  end
+
   @doc "Removes the fixture worktree and temporary source repository."
   def cleanup!(%{worktree: worktree, worktrees_dir: worktrees_dir, root: root}) do
     _ =

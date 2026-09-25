@@ -17,7 +17,7 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
   """
   use Shoestring.DataCase, async: false
 
-  alias Shoestring.Cobbler.{Dispatcher, LeaseBounds, LeaseRenewal}
+  alias Shoestring.Cobbler.{Dispatcher, GoalLocalObservation, LeaseBounds, LeaseRenewal}
 
   alias Shoestring.Harness.{
     CapacitySnapshot,
@@ -295,7 +295,9 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
     FakeHelpers.append_capacity_snapshot(goal, fresh_id)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
 
-    assert {:ok, %{outcome: :renewed, admitted_snapshot_id: ^fresh_id}} =
+    local_id = GoalLocalObservation.snapshot_id("lease-renewal", goal.id, grant_id, fresh_id)
+
+    assert {:ok, %{outcome: :renewed, admitted_snapshot_id: ^local_id}} =
              LeaseRenewal.maybe_renew(goal.id, grant_id,
                now: @now,
                stop: :already_requested,
@@ -306,7 +308,7 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
     record = Repo.get!(ExecutionLeaseRecord, grant_id)
     assert record.status == "renewed"
-    assert record.admitted_snapshot_id == fresh_id
+    assert record.admitted_snapshot_id == local_id
     assert record.admitted_snapshot_id != snapshot_id
   end
 

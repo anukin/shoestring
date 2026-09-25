@@ -74,6 +74,7 @@ defmodule Shoestring.Cobbler.Wakeups do
     AdmissionPolicy,
     Commands,
     GoalLifecycle,
+    GoalLocalObservation,
     Leases,
     WakeupRecord,
     WakeupWorker
@@ -558,7 +559,8 @@ defmodule Shoestring.Cobbler.Wakeups do
          {:ok, run} <- fetch_run(repo, wakeup),
          {:ok, lease} <- latest_lease(repo, run),
          {:ok, {request, candidate}} <- admission_context(repo, wakeup, goal, run, opts),
-         {:ok, snapshot} <- observe(opts, candidate),
+         {:ok, observed} <- observe(opts, candidate),
+         {:ok, snapshot} <- GoalLocalObservation.localize(observed, "wakeup", goal.id, wakeup.id),
          {:ok, _snapshot_event} <- persist_snapshot(wakeup, goal, run, snapshot, now, opts),
          {:ok, _position} <- Projector.project(goal.id, clock: clock(opts)),
          {:ok, evaluation} <- evaluate(repo, goal, snapshot, request, candidate, now, opts),
@@ -659,6 +661,10 @@ defmodule Shoestring.Cobbler.Wakeups do
 
   defp observe_scoping(_candidate), do: %{provider_id: nil, scope: nil}
 
+  # The snapshot arrives already re-identified to its goal-local id
+  # (`GoalLocalObservation`, derived per wakeup): the production wake probe
+  # serves a reading the Observatory goal owns, and re-appending that id here
+  # would wedge this goal's projector with `capacity_snapshot_not_owned`.
   defp persist_snapshot(wakeup, goal, run, snapshot, now, opts) do
     run_id = if run, do: run.id, else: nil
 
