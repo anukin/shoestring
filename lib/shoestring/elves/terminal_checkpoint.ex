@@ -71,6 +71,8 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   @max_diff_bytes 32 * 1024
   @max_evidence_items 32
   @chunk_bytes 1_900
+  # `Shoestring.Harness.CheckpointFallback`'s per-item text budget.
+  @item_chars 2_000
   @max_verification_lines 40
   @max_events_scanned 500
   @max_decision_entries 8
@@ -1098,12 +1100,19 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   defp skipped_note(0), do: ""
   defp skipped_note(skipped), do: "; #{skipped} lifecycle/capacity/artifact events omitted"
 
+  # Each chunk is one evidence item, and `CheckpointFallback` refuses any item
+  # over `@item_chars` characters, so the budget covers the whole item —
+  # header and part label included — counted as the fallback counts it.
+  # Sizing the body alone let a full body plus a long header overflow the
+  # item and drop the whole checkpoint to the floor template.
   defp chunk_lines(header, lines) do
+    budget = @item_chars - String.length("#{header} (part 999):\n")
+
     lines
     |> Enum.reduce([""], fn line, [current | rest] ->
       candidate = if current == "", do: line, else: current <> "\n" <> line
 
-      if byte_size(candidate) > @chunk_bytes do
+      if current != "" and String.length(candidate) > budget do
         [line, current | rest]
       else
         [candidate | rest]

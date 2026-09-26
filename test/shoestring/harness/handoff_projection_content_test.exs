@@ -22,7 +22,7 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
   use Shoestring.DataCase, async: false
 
   alias Shoestring.Elves.TerminalCheckpoint
-  alias Shoestring.Harness.{Continuation, Security}
+  alias Shoestring.Harness.{CheckpointFallback, Continuation, Security}
   alias Shoestring.Test.CobblerHelpers
   alias Shoestring.Test.ElfWorktreeFixture
   alias Shoestring.Test.FixedClock
@@ -197,6 +197,63 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
     end
   end
 
+  describe "evidence items stay within the checkpoint's per-item budget" do
+    # LOCK against 0c67f21, which added command text to the evidence lines:
+    # the live turn-2 shape (13 verification lines, 5 finished commands of
+    # ~200 characters, lifecycle events omitted) chunked a 1 900-byte body
+    # under a ~180-character header, overflowed the 2 000-character item
+    # limit, and dropped the whole terminal checkpoint to the floor template
+    # (`{:checkpoint_overflow, %{field: :evidence, actual: 2035}}` live).
+    # At base c1ae4a8 it fails only on the command-text assertion (no
+    # command text existed); its id-only lines fit the budget.
+    test "a run with long finished commands collects without overflow" do
+      commands =
+        for n <- 1..13 do
+          command = "/bin/zsh -lc \"python3 - <<'PY'\n" <> String.duplicate("x", 190) <> "\""
+          {n, "command", codex_ext(command, if(rem(n, 2) == 0, do: 0, else: nil)), exec_id(n)}
+        end
+
+      lifecycle = for n <- 14..30, do: {n, "lifecycle", %{}, exec_id(n)}
+      %{state: state} = recorded_run!(commands ++ lifecycle)
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :completed})
+      assert Enum.all?(inputs.evidence, &(String.length(&1) <= 2_000))
+      # What production does with the inputs, and what refused them live.
+      assert {:ok, _checkpoint} =
+               CheckpointFallback.build(Map.put(inputs, :checkpoint_id, Ecto.UUID.generate()))
+
+      assert Enum.join(inputs.evidence, "\n") =~ "ordinal 12 exit 0: /bin/zsh -lc"
+    end
+
+    # LOCK against base c1ae4a8 as well: the same header-blind sizing
+    # overflowed with id-only lines once a run recorded about two dozen
+    # command/tool/result events, so a long Codex run's terminal checkpoint
+    # fell to the floor template before any change on this branch.
+    test "a run with forty id-only verification lines collects without overflow" do
+      tools = for n <- 1..40, do: {n, "tool", %{}, exec_id(n)}
+      lifecycle = for n <- 41..60, do: {n, "lifecycle", %{}, exec_id(n)}
+      %{state: state} = recorded_run!(tools ++ lifecycle)
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :completed})
+      assert Enum.all?(inputs.evidence, &(String.length(&1) <= 2_000))
+      # What production does with the inputs, and what refused them live.
+      assert {:ok, _checkpoint} =
+               CheckpointFallback.build(Map.put(inputs, :checkpoint_id, Ecto.UUID.generate()))
+
+      assert Enum.join(inputs.evidence, "\n") =~ "tool #{exec_id(40)} ordinal 40"
+    end
+  end
+
+  defp exec_id(n),
+    do: "item-completed-exec-019b7758-2372-4c3f-953b-#{String.pad_leading("#{n}", 12, "0")}"
+
+  defp codex_ext(command, exit_code) do
+    %{"codex-app-server:command" => command, "codex-app-server:status" => "completed"}
+    |> then(fn ext ->
+      if exit_code, do: Map.put(ext, "codex-app-server:exit_code", exit_code), else: ext
+    end)
+  end
+
   defp recorded_run!(events) do
     goal = FakeHelpers.insert_goal()
     task = FakeHelpers.insert_task(goal)
@@ -205,7 +262,13 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
     fixture = ElfWorktreeFixture.create!(run.id)
     on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
 
-    for {ordinal, kind, extensions} <- events do
+    for event <- events do
+      {ordinal, kind, extensions, source_id} =
+        case event do
+          {ordinal, kind, extensions} -> {ordinal, kind, extensions, "item-#{ordinal}"}
+          {_ordinal, _kind, _extensions, _source_id} = full -> full
+        end
+
       assert {:ok, _event} =
                Trajectory.append(
                  goal.id,
@@ -217,7 +280,7 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
                    "idempotency_key" => "rec:#{run.id}:#{ordinal}",
                    "payload" => %{
                      "run_id" => run.id,
-                     "source_event_id" => "item-#{ordinal}",
+                     "source_event_id" => source_id,
                      "ordinal" => ordinal,
                      "occurred_at" => DateTime.to_iso8601(CobblerHelpers.now()),
                      "kind" => kind,
