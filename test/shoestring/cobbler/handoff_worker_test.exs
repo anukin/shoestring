@@ -217,7 +217,7 @@ defmodule Shoestring.Cobbler.HandoffWorkerTest do
   # LOCK (final-acceptance.md §5.4, live): an identical `run.handoff` replayed
   # after the first delivery COMPLETED and the claim was released inserted a
   # sixth handoff job, which then failed `handoff_claim_lost` and retried.
-  test "a replay after the transfer settled enqueues nothing, and a late delivery is a no-op" do
+  test "a replay after the transfer settled enqueues no new delivery job" do
     fixture = fixture()
     attrs = handoff_attrs(fixture)
 
