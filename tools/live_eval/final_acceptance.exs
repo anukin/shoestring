@@ -47,9 +47,87 @@ defmodule FinalEval do
   def repo_path, do: Path.join(state_root(), "repos/ttt")
 
   def record(phase, map) do
-    line = Jason.encode!(Map.merge(%{"phase" => phase, "at" => DateTime.utc_now()}, map))
+    line =
+      Jason.encode!(
+        Map.merge(%{"phase" => phase, "at" => DateTime.utc_now(), "code" => code_identity()}, map)
+      )
+
     File.write!(Path.join(state_root(), "live-results.jsonl"), line <> "\n", [:append])
     IO.puts("RESULT " <> line)
+  end
+
+  # The Shoestring checkout this node compiled from (the driver runs with the
+  # checkout as its working directory): HEAD, and whether the tree differed
+  # from HEAD. Recorded in EVERY phase record, so which code ran is evidence
+  # rather than an inference from timestamps (final-acceptance.md §3.1).
+  # Read-only: `GIT_OPTIONAL_LOCKS=0`, no index refresh.
+  def code_identity do
+    cwd = File.cwd!()
+    env = [{"GIT_OPTIONAL_LOCKS", "0"}]
+    {head, head_exit} = System.cmd("git", ["rev-parse", "HEAD"], cd: cwd, env: env)
+
+    {status, status_exit} =
+      System.cmd("git", ["status", "--porcelain=v1", "--untracked-files=normal"],
+        cd: cwd,
+        env: env
+      )
+
+    %{
+      "sha" => if(head_exit == 0, do: String.trim(head), else: nil),
+      "dirty" => if(status_exit == 0, do: status != "", else: nil),
+      "status_lines" =>
+        if(status_exit == 0, do: String.split(status, "\n", trim: true), else: nil)
+    }
+  rescue
+    error -> %{"error" => Exception.message(error)}
+  end
+
+  # The provider session's own view at the end of an observation window
+  # (status, in-flight item, stop request, buffered count). Diagnostic only;
+  # it decides nothing. A declined run left with no terminal can then be told
+  # apart: a session still waiting on an in-flight item, or no session.
+  def session_status(run) do
+    ids = Enum.reject([run.dispatch_id, run.id], &is_nil/1)
+
+    Enum.find_value(ids, %{"session" => "none"}, fn id ->
+      with {:ok, pid} when is_pid(pid) <- Shoestring.Harness.CodexAppServer.lookup_session(id),
+           true <- Process.alive?(pid),
+           {:ok, status} <- Shoestring.Harness.CodexAppServer.Session.status(pid) do
+        %{
+          "session" => "codex",
+          "status" => to_string(status.status),
+          "in_flight_item_type" => status.in_flight_item && status.in_flight_item["type"],
+          "stop_requested" => inspect(status.stop_requested),
+          "buffered_events" => status.event_count
+        }
+      else
+        _other -> nil
+      end
+    end)
+  rescue
+    error -> %{"session" => "error", "message" => Exception.message(error)}
+  catch
+    kind, reason -> %{"session" => "error", "message" => inspect({kind, reason})}
+  end
+
+  # Wake decisions recorded for the goal (the manual-scope refusal among them).
+  def wake_decisions(goal_id) do
+    Repo.all(
+      from e in TrajectoryEvent,
+        where:
+          e.goal_id == ^goal_id and e.type == "admission.decided" and
+            like(e.idempotency_key, "wakeup-decision:%"),
+        order_by: [asc: e.sequence],
+        select: %{sequence: e.sequence, payload: e.payload}
+    )
+    |> Enum.map(fn %{sequence: seq, payload: p} ->
+      %{
+        "sequence" => seq,
+        "result" => p["result"],
+        "reason_code" => p["reason_code"],
+        "scope" => p["scope"]
+      }
+    end)
   end
 
   def say(label, term),
@@ -1201,6 +1279,8 @@ case phase do
       "terminal" => FinalEval.terminal_event(goal_id, run_id),
       "worktree" => FinalEval.worktree_head(run),
       "wakeups" => wakeups,
+      "wake_decisions" => FinalEval.wake_decisions(goal_id),
+      "session_at_end" => FinalEval.session_status(run),
       "runs_in_goal" => runs_in_goal,
       "continuation" => continuation,
       "event_types" => FinalEval.event_types(goal_id)

@@ -321,6 +321,57 @@ defmodule Shoestring.Elves.ElfTerminalCheckpointTest do
     assert ElvesHelpers.count_events(goal.id, run_id, ["run.cancelled"]) == 1
   end
 
+  # Milestone 05 gate: "All planned and failure stops create a minimum
+  # structural checkpoint." The two overflow stops share `commit_terminal/2`
+  # with every other terminal, but nothing asserted it for them.
+  test "an event-count overflow stop checkpoints before its terminal", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    request = ElvesHelpers.run_request(goal, task)
+
+    scenario =
+      ElvesHelpers.custom_scenario(
+        :event_flood,
+        for(n <- 1..5, do: Scenario.output_event("chunk #{n}", source_event_id: "evt-#{n}"))
+      )
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               max_events_per_run: 2,
+               notify: self()
+             )
+
+    assert_receive {:elf_terminal, run_id, %{class: :failed}}, 10_000
+    assert_checkpoint_before_terminal(goal.id, run_id, "log_overflow")
+  end
+
+  test "an output-byte overflow stop checkpoints before its terminal", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    request = ElvesHelpers.run_request(goal, task)
+    printer = ~s|import sys; sys.stdout.write("y" * 100_000)|
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: ElvesHelpers.custom_scenario(:os_flood, []),
+               command: ["python3", "-c", printer],
+               runner_opts: [max_output_bytes: 4_096, kill_grace_ms: 200, reap_timeout_ms: 2_000],
+               notify: self()
+             )
+
+    assert_receive {:elf_terminal, run_id, %{class: :failed}}, 10_000
+    assert_checkpoint_before_terminal(goal.id, run_id, "log_overflow")
+  end
+
   test "interrupted run checkpoints at the safe boundary", %{sup: sup, goal: goal, task: task} do
     request = ElvesHelpers.run_request(goal, task)
 
@@ -354,6 +405,17 @@ defmodule Shoestring.Elves.ElfTerminalCheckpointTest do
   end
 
   # -- Helpers --
+
+  defp assert_checkpoint_before_terminal(goal_id, run_id, error_code) do
+    terminal = ElvesHelpers.terminal_event(goal_id, run_id)
+    assert terminal.type == "run.failed"
+    assert terminal.payload["error_code"] == error_code
+
+    assert [%{payload: payload} = checkpoint] = terminal_checkpoints(goal_id, run_id)
+    assert checkpoint.sequence < terminal.sequence
+    assert payload["stop_reason"] =~ "run.failed"
+    assert payload["extensions"]["shoestring.elf:terminal_outcome"] == "failed"
+  end
 
   defp terminal_checkpoints(goal_id, run_id) do
     Repo.all(
