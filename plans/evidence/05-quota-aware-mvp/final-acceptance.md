@@ -561,8 +561,10 @@ findings 1, 2 and 4 bear on gates 5 and 3.
 `gate_0a.node_test`, `ui.node_test`) with a fresh `SHOESTRING_STATE_DIR`
 under `$TMPDIR`, run by the recovery worker, exit 0:
 
-- `4 doctests, 1454 tests, 0 failures, 1 skipped (6 excluded)`, finished in
-  120.6 s;
+- `4 doctests, 1454 tests, 0 failures, 1 skipped (6 excluded)`. Run three
+  times with identical counts: on `d51f47c` plus the recovery's working-tree
+  edits (120.6 s), on `168a2e4` (119.2 s), and on the commit that adds this
+  sentence (reported in the PR);
 - Node gate_0a: pass 52, fail 0;
 - Node UI: pass 7, fail 0.
 
