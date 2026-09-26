@@ -33,6 +33,11 @@ UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-
 # is used for Shoestring-managed worktrees, `$REDACTED_PATH` for the rest.
 PATH = re.compile(r"/(?:Users|private|var|home|Library|opt)/[^\s\"'`,;)\]}<>|\\]*")
 PGID = re.compile(r"pgid:\d+")
+# Provider-generated prefixed identifiers (Claude message, request and
+# tool-use ids; OpenAI-style message ids). Substituted shape-preserving per
+# plans/evidence/04-single-elf/README.md: same prefix, same length, digits
+# only after the prefix, 1:1 and deterministic.
+PREFIXED = re.compile(r"\b(msg|req|toolu)_[0-9A-Za-z]{8,}")
 # The operator's login name appears in captured `ls -l` output; it is a machine
 # identifier, replaced same-length like everything else.
 LOGIN = re.compile(r"\b%s\b" % re.escape(getpass.getuser()))
@@ -45,6 +50,16 @@ OMIT = {
 DETAIL_CAP = 600
 
 uuid_map = {}
+prefixed_map = {}
+
+
+def synthetic_prefixed(match):
+    real = match.group(0)
+    if real not in prefixed_map:
+        prefix = match.group(1) + "_"
+        n = str(len(prefixed_map) + 1)
+        prefixed_map[real] = prefix + n.rjust(len(real) - len(prefix), "0")
+    return prefixed_map[real]
 
 
 def synthetic_uuid(real):
@@ -72,6 +87,7 @@ def substitute(text):
     text = PATH.sub(path, text)
     text = UUID.sub(lambda m: synthetic_uuid(m.group(0)), text)
     text = PGID.sub(lambda m: pad("pgid:", len(m.group(0))), text)
+    text = PREFIXED.sub(synthetic_prefixed, text)
     text = LOGIN.sub(lambda m: pad("$USER", len(m.group(0))), text)
     return text
 
@@ -149,7 +165,10 @@ def main(argv):
         label, run_id = spec.split("=", 1)
         with open("%s/%s.md" % (out_dir, label), "w") as fh:
             fh.write(render_run(db, label, run_id))
-    json.dump({"synthetic_ids_assigned": len(uuid_map)}, sys.stdout)
+    json.dump(
+        {"synthetic_ids_assigned": len(uuid_map), "prefixed_ids_assigned": len(prefixed_map)},
+        sys.stdout,
+    )
     print()
 
 
