@@ -448,6 +448,78 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     assert count_types(goal.id, run_id, ["harness.event_recorded"]) == 5
   end
 
+  # LOCK (fails at 32a3fe6 and at base c1ae4a8): the live shape of
+  # final-acceptance.md §5.2. The deadline has passed, and the next event is
+  # the START of a Codex `fileChange`. Counting that START as a tool spend
+  # made it a boundary, so the Elf declined — expired, checkpoint, suspend —
+  # with the file write in flight. The decline must wait for the item's
+  # completion.
+  test "a passed deadline declines at the tool's completion, not at its start", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:deadline_expire, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        codex_file_change("fc-1", "inProgress", source_event_id: "item-started-fc-1"),
+        codex_file_change("fc-1", "completed", source_event_id: "item-completed-fc-1"),
+        Scenario.output_event("after", source_event_id: "evt-out-after"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    hold_before_first_event(pid)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 100,
+      tool_budget: 100,
+      reserves: %{response: 1, tool: 1},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), -60, :second)
+    )
+
+    release_elf(pid)
+
+    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+
+    ordered = ordered_events(goal.id, run_id)
+
+    # The file change completed before the lease was declined.
+    assert sequence_before?(
+             ordered,
+             {:harness, "item-completed-fc-1"},
+             {"lease.expired", nil}
+           )
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "item-completed-fc-1"},
+             {"checkpoint.created", nil}
+           )
+  end
+
   # LOCK (fails at 8c97eb7 and at base c1ae4a8): the `/runs/new` shape. The
   # grant is committed (`lease.granted`) but nothing projects the goal, so
   # there is no lease ROW when the Elf starts. Live (final-acceptance.md
@@ -724,6 +796,22 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
         "codex-app-server:item_id" => item_id,
         "codex-app-server:status" => status,
         "codex-app-server:exit_code" => 0
+      }
+    }
+  end
+
+  defp codex_file_change(item_id, status, opts) do
+    %{
+      kind: :tool,
+      offset_ms: Keyword.get(opts, :offset_ms, 0),
+      source_event_id: Keyword.fetch!(opts, :source_event_id),
+      error: nil,
+      result: nil,
+      capacity_snapshot: nil,
+      extensions: %{
+        "codex-app-server:item_id" => item_id,
+        "codex-app-server:tool" => "fileChange",
+        "codex-app-server:status" => status
       }
     }
   end
