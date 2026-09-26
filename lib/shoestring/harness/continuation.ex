@@ -544,6 +544,16 @@ defmodule Shoestring.Harness.Continuation do
   # goal unfinished (live, 2 of 2 handoffs; final-acceptance.md §4). The
   # label says whose statement it is and that the session it limited has
   # ended; it adds no claim about what remains.
+  @doc false
+  # The exact goal-statement section `compose_handoff_prompt/2` adds for this
+  # checkpoint record ("" when the record has no acceptance contract). The
+  # fixture rubrics grade prompt bytes without it; removing the literal
+  # section is exact even when the statement itself contains a later
+  # section's header, which a pattern over the prompt cannot tell apart.
+  @spec handoff_objective_section(map() | struct() | nil) :: String.t()
+  def handoff_objective_section(nil), do: ""
+  def handoff_objective_section(record), do: record |> objective_text() |> objective_section()
+
   defp objective_section(nil), do: ""
 
   defp objective_section(objective),

@@ -64,7 +64,6 @@ defmodule Shoestring.Cobbler.LeaseBounds do
     tools: 0,
     due: false,
     quota_refused: false,
-    pending_starts: MapSet.new(),
     counted_commands: MapSet.new(),
     seen: MapSet.new()
   ]
@@ -91,7 +90,6 @@ defmodule Shoestring.Cobbler.LeaseBounds do
           tools: non_neg_integer(),
           due: boolean(),
           quota_refused: boolean(),
-          pending_starts: MapSet.t(),
           counted_commands: MapSet.t(),
           seen: MapSet.t()
         }
@@ -129,8 +127,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   re-fires the edge-triggered `:renewal_due` effect and the full
   due → stop → re-evaluate sequence. Budgets, grant/run identity, and the
   already-seen set are kept: events counted in an earlier epoch are never
-  double-spent, and command correlation (`pending_starts`,
-  `counted_commands`) carries over because item ids are unique per call.
+  double-spent, and command correlation (`counted_commands`) carries over because item ids are unique per call.
   """
   @spec new_epoch(t()) :: t()
   def new_epoch(%__MODULE__{} = state) do
@@ -334,11 +331,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   # the START of a Codex `fileChange`, with the file write still in flight
   # (live, final-acceptance.md §5.2).
   defp spend(state, %HarnessEvent{kind: :tool} = event) do
-    if tool_start?(event.extensions) do
-      %{state | pending_starts: MapSet.put(state.pending_starts, correlation_id(event))}
-    else
-      %{state | tools: state.tools + 1}
-    end
+    if tool_start?(event.extensions), do: state, else: %{state | tools: state.tools + 1}
   end
 
   defp spend(state, %HarnessEvent{kind: :command} = event) do
@@ -355,7 +348,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
         }
       end
     else
-      %{state | pending_starts: MapSet.put(state.pending_starts, item_id)}
+      state
     end
   end
 

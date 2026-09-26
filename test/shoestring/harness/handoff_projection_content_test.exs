@@ -137,6 +137,40 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
     end
   end
 
+  describe "the fixture rubrics' goal-statement removal" do
+    # LOCK (review nit on 4ae2640): the rubric helper removed the section with
+    # a lazy pattern ending at the first `. Completed work: `, so a statement
+    # containing that phrase was cut short and its tail stayed in the graded
+    # bytes.
+    test "removes a statement that itself contains a later section's header, exactly" do
+      cid = Ecto.UUID.generate()
+      tricky = "Ship the CLI. Completed work: must stay green. Then stop"
+
+      base = %{
+        id: cid,
+        stop_reason: "run.completed",
+        decisions: %{"items" => ["chose A"]},
+        unresolved_issues: %{"items" => []},
+        evidence: %{"items" => ["command cmd-1 ordinal 1"]}
+      }
+
+      with_contract = Map.put(base, :acceptance_contract, %{"criteria" => [tricky]})
+
+      prompt =
+        Continuation.compose_handoff_prompt(continuation(cid), checkpoint_record: with_contract)
+
+      without = Continuation.compose_handoff_prompt(continuation(cid), checkpoint_record: base)
+
+      assert prompt =~ tricky
+
+      assert Shoestring.Test.EvalMatrixHelpers.without_goal_statement(prompt, with_contract) ==
+               without
+
+      # A record with no contract leaves the prompt untouched.
+      assert Shoestring.Test.EvalMatrixHelpers.without_goal_statement(without, base) == without
+    end
+  end
+
   describe "TerminalCheckpoint command evidence and next action" do
     # Base: evidence lines were `command <id> ordinal <n>` with no command
     # and no exit status, and next_action said `mix precommit`.
@@ -199,6 +233,50 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
         assert {:ok, inputs} = TerminalCheckpoint.collect(state, terminal)
         refute inputs.next_action =~ "mix", inspect(terminal)
       end
+    end
+  end
+
+  describe "TerminalCheckpoint names provider items that never completed" do
+    # LOCK (final-acceptance.md §5.2): after a lease stop, Codex started one
+    # more `fileChange` and the interrupt ended it with no completion event.
+    # Its files were on disk, but the checkpoint said nothing about an
+    # unfinished item: only an id-only `tool` line.
+    test "a Codex item with a recorded start and no completion is named; a finished one is not" do
+      %{state: state} =
+        recorded_run!([
+          codex_item(1, "command", "exec-aaaa", "inProgress", %{
+            "codex-app-server:command" => "go test ./..."
+          }),
+          codex_item(2, "command", "exec-aaaa", "completed", %{
+            "codex-app-server:command" => "go test ./...",
+            "codex-app-server:exit_code" => 0
+          }),
+          codex_item(3, "tool", "exec-bbbb", "inProgress", %{
+            "codex-app-server:tool" => "fileChange"
+          })
+        ])
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :interrupted})
+      evidence = Enum.join(inputs.evidence, "\n")
+
+      assert evidence =~ "not completed: tool fileChange item-started-exec-bbbb ordinal 3"
+      refute evidence =~ "not completed: command"
+      assert evidence =~ "exit 0: go test ./..."
+    end
+
+    test "a Claude tool start with no end is named" do
+      %{state: state} =
+        recorded_run!([
+          claude_tool(1, "start", "toolu_01BBBBBBBBBBBBBBBBBBBBBB", command: "go vet ./..."),
+          claude_tool(2, "start", "toolu_01CCCCCCCCCCCCCCCCCCCCCC", command: "gofmt -l ."),
+          claude_tool(3, "end", "toolu_01CCCCCCCCCCCCCCCCCCCCCC", [])
+        ])
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :interrupted})
+      evidence = Enum.join(inputs.evidence, "\n")
+
+      assert evidence =~ ~r/not completed: command Bash item-1 ordinal 1/
+      refute evidence =~ ~r/not completed: command Bash item-2/
     end
   end
 
@@ -313,6 +391,16 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
     }
 
     %{state: state, goal: goal, run: run}
+  end
+
+  defp codex_item(ordinal, kind, item_id, status, extra) do
+    phase = if status == "inProgress", do: "started", else: "completed"
+
+    {ordinal, kind,
+     Map.merge(
+       %{"codex-app-server:item_id" => item_id, "codex-app-server:status" => status},
+       extra
+     ), "item-#{phase}-#{item_id}"}
   end
 
   defp codex_command(ordinal, command, exit_code) do

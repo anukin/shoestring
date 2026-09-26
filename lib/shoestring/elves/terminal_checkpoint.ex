@@ -871,6 +871,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
       rows
       |> Enum.flat_map(&verification_line(&1, started))
       |> Enum.filter(&is_binary/1)
+      |> Kernel.++(unfinished_lines(rows))
 
     skipped =
       rows
@@ -926,6 +927,66 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   end
 
   defp verification_line(_other, _started), do: []
+
+  # A provider item whose START is recorded but whose completion is not.
+  # After a lease stop this is the provider-side race (final-acceptance.md
+  # §5.2): Codex can start one more item between the completion boundary and
+  # the interrupt landing, and the interrupt ends it with no completion
+  # event, although its writes may already be on disk (the changed-files
+  # evidence shows them). Naming it here keeps that fact in the checkpoint
+  # instead of leaving a silent gap. These lines go last so the newest-kept
+  # cap never drops them.
+  defp unfinished_lines(rows) do
+    {order, open} =
+      Enum.reduce(rows, {[], %{}}, fn {_sequence, payload}, {order, open} ->
+        case item_boundary(payload) do
+          {:start, id} -> {[id | order], Map.put(open, id, payload)}
+          {:end, id} -> {order, Map.delete(open, id)}
+          nil -> {order, open}
+        end
+      end)
+
+    order
+    |> Enum.reverse()
+    |> Enum.uniq()
+    |> Enum.filter(&Map.has_key?(open, &1))
+    |> Enum.map(fn id ->
+      payload = Map.fetch!(open, id)
+
+      "not completed: #{payload["kind"]} #{item_label(payload)}" <>
+        "#{payload["source_event_id"]} ordinal #{payload["ordinal"]} " <>
+        "(start recorded, no completion recorded before this checkpoint)"
+    end)
+  end
+
+  defp item_boundary(%{"kind" => kind, "extensions" => %{} = ext})
+       when kind in ["command", "tool"] do
+    cond do
+      is_binary(ext["codex-app-server:item_id"]) ->
+        if ext["codex-app-server:status"] == "inProgress",
+          do: {:start, ext["codex-app-server:item_id"]},
+          else: {:end, ext["codex-app-server:item_id"]}
+
+      is_binary(ext["claude-headless:tool_use_id"]) ->
+        case ext["claude-headless:boundary"] do
+          "start" -> {:start, ext["claude-headless:tool_use_id"]}
+          "end" -> {:end, ext["claude-headless:tool_use_id"]}
+          _other -> nil
+        end
+
+      true ->
+        nil
+    end
+  end
+
+  defp item_boundary(_payload), do: nil
+
+  defp item_label(%{"extensions" => ext}) do
+    case ext["codex-app-server:tool"] || ext["claude-headless:tool_name"] do
+      name when is_binary(name) and name != "" -> name <> " "
+      _other -> ""
+    end
+  end
 
   @max_command_chars 200
 

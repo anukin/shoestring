@@ -63,7 +63,7 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
   test "trajectory arm: full recovery through the real handoff path", %{sup: sup} do
     %{goal: goal, task: task, dir: dir, leg_a_run: leg_a_run} = leg_a_fixture!(sup, :trajectory)
 
-    {prompt, _triple} = drive_handoff!(sup, goal, leg_a_run, dir)
+    {prompt, triple} = drive_handoff!(sup, goal, leg_a_run, dir)
 
     assert prompt =~ @constraint
     assert prompt =~ "status: fixed"
@@ -71,7 +71,7 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
     terminal = drive_applier!(sup, goal, task, dir, prompt)
     assert terminal == :completed
 
-    scores = score_arm(dir, prompt)
+    scores = score_arm(dir, prompt, checkpoint_record!(triple))
     assert scores.acceptance == 2
     assert scores.constraint == 2
     assert scores.total == 11
@@ -80,7 +80,7 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
 
   test "naive arm: fix without constraint, noisier reads", %{sup: sup} do
     %{goal: goal, task: task, dir: dir, leg_a_run: leg_a_run} = leg_a_fixture!(sup, :naive)
-    {prompt, _triple} = drive_handoff!(sup, goal, leg_a_run, dir)
+    {prompt, triple} = drive_handoff!(sup, goal, leg_a_run, dir)
 
     refute prompt =~ @constraint
     assert prompt =~ "status: fixed"
@@ -88,7 +88,7 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
     terminal = drive_applier!(sup, goal, task, dir, prompt)
     assert terminal == :completed
 
-    scores = score_arm(dir, prompt)
+    scores = score_arm(dir, prompt, checkpoint_record!(triple))
     assert scores.acceptance == 2
     assert scores.constraint == 0
     assert scores.total == 9
@@ -132,7 +132,7 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
     terminal = drive_applier!(sup, goal, task, dir, prompt)
     assert terminal == :failed
 
-    scores = score_arm(dir, prompt)
+    scores = score_arm(dir, prompt, nil)
     assert scores.acceptance == 0
     assert scores.constraint == 0
     assert scores.total == 3
@@ -357,7 +357,10 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
   # Mechanical scoring (file bytes + exit codes + applier log, never prose)
   # ----------------------------------------------------------------------------
 
-  defp score_arm(dir, prompt) do
+  defp checkpoint_record!(triple),
+    do: Repo.get!(Shoestring.Harness.CheckpointRecord, triple.checkpoint_id)
+
+  defp score_arm(dir, prompt, record) do
     {_, check_exit} = System.cmd(Path.join(dir, "check.sh"), [], cd: dir)
     service = File.read!(Path.join(dir, "service.txt"))
     forbidden = File.read!(Path.join(dir, "forbidden.txt"))
@@ -411,7 +414,7 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
     turns = if check_exit == 0, do: 2, else: 0
     # Graded without the arm-invariant goal-statement section, as in
     # `Eval.score_arm/1`: the threshold predates that section.
-    capacity = if byte_size(Eval.without_goal_statement(prompt)) <= 800, do: 2, else: 1
+    capacity = if byte_size(Eval.without_goal_statement(prompt, record)) <= 800, do: 2, else: 1
 
     %{
       acceptance: acceptance,
