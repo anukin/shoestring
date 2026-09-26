@@ -214,6 +214,82 @@ defmodule Shoestring.Cobbler.HandoffWorkerTest do
     ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(fixture.goal.id, receiver.id))
   end
 
+  # LOCK (final-acceptance.md §5.4, live): an identical `run.handoff` replayed
+  # after the first delivery COMPLETED and the claim was released inserted a
+  # sixth handoff job, which then failed `handoff_claim_lost` and retried.
+  test "a replay after the transfer settled enqueues nothing, and a late delivery is a no-op" do
+    fixture = fixture()
+    attrs = handoff_attrs(fixture)
+
+    {:ok, %{job: handoff_job, handoff_id: handoff_id}} = Handoffs.request(fixture.goal.id, attrs)
+    assert :ok = perform_delivery(handoff_job)
+    receiver = receiver_run!(fixture)
+
+    assert [dispatch_job] = Repo.all(from j in Job, where: j.queue == "dispatch")
+    assert :ok = perform_delivery(dispatch_job)
+
+    assert {:ok, _} =
+             ElvesHelpers.wait_until(fn ->
+               ElvesHelpers.terminal_event(fixture.goal.id, receiver.id)
+             end)
+
+    # What the live node did: the delivery finished and the operator
+    # released the goal's claim.
+    Repo.update_all(from(j in Job, where: j.id == ^handoff_job.id), set: [state: "completed"])
+    {:ok, %{command: release}} = Commands.submit(fixture.goal.id, release_command())
+    assert release.status == "resolved"
+
+    assert {:ok, %{outcome: :replayed, handoff_id: ^handoff_id, job: nil}} =
+             Handoffs.request(fixture.goal.id, attrs)
+
+    assert [only] = Repo.all(from j in Job, where: j.queue == "handoff")
+    assert only.id == handoff_job.id
+
+    # At-least-once delivery of the settled transfer, after the claim is gone,
+    # converges without touching anything.
+    assert :ok = perform_delivery(handoff_job)
+
+    assert length(handoff_events(fixture.goal.id)) == 1
+    assert Enum.map(receiver_runs(fixture), & &1.id) == [receiver.id]
+    assert length(Repo.all(DispatchRecord)) == 1
+    assert [_dispatch_job] = Repo.all(from j in Job, where: j.queue == "dispatch")
+    assert 1 == ElvesHelpers.count_events(fixture.goal.id, receiver.id, ["run.running"])
+
+    ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(fixture.goal.id, receiver.id))
+  end
+
+  test "a replay while the first delivery is still pending returns that attempt" do
+    fixture = fixture()
+    attrs = handoff_attrs(fixture)
+
+    {:ok, %{job: first}} = Handoffs.request(fixture.goal.id, attrs)
+    assert {:ok, %{outcome: :replayed, job: replayed}} = Handoffs.request(fixture.goal.id, attrs)
+
+    assert replayed.id == first.id
+    assert [only] = Repo.all(from j in Job, where: j.queue == "handoff")
+    assert only.id == first.id
+    assert receiver_runs(fixture) == []
+  end
+
+  test "a replay in the crash window (intent committed, attempt lost) restores one attempt" do
+    fixture = fixture()
+    attrs = handoff_attrs(fixture)
+
+    {:ok, %{handoff_id: handoff_id}} = Handoffs.request(fixture.goal.id, attrs)
+    Repo.delete_all(Job)
+
+    assert {:ok, %{outcome: :replayed, job: %Job{} = restored}} =
+             Handoffs.request(fixture.goal.id, attrs)
+
+    assert restored.args["handoff_id"] == handoff_id
+    assert [_only] = Repo.all(from j in Job, where: j.queue == "handoff")
+
+    assert :ok = perform_delivery(restored)
+    receiver = receiver_run!(fixture)
+    assert length(handoff_events(fixture.goal.id)) == 1
+    assert receiver.dispatch_id == handoff_id
+  end
+
   test "a refused handoff delivery is :ok, records the decision, and executes nothing" do
     fixture = fixture()
 
