@@ -570,3 +570,122 @@ under `$TMPDIR`, run by the recovery worker, exit 0:
 
 The 6 exclusions are the `@tag :live` provider smokes, not run. No provider
 was called by the gate.
+
+## 8. Takeover addendum (2026-09-25, after the session-quota stop)
+
+§§1–7 are the recovered branch record, preserved byte-for-byte. This
+section records only what the takeover verified, and leaves every gate
+that needs a live run exactly where §§6–7 left it.
+
+### 8.1 Fresh-database migration diagnosis (VERIFIED, no existing DB touched)
+
+The live attempt stopped at a fresh database: `mix ecto.migrate` under
+`MIX_ENV=prod` failed at `20260903000650
+HardenCapacitySnapshotContractV2` with
+`there is already another table or index with this name:
+harness_capacity_windows` on
+`ALTER TABLE harness_capacity_windows_v2 RENAME TO
+harness_capacity_windows`, after `DROP TABLE harness_capacity_windows`
+had already succeeded. Retrying on the same state dir then fails
+differently (`table harness_capacity_windows_v2 already exists`):
+the migration is non-transactional (`@disable_ddl_transaction`), so the
+half-state (new table present, old table gone, version not recorded)
+persists. No cleanup, drop, or reset of any existing database was
+performed; all probes used fresh state dirs under `$TMPDIR`, and the
+wedged probe dirs were discarded, never repaired in place.
+
+Cause, isolated by reproduction (VERIFIED):
+
+- The same `RENAME` issued through the database CLI against a copy of
+  the half-state file succeeds, so the migration SQL and schema are
+  sound.
+- `mix ecto.migrate` (boots the full application next to the migrator)
+  fails on a fresh database repeatedly, with and without `POOL_SIZE=1`.
+- `mix run --no-start -e 'Shoestring.Release.migrate()'` — which starts
+  only the repo with `pool_size: 1` (the path already hardcoded in
+  `lib/shoestring/release.ex`, REPO-INSPECTION) and no application
+  supervision tree — migrates a fresh database fully (all 16 versions,
+  rerun reports `Migrations already up`).
+
+The non-transactional DROP+RENAME rebuild (`PRAGMA foreign_keys`
+toggling is per-connection) does not survive the booted application's
+concurrent connections to the same file. The next live run must build
+its fresh database with the release migrator path, not
+`mix ecto.migrate`. No historical migration was edited.
+
+### 8.2 Fix-status ledger (code-complete and hermetic; live pending)
+
+Each item below names the commits (all on this branch, all preserved),
+the hermetic lock with its pre-fix proof from this takeover, and what
+still needs a live run. Nothing here closes a gate that §§6–7 left
+open.
+
+- **Finding 4 — replay enqueues a new job** (`b474253`, `4d5975e`):
+  replayed requests now converge (settled: none; live attempt: the
+  existing one; crash window: one new), and a late delivery of a
+  settled transfer converges instead of failing `handoff_claim_lost`.
+  LOCK for the two broken sub-cases, proven against the pre-fix
+  commit (4 tests, 2 failures: settled-replay inserted a fresh job;
+  late delivery failed the claim check). The pending-attempt and
+  crash-window sub-cases passed pre-fix too and are DOCUMENTATION.
+  LIVE-UNVERIFIED: no live handoff has run since the fix.
+- **Finding 1 — manual-scope recheck retries forever** (`6080764`):
+  a manual-scope decline recheck now records one idempotency-keyed
+  `require_confirmation` decision (`manual_scope_not_resumable`, with
+  explanation) and settles the wake row, instead of failing
+  `no_observation_for_provider` on every retry and every boot.
+  Provider-scoped wakes are unchanged. LOCK, proven against the
+  pre-fix commit (3 tests, 2 failures, both `observation_failed`;
+  the provider-scope twin passed pre-fix and is DOCUMENTATION).
+  LIVE-UNVERIFIED.
+- **Finding 2 — suspended run with no terminal** (`0750ff5`): both
+  adapters now return an explicit `session_not_found` transport error
+  for live reads with no registered session instead of the simulated
+  completion, and hermetic callers keep the simulation. LOCK, proven
+  against the pre-fix commit (4 tests, 2 failures: live reads
+  returned the scripted completion). Whether a stop request can
+  otherwise go unanswered remains untested live; the driver now
+  records the session's own end-of-window status and the wake
+  decisions so the next run can tell the cases apart. Stays open
+  pending live.
+- **Finding 3 — provider-side next-item race** (`8d91f80`): bounded,
+  not eliminated (the adapter has no pause). The checkpoint now names
+  every item with a recorded start and no recorded completion, for
+  Codex and Claude, last so the newest-kept cap never drops it.
+  LOCK for both providers, proven against the pre-fix commit
+  (2 tests, 2 failures: pre-fix evidence has no `not completed:`
+  lines). Live naming is exercised only by the next live run.
+- **Finding 6 — code identity per live phase** (`0750ff5`): the
+  driver records HEAD, dirty state, and status lines in EVERY phase
+  record (read-only git calls). Code-complete; no phase records exist
+  yet because no live run has executed since. Stays open until live
+  produces them.
+- **Overflow stops checkpoint** (`0750ff5`): the two new tests pass
+  against the pre-fix commit as well (2 tests, 0 failures), so they
+  are DOCUMENTATION of the shared terminal path, not regression
+  locks. Failed and crash stops remain hermetic-only, as in §7.
+
+### 8.3 Acceptance 8 and the comparison (unchanged, not re-run)
+
+The pre-registered cycle failed and the post-hoc repair showed no
+consistent advantage; that distinction stands, and the comparison was
+NOT repeated — re-running it to manufacture an advantage is out of
+scope. Acceptance 8 stays exactly as §7 records it (measured under
+the pre-registered design; promotion is the reviewer's call).
+
+### 8.4 Live status and remaining criteria
+
+No live provider run executed in this takeover: the Claude session
+quota was exhausted (reset late evening Pacific), and the authorized
+ONE bounded Go Tic-Tac-Toe run was preserved, not consumed. Before
+any live work, the process check showed no running Elf, beam node, or
+provider session from this project — only the UI and provider
+bridges — so nothing was duplicated or interrupted. The gate in §7.1
+predates the five fix commits; the current gate is reported in the
+takeover commit, not here.
+
+Iteration 6 stays locked. What unlocks it is unchanged: a live run on
+the release-migrated database exercising findings 1, 2, and 4 live
+(settled replay with no new job, manual-scope wake settled once, a
+declined run told apart by its session status), per-phase code
+identity in the records, and a reviewer decision on Acceptance 8.
