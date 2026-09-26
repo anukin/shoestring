@@ -245,6 +245,34 @@ defmodule Shoestring.Cobbler.HandoffWorkerTest do
     assert [only] = Repo.all(from j in Job, where: j.queue == "handoff")
     assert only.id == handoff_job.id
 
+    assert length(handoff_events(fixture.goal.id)) == 1
+    assert Enum.map(receiver_runs(fixture), & &1.id) == [receiver.id]
+    assert 1 == ElvesHelpers.count_events(fixture.goal.id, receiver.id, ["run.running"])
+
+    ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(fixture.goal.id, receiver.id))
+  end
+
+  # LOCK: the same live sequence's job then failed `handoff_claim_lost` on
+  # every attempt, because `perform/3` checked the claim before noticing the
+  # transfer had already settled.
+  test "a late delivery of a settled transfer after the claim is released converges" do
+    fixture = fixture()
+
+    {:ok, %{job: handoff_job}} = Handoffs.request(fixture.goal.id, handoff_attrs(fixture))
+    assert :ok = perform_delivery(handoff_job)
+    receiver = receiver_run!(fixture)
+
+    assert [dispatch_job] = Repo.all(from j in Job, where: j.queue == "dispatch")
+    assert :ok = perform_delivery(dispatch_job)
+
+    assert {:ok, _} =
+             ElvesHelpers.wait_until(fn ->
+               ElvesHelpers.terminal_event(fixture.goal.id, receiver.id)
+             end)
+
+    {:ok, %{command: release}} = Commands.submit(fixture.goal.id, release_command())
+    assert release.status == "resolved"
+
     # At-least-once delivery of the settled transfer, after the claim is gone,
     # converges without touching anything.
     assert :ok = perform_delivery(handoff_job)
