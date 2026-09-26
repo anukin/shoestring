@@ -801,6 +801,11 @@ case phase do
     checkpoint_row = Repo.get(CheckpointRecord, checkpoint_id)
     initial_state = FinalEval.worktree_head(run)
 
+    # LIVE_HANDOFF_TAG names an additional, separately recorded transfer from
+    # the same sender checkpoint (a new command id; the product decides
+    # whether that boundary may be handed off again).
+    tag = System.get_env("LIVE_HANDOFF_TAG")
+
     # Attempt 2 only (LIVE_RECLAIM=1). Attempt 1 failed every delivery with
     # `handoff_claim_lost`: this driver had released turn 2's claim, which
     # #83's driver never did. The intent stayed unsettled by design, so this
@@ -851,10 +856,6 @@ case phase do
 
     FinalEval.say("reclaim", reclaim)
     refs = Continuation.decision_refs(Repo, run.goal_id)
-    # LIVE_HANDOFF_TAG names an additional, separately recorded transfer from
-    # the same sender checkpoint (a new command id; the product decides
-    # whether that boundary may be handed off again).
-    tag = System.get_env("LIVE_HANDOFF_TAG")
     command_id = if tag, do: "live-handoff-#{run.id}-#{tag}", else: "live-handoff-#{run.id}"
 
     request =
