@@ -779,7 +779,9 @@ case phase do
       "event_types" => FinalEval.event_types(run.goal_id)
     })
 
-    FinalEval.say("release", FinalEval.release_claim(run.goal_id, turn) |> elem(0))
+    # turn 2's goal keeps its claim: the handoff dispatches under it.
+    if turn == "turn1",
+      do: FinalEval.say("release", FinalEval.release_claim(run.goal_id, turn) |> elem(0))
 
   "handoff" ->
     sender = FinalEval.result_for("turn2")
@@ -798,6 +800,56 @@ case phase do
 
     checkpoint_row = Repo.get(CheckpointRecord, checkpoint_id)
     initial_state = FinalEval.worktree_head(run)
+
+    # Attempt 2 only (LIVE_RECLAIM=1). Attempt 1 failed every delivery with
+    # `handoff_claim_lost`: this driver had released turn 2's claim, which
+    # #83's driver never did. The intent stayed unsettled by design, so this
+    # boot's `HandoffReconciler` re-enqueued it. Re-establish the goal's claim
+    # with a product `task.claim` command against the goal's own manual
+    # admission event, then replay the identical request below; the product
+    # converges both on the one intent.
+    reclaim =
+      if System.get_env("LIVE_RECLAIM") == "1" do
+        admission =
+          Repo.one!(
+            from e in TrajectoryEvent,
+              where: e.goal_id == ^run.goal_id and e.type == "admission.decided",
+              order_by: [asc: e.sequence],
+              limit: 1
+          )
+
+        jobs_at_boot =
+          Repo.all(
+            from j in Oban.Job,
+              where: j.queue == "handoff",
+              order_by: j.id,
+              select: %{id: j.id, state: j.state, attempt: j.attempt}
+          )
+
+        claimed =
+          Shoestring.Cobbler.submit_command(run.goal_id, %{
+            "type" => "task.claim",
+            "command_id" => "live-reclaim-#{run.id}",
+            "payload" => %{
+              "intent" => admission.payload["requested_capability"],
+              "scope" => admission.payload["scope"],
+              "candidate" =>
+                Map.take(admission.payload["candidate"], ["provider_id", "adapter_id"]),
+              "admission_event_id" => admission.id
+            }
+          })
+
+        %{
+          "handoff_jobs_at_boot" => jobs_at_boot,
+          "claim" =>
+            case claimed do
+              {:ok, c} -> %{"status" => c.command.status, "result" => c.command.result}
+              {:error, reason} -> %{"error" => inspect(reason)}
+            end
+        }
+      end
+
+    FinalEval.say("reclaim", reclaim)
     refs = Continuation.decision_refs(Repo, run.goal_id)
     command_id = "live-handoff-#{run.id}"
 
@@ -826,7 +878,18 @@ case phase do
 
     FinalEval.say("handoff_command", %{status: command_status, result: command_result, job?: job?})
 
-    deadline = System.monotonic_time(:second) + if(job?, do: 480, else: 0)
+    # A replayed request returns the existing incomplete delivery (the worker
+    # is unique per handoff id), so "no job inserted" is not "no delivery".
+    delivery? =
+      job? or
+        Repo.exists?(
+          from j in Oban.Job,
+            where:
+              j.queue == "handoff" and
+                j.state in ["available", "scheduled", "executing", "retryable"]
+        )
+
+    deadline = System.monotonic_time(:second) + if(delivery?, do: 480, else: 0)
 
     wait = fn wait ->
       job =
@@ -844,7 +907,7 @@ case phase do
 
       cond do
         created > 0 -> {:handoff_created, job}
-        not job? -> {:no_delivery_attempt, job}
+        not delivery? -> {:no_delivery_attempt, job}
         job && job.state in ["discarded", "cancelled", "completed"] -> {:settled, job}
         System.monotonic_time(:second) > deadline -> {:timeout, job}
         true -> Process.sleep(3_000) && wait.(wait)
@@ -915,6 +978,8 @@ case phase do
 
     FinalEval.record("handoff", %{
       "outcome" => outcome,
+      "attempt" => if(reclaim, do: 2, else: 1),
+      "reclaim" => reclaim,
       "goal_id" => run.goal_id,
       "sender_run_id" => run.id,
       "checkpoint_id" => checkpoint_id,
