@@ -1016,7 +1016,7 @@ case phase do
 
     FinalEval.say(
       "release_handoff_goal",
-      FinalEval.release_claim(run.goal_id, "handoff") |> elem(0)
+      FinalEval.release_claim(run.goal_id, "handoff-#{run.id}") |> elem(0)
     )
 
   "arm" ->
