@@ -108,7 +108,8 @@ defmodule Shoestring.Elves.Elf do
           lease_checkpointed?: boolean(),
           lease_checkpoint_id: Ecto.UUID.t() | nil,
           lease_checkpoint_error: term(),
-          lease_declined?: boolean()
+          lease_declined?: boolean(),
+          lease_projection_tried?: boolean()
         }
 
   defstruct [
@@ -154,7 +155,8 @@ defmodule Shoestring.Elves.Elf do
     lease_checkpointed?: false,
     lease_checkpoint_id: nil,
     lease_checkpoint_error: nil,
-    lease_declined?: false
+    lease_declined?: false,
+    lease_projection_tried?: false
   ]
 
   @doc """
@@ -1118,7 +1120,7 @@ defmodule Shoestring.Elves.Elf do
   end
 
   defp lease_account_inner(state, event) do
-    case ensure_lease_bounds(state) do
+    case load_lease(state) do
       {:ok, state} ->
         previous = state.lease_bounds
 
@@ -1139,10 +1141,58 @@ defmodule Shoestring.Elves.Elf do
         state = stop_path(state)
         renew_path(state, boundary?)
 
-      :skip ->
+      {:skip, state} ->
         state
     end
   end
+
+  # The lease is read from its projected row, and a granted lease is only a
+  # row once the goal is projected past `lease.granted`. The handoff and wake
+  # paths project before they dispatch; `/runs/new` and a dispatch-worker
+  # start (including crash redelivery) do not, so live their Elves never
+  # loaded the grant and ran with no budget, deadline or renewal at all.
+  # At the first lease need with no row, project the Elf's own goal ONCE and
+  # read again. Idempotent and bounded (one projection per Elf); a failed
+  # projection leaves behaviour as before, and the row is still re-read on
+  # every later event, so a lease projected by anyone else is picked up.
+  defp load_lease(state) do
+    case ensure_lease_bounds(state) do
+      {:ok, state} ->
+        {:ok, state}
+
+      :skip when state.lease_projection_tried? ->
+        {:skip, state}
+
+      :skip ->
+        state = %{state | lease_projection_tried?: true}
+        _ = project_own_goal(state)
+
+        case ensure_lease_bounds(state) do
+          {:ok, state} -> {:ok, state}
+          :skip -> {:skip, state}
+        end
+    end
+  end
+
+  defp project_own_goal(%{repo: Shoestring.Repo, goal_id: goal_id} = state)
+       when is_binary(goal_id) do
+    Shoestring.Harness.Projector.project(goal_id, clock: state.clock)
+  rescue
+    error ->
+      Logger.warning("elf lease projection failed",
+        run_id: state.run_id,
+        reason: Exception.message(error)
+      )
+
+      {:error, :projection_raised}
+  catch
+    _kind, _reason -> {:error, :projection_failed}
+  end
+
+  # The projector writes through the application repo only; an Elf running
+  # on any other repo (tests with a raising or scratch repo) reads rows it
+  # cannot have projected, so it keeps its previous behaviour.
+  defp project_own_goal(_state), do: {:error, :not_the_application_repo}
 
   # The item.completed boundary, derived — not redefined — from the T2 rule:
   # this normalized event spent responses or tools.

@@ -55,10 +55,18 @@ defmodule Shoestring.Harness.Continuation do
   generic constraints summary). With a checkpoint record it additionally
   carries the projection state WP F demands:
 
+  - the goal statement: the goal/task acceptance contract the checkpoint recorded
+    (`acceptance_contract` criteria; descriptions only, deduplicated, at most
+    `@max_handoff_objective_chars`), omitted when none was recorded, and
+    labelled as the statement an earlier, ended session was given. This is
+    Shoestring's durable goal record — for a manual run, the operator's task
+    statement — never provider transcript;
   - completed work from the checkpoint `decisions` items;
   - current failure from `stop_reason` plus the `unresolved_issues` items;
   - constraints from the `unresolved_issues` items;
-  - verification from the `evidence` items;
+  - verification: the commands the sender finished, each with its exit
+    status (`TerminalCheckpoint` evidence lines), newest kept within the
+    section cap; the leading `evidence` items when none was recorded;
   - the next checkpoint condition is the base `next_action` + checkpoint
     pointer, already present.
 
@@ -76,9 +84,9 @@ defmodule Shoestring.Harness.Continuation do
   - `:constraints` — overrides the generic constraints summary in the
     base text (unchanged behaviour).
 
-  Only checkpoint content fields (`decisions`, `unresolved_issues`,
-  `evidence`, `stop_reason`) are ever read: transcript-scale terms never
-  enter the prompt. Section lists keep at most `@max_handoff_section_items`
+  Only checkpoint content fields (`acceptance_contract`, `decisions`,
+  `unresolved_issues`, `evidence`, `stop_reason`) are ever read:
+  transcript-scale terms never enter the prompt. Section lists keep at most `@max_handoff_section_items`
   items and `@max_handoff_section_chars` characters each (with `…[+N more]`
   / `…[truncated]` markers); the whole prompt stays within
   `@handoff_prompt_max_chars` characters with the `…[truncated]` marker on
@@ -358,12 +366,16 @@ defmodule Shoestring.Harness.Continuation do
 
   def handoff_payload(_params), do: {:error, {:invalid_handoff, :must_be_a_map}}
 
-  @handoff_prompt_max_chars 4_000
+  @handoff_prompt_max_chars 6_000
   @max_handoff_section_items 8
   @max_handoff_section_chars 800
+  @max_handoff_objective_chars 1_600
+  @objective_label "Goal statement (as recorded for this goal and given to an earlier " <>
+                     "session, which has ended; limits it places on a single session were " <>
+                     "that session's, and you continue the goal from this checkpoint)"
 
   @doc "Maximum characters for a composed handoff prompt (transcript-free, bounded)."
-  @spec handoff_prompt_max_chars() :: 4_000
+  @spec handoff_prompt_max_chars() :: 6_000
   def handoff_prompt_max_chars, do: @handoff_prompt_max_chars
 
   @doc "Maximum checkpoint items carried per handoff-prompt section."
@@ -373,6 +385,10 @@ defmodule Shoestring.Harness.Continuation do
   @doc "Maximum characters carried per handoff-prompt section."
   @spec max_handoff_section_chars() :: 800
   def max_handoff_section_chars, do: @max_handoff_section_chars
+
+  @doc "Maximum characters for the goal-statement (acceptance contract) section."
+  @spec max_handoff_objective_chars() :: 1_600
+  def max_handoff_objective_chars, do: @max_handoff_objective_chars
 
   @doc """
   Composes a bounded, transcript-free handoff prompt from a continuation.
@@ -482,15 +498,133 @@ defmodule Shoestring.Harness.Continuation do
   end
 
   defp record_sections(record) do
+    objective = objective_text(record)
     completed = section_text(record_items(record, :decisions), "none recorded")
     failure = failure_text(record)
     constraints = section_text(record_items(record, :unresolved_issues), "none recorded")
-    verification = section_text(record_items(record, :evidence), "no verification recorded")
+    verification = verification_text(record)
 
-    " Completed work: #{completed}." <>
+    objective_section(objective) <>
+      " Completed work: #{completed}." <>
       " Failure: #{failure}." <>
       " Constraints: #{constraints}." <>
       " Verification: #{verification}."
+  end
+
+  # The goal/task acceptance contract the checkpoint recorded (WP D: "goal,
+  # task, acceptance contract"). Criteria are `accept goal|task <id> "<title>"
+  # — <description>`; only the descriptions are carried, deduplicated in
+  # order (a manual run's goal and task share one statement), bounded by
+  # `@max_handoff_objective_chars`. This is Shoestring's durable goal record,
+  # never provider transcript.
+  defp objective_text(record) do
+    record
+    |> acceptance_criteria()
+    |> Enum.map(fn criterion ->
+      case String.split(criterion, " — ", parts: 2) do
+        [_label, description] -> String.trim(description)
+        [whole] -> String.trim(whole)
+      end
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> case do
+      [] -> nil
+      descriptions -> descriptions |> Enum.join(" / ") |> bound(@max_handoff_objective_chars)
+    end
+  end
+
+  # A checkpoint that recorded no acceptance contract adds no section, so a
+  # record without one composes exactly as before this section existed.
+  #
+  # The statement is the goal's own record, and for a manual run it is the
+  # text the earlier session was given — including any limits on what that
+  # one session should do ("this session only does X, then stops"). Carried
+  # bare, a receiver took those limits as its own brief and stopped with the
+  # goal unfinished (live, 2 of 2 handoffs; final-acceptance.md §4). The
+  # label says whose statement it is and that the session it limited has
+  # ended; it adds no claim about what remains.
+  @doc false
+  # The exact goal-statement section `compose_handoff_prompt/2` adds for this
+  # checkpoint record ("" when the record has no acceptance contract). The
+  # fixture rubrics grade prompt bytes without it; removing the literal
+  # section is exact even when the statement itself contains a later
+  # section's header, which a pattern over the prompt cannot tell apart.
+  @spec handoff_objective_section(map() | struct() | nil) :: String.t()
+  def handoff_objective_section(nil), do: ""
+  def handoff_objective_section(record), do: record |> objective_text() |> objective_section()
+
+  defp objective_section(nil), do: ""
+
+  defp objective_section(objective),
+    do: " #{@objective_label}: #{objective}."
+
+  defp acceptance_criteria(record) do
+    case record_field(record, :acceptance_contract) do
+      value when is_map(value) ->
+        value
+        |> Map.get("criteria", Map.get(value, :criteria, []))
+        |> List.wrap()
+        |> Enum.filter(&is_binary/1)
+
+      _other ->
+        []
+    end
+  end
+
+  # Commands the sender ran and how each ended, newest kept, from the
+  # checkpoint's verification evidence lines (`command <id> ordinal <n>
+  # <exit N|completed|failed>: <command>`). Falls back to the leading
+  # evidence items when no finished command was recorded.
+  @command_line ~r/^command \S+ ordinal \S+ (exit -?\d+|completed|failed): (.+)$/
+
+  defp verification_text(record) do
+    commands =
+      record
+      |> record_items(:evidence)
+      |> Enum.filter(&String.starts_with?(&1, "verification"))
+      |> Enum.flat_map(&String.split(&1, "\n"))
+      |> Enum.flat_map(fn line ->
+        case Regex.run(@command_line, line) do
+          [_all, outcome, command] -> ["#{outcome}: #{command}"]
+          nil -> []
+        end
+      end)
+
+    case commands do
+      [] -> section_text(record_items(record, :evidence), "no verification recorded")
+      commands -> newest_within(commands, @max_handoff_section_chars)
+    end
+  end
+
+  # Keeps the newest entries that fit `limit`, oldest first, with an
+  # `…[+N earlier]` marker for the ones left out.
+  defp newest_within(entries, limit) do
+    {kept, _size} =
+      entries
+      |> Enum.reverse()
+      |> Enum.reduce_while({[], 0}, fn entry, {kept, size} ->
+        added = String.length(entry) + 2
+
+        if kept != [] and size + added > limit - 24 do
+          {:halt, {kept, size}}
+        else
+          {:cont, {[entry | kept], size + added}}
+        end
+      end)
+
+    hidden = length(entries) - length(kept)
+    text = Enum.join(kept, "; ")
+    text = if hidden > 0, do: "…[+#{hidden} earlier] " <> text, else: text
+    bound(text, limit)
+  end
+
+  defp bound(text, limit) do
+    if String.length(text) > limit do
+      String.slice(text, 0, limit - String.length(@truncation_marker)) <> @truncation_marker
+    else
+      text
+    end
   end
 
   defp failure_text(record) do

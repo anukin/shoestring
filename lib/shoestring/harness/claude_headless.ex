@@ -184,7 +184,7 @@ defmodule Shoestring.Harness.ClaudeHeadless do
             Session.stream_events(session_pid)
 
           _ ->
-            {:ok, simulated_completion_events(identity, opts)}
+            missing_session(identity, opts)
         end
     end
   end
@@ -214,6 +214,25 @@ defmodule Shoestring.Harness.ClaudeHeadless do
   end
 
   # --- Session Management ---
+
+  # A live run whose session is no longer registered has nothing to read.
+  # Returning the simulated completion here fabricated a successful turn
+  # ("Created `test.txt` successfully." and a `completed` result) that the Elf
+  # would record as the run's canonical terminal. Live callers get an explicit
+  # transport error instead; hermetic callers (no live flag) keep the
+  # simulation they are built on.
+  defp missing_session(identity, opts) do
+    if live_or_transport?(opts) do
+      {:error,
+       Error.new(
+         :transport,
+         "session_not_found",
+         "No live Claude session is registered for this run; no provider events can be read"
+       )}
+    else
+      {:ok, simulated_completion_events(identity, opts)}
+    end
+  end
 
   defp live_or_transport?(opts) do
     Map.get(opts, :live) == true or

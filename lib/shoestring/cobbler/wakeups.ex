@@ -559,6 +559,7 @@ defmodule Shoestring.Cobbler.Wakeups do
          {:ok, run} <- fetch_run(repo, wakeup),
          {:ok, lease} <- latest_lease(repo, run),
          {:ok, {request, candidate}} <- admission_context(repo, wakeup, goal, run, opts),
+         :ok <- refuse_manual_scope(repo, wakeup, goal, run, request, candidate, now, opts),
          {:ok, observed} <- observe(opts, candidate),
          {:ok, snapshot} <- GoalLocalObservation.localize(observed, "wakeup", goal.id, wakeup.id),
          {:ok, _snapshot_event} <- persist_snapshot(wakeup, goal, run, snapshot, now, opts),
@@ -573,6 +574,113 @@ defmodule Shoestring.Cobbler.Wakeups do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # A run admitted as an operator-confirmed MANUAL run (`support_tier:
+  # "manual"`, scope `account:manual`) rests on operator-declared bounds, not
+  # on a provider reading, and no provider reading ever carries that scope.
+  # Re-observing for it can only fail (`no_observation_for_provider`), and
+  # used to do so forever: the wake stayed `due`, its job retried to discard,
+  # and every boot's reconcile re-enqueued it. It is not a transient
+  # failure. So the wake records that fact once, as an explained
+  # `require_confirmation` decision, and takes the confirmation branch: the
+  # run stays suspended at its checkpoint, any pending continuation is
+  # neutralized, the wake row is settled (`woken`), and resuming is the
+  # operator's explicit act. Provider-scoped wakes never enter this path.
+  defp refuse_manual_scope(repo, wakeup, goal, run, request, candidate, now, opts) do
+    if manual_candidate?(candidate) do
+      with {:ok, event, decision} <-
+             record_manual_refusal(repo, wakeup, goal, run, request, candidate, now, opts),
+           {:ok, summary} <- confirm_branch(repo, wakeup, goal, event, decision, now, opts) do
+        {:terminal, summary}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp manual_candidate?(candidate) when is_map(candidate) do
+    tier = Map.get(candidate, :support_tier, Map.get(candidate, "support_tier"))
+    not is_nil(tier) and to_string(tier) == "manual"
+  end
+
+  defp manual_candidate?(_candidate), do: false
+
+  @manual_refusal_reason "manual_scope_not_resumable"
+
+  defp record_manual_refusal(repo, wakeup, goal, run, request, candidate, now, opts) do
+    key = "wakeup-decision:#{wakeup.id}:#{@manual_refusal_reason}"
+
+    case repo.get_by(TrajectoryEvent, goal_id: goal.id, idempotency_key: key) do
+      %TrajectoryEvent{} = event ->
+        with {:ok, decision} <- decision_from_payload(event.payload), do: {:ok, event, decision}
+
+      nil ->
+        payload =
+          manual_refusal_payload(run, request, candidate, now)
+          |> maybe_put_run_id(run)
+
+        attrs = %{
+          "type" => "admission.decided",
+          "schema_version" => 1,
+          "actor" => Keyword.get(opts, :actor, @actor),
+          "occurred_at" => now,
+          "idempotency_key" => key,
+          "payload" => payload
+        }
+
+        trusted = if run, do: [run_id: run.id], else: []
+
+        with {:ok, event} <-
+               Trajectory.append(goal.id, attrs,
+                 trusted: trusted,
+                 writer_opts: Keyword.get(opts, :writer_opts, [])
+               ),
+             {:ok, decision} <- AdmissionDecision.from_payload(event.payload) do
+          {:ok, event, decision}
+        else
+          {:error, reason} -> {:error, {:wakeup_decision_failed, reason}}
+        end
+    end
+  end
+
+  defp manual_refusal_payload(run, request, candidate, now) do
+    scope = to_string(fetch_any(request, :scope) || fetch_any(candidate, :scope))
+    run_label = if run, do: "run #{run.id}", else: "this goal"
+
+    %{
+      "decision_id" => Ecto.UUID.generate(),
+      "result" => "require_confirmation",
+      "reason_code" => @manual_refusal_reason,
+      "explanation" =>
+        "#{run_label} was admitted as an operator-confirmed manual run (scope " <>
+          "'#{scope}'). No provider capacity reading carries that scope, so capacity " <>
+          "cannot be re-observed and the run cannot resume automatically. It stays " <>
+          "suspended at its checkpoint; resuming or continuing it is an explicit " <>
+          "operator action.",
+      "requested_capability" => to_string(fetch_any(request, :requested_capability)),
+      "candidate" =>
+        Map.new(
+          [:provider_id, :adapter_id, :support_tier, :compatibility_state],
+          fn key -> {Atom.to_string(key), stringify(fetch_any(candidate, key))} end
+        ),
+      "scope" => scope,
+      "observation" => %{
+        "snapshot_id" => nil,
+        "confidence" => "none",
+        "freshness" => "unknown",
+        "note" => "Not observed: a manual scope has no provider reading to re-observe."
+      },
+      "policy" => %{"version" => 1},
+      "proposed_bounds" => %{},
+      "reobservation_required" => false,
+      "evaluated_at" => DateTime.to_iso8601(now)
+    }
+  end
+
+  defp fetch_any(map, key) when is_map(map),
+    do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+
+  defp fetch_any(_map, _key), do: nil
 
   defp fetch_wakeup(repo, wakeup_id) do
     case repo.get(WakeupRecord, wakeup_id) do
