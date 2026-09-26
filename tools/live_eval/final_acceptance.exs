@@ -829,7 +829,7 @@ case phase do
         claimed =
           Shoestring.Cobbler.submit_command(run.goal_id, %{
             "type" => "task.claim",
-            "command_id" => "live-reclaim-#{run.id}",
+            "command_id" => "live-reclaim-#{run.id}-#{tag || "base"}",
             "payload" => %{
               "intent" => admission.payload["requested_capability"],
               "scope" => admission.payload["scope"],
@@ -851,7 +851,11 @@ case phase do
 
     FinalEval.say("reclaim", reclaim)
     refs = Continuation.decision_refs(Repo, run.goal_id)
-    command_id = "live-handoff-#{run.id}"
+    # LIVE_HANDOFF_TAG names an additional, separately recorded transfer from
+    # the same sender checkpoint (a new command id; the product decides
+    # whether that boundary may be handed off again).
+    tag = System.get_env("LIVE_HANDOFF_TAG")
+    command_id = if tag, do: "live-handoff-#{run.id}-#{tag}", else: "live-handoff-#{run.id}"
 
     request =
       Shoestring.Cobbler.Handoffs.request(run.goal_id, %{
@@ -979,6 +983,8 @@ case phase do
     FinalEval.record("handoff", %{
       "outcome" => outcome,
       "attempt" => if(reclaim, do: 2, else: 1),
+      "tag" => tag,
+      "command_id" => command_id,
       "reclaim" => reclaim,
       "goal_id" => run.goal_id,
       "sender_run_id" => run.id,
@@ -1016,7 +1022,7 @@ case phase do
 
     FinalEval.say(
       "release_handoff_goal",
-      FinalEval.release_claim(run.goal_id, "handoff-#{run.id}") |> elem(0)
+      FinalEval.release_claim(run.goal_id, "handoff-#{run.id}-#{tag || "base"}") |> elem(0)
     )
 
   "arm" ->
