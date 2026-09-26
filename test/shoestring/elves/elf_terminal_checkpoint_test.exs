@@ -119,7 +119,7 @@ defmodule Shoestring.Elves.ElfTerminalCheckpointTest do
     assert evidence =~ "outcome completed"
 
     assert payload["next_action"] =~ "completed"
-    assert payload["next_action"] =~ "mix precommit"
+    assert payload["next_action"] =~ "rerunning the recorded verification commands"
   end
 
   test "failed run checkpoint carries failure plus rerun pointer", %{
@@ -194,7 +194,7 @@ defmodule Shoestring.Elves.ElfTerminalCheckpointTest do
 
     assert payload["next_action"] =~ "run.failed"
     assert payload["next_action"] =~ "elf-terminal:#{request.dispatch_id}"
-    assert payload["next_action"] =~ "mix precommit"
+    assert payload["next_action"] =~ "rerun the recorded verification commands"
   end
 
   test "failed-before-start run falls back to the template with no invented certainty", %{
@@ -235,7 +235,7 @@ defmodule Shoestring.Elves.ElfTerminalCheckpointTest do
     assert evidence =~ "elf-terminal:#{request.dispatch_id}"
 
     assert payload["next_action"] =~ "run.failed"
-    assert payload["next_action"] =~ "mix precommit"
+    assert payload["next_action"] =~ "run the repository's own checks"
   end
 
   test "checkpoint-writer failure still commits the terminal and records the error", %{

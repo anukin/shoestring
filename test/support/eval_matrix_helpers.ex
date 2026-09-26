@@ -672,7 +672,7 @@ defmodule Shoestring.Test.EvalMatrixHelpers do
         starts: starts,
         resumes: resumes
       }) do
-    prompt_bytes = byte_size(prompt)
+    prompt_bytes = byte_size(without_objective(prompt))
     has_constraint? = String.contains?(prompt, fixture_constraint())
     has_step? = String.contains?(next_action, fixture_step())
 
@@ -728,5 +728,15 @@ defmodule Shoestring.Test.EvalMatrixHelpers do
     }
 
     Map.put(scores, :total, Enum.sum(Map.values(scores)))
+  end
+
+  # The byte thresholds above were authored before handoff prompts carried
+  # the checkpoint's acceptance contract (the ` Objective: ….` section). That
+  # section is the goal's own statement, identical in every arm, so it cannot
+  # separate arms; the thresholds keep grading only the continuation state
+  # they were written for. Removing it reproduces each arm's pre-Objective
+  # byte count exactly.
+  defp without_objective(prompt) do
+    String.replace(prompt, ~r/ Objective: .*?\.(?= Completed work: )/s, "", global: false)
   end
 end

@@ -86,9 +86,12 @@ defmodule Shoestring.Cobbler.Handoffs do
 
   The receiver is a FRESH session. It receives
   `Continuation.compose_handoff_prompt/2` output — checkpoint pointer,
-  `next_action`, decision refs and the bounded checkpoint content sections —
-  and never the sender's prompt, transcript or provider session id. The
-  sender's `provider_session_id` is not read on this path at all.
+  `next_action`, decision refs and the bounded checkpoint content sections,
+  including the goal's acceptance contract as the checkpoint recorded it
+  (for a manual run that is the operator's task statement) and the commands
+  the sender finished with their exit statuses — and never the sender's
+  transcript or provider session id. The sender's `provider_session_id` is
+  not read on this path at all.
 
   ## Remaining window (stated rather than implied)
 

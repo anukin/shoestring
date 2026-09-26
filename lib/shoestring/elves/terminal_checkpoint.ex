@@ -443,7 +443,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   defp reactive_next_action(state, reason, revision, checkpoint_id) do
     "Lease #{reactive_stop_reason(reason)} for run #{state.run_id} at revision #{revision}. " <>
       "Resume from checkpoint #{checkpoint_id} after re-observing capacity and " <>
-      "re-evaluating admission; re-verify with `mix precommit`."
+      "re-evaluating admission; re-verify by rerunning the recorded verification commands."
   end
 
   defp reactive_extensions(state, reason, collection_error) do
@@ -863,9 +863,11 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
           select: {event.sequence, event.payload}
       )
 
+    started = started_commands(rows)
+
     lines =
       rows
-      |> Enum.flat_map(&verification_line/1)
+      |> Enum.flat_map(&verification_line(&1, started))
       |> Enum.filter(&is_binary/1)
 
     skipped =
@@ -891,25 +893,89 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   defp verification_kind?(kind) when kind in ~w(command tool result error), do: true
   defp verification_kind?(_kind), do: false
 
-  defp verification_line({_sequence, %{"kind" => "command"} = payload}) do
-    ["command #{payload["source_event_id"]} ordinal #{payload["ordinal"]}"]
+  # A finished command names what ran and how it ended (WP D: "commands/tests
+  # with exact exit status"), from the normalized event only: Codex carries
+  # the command and its exit code on the completed item; Claude carries the
+  # command on the tool START and the outcome on the tool END, joined by the
+  # tool-use id. Starts and anything without a recorded command stay
+  # identity-only. The command text is bounded; the whole evidence list is
+  # redacted by `assemble_evidence/1`.
+  defp verification_line({_sequence, %{"kind" => "command"} = payload}, started) do
+    base = "command #{payload["source_event_id"]} ordinal #{payload["ordinal"]}"
+
+    case command_outcome(payload, started) do
+      {outcome, command} -> ["#{base} #{outcome}: #{bounded_command(command)}"]
+      nil -> [base]
+    end
   end
 
-  defp verification_line({_sequence, %{"kind" => "tool"} = payload}) do
+  defp verification_line({_sequence, %{"kind" => "tool"} = payload}, _started) do
     ["tool #{payload["source_event_id"]} ordinal #{payload["ordinal"]}"]
   end
 
-  defp verification_line({_sequence, %{"kind" => "result"} = payload}) do
+  defp verification_line({_sequence, %{"kind" => "result"} = payload}, _started) do
     ["result #{payload["source_event_id"]} status #{get_in(payload, ["result", "status"])}"]
   end
 
-  defp verification_line({_sequence, %{"kind" => "error"} = payload}) do
+  defp verification_line({_sequence, %{"kind" => "error"} = payload}, _started) do
     [
       "error #{payload["source_event_id"]} #{get_in(payload, ["error", "category"])}/#{get_in(payload, ["error", "code"])}"
     ]
   end
 
-  defp verification_line(_other), do: []
+  defp verification_line(_other, _started), do: []
+
+  @max_command_chars 200
+
+  @doc false
+  @spec max_command_chars() :: pos_integer()
+  def max_command_chars, do: @max_command_chars
+
+  # Claude tool starts by tool-use id, so an END can name its command.
+  defp started_commands(rows) do
+    Enum.reduce(rows, %{}, fn
+      {_sequence, %{"kind" => "command", "extensions" => %{} = ext}}, acc ->
+        with "start" <- ext["claude-headless:boundary"],
+             id when is_binary(id) <- ext["claude-headless:tool_use_id"],
+             command when is_binary(command) and command != "" <-
+               ext["claude-headless:command"] do
+          Map.put(acc, id, command)
+        else
+          _other -> acc
+        end
+
+      _row, acc ->
+        acc
+    end)
+  end
+
+  defp command_outcome(%{"extensions" => %{} = ext}, started) do
+    cond do
+      is_integer(ext["codex-app-server:exit_code"]) and is_binary(ext["codex-app-server:command"]) ->
+        {"exit #{ext["codex-app-server:exit_code"]}", ext["codex-app-server:command"]}
+
+      ext["claude-headless:boundary"] == "end" and
+          is_binary(Map.get(started, ext["claude-headless:tool_use_id"])) ->
+        status = if ext["claude-headless:is_error"] == true, do: "failed", else: "completed"
+        {status, Map.fetch!(started, ext["claude-headless:tool_use_id"])}
+
+      true ->
+        nil
+    end
+  end
+
+  defp command_outcome(_payload, _started), do: nil
+
+  defp bounded_command(command) do
+    command = command |> String.replace(~r/\s+/, " ") |> String.trim()
+
+    if String.length(command) > @max_command_chars do
+      String.slice(command, 0, @max_command_chars - String.length("…[truncated]")) <>
+        "…[truncated]"
+    else
+      command
+    end
+  end
 
   defp boundary_evidence(state, opts) do
     repo = Keyword.get(opts, :repo, state.repo)
@@ -1119,7 +1185,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
 
   defp next_action(%{class: :completed} = _terminal, state, revision, _verification) do
     "Run #{state.run_id} completed at revision #{revision}. " <>
-      "Verify the worktree with `mix precommit`, then continue from " <>
+      "Verify the worktree by rerunning the recorded verification commands, then continue from " <>
       "checkpoint #{checkpoint_id(state.run_id)}."
   end
 
@@ -1131,18 +1197,18 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
 
   defp next_action(%{class: :cancelled}, state, revision, _verification) do
     "Run #{state.run_id} was cancelled (terminal key #{terminal_key(state)}). " <>
-      "Resume only on explicit operator intent; re-verify revision #{revision} with " <>
-      "`mix precommit` from checkpoint #{checkpoint_id(state.run_id)}."
+      "Resume only on explicit operator intent; re-verify revision #{revision} by rerunning " <>
+      "the recorded verification commands from checkpoint #{checkpoint_id(state.run_id)}."
   end
 
   defp next_action(_terminal, state, revision, _verification) do
     "Run #{state.run_id} was interrupted at the safe boundary. Resume from " <>
       "checkpoint #{checkpoint_id(state.run_id)} at revision #{revision}; " <>
-      "re-verify with `mix precommit`."
+      "re-verify by rerunning the recorded verification commands."
   end
 
   defp rerun_instruction(%{lines: [], total: 0}) do
-    "no verification recorded during the run — rerun `mix precommit` in the worktree to verify"
+    "no verification recorded during the run — run the repository's own checks in the worktree to verify"
   end
 
   defp rerun_instruction(%{lines: lines}) do
@@ -1155,7 +1221,7 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
       |> Enum.take(5)
       |> Enum.join(", ")
 
-    "rerun `mix precommit` (recorded verification: #{ids}) to verify"
+    "rerun the recorded verification commands (#{ids}) to verify"
   end
 
   defp terminal_key(state), do: "elf-terminal:#{state.dispatch_id}"

@@ -348,7 +348,7 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
     assert criteria =~ "Elf task"
     assert criteria =~ "Deterministic acceptance description for the task."
 
-    assert payload["next_action"] =~ "mix precommit"
+    assert payload["next_action"] =~ "rerunning the recorded verification commands"
     assert payload["next_action"] =~ "lease_exhausted"
 
     assert count_types(goal.id, run_id, ["run.suspended"]) == 1
