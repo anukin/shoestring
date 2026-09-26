@@ -672,7 +672,7 @@ defmodule Shoestring.Test.EvalMatrixHelpers do
         starts: starts,
         resumes: resumes
       }) do
-    prompt_bytes = byte_size(without_objective(prompt))
+    prompt_bytes = byte_size(without_goal_statement(prompt))
     has_constraint? = String.contains?(prompt, fixture_constraint())
     has_step? = String.contains?(next_action, fixture_step())
 
@@ -731,12 +731,19 @@ defmodule Shoestring.Test.EvalMatrixHelpers do
   end
 
   # The byte thresholds above were authored before handoff prompts carried
-  # the checkpoint's acceptance contract (the ` Objective: ….` section). That
+  # the checkpoint's acceptance contract (the ` Goal statement (…): ….` section). That
   # section is the goal's own statement, identical in every arm, so it cannot
   # separate arms; the thresholds keep grading only the continuation state
-  # they were written for. Removing it reproduces each arm's pre-Objective
+  # they were written for. Removing it reproduces each arm's pre-section
   # byte count exactly.
-  defp without_objective(prompt) do
-    String.replace(prompt, ~r/ Objective: .*?\.(?= Completed work: )/s, "", global: false)
+  @doc """
+  The prompt without its goal-statement section, for the fixture rubrics'
+  byte thresholds (see the comment above).
+  """
+  @spec without_goal_statement(String.t()) :: String.t()
+  def without_goal_statement(prompt) do
+    String.replace(prompt, ~r/ Goal statement \(.*?\): .*?\.(?= Completed work: )/s, "",
+      global: false
+    )
   end
 end

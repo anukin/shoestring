@@ -409,7 +409,9 @@ defmodule Shoestring.Harness.EvalMatrix.SemanticFixtureTest do
       end
 
     turns = if check_exit == 0, do: 2, else: 0
-    capacity = if byte_size(prompt) <= 800, do: 2, else: 1
+    # Graded without the arm-invariant goal-statement section, as in
+    # `Eval.score_arm/1`: the threshold predates that section.
+    capacity = if byte_size(Eval.without_goal_statement(prompt)) <= 800, do: 2, else: 1
 
     %{
       acceptance: acceptance,

@@ -55,9 +55,10 @@ defmodule Shoestring.Harness.Continuation do
   generic constraints summary). With a checkpoint record it additionally
   carries the projection state WP F demands:
 
-  - the objective: the goal/task acceptance contract the checkpoint recorded
+  - the goal statement: the goal/task acceptance contract the checkpoint recorded
     (`acceptance_contract` criteria; descriptions only, deduplicated, at most
-    `@max_handoff_objective_chars`), omitted when none was recorded. This is
+    `@max_handoff_objective_chars`), omitted when none was recorded, and
+    labelled as the statement an earlier, ended session was given. This is
     Shoestring's durable goal record — for a manual run, the operator's task
     statement — never provider transcript;
   - completed work from the checkpoint `decisions` items;
@@ -369,6 +370,9 @@ defmodule Shoestring.Harness.Continuation do
   @max_handoff_section_items 8
   @max_handoff_section_chars 800
   @max_handoff_objective_chars 1_600
+  @objective_label "Goal statement (as recorded for this goal and given to an earlier " <>
+                     "session, which has ended; limits it places on a single session were " <>
+                     "that session's, and you continue the goal from this checkpoint)"
 
   @doc "Maximum characters for a composed handoff prompt (transcript-free, bounded)."
   @spec handoff_prompt_max_chars() :: 6_000
@@ -382,7 +386,7 @@ defmodule Shoestring.Harness.Continuation do
   @spec max_handoff_section_chars() :: 800
   def max_handoff_section_chars, do: @max_handoff_section_chars
 
-  @doc "Maximum characters for the Objective (acceptance contract) section."
+  @doc "Maximum characters for the goal-statement (acceptance contract) section."
   @spec max_handoff_objective_chars() :: 1_600
   def max_handoff_objective_chars, do: @max_handoff_objective_chars
 
@@ -532,8 +536,18 @@ defmodule Shoestring.Harness.Continuation do
 
   # A checkpoint that recorded no acceptance contract adds no section, so a
   # record without one composes exactly as before this section existed.
+  #
+  # The statement is the goal's own record, and for a manual run it is the
+  # text the earlier session was given — including any limits on what that
+  # one session should do ("this session only does X, then stops"). Carried
+  # bare, a receiver took those limits as its own brief and stopped with the
+  # goal unfinished (live, 2 of 2 handoffs; final-acceptance.md §4). The
+  # label says whose statement it is and that the session it limited has
+  # ended; it adds no claim about what remains.
   defp objective_section(nil), do: ""
-  defp objective_section(objective), do: " Objective: #{objective}."
+
+  defp objective_section(objective),
+    do: " #{@objective_label}: #{objective}."
 
   defp acceptance_criteria(record) do
     case record_field(record, :acceptance_contract) do

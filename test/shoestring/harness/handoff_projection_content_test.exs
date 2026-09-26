@@ -41,8 +41,8 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
   end
 
   describe "compose_handoff_prompt/2 with a checkpoint record" do
-    # Base: no Objective section exists, so the statement is absent.
-    test "carries the recorded acceptance contract once, as the Objective" do
+    # Base: no such section exists, so the statement is absent.
+    test "carries the recorded acceptance contract once, as the earlier session's goal statement" do
       cid = Ecto.UUID.generate()
 
       record = %{
@@ -62,7 +62,12 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
 
       prompt = Continuation.compose_handoff_prompt(continuation(cid), checkpoint_record: record)
 
-      assert prompt =~ "Objective: #{@statement}."
+      assert prompt =~ "#{@statement}."
+      # Labelled as the statement an earlier, ended session was given, so a
+      # receiver does not take that session's limits as its own brief.
+      assert prompt =~
+               ~r/Goal statement \(as recorded for this goal and given to an earlier session, which has ended;[^)]*you continue the goal from this checkpoint\): Finish the CLI\./
+
       # Goal and task share one statement: carried once, labels dropped.
       assert length(String.split(prompt, @statement)) == 2
       refute prompt =~ "Manual Run 1"
@@ -126,7 +131,7 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
 
       prompt = Continuation.compose_handoff_prompt(continuation(cid), checkpoint_record: record)
 
-      refute prompt =~ "Objective:"
+      refute prompt =~ "Goal statement"
       assert prompt =~ "Completed work: chose A."
       assert prompt =~ "Verification: command cmd-1 ordinal 1."
     end
