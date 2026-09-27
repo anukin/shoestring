@@ -201,6 +201,58 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   end
 
   @doc """
+  Folds one normalized event into an identity-keyed open set of
+  still-running tool items.
+
+  The set keys are the provider-native correlation identity
+  (`claude-headless:tool_use_id`, then `codex-app-server:item_id`, then
+  `item_id`):
+
+  - `:command` START opens; `:command` completion closes.
+  - `:tool` START opens; any other `:tool` event closes (a status-less
+    single-shot tool never blocks, exactly as it spends immediately).
+  - Every other kind (`:output` messages, `:lifecycle`, `:result`,
+    `:error`, ...) leaves the set untouched: a response/message
+    completion must never close an open tool, and reasoning-adjacent
+    content never opens one.
+
+  Pure and idempotent: an unknown id closes nothing, duplicate starts
+  open once, and anything still open is dropped by the caller at the
+  natural terminal. The Elf folds both the live buffer and the durable
+  rebuild through this function so the two views can never disagree.
+
+  Entries open only for events carrying a real tool identity (Claude
+  `tool_use_id`, Codex `item_id`, or plain `item_id`). Identity-less
+  `:command`/`:tool` shapes — synthetic or degraded evidence that spend
+  counting likewise never treats as an open tool — never block; a
+  status-less single-shot tool still closes instantaneously.
+  """
+  @spec track_open_tools(MapSet.t(), HarnessEvent.t()) :: MapSet.t()
+  def track_open_tools(open, %HarnessEvent{kind: :command} = event) do
+    if command_completion?(event) do
+      MapSet.delete(open, correlation_id(event))
+    else
+      case real_identity(event) do
+        nil -> open
+        id -> MapSet.put(open, id)
+      end
+    end
+  end
+
+  def track_open_tools(open, %HarnessEvent{kind: :tool} = event) do
+    if tool_start?(event.extensions) do
+      case real_identity(event) do
+        nil -> open
+        id -> MapSet.put(open, id)
+      end
+    else
+      MapSet.delete(open, correlation_id(event))
+    end
+  end
+
+  def track_open_tools(open, _event), do: open
+
+  @doc """
   Folds the live normalized-event buffer for one `run_id`.
 
   Events carrying another `run_id` are ignored; effects accumulate in order.
@@ -431,4 +483,20 @@ defmodule Shoestring.Cobbler.LeaseBounds do
     extensions["claude-headless:tool_use_id"] || extensions["codex-app-server:item_id"] ||
       extensions["item_id"] || source_id
   end
+
+  # A trackable tool identity: the provider-native correlation keys only.
+  # The `source_event_id` fallback that spend dedup uses is deliberately
+  # excluded — an event with no provider identity is synthetic or degraded
+  # evidence, never an open tool.
+  defp real_identity(%HarnessEvent{extensions: extensions}) do
+    [
+      extensions["claude-headless:tool_use_id"],
+      extensions["codex-app-server:item_id"],
+      extensions["item_id"]
+    ]
+    |> Enum.find(&present?/1)
+  end
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
 end

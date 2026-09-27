@@ -507,6 +507,31 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
          })}
       )
 
+      _ = :sys.get_state(session)
+
+      # Draining the last open tool ARMS the pending stop but must NOT
+      # send yet: the provider may have already emitted the next tool
+      # START (compound exec), which re-opens tracking first.
+      refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+
+      # Model-control evidence (a finished agent message) with no open
+      # tools releases the pending stop exactly once.
+      send(
+        session,
+        {:codex_transport_frame, transport,
+         Jason.encode!(%{
+           "method" => "item/completed",
+           "params" => %{
+             "item" => %{
+               "type" => "agentMessage",
+               "id" => "msg-1",
+               "phase" => "final_answer",
+               "text" => "done"
+             }
+           }
+         })}
+      )
+
       # CRITICAL ASSERTION: turn/interrupt MUST be sent immediately now!
       assert_receive {:sent_rpc,
                       %{
@@ -594,7 +619,8 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       assert {:ok, :cancelled} = Session.cancel(session, %{boundary: :item})
       refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
-      # On item completion, interrupt fires
+      # On item completion the stop stays armed (no send on drain
+      # alone); model-control evidence releases it.
       send(
         session,
         {:codex_transport_frame, transport,
@@ -610,6 +636,18 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
                "exitCode" => 0
              }
            }
+         })}
+      )
+
+      _ = :sys.get_state(session)
+      refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+
+      send(
+        session,
+        {:codex_transport_frame, transport,
+         Jason.encode!(%{
+           "method" => "item/agentMessage/delta",
+           "params" => %{"delta" => "done"}
          })}
       )
 

@@ -520,6 +520,143 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
            )
   end
 
+  # LOCK (fails behaviourally on the pre-fix commit): past the deadline, a
+  # message completion that spends while a command is still open must not
+  # be treated as a safe renewal/decline boundary. The decline waits for
+  # the tool's own completion. On base the Elf declines at the message
+  # (`lease.expired` lands before the command END).
+  test "a passed deadline with a message while a command is open declines at the tool end",
+       %{sup: sup, goal: goal, task: task} do
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:deadline_expire, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        codex_command_start("cmd-1", source_event_id: "item-started-cmd-1"),
+        Scenario.output_event("mid", source_event_id: "evt-out-mid"),
+        command_event("cmd-1", "completed", source_event_id: "item-completed-cmd-1"),
+        Scenario.output_event("after", source_event_id: "evt-out-after"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    hold_before_first_event(pid)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 100,
+      tool_budget: 100,
+      reserves: %{response: 1, tool: 1},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), -60, :second)
+    )
+
+    release_elf(pid)
+
+    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+
+    ordered = ordered_events(goal.id, run_id)
+
+    # The spend at the message did not decline: both the expiry and the
+    # reactive checkpoint follow the command's own completion.
+    assert sequence_before?(
+             ordered,
+             {:harness, "item-completed-cmd-1"},
+             {"lease.expired", nil}
+           )
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "item-completed-cmd-1"},
+             {"checkpoint.created", nil}
+           )
+  end
+
+  # LOCK (fails behaviourally on the pre-fix commit): the Claude twin of
+  # the message-while-open rule. Tool boundaries correlate by
+  # `tool_use_id`; the output between START and END spends but must not
+  # decline until the END drains the open set.
+  test "a passed deadline with a message while a Claude tool is open declines at the tool end",
+       %{sup: sup, goal: goal, task: task} do
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:deadline_expire, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        claude_tool_start("toolu_7", source_event_id: "evt-claude-start"),
+        Scenario.output_event("mid", source_event_id: "evt-out-mid"),
+        claude_tool_end("toolu_7", source_event_id: "evt-claude-end"),
+        Scenario.output_event("after", source_event_id: "evt-out-after"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    hold_before_first_event(pid)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 100,
+      tool_budget: 100,
+      reserves: %{response: 1, tool: 1},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), -60, :second)
+    )
+
+    release_elf(pid)
+
+    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+
+    ordered = ordered_events(goal.id, run_id)
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "evt-claude-end"},
+             {"lease.expired", nil}
+           )
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "evt-claude-end"},
+             {"checkpoint.created", nil}
+           )
+  end
+
   # LOCK (fails at 8c97eb7 and at base c1ae4a8): the `/runs/new` shape. The
   # grant is committed (`lease.granted`) but nothing projects the goal, so
   # there is no lease ROW when the Elf starts. Live (final-acceptance.md
@@ -812,6 +949,57 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
         "codex-app-server:item_id" => item_id,
         "codex-app-server:tool" => "fileChange",
         "codex-app-server:status" => status
+      }
+    }
+  end
+
+  # A Codex command START: in-progress status with no exit code spends
+  # nothing and (with the safe-boundary gate) opens the tool until the
+  # matching END. The pre-existing `command_event/3` always carries
+  # `exit_code: 0`, so it can only express completions.
+  defp codex_command_start(item_id, opts) do
+    %{
+      kind: :command,
+      offset_ms: Keyword.get(opts, :offset_ms, 0),
+      source_event_id: Keyword.fetch!(opts, :source_event_id),
+      error: nil,
+      result: nil,
+      capacity_snapshot: nil,
+      extensions: %{
+        "codex-app-server:item_id" => item_id,
+        "codex-app-server:status" => "inProgress"
+      }
+    }
+  end
+
+  defp claude_tool_start(tool_use_id, opts) do
+    %{
+      kind: :command,
+      offset_ms: Keyword.get(opts, :offset_ms, 0),
+      source_event_id: Keyword.fetch!(opts, :source_event_id),
+      error: nil,
+      result: nil,
+      capacity_snapshot: nil,
+      extensions: %{
+        "claude-headless:boundary" => "start",
+        "claude-headless:tool_use_id" => tool_use_id,
+        "claude-headless:tool_name" => "Bash"
+      }
+    }
+  end
+
+  defp claude_tool_end(tool_use_id, opts) do
+    %{
+      kind: :command,
+      offset_ms: Keyword.get(opts, :offset_ms, 0),
+      source_event_id: Keyword.fetch!(opts, :source_event_id),
+      error: nil,
+      result: nil,
+      capacity_snapshot: nil,
+      extensions: %{
+        "claude-headless:boundary" => "end",
+        "claude-headless:tool_use_id" => tool_use_id,
+        "claude-headless:status" => "completed"
       }
     }
   end

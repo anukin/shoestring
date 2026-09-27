@@ -171,7 +171,30 @@ defmodule Shoestring.Elves.LeaseBoundaryTest do
                event.extensions["codex-app-server:item_id"] == "exec-1"
            end)
 
-    # Only AFTER item.completed does the turn interrupt fire.
+    # Draining the last open tool arms the stop but sends nothing yet: the
+    # next tool START may already be on its way (compound exec).
+    refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+
+    # Model-control evidence with an empty open set releases the stop.
+    send(
+      session,
+      {:codex_transport_frame, transport,
+       Jason.encode!(%{
+         "method" => "item/completed",
+         "params" => %{
+           "item" => %{
+             "type" => "agentMessage",
+             "id" => "msg-1",
+             "phase" => "final_answer",
+             "text" => "done"
+           }
+         }
+       })}
+    )
+
+    _ = :sys.get_state(session)
+
+    # Only AFTER model-control evidence does the turn interrupt fire.
     assert_receive {:sent_rpc,
                     %{
                       "method" => "turn/interrupt",
@@ -239,6 +262,20 @@ defmodule Shoestring.Elves.LeaseBoundaryTest do
     refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
     item_completed(session, transport, "exec-1", "44444")
+
+    # Armed, not sent: the drain alone is not a boundary.
+    refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+
+    send(
+      session,
+      {:codex_transport_frame, transport,
+       Jason.encode!(%{
+         "method" => "item/agentMessage/delta",
+         "params" => %{"delta" => "done"}
+       })}
+    )
+
+    _ = :sys.get_state(session)
     assert_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
   end
 

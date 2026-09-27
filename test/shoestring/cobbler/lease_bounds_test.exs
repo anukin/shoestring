@@ -155,6 +155,196 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
     assert state.tools == 1
   end
 
+  # ----------------------------------------------------------------------------
+  # Identity-keyed open-tool tracking (safe-boundary gate surface)
+  #
+  # Locking note: `track_open_tools/2` is new in this slice, so these unit
+  # tests reference a helper that does not exist on the pre-fix commit (they
+  # fail to compile there). They document the pure surface; the behavioural
+  # locks live in the Elf lease-loop tests and the Codex session
+  # safe-boundary tests, which use only pre-existing APIs.
+  # ----------------------------------------------------------------------------
+
+  describe "track_open_tools/2" do
+    test "command START opens by item id; matching completion closes; unrelated ids never close" do
+      open = MapSet.new()
+
+      start =
+        event(:command, 1, %{
+          "codex-app-server:item_id" => "cmd-1",
+          "codex-app-server:status" => "inProgress"
+        })
+
+      other_done =
+        event(:command, 2, %{
+          "codex-app-server:item_id" => "cmd-2",
+          "codex-app-server:status" => "completed",
+          "codex-app-server:exit_code" => 0
+        })
+
+      done =
+        event(:command, 3, %{
+          "codex-app-server:item_id" => "cmd-1",
+          "codex-app-server:status" => "completed",
+          "codex-app-server:exit_code" => 0
+        })
+
+      open = LeaseBounds.track_open_tools(open, start)
+      assert MapSet.member?(open, "cmd-1")
+
+      open = LeaseBounds.track_open_tools(open, other_done)
+      assert MapSet.member?(open, "cmd-1")
+
+      open = LeaseBounds.track_open_tools(open, done)
+      assert MapSet.size(open) == 0
+    end
+
+    test "overlapping tools drain independently" do
+      open = MapSet.new()
+
+      a_start =
+        event(:command, 1, %{
+          "codex-app-server:item_id" => "cmd-A",
+          "codex-app-server:status" => "inProgress"
+        })
+
+      b_start =
+        event(:tool, 2, %{
+          "codex-app-server:item_id" => "fc-B",
+          "codex-app-server:tool" => "fileChange",
+          "codex-app-server:status" => "inProgress"
+        })
+
+      a_done =
+        event(:command, 3, %{
+          "codex-app-server:item_id" => "cmd-A",
+          "codex-app-server:status" => "completed",
+          "codex-app-server:exit_code" => 0
+        })
+
+      b_done =
+        event(:tool, 4, %{
+          "codex-app-server:item_id" => "fc-B",
+          "codex-app-server:tool" => "fileChange",
+          "codex-app-server:status" => "completed"
+        })
+
+      open =
+        open |> LeaseBounds.track_open_tools(a_start) |> LeaseBounds.track_open_tools(b_start)
+
+      assert MapSet.size(open) == 2
+
+      open = LeaseBounds.track_open_tools(open, a_done)
+      assert open == MapSet.new(["fc-B"])
+
+      open = LeaseBounds.track_open_tools(open, b_done)
+      assert MapSet.size(open) == 0
+    end
+
+    test "message completions and lifecycle events never touch the open set" do
+      open =
+        MapSet.new()
+        |> LeaseBounds.track_open_tools(
+          event(:command, 1, %{
+            "codex-app-server:item_id" => "cmd-1",
+            "codex-app-server:status" => "inProgress"
+          })
+        )
+
+      message =
+        event(:output, 2, %{
+          "codex-app-server:item_id" => "msg-1",
+          "codex-app-server:phase" => "final_answer",
+          "codex-app-server:text" => "done"
+        })
+
+      lifecycle = event(:lifecycle, 3, %{"codex-app-server:method" => "turn/started"})
+      result = event(:result, 4, %{}, result: %{"status" => "completed"})
+
+      open =
+        open
+        |> LeaseBounds.track_open_tools(message)
+        |> LeaseBounds.track_open_tools(lifecycle)
+        |> LeaseBounds.track_open_tools(result)
+
+      assert open == MapSet.new(["cmd-1"])
+    end
+
+    test "status-less single-shot tools never block" do
+      open = MapSet.new()
+
+      single_shot = event(:tool, 1, %{"codex-app-server:tool" => "fileChange"})
+      open = LeaseBounds.track_open_tools(open, single_shot)
+      assert MapSet.size(open) == 0
+    end
+
+    test "identity-less command evidence never blocks (synthetic/degraded shapes)" do
+      open = MapSet.new()
+
+      synthetic = event(:command, 1, %{"shoestring.fake:detail" => "verify"})
+      open = LeaseBounds.track_open_tools(open, synthetic)
+      assert MapSet.size(open) == 0
+
+      blank_id =
+        event(:command, 2, %{
+          "codex-app-server:item_id" => "  ",
+          "codex-app-server:status" => "inProgress"
+        })
+
+      open = LeaseBounds.track_open_tools(open, blank_id)
+      assert MapSet.size(open) == 0
+    end
+
+    test "Claude boundaries correlate by tool_use_id" do
+      open = MapSet.new()
+
+      start =
+        event(:command, 1, %{
+          "claude-headless:boundary" => "start",
+          "claude-headless:tool_use_id" => "toolu_9"
+        })
+
+      finish =
+        event(:command, 2, %{
+          "claude-headless:boundary" => "end",
+          "claude-headless:tool_use_id" => "toolu_9"
+        })
+
+      open = LeaseBounds.track_open_tools(open, start)
+      assert open == MapSet.new(["toolu_9"])
+
+      open = LeaseBounds.track_open_tools(open, finish)
+      assert MapSet.size(open) == 0
+    end
+
+    test "duplicate starts are idempotent; unknown completions close nothing" do
+      open = MapSet.new()
+
+      start =
+        event(:command, 1, %{
+          "codex-app-server:item_id" => "cmd-1",
+          "codex-app-server:status" => "inProgress"
+        })
+
+      open =
+        open
+        |> LeaseBounds.track_open_tools(start)
+        |> LeaseBounds.track_open_tools(start)
+
+      assert open == MapSet.new(["cmd-1"])
+
+      unknown_done =
+        event(:command, 2, %{
+          "codex-app-server:item_id" => "cmd-ghost",
+          "codex-app-server:status" => "completed",
+          "codex-app-server:exit_code" => 0
+        })
+
+      open = LeaseBounds.track_open_tools(open, unknown_done)
+      assert open == MapSet.new(["cmd-1"])
+    end
+  end
+
   test "lifecycle, capacity, result, and non-quota error events never spend" do
     state = bounds()
 
