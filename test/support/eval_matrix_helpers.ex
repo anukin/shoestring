@@ -663,16 +663,18 @@ defmodule Shoestring.Test.EvalMatrixHelpers do
   Fake delivery counts. Returns the per-dimension scores plus `:total`.
   """
   @spec score_arm(map()) :: map()
-  def score_arm(%{
-        terminal_class: terminal_class,
-        prompt: prompt,
-        next_action: next_action,
-        decision_ref_count: decision_ref_count,
-        leg_b_event_count: leg_b_event_count,
-        starts: starts,
-        resumes: resumes
-      }) do
-    prompt_bytes = byte_size(prompt)
+  def score_arm(
+        %{
+          terminal_class: terminal_class,
+          prompt: prompt,
+          next_action: next_action,
+          decision_ref_count: decision_ref_count,
+          leg_b_event_count: leg_b_event_count,
+          starts: starts,
+          resumes: resumes
+        } = arm
+      ) do
+    prompt_bytes = byte_size(without_goal_statement(prompt, Map.get(arm, :checkpoint)))
     has_constraint? = String.contains?(prompt, fixture_constraint())
     has_step? = String.contains?(next_action, fixture_step())
 
@@ -728,5 +730,25 @@ defmodule Shoestring.Test.EvalMatrixHelpers do
     }
 
     Map.put(scores, :total, Enum.sum(Map.values(scores)))
+  end
+
+  # The byte thresholds above were authored before handoff prompts carried
+  # the checkpoint's acceptance contract (the ` Goal statement (…): ….` section). That
+  # section is the goal's own statement, identical in every arm, so it cannot
+  # separate arms; the thresholds keep grading only the continuation state
+  # they were written for. Removing it reproduces each arm's pre-section
+  # byte count exactly.
+  @doc """
+  The prompt without the goal-statement section composed for `record` (the
+  checkpoint record the prompt was composed from), for the fixture rubrics'
+  byte thresholds (see the comment above). The literal section is removed, so
+  a statement that itself contains ` Completed work: ` is still removed whole.
+  """
+  @spec without_goal_statement(String.t(), map() | struct() | nil) :: String.t()
+  def without_goal_statement(prompt, record) do
+    case Shoestring.Harness.Continuation.handoff_objective_section(record) do
+      "" -> prompt
+      section -> String.replace(prompt, section, "", global: false)
+    end
   end
 end

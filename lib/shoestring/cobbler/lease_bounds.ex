@@ -8,10 +8,13 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   - 1 response per `:output` message completion. Delta frames (Codex
     `item/agentMessage/delta`, or any extension key ending in `:delta`) never
     count.
-  - 1 tool per `:tool` event, or per `:command` START→END completion.
-    A START alone never counts; an END completion counts once per correlated
-    item (START observed or not — the END is the spend boundary, and duplicate
-    ENDs do not double-spend).
+  - 1 tool per completed `:tool` event, or per `:command` START→END
+    completion. A START alone never counts — for `:tool` that is an event
+    whose status is in progress (Codex `fileChange` arrives as an
+    `inProgress` START and a separate completion) or whose boundary is
+    `start`; a `:tool` event with no status is single-shot and counts. An END
+    completion counts once per correlated item (START observed or not — the
+    END is the spend boundary, and duplicate ENDs do not double-spend).
   - `:lifecycle`, `:artifact`, `:capacity`, `:error`, and `:result` events
     never spend. In particular a Codex `:quota_refused` error emits the
     `:quota_refused` fast-path marker with zero spend, and a Claude
@@ -61,7 +64,6 @@ defmodule Shoestring.Cobbler.LeaseBounds do
     tools: 0,
     due: false,
     quota_refused: false,
-    pending_starts: MapSet.new(),
     counted_commands: MapSet.new(),
     seen: MapSet.new()
   ]
@@ -88,7 +90,6 @@ defmodule Shoestring.Cobbler.LeaseBounds do
           tools: non_neg_integer(),
           due: boolean(),
           quota_refused: boolean(),
-          pending_starts: MapSet.t(),
           counted_commands: MapSet.t(),
           seen: MapSet.t()
         }
@@ -126,8 +127,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   re-fires the edge-triggered `:renewal_due` effect and the full
   due → stop → re-evaluate sequence. Budgets, grant/run identity, and the
   already-seen set are kept: events counted in an earlier epoch are never
-  double-spent, and command correlation (`pending_starts`,
-  `counted_commands`) carries over because item ids are unique per call.
+  double-spent, and command correlation (`counted_commands`) carries over because item ids are unique per call.
   """
   @spec new_epoch(t()) :: t()
   def new_epoch(%__MODULE__{} = state) do
@@ -326,8 +326,12 @@ defmodule Shoestring.Cobbler.LeaseBounds do
     if message_completion?(extensions), do: %{state | responses: state.responses + 1}, else: state
   end
 
-  defp spend(state, %HarnessEvent{kind: :tool}) do
-    %{state | tools: state.tools + 1}
+  # A tool START is not a spend and therefore not a boundary: counting it
+  # let a passed deadline decline the lease — checkpoint, suspend, stop — at
+  # the START of a Codex `fileChange`, with the file write still in flight
+  # (live, final-acceptance.md §5.2).
+  defp spend(state, %HarnessEvent{kind: :tool} = event) do
+    if tool_start?(event.extensions), do: state, else: %{state | tools: state.tools + 1}
   end
 
   defp spend(state, %HarnessEvent{kind: :command} = event) do
@@ -344,7 +348,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
         }
       end
     else
-      %{state | pending_starts: MapSet.put(state.pending_starts, item_id)}
+      state
     end
   end
 
@@ -387,6 +391,18 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   defp method(extensions) do
     extensions["codex-app-server:method"] || extensions["method"]
   end
+
+  @start_statuses ["inProgress", "in_progress", "started", "pending", "running"]
+
+  defp tool_start?(extensions) when is_map(extensions) do
+    status =
+      extensions["claude-headless:status"] || extensions["codex-app-server:status"] ||
+        extensions["status"]
+
+    boundary(extensions) == "start" or status in @start_statuses
+  end
+
+  defp tool_start?(_extensions), do: false
 
   defp command_completion?(%HarnessEvent{extensions: extensions}) do
     boundary(extensions) == "end" or completion_status?(extensions) or exit_code?(extensions)

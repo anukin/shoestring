@@ -448,6 +448,141 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     assert count_types(goal.id, run_id, ["harness.event_recorded"]) == 5
   end
 
+  # LOCK (fails at 32a3fe6 and at base c1ae4a8): the live shape of
+  # final-acceptance.md §5.2. The deadline has passed, and the next event is
+  # the START of a Codex `fileChange`. Counting that START as a tool spend
+  # made it a boundary, so the Elf declined — expired, checkpoint, suspend —
+  # with the file write in flight. The decline must wait for the item's
+  # completion.
+  test "a passed deadline declines at the tool's completion, not at its start", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:deadline_expire, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        codex_file_change("fc-1", "inProgress", source_event_id: "item-started-fc-1"),
+        codex_file_change("fc-1", "completed", source_event_id: "item-completed-fc-1"),
+        Scenario.output_event("after", source_event_id: "evt-out-after"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    hold_before_first_event(pid)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 100,
+      tool_budget: 100,
+      reserves: %{response: 1, tool: 1},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), -60, :second)
+    )
+
+    release_elf(pid)
+
+    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+
+    ordered = ordered_events(goal.id, run_id)
+
+    # The file change completed before the lease was declined.
+    assert sequence_before?(
+             ordered,
+             {:harness, "item-completed-fc-1"},
+             {"lease.expired", nil}
+           )
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "item-completed-fc-1"},
+             {"checkpoint.created", nil}
+           )
+  end
+
+  # LOCK (fails at 8c97eb7 and at base c1ae4a8): the `/runs/new` shape. The
+  # grant is committed (`lease.granted`) but nothing projects the goal, so
+  # there is no lease ROW when the Elf starts. Live (final-acceptance.md
+  # §5.1) such an Elf never loaded its lease: a 60 s manual lease ran for
+  # 4 min 12 s with no due, no decline and no checkpoint before completion.
+  test "a granted but unprojected lease is still enforced", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:exhausted, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.output_event("one", source_event_id: "evt-out-1"),
+        Scenario.output_event("two", source_event_id: "evt-out-2"),
+        Scenario.output_event("three", source_event_id: "evt-out-3"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    hold_before_first_event(pid)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    %{grant_id: grant_id} =
+      grant_for_run!(goal, run_id, fresh_id,
+        response_budget: 2,
+        tool_budget: 25,
+        reserves: %{response: 0, tool: 0},
+        checkpoint_cadence: 100,
+        deadline: DateTime.add(FixedClock.now(), 3_600, :second),
+        project: false
+      )
+
+    assert Repo.get(ExecutionLeaseRecord, grant_id) == nil
+
+    release_elf(pid)
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
+
+    # The Elf loaded the grant it was given and enforced it: exhaustion at
+    # the 2nd output checkpoints at that boundary, the turn still completes.
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert Repo.get(ExecutionLeaseRecord, grant_id) != nil
+  end
+
   test "quota fast path expires immediately with zero spend and checkpoints", %{
     sup: sup,
     goal: goal,
@@ -665,6 +800,22 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     }
   end
 
+  defp codex_file_change(item_id, status, opts) do
+    %{
+      kind: :tool,
+      offset_ms: Keyword.get(opts, :offset_ms, 0),
+      source_event_id: Keyword.fetch!(opts, :source_event_id),
+      error: nil,
+      result: nil,
+      capacity_snapshot: nil,
+      extensions: %{
+        "codex-app-server:item_id" => item_id,
+        "codex-app-server:tool" => "fileChange",
+        "codex-app-server:status" => status
+      }
+    }
+  end
+
   defp delta_event(opts) do
     %{
       kind: :output,
@@ -772,8 +923,11 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       })
 
     assert {:ok, %{grant_id: ^grant_id}} = Leases.grant(goal.id, lease)
-    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
-    assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "active"
+
+    if Keyword.get(opts, :project, true) do
+      assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+      assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "active"
+    end
 
     %{grant_id: grant_id, admission_id: admission.id}
   end

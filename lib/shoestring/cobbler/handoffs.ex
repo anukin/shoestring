@@ -86,9 +86,12 @@ defmodule Shoestring.Cobbler.Handoffs do
 
   The receiver is a FRESH session. It receives
   `Continuation.compose_handoff_prompt/2` output — checkpoint pointer,
-  `next_action`, decision refs and the bounded checkpoint content sections —
-  and never the sender's prompt, transcript or provider session id. The
-  sender's `provider_session_id` is not read on this path at all.
+  `next_action`, decision refs and the bounded checkpoint content sections,
+  including the goal's acceptance contract as the checkpoint recorded it
+  (for a manual run that is the operator's task statement) and the commands
+  the sender finished with their exit statuses — and never the sender's
+  transcript or provider session id. The sender's `provider_session_id` is
+  not read on this path at all.
 
   ## Remaining window (stated rather than implied)
 
@@ -247,7 +250,7 @@ defmodule Shoestring.Cobbler.Handoffs do
            command: command,
            handoff_id: command.id,
            outcome: outcome,
-           job: enqueue_delivery(command, opts)
+           job: deliver(outcome, command, opts)
          }}
 
       {:error, reason} ->
@@ -273,6 +276,35 @@ defmodule Shoestring.Cobbler.Handoffs do
     error in [Exqlite.Error, DBConnection.ConnectionError] ->
       {:error, {:handoff_projection_failed, {:database_error, Exception.message(error)}}}
   end
+
+  # A replayed request is the same intent again, so it gets exactly the
+  # delivery `reconcile/1` would give it: none when the transfer has settled,
+  # the existing attempt when one is live, and a new one only in the crash
+  # window (intent committed, no attempt). Oban's uniqueness covers only
+  # incomplete jobs, so without this a replay after the first delivery
+  # COMPLETED inserted a fresh job for an already-settled transfer.
+  defp deliver(:replayed, %CommandRecord{} = command, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    cond do
+      not handoff_requested?(command) -> nil
+      settled?(repo, command) -> nil
+      job = live_job(repo, command.id) -> job
+      true -> enqueue_delivery(command, opts)
+    end
+  rescue
+    _error -> nil
+  end
+
+  defp deliver(_outcome, command, opts), do: enqueue_delivery(command, opts)
+
+  defp handoff_requested?(%CommandRecord{
+         status: "resolved",
+         result: %{"kind" => "handoff_requested"}
+       }),
+       do: true
+
+  defp handoff_requested?(_command), do: false
 
   # A rejected command is not an intent and gets no delivery attempt.
   defp enqueue_delivery(
@@ -440,17 +472,21 @@ defmodule Shoestring.Cobbler.Handoffs do
     )
   end
 
-  defp live_job?(repo, handoff_id) do
+  defp live_job?(repo, handoff_id), do: not is_nil(live_job(repo, handoff_id))
+
+  defp live_job(repo, handoff_id) do
     states = @live_job_states
 
-    repo.exists?(
+    repo.one(
       from job in Job,
         where:
           job.state in ^states and
-            fragment("json_extract(?, \'$.handoff_id\') = ?", job.args, ^handoff_id)
+            fragment("json_extract(?, \'$.handoff_id\') = ?", job.args, ^handoff_id),
+        order_by: [asc: job.id],
+        limit: 1
     )
   rescue
-    _error -> false
+    _error -> nil
   end
 
   # ----------------------------------------------------------------------------
@@ -498,8 +534,41 @@ defmodule Shoestring.Cobbler.Handoffs do
 
     with {:ok, goal} <- fetch_goal(repo, goal_id),
          {:ok, command} <- fetch_handoff_command(repo, goal.id, command_id),
-         {:ok, intent} <- handoff_intent(command),
-         {:ok, sender} <- fetch_sender_run(repo, goal.id, intent["run_id"]),
+         {:ok, intent} <- handoff_intent(command) do
+      # A SETTLED transfer (pointer committed AND the receiver's dispatch row
+      # exists) has nothing left to do, so a late or replayed delivery ends
+      # here with no effect. It must not reach the claim check below: the
+      # goal's claim is normally released once the receiver finishes, and a
+      # delivery of a finished transfer then failed `handoff_claim_lost` and
+      # retried, although there was nothing to authorize.
+      case settled_transfer(repo, goal.id, command.id) do
+        {:ok, settled} -> {:ok, settled}
+        :none -> perform_unsettled(repo, goal, command, intent, now, opts)
+      end
+    end
+  end
+
+  defp settled_transfer(repo, goal_id, handoff_id) do
+    with {:ok, event} <- existing_intent(repo, goal_id, handoff_id),
+         receiver_id when is_binary(receiver_id) <- event.payload["run_id"] || event.run_id,
+         %RunRecord{} = receiver <- repo.get(RunRecord, receiver_id),
+         %DispatchRecord{} = dispatch <-
+           repo.one(from d in DispatchRecord, where: d.run_id == ^receiver.id, limit: 1) do
+      {:ok,
+       %{
+         outcome: :converged,
+         handoff_id: handoff_id,
+         run: receiver,
+         dispatch_id: dispatch.dispatch_id,
+         job_id: nil
+       }}
+    else
+      _unsettled -> :none
+    end
+  end
+
+  defp perform_unsettled(repo, goal, command, intent, now, opts) do
+    with {:ok, sender} <- fetch_sender_run(repo, goal.id, intent["run_id"]),
          # B3 ORDER IS LOAD-BEARING. Authorization and receiver identity are
          # resolved BEFORE the provider is observed, so a lost claim or an
          # unknown receiver produces no provider observation and no

@@ -263,6 +263,7 @@ defmodule Shoestring.Harness.EvalMatrix.AblationTest do
       Eval.score_arm(%{
         terminal_class: terminal.class,
         prompt: prompt,
+        checkpoint: checkpoint,
         next_action: checkpoint.next_action,
         decision_ref_count: length(handoff_event.payload["decision_refs"]),
         leg_b_event_count: tax.harness_events,

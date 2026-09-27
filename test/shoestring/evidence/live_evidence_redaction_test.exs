@@ -39,6 +39,7 @@ defmodule Shoestring.Evidence.LiveEvidenceRedactionTest do
     "plans/evidence/05-quota-aware-mvp/fixtures/live/*",
     "plans/evidence/05-quota-aware-mvp/fixtures/live-prod-rerun/*",
     "plans/evidence/05-quota-aware-mvp/fixtures/live-unblock/*",
+    "plans/evidence/05-quota-aware-mvp/fixtures/live-final/*",
     "plans/evidence/04-single-elf/fixtures/harness/*"
   ]
 
@@ -75,6 +76,13 @@ defmodule Shoestring.Evidence.LiveEvidenceRedactionTest do
   # these is a real identifier that escaped substitution.
   @synthetic_uuid ~r/^(?:01950000-0000-7000-8000|aaaaaaaa-0000-4000-a000|55555555-0000-4000-9000)-\d{12}$/
   @uuid_shaped ~r/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
+
+  # Provider-generated prefixed identifiers (Claude `msg_`/`req_`/`toolu_`,
+  # OpenAI-style `msg_`). A substitute keeps the prefix and length and carries
+  # only digits after it (plans/evidence/04-single-elf/README.md §1); a real
+  # one carries letters.
+  @prefixed_id ~r/\b(?:msg|req|toolu)_[0-9A-Za-z]{8,}/
+  @synthetic_prefixed ~r/^(?:msg|req|toolu)_\d+$/
 
   # The protected Observatory goal is a compile-time constant in the
   # repository, not an observation, so it may appear literally.
@@ -137,6 +145,17 @@ defmodule Shoestring.Evidence.LiveEvidenceRedactionTest do
         for match <- Regex.scan(@uuid_shaped, body) |> List.flatten() |> Enum.uniq() do
           assert synthetic?(match),
                  "#{path}: contains a non-synthetic UUID #{inspect(match)}"
+        end
+      end
+    end
+
+    # LOCK: the #83 transcripts committed real Claude message, request and
+    # tool-use ids (fixtures/live-unblock); this fails on them as committed.
+    test "every provider-prefixed identifier is a synthetic substitute" do
+      for {path, body} <- fixtures() do
+        for match <- Regex.scan(@prefixed_id, body) |> List.flatten() |> Enum.uniq() do
+          assert Regex.match?(@synthetic_prefixed, match),
+                 "#{path}: contains a non-synthetic provider identifier #{inspect(match)}"
         end
       end
     end

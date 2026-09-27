@@ -51,7 +51,7 @@ defmodule Shoestring.Elves.TerminalCheckpointTest do
     assert evidence =~ "last safe boundary: none recorded"
     assert evidence =~ "outcome completed"
 
-    assert inputs.next_action =~ "mix precommit"
+    assert inputs.next_action =~ "rerunning the recorded verification commands"
     assert inputs.extensions["shoestring.elf:checkpoint_kind"] == "terminal"
     assert inputs.extensions["shoestring.elf:terminal_key"] == "elf-terminal:#{state.dispatch_id}"
   end
@@ -153,7 +153,7 @@ defmodule Shoestring.Elves.TerminalCheckpointTest do
     assert checkpoint.repository_state.dirty == false
     assert Enum.any?(checkpoint.evidence, &(&1 =~ "no verification recorded"))
     assert Enum.any?(checkpoint.evidence, &(&1 =~ "process_launch_failed"))
-    assert checkpoint.next_action =~ "mix precommit"
+    assert checkpoint.next_action =~ "run the repository's own checks"
     assert checkpoint.extensions["shoestring.elf:checkpoint_error"] =~ "no_worktree_evidence"
   end
 

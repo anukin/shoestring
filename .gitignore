@@ -69,3 +69,6 @@ plans/evidence/*
 
 # Codex runtime scratch (may contain local authentication state).
 /.codex-tmp/
+
+# Python bytecode (tools/live_eval exporters)
+__pycache__/

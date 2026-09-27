@@ -26,7 +26,8 @@ import export_evidence as ev  # noqa: E402
 
 def scrub(value):
     if isinstance(value, dict):
-        return {k: scrub(v) for k, v in value.items()}
+        # Keys too: some phases key maps by provider item id.
+        return {scrub(k): scrub(v) for k, v in value.items()}
     if isinstance(value, list):
         return [scrub(v) for v in value]
     if isinstance(value, str):

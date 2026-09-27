@@ -609,3 +609,62 @@ left exactly as written. This branch is unmerged pending independent review.*
   earlier red run at `8587b7f` is recorded with its diagnosis in the evidence.
   Iteration 6 stays locked until review and merge.
 
+### Completion-record addendum — final live acceptance (2026-09-25)
+
+*Measured on `polly/iter5-final-acceptance` (live phases) and finished on
+`polly/iter5-final-acceptance-recovery`, base `c1ae4a8`. The full record is
+`plans/evidence/05-quota-aware-mvp/final-acceptance.md`; its §2 was
+pre-registered at `42fde95` before the first live call. Earlier bullets are
+left exactly as written. This branch is unmerged pending independent review.*
+
+- **Seven defects fixed**, six in production code, each locked by a test that
+  fails at its pre-fix commit for the behavioural reason (the recovery re-ran
+  all six locks):
+  - the handoff prompt now carries the goal statement and the sender's
+    finished commands with exit status;
+  - checkpoint evidence chunks now fit the 2 000-char item budget, where
+    they had overflowed to the floor template;
+  - the carried goal statement is now labelled as an earlier, ended
+    session's, so the receiver no longer adopts the session's stop limit;
+  - a granted but unprojected lease is now enforced: every manual run had
+    run unenforced;
+  - a tool now spends lease only at its completion, not at its START;
+  - real Claude ids are removed from #83's committed transcripts;
+  - a committed `.pyc` embedding an absolute home path is removed.
+- **Acceptance 7 — demonstrated again**, now at `32a3fe6` (code identity by
+  timestamp, not recorded by the driver). Codex → `Handoffs.request/3` → live
+  `handoff` queue → `HandoffWorker` (`:prod` probe) → owner-confirmed
+  admission → receiver lease → live `dispatch` → Claude Elf
+  (`claude-opus-5-5`) → `run.completed`, and the Go CLI passed every check.
+  16 of 16 live runs launched through the process-group handshake.
+- **Acceptance 8 — measured under the pre-registered design; the result does
+  not favour the product on this fixture.**
+  - Three arms ran live twice, each cycle from one committed state, and every
+    pre-registered measure was computed.
+  - In the pre-registered cycle the projection arm **failed**: its receiver
+    adopted the sender session's stop limit and did nothing, while
+    `worktree_only` passed and `naive_summary` failed only on `go vet`.
+  - After the post-hoc label fix, projection passed 2 of 2, but in the one
+    same-cycle comparison it was dearer than `worktree_only`: 55 vs 50
+    events, 63.0 vs 55.8 s.
+  - The constraint and rejected-approach measures did not separate the arms.
+  - The gate's letter (§2.5) is met, but the product value it was meant to
+    show was not shown. Closing it is the reviewer's call.
+- **Lease stop at a safe boundary — met on Shoestring's side after two fixes;
+  open issues remain.**
+  - After both fixes, a live decline fired at a command completion, but
+    Codex had started the next item 2 ms earlier.
+  - Every manual-scope `lease_decline_recheck` wake failed
+    `no_observation_for_provider` (5 of 5 jobs): the Observatory never holds
+    the `account:manual` scope.
+  - One run declined before the fix remained `suspended` with no terminal.
+- **Replay** produced no duplicate run, but it did enqueue a new handoff job
+  (failing `handoff_claim_lost`), which the pre-registered clause forbade.
+- **Cancellation:** owned group alive and leading before the cancel,
+  `cancelled` in 172 ms, dead after with the node up, then
+  `already_terminal`. The source checkout was byte-for-byte unchanged before,
+  after and at recovery.
+- **Gate at the branch tip:** `mix precommit`, exit 0: 4 doctests, 1454
+  tests, 0 failures, 1 skipped (6 excluded); Node 52/52; UI 7/7.
+- **Iteration 6 stays locked** until review and merge. Open findings are in
+  §6 of the record.
