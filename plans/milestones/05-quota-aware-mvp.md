@@ -668,3 +668,28 @@ left exactly as written. This branch is unmerged pending independent review.*
   tests, 0 failures, 1 skipped (6 excluded); Node 52/52; UI 7/7.
 - **Iteration 6 stays locked** until review and merge. Open findings are in
   §6 of the record.
+
+### Completion-record addendum — live closeout on merged main (2026-09-27 UTC)
+
+Record: `plans/evidence/05-quota-aware-mvp/live-closeout.md`. One authorized,
+bounded sequence (`setup → turn1 → turn2 → handoff → lease_stop → audit`) ran
+at `1566acd`, on a fresh state DB built with `Shoestring.Release.migrate()`.
+It used 3 Codex runs and 1 Claude run, with no retries and no comparison arms.
+
+- **Code identity:** 6 of 6 phase records carry `1566acd`, clean.
+- **Cross-provider handoff on the production path:** completed. Owner-confirmed
+  admission, job attempt 1, receiver `claude-opus-5-5` (from its `init`
+  frame). Every M1 fixture check passed, C1 0 violations, R1 honoured.
+- **Replay:** the settled-transfer replay added 0 jobs and 0 runs (compared
+  explicitly).
+- **Checkpoint on stop:** the lease-stopped run's checkpoint names its
+  unfinished item.
+- **Lease stop: not met.** At the manual-lease deadline the turn was
+  interrupted 2.5 s after a command START with no completion recorded. The
+  decline, suspend and recheck wake never happened, and the lease row stayed
+  `active`. The manual-scope wake fix is therefore still unverified live.
+  Mechanism not established; not fixed on this branch.
+- **Acceptance 8:** not re-run. The pre-registered failure, the post-hoc
+  2 of 2 passes with no consistent advantage, and the missing scripted quota
+  refusal all stand.
+- **Iteration 6 stays locked.**

@@ -689,3 +689,33 @@ the release-migrated database exercising findings 1, 2, and 4 live
 (settled replay with no new job, manual-scope wake settled once, a
 declined run told apart by its session status), per-phase code
 identity in the records, and a reviewer decision on Acceptance 8.
+
+## 9. Live closeout (2026-09-27 UTC, after #84 merged)
+
+§§1–8 are preserved as written. The single bounded live sequence that §8.4
+left pending ran at `1566acd` (merged `main`). Its full record is
+`live-closeout.md`. What it changes in §8.2's ledger:
+
+- **Finding 6**: every phase record carries `code.sha = 1566acd…`,
+  `dirty: false` (6 of 6). VERIFIED live.
+- **Finding 4**: the settled replay added **0** handoff jobs (1 → 1) and 0 runs
+  (2 → 2). VERIFIED live for the settled case. Late delivery and the crash
+  window were not exercised.
+- **Finding 3**: the terminal checkpoint named the one unfinished Codex
+  item. VERIFIED live.
+- **Finding 1**: **still LIVE-UNVERIFIED.** The lease-stop run never
+  declined, so no recheck wake was scheduled (0 wakeups, 0 decisions).
+- **Finding 2**: the declined case did not arise. The session diagnostic
+  was recorded (`none`) for an interrupted run whose terminal is Codex's own
+  `interrupted` result.
+- **New finding** (`live-closeout.md` §5, §7.1): at the 60 s manual-lease
+  deadline, the stop interrupted the Codex turn 2.5 s after a command START
+  with no completion recorded. The decline sequence (`lease.expired`,
+  suspend, wake) never ran, and the lease row stayed `active`. Mechanism not
+  established; not fixed.
+- The Acceptance-7 path ran live at the merged tip: owner-confirmed
+  handoff to a `claude-opus-5-5` receiver (from its `init` frame), and every
+  fixture check passed.
+
+Iteration 6 stays locked: finding 1 is unverified live, and the new
+lease-stop finding bears on the "safe harness boundaries" rule.
