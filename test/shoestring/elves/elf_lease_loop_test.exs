@@ -1537,10 +1537,13 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     }
   end
 
-  # Explicit lifecycle boundary markers mirror what the Codex normalizer
-  # records from the raw RPC method. `command_event/3` is used for both
-  # starts and ends across these tests, so the marker derives from the
-  # status it expresses; genuinely ambiguous shapes have no marker at all.
+  # Synthetic Fake command shapes carrying the status/item keys the T2
+  # spend counter reads (`LeaseBounds`: completions spend, STARTs do not).
+  # They are not normalizer output — the Codex normalizer emits no
+  # `boundary` key and nothing in the Elf gates on boundaries anymore.
+  # `command_event/3` is used for both starts and ends across these tests,
+  # so the spend derives from the status it expresses; genuinely ambiguous
+  # shapes have no marker at all.
   defp command_event(item_id, status, opts) do
     %{
       kind: :command,

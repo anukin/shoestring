@@ -70,9 +70,11 @@ under `Blocker dispositions`.
   path is untouched (provider already halted: immediate re-evaluate,
   decline plus terminal on refusal).
 - Dead latches removed with the redesign: `lease_settled?`,
-  `lease_declined?`, `lease_checkpointed?`, `settle_on_checkpoint/1`,
-  the mid-turn ensure-checkpoint path, and the Elf-side open-tool /
-  model-control tracking (already gone). Session-side open-tool maps are
+  `lease_declined?`, `settle_on_checkpoint/1`, the mid-turn
+  ensure-checkpoint path, and the Elf-side open-tool / model-control
+  tracking (already gone). `lease_checkpointed?` is RETAINED — it is
+  set by the reactive checkpoint path and feeds the terminal
+  checkpoint's interrupted stop-reason suffix. Session-side open-tool maps are
   RETAINED for status observability only — nothing consults them for
   decisions (stated in the moduledocs; no consumers exist outside the
   two session modules) — reported here per the review rather than
@@ -141,6 +143,13 @@ multi-turn streams (each outcome judges only undecided business).
   scenario support.
 
 ## Tests plus pre-fix regression evidence
+
+Verification label for this whole section: every count below is
+implementer-verified (the implementer ran the commands and read the
+logs) and NOT independently verified — the reviewer ran no tests, and
+the orchestrator gate verified the suite is green on-tree, not these
+per-base failure claims. The `/tmp` proof worktrees and logs exist as
+named; their contents were not independently inspected.
 
 Proof worktrees at `1566acd` (PR base), `e675c3b` (first revision),
 and `238b161` (direct parent) were built in isolation with the final
@@ -236,7 +245,7 @@ marks a new API (labeled as such, never as regression evidence):
   No retry-until-green; a single full run after the last edit, quoted
   exactly.
 
-## Independent gate record (FAILED on teardown leak, root-caused;
+## Independent gate record (FAILED on teardown leak;
 ## history preserved, not erased)
 
 - Independent gate at `917f2d8`, exact command
@@ -251,20 +260,28 @@ marks a new API (labeled as such, never as regression evidence):
   SETUP (`__ex_unit_setup_1`, line 24: `create_goal!()`) with
   `Exqlite.Error Database busy` on `INSERT INTO "goals"` — the test body
   never executed.
-- Root-cause record (carried over, unchanged): the storm file's teardown
-  helper killed the unlinked test root and awaited only the root's DOWN.
-  The healthy `CodexMonitor` traps exits (`Process.flag(:trap_exit,
-  true)`) and its catch-all `handle_info(_other, ...)` ignores unmatched
-  messages — verified in code, not assumed. What is VERIFIED: a
-  Repo-touching monitor was observed alive after root teardown in
-  diagnosis, and dead ~3s later; the independent log independently names
-  the storm as the lingering Repo client; the leak was confirmed present
-  on base `1566acd`. What remains INFERENCE (medium confidence, stated
+- Teardown-leak record (carried over, unchanged): the storm file's
+  teardown helper killed the unlinked test root and awaited only the
+  root's DOWN. Code reasoning only (REPO-INSPECTION, not a runtime
+  proof): the healthy `CodexMonitor` sets `Process.flag(:trap_exit,
+  true)` in `init/1` and has a catch-all `handle_info(_other, ...)`
+  clause that keeps its state. NOT established: that a parent's EXIT
+  ever reached that clause and was swallowed there — OTP itself handles
+  a parent EXIT inside gen_server after already-queued mailbox messages,
+  and the monitor's direct parent is the capacity supervisor, not the
+  test root. What is VERIFIED: a Repo-touching monitor was observed
+  alive after root teardown in diagnosis, and dead ~3s later; the
+  independent log independently names the storm as the lingering Repo
+  client; the leak was confirmed present on base `1566acd` — not
+  re-verified by this slice (that confirmation predates it and was not
+  re-run here). What remains INFERENCE (medium confidence, stated
   as such): that the zombie's Repo contention produced the exact
   `Database busy` in ManualRecheck's setup INSERT (observed once, in
   that run; the precise lock mechanics were never reproduced
-  deterministically). Earlier wording that implied the SQLite cause was
-  established is corrected here.
+  deterministically, and the SQLite linkage remains inference).
+  Earlier wording that implied the SQLite cause was established, or
+  that the catch-all mechanism was verified rather than reasoned
+  about, is corrected here.
 - Repair and its deterministic rewrite: the `238b161` repair (snapshot
   every tree pid pre-kill, kill root, await every DOWN) is superseded in
   this round by a stronger helper (kill the root, then kill every
@@ -332,8 +349,12 @@ marks a new API (labeled as such, never as regression evidence):
    evaluated) pin it. No live-probe-latency assumption remains (the
    microsecond-TOCTOU note is retired with the preview it described).
 4. Storm/evidence — CLOSED except as noted: deterministic teardown
-   helper + regression (both directions, no timing, preserved proof);
-    the false catch-all comment replaced with code-verified mechanism;
+    helper + regression (fixed-helper direction locks the
+    whole-snapshot postcondition against a SYNTHETIC detached member;
+    the companion direction documents the pre-fix helper's
+    insufficiency and passes every commit by construction);
+    the false catch-all comment replaced with explicitly labeled
+    code reasoning (REPO-INSPECTION, not a verified mechanism);
     no `Process.alive?`-based synchronization and no sleep-polling in the
     new work (`refute Process.alive?/1` appears only as post-DOWN
     monotonic death assertions, never as synchronization; pre-existing
@@ -346,10 +367,19 @@ marks a new API (labeled as such, never as regression evidence):
    worktrees/logs preserved (never deleted this round); new-API
    `UndefinedFunctionError` results labeled documentation, never
    regression evidence.
-- NITs, each addressed: stale `track_open_tools`/`track_control`
-  references (none remain in lib); event-marker/model-control release
-  descriptions (normalizer markers gone with the tracking that consumed
-  them; session docs describe pend-only); contradictory mid-turn expiry
+- NITs, as actually disposed (no blanket claim: each item below states
+  what was done, and the stale test comments fixed this round are
+  listed): stale `track_open_tools`/`track_control` references — those
+  helpers exist nowhere in lib (removed design); the one remaining
+  comment naming them (`lease_bounds_test.exs`) is corrected this
+  round to name only `tool_identity/1`; event-marker/model-control
+  release descriptions (normalizer markers gone with the tracking that
+  consumed them; session docs describe pend-only; the
+  `session_test.exs` "model-control evidence releases it" comment is
+  corrected this round to terminal-only, and the
+  `elf_lease_loop_test.exs` "boundary marker" helper comment is
+  corrected this round — the normalizer emits no `boundary` key and
+  nothing gates on boundaries); contradictory mid-turn expiry
   comments (rewritten); unfinished-tool test now asserts terminal
   checkpoint evidence naming the tool; `String.to_atom/1` on the lease
   status replaced with an explicit finite mapping (the one remaining
@@ -362,7 +392,10 @@ marks a new API (labeled as such, never as regression evidence):
 
 ## Unresolved risks and residual limits
 
-- Deadline pressure waits for the turn to finish (stated cost).
+- Deadline pressure waits for the turn to finish (stated cost). An
+  operator safe stop on a single-turn run likewise waits for natural
+  completion — the accepted terminal-only safety tradeoff; no live
+  effectiveness is claimed as proven (see OPEN N5 below).
 - A turn with no outcome event at all never declines; supervision
   continues under the locked staleness rules (demonstrated hermetically
   by outcome-less scenarios draining without declining).
@@ -376,3 +409,35 @@ marks a new API (labeled as such, never as regression evidence):
   cannot be traversed); orphans of an already-dead tree are reaped by
   pid. Crash-loop reincarnation between snapshot and kill is a bounded
   pre-existing window, unchanged by this round.
+
+## Open follow-ups (recorded from review, NOT fixed this round)
+
+Source: the Opus re-review of `11b0460` (behavioral blockers closed by
+REPO-INSPECTION; reviewer ran no tests). The implementer did not
+independently verify these behaviorally, and no behavior change was
+made for any of them here — they are recorded so a later round can
+take them with a separate brief.
+
+- OPEN N1: an external concurrent expiry can produce an unhandled
+  expired result in `renewal_attempt` and a duplicate admission
+  decision within one epoch.
+- OPEN N2: a failed outcome / failed stop can leave the UI showing
+  lease `renewal_due`.
+- OPEN N3: a failed interrupted-outcome checkpoint records the terminal
+  with no wake while logging "run stays active for retry" — the log
+  line misleads.
+- OPEN N4: the Claude safe-stop flag can stick after its session
+  finished.
+- OPEN N5: operator safe stop for single-turn runs waits for natural
+  completion (accepted terminal-only safety tradeoff, stated above);
+  no claim is made that live effectiveness is proven.
+- OPEN N6: deadline path probes once per spend (repeated probes on
+  spend-heavy turns) — pre-existing per inspection.
+- OPEN N7: the async kill snapshot can race a supervised child restart;
+  post-DOWN `Process.alive?/1` assertions are discouraged by the
+  standing contract (this round's uses are post-DOWN monotonic death
+  assertions only, labeled where they appear).
+- UNKNOWNS (explicitly not established): the `/tmp` proof logs were
+  not independently inspected; the unchanged quota failed-terminal
+  wake interaction is not fully traced; the live frequency of
+  interrupted outcomes under pend-only stops is unknown.

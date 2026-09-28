@@ -156,14 +156,15 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
   end
 
   # ----------------------------------------------------------------------------
-  # Safe-boundary gate surface (explicit lifecycle markers + control)
+  # `tool_identity/1` surface (observability keying only)
   #
-  # Locking note: `track_open_tools/2`, `track_control/2`, and
-  # `tool_identity/1` are new in this slice, so these unit tests reference
-  # helpers that do not exist on the pre-fix commits (they fail to compile
-  # there). They document the pure surface; the behavioural locks live in
-  # the Elf lease-loop tests, the Codex session safe-boundary tests, and
-  # the normalizer marker tests, which use only pre-existing APIs.
+  # Locking note: only `tool_identity/1` is new in this slice.
+  # `track_open_tools/2` and `track_control/2` name a removed design —
+  # no such helpers exist anywhere in lib or test, and no safe-stop or
+  # renewal decision consults open-tool state. These unit tests document
+  # the pure surface; the behavioural locks live in the Elf lease-loop
+  # tests, the Codex session safe-boundary tests, and the normalizer
+  # marker tests, which use only pre-existing APIs.
   # ----------------------------------------------------------------------------
 
   describe "tool_identity/1" do

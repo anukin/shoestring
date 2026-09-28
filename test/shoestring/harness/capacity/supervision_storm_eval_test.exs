@@ -354,14 +354,21 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
   # so nothing the root's death propagates can ever kill it (survival is
   # structural), while death after an observed DOWN is monotonic.
   #
-  # The detached member models the observed phenomenon (a Repo-touching
-  # monitor demonstrably alive after root teardown in diagnosis). The
-  # mechanism is verified in code, not assumed: `CodexMonitor` traps
-  # exits (`Process.flag(:trap_exit, true)`) and its catch-all
-  # `handle_info(_other, ...)` ignores unmatched messages — so a
-  # trappable parent death arrives as an `{'EXIT', ...}` message rather
-  # than killing it. (A brutal `:kill`/`:killed` is untrappable and always
-  # kills; the point here is what root-only *evidence* can(not) prove.)
+  # The detached member is a SYNTHETIC model of the whole-snapshot
+  # teardown postcondition — every snapshot pid dead when the helper
+  # returns — not a faithful reproduction of the historical shutdown
+  # mechanism. What code reasoning supports (REPO-INSPECTION, not a
+  # runtime proof): the real `CodexMonitor` sets `Process.flag(:trap_exit,
+  # true)` in `init/1` and has a catch-all `handle_info(_other, ...)`
+  # clause that keeps its state. What is NOT established: that a
+  # parent's EXIT ever reached that clause and was swallowed there.
+  # OTP itself handles a parent EXIT inside gen_server after the
+  # messages already queued in the mailbox, and the monitor's direct
+  # parent is the capacity supervisor, not the test root — so the exact
+  # historical path by which a Repo-touching monitor outlived root
+  # teardown was never determined. Likewise a root DOWN does not
+  # establish that descendants have finished asynchronous shutdown;
+  # that is exactly what the fixed helper refuses to assume.
   test "teardown reaps the whole tree including members detached from the root" do
     test_pid = self()
 
@@ -400,11 +407,14 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
            "detached member survived synchronous teardown and can keep touching Repo"
   end
 
-  # Pre-fix insufficiency, pinned deterministically: kill the root and
-  # await only the root's DOWN (the exact pre-fix helper semantics,
-  # preserved below). The detached member is structurally alive
-  # afterwards — root-only evidence cannot prove tree teardown. Cleans up
-  # with the fixed helper.
+  # Documentation of the pre-fix helper's insufficiency, pinned
+  # deterministically: kill the root and await only the root's DOWN (the
+  # exact pre-fix helper semantics, preserved below). The detached member
+  # is structurally alive afterwards — root-only evidence cannot prove
+  # tree teardown. This test passes on every commit by construction (the
+  # helper under test is local to this file); it documents the property,
+  # it is not a regression lock on production behavior. Cleans up with
+  # the fixed helper.
   test "root-only teardown demonstrably leaves a detached member alive" do
     test_pid = self()
 
@@ -443,8 +453,9 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
   # Parked Repo-capable worker that detaches from its supervisor after
   # start: unlinks every link it holds except the test's (in a fresh tree,
   # exactly the supervisor link), proves Repo access from its own pid,
-  # notifies, then parks until killed. Models a monitor that outlives
-  # its root.
+  # notifies, then parks until killed. A SYNTHETIC stand-in for "a member
+  # that outlives its root" — it models the teardown postcondition, not
+  # the real monitor's shutdown path.
   defp detach_and_park(test_pid) do
     {:links, links} = Process.info(self(), :links)
 

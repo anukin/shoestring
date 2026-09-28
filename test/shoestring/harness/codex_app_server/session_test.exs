@@ -610,8 +610,8 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       assert {:ok, :cancelled} = Session.cancel(session, %{boundary: :item})
       refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
-      # On item completion the stop stays armed (no send on drain
-      # alone); model-control evidence releases it.
+      # On item completion the stop stays armed with no send — terminal-only:
+      # no frame class releases it; the authoritative turn outcome resolves it.
       send(
         session,
         {:codex_transport_frame, transport,
