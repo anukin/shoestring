@@ -347,4 +347,105 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizerTest do
       refute Map.has_key?(event.extensions, "codex-app-server:exit_code")
     end
   end
+
+  describe "explicit lifecycle boundary markers" do
+    test "commandExecution started/completed carry start/end markers" do
+      started = %{
+        "type" => "commandExecution",
+        "id" => "exec-9",
+        "command" => "sleep 10",
+        "processId" => "44444",
+        "status" => "inProgress"
+      }
+
+      completed = Map.merge(started, %{"status" => "completed", "exitCode" => 0})
+
+      assert {:ok, start_event} =
+               EventNormalizer.normalize(
+                 %{"method" => "item/started", "params" => %{"item" => started}},
+                 @run_id,
+                 1,
+                 %{provider_session_id: @session_id}
+               )
+
+      assert start_event.kind == :command
+      assert start_event.extensions["codex-app-server:boundary"] == "start"
+      assert start_event.extensions["codex-app-server:item_id"] == "exec-9"
+
+      assert {:ok, end_event} =
+               EventNormalizer.normalize(
+                 %{"method" => "item/completed", "params" => %{"item" => completed}},
+                 @run_id,
+                 2,
+                 %{provider_session_id: @session_id}
+               )
+
+      assert end_event.kind == :command
+      assert end_event.extensions["codex-app-server:boundary"] == "end"
+      assert end_event.extensions["codex-app-server:exit_code"] == 0
+    end
+
+    test "fileChange started/completed carry start/end markers" do
+      started = %{"type" => "fileChange", "id" => "fc-9", "status" => "inProgress"}
+      completed = %{"type" => "fileChange", "id" => "fc-9", "status" => "completed"}
+
+      assert {:ok, start_event} =
+               EventNormalizer.normalize(
+                 %{"method" => "item/started", "params" => %{"item" => started}},
+                 @run_id,
+                 1,
+                 %{provider_session_id: @session_id}
+               )
+
+      assert start_event.kind == :tool
+      assert start_event.extensions["codex-app-server:boundary"] == "start"
+
+      assert {:ok, end_event} =
+               EventNormalizer.normalize(
+                 %{"method" => "item/completed", "params" => %{"item" => completed}},
+                 @run_id,
+                 2,
+                 %{provider_session_id: @session_id}
+               )
+
+      assert end_event.kind == :tool
+      assert end_event.extensions["codex-app-server:boundary"] == "end"
+    end
+
+    # LOCK (fails behaviourally on 1566acd and e675c3b — no marker key at
+    # all): unknown shapes (e.g. `mcpToolCall`) stay `:lifecycle` (zero
+    # spend impact) but carry explicit start/end markers plus identity and
+    # the recorded type, so the Elf layer can track them as potential
+    # tools without touching spend counting.
+    test "unknown item shapes stay lifecycle but carry markers and identity" do
+      started = %{"type" => "mcpToolCall", "id" => "mcp-9", "status" => "inProgress"}
+      completed = %{"type" => "mcpToolCall", "id" => "mcp-9", "status" => "completed"}
+
+      assert {:ok, start_event} =
+               EventNormalizer.normalize(
+                 %{"method" => "item/started", "params" => %{"item" => started}},
+                 @run_id,
+                 1,
+                 %{provider_session_id: @session_id}
+               )
+
+      assert start_event.kind == :lifecycle
+      assert start_event.extensions["codex-app-server:boundary"] == "start"
+      assert start_event.extensions["codex-app-server:item_id"] == "mcp-9"
+      assert start_event.extensions["codex-app-server:item_type"] == "mcpToolCall"
+
+      assert {:ok, end_event} =
+               EventNormalizer.normalize(
+                 %{"method" => "item/completed", "params" => %{"item" => completed}},
+                 @run_id,
+                 2,
+                 %{provider_session_id: @session_id}
+               )
+
+      assert end_event.kind == :lifecycle
+      assert end_event.extensions["codex-app-server:boundary"] == "end"
+      assert end_event.extensions["codex-app-server:item_id"] == "mcp-9"
+      assert end_event.extensions["codex-app-server:item_type"] == "mcpToolCall"
+    end
+  end
 end

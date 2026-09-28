@@ -102,6 +102,8 @@ defmodule Shoestring.Elves.Elf do
           output_overflowed?: boolean(),
           lease_bounds: Shoestring.Cobbler.LeaseBounds.t() | nil,
           lease_open_tools: MapSet.t(),
+          lease_tool_seen?: boolean(),
+          lease_model_control?: boolean(),
           lease_grant_id: Ecto.UUID.t() | nil,
           lease_deadline: DateTime.t() | nil,
           lease_stop_requested?: boolean(),
@@ -150,6 +152,8 @@ defmodule Shoestring.Elves.Elf do
     output_overflowed?: false,
     lease_bounds: nil,
     lease_open_tools: nil,
+    lease_tool_seen?: false,
+    lease_model_control?: false,
     lease_grant_id: nil,
     lease_deadline: nil,
     lease_stop_requested?: false,
@@ -1089,10 +1093,11 @@ defmodule Shoestring.Elves.Elf do
   # - Counting follows the `LeaseBounds` T2 rule (message completions, never
   #   delta frames); the item.completed boundary is derived from the live
   #   counters (this event incremented responses or tools), never redefined —
-  #   AND it additionally requires an empty open-tool set (identity-keyed
-  #   `:command`/`:tool` items folded from every normalized event, live and
-  #   durable). A message completion with a tool still open is spend, never
-  #   a boundary.
+  #   AND it additionally requires an empty open-tool set plus demonstrated
+  #   model control (identity-keyed `:command`/`:tool`/unknown-tool items
+  #   and control evidence folded from every normalized event, live and
+  #   durable). A spend with a tool still open — or right after one finished
+  #   with no intervening model activity — is spend, never a boundary.
   # - On renewal-due or deadline: the durable `lease.renewal_due` marker is
   #   appended, a safe stop is ensured through the existing `LeaseBoundary`
   #   (exactly once — never restopped), and at the item.completed boundary the
@@ -1127,11 +1132,11 @@ defmodule Shoestring.Elves.Elf do
   end
 
   defp lease_account_inner(state, event) do
-    # The open-tool set folds every ingested event, lease or not, so a
-    # tool that starts before its run's lease row exists is still open
-    # when the lease loads (the durable rebuild below re-folds the same
-    # events idempotently).
-    state = track_lease_open_tool(state, event)
+    # The boundary trackers fold every ingested event, lease or not, so a
+    # tool that starts before its run's lease row exists is still seen when
+    # the lease loads (the durable rebuild below re-folds the same events
+    # idempotently).
+    state = track_lease_boundary(state, event)
 
     case load_lease(state) do
       {:ok, state} ->
@@ -1141,7 +1146,10 @@ defmodule Shoestring.Elves.Elf do
           Shoestring.Cobbler.LeaseBounds.advance(previous, event)
 
         state = %{state | lease_bounds: bounds}
-        boundary? = spent_more?(previous, bounds) and open_tools_empty?(state)
+
+        boundary? =
+          spent_more?(previous, bounds) and open_tools_empty?(state) and
+            model_control?(state)
 
         state =
           if :quota_refused in effects do
@@ -1209,30 +1217,48 @@ defmodule Shoestring.Elves.Elf do
 
   # The item.completed boundary, derived — not redefined — from the T2 rule:
   # this normalized event spent responses or tools. A spend alone is not
-  # enough: normalized tool items may still be open (a message completion
-  # never closes them), and renewal/decline must wait until none remain.
+  # enough: normalized tool items may still be open, or one may just have
+  # finished with no model activity since — renewal/decline additionally
+  # waits for an empty open set plus demonstrated model control.
   defp spent_more?(previous, current) do
     current.responses > previous.responses or current.tools > previous.tools
   end
 
-  # Identity-keyed open tool items folded from every ingested normalized
-  # event (live buffer and durable rebuild alike, via
-  # `LeaseBounds.track_open_tools/2`). A renewal/decline boundary requires
-  # this set to be empty: no suspend, checkpoint, or session stop may be
-  # treated as safe while a tool is observably in flight.
-  defp track_lease_open_tool(state, event) do
-    open =
-      Shoestring.Cobbler.LeaseBounds.track_open_tools(open_tools(state), event)
+  # Identity-keyed open tool items plus model-control evidence, folded
+  # from every ingested normalized event (live buffer and durable rebuild
+  # alike, via `LeaseBounds`). A renewal/decline boundary requires all
+  # three: this event spent responses or tools, no tool is observably open,
+  # AND the provider demonstrated model control after the last tool
+  # activity — so neither a suspend nor a session stop is ever treated as
+  # safe while a tool is in flight or immediately after one finished.
+  defp track_lease_boundary(state, event) do
+    open = Shoestring.Cobbler.LeaseBounds.track_open_tools(open_tools(state), event)
 
-    %{state | lease_open_tools: open}
+    {seen, control} =
+      Shoestring.Cobbler.LeaseBounds.track_control(control_state(state), event)
+
+    %{
+      state
+      | lease_open_tools: open,
+        lease_tool_seen?: seen,
+        lease_model_control?: control
+    }
   end
 
   defp open_tools(state) do
     state.lease_open_tools || MapSet.new()
   end
 
+  defp control_state(state) do
+    {state.lease_tool_seen? || false, state.lease_model_control? || false}
+  end
+
   defp open_tools_empty?(state) do
     MapSet.size(open_tools(state)) == 0
+  end
+
+  defp model_control?(state) do
+    elem(control_state(state), 1)
   end
 
   defp exhausted?(state) do
@@ -1294,22 +1320,20 @@ defmodule Shoestring.Elves.Elf do
         {bounds, _effects, events} = rebuild_spend(state, bounds)
 
         # A lease granted while the stream is already flowing may have
-        # tools open: fold the same durable events for the open set so a
-        # later message completion cannot look like a safe boundary.
-        # MapSet put/delete is idempotent, so overlapping the live fold
-        # (the current event re-advances below) is harmless.
-        open =
-          Enum.reduce(
-            events,
-            open_tools(state),
-            &Shoestring.Cobbler.LeaseBounds.track_open_tools(&2, &1)
-          )
+        # tools open or control established: fold the same durable events
+        # for the full boundary state so a later message completion cannot
+        # look like a safe boundary. Both folds are idempotent, so
+        # overlapping the live fold (the current event re-advances below)
+        # is harmless.
+        state =
+          Enum.reduce(events, state, fn event, state ->
+            track_lease_boundary(state, event)
+          end)
 
         {:ok,
          %{
            state
            | lease_bounds: bounds,
-             lease_open_tools: open,
              lease_grant_id: record.id,
              lease_deadline: record.deadline
          }}

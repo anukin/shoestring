@@ -156,28 +156,61 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
   end
 
   # ----------------------------------------------------------------------------
-  # Identity-keyed open-tool tracking (safe-boundary gate surface)
+  # Safe-boundary gate surface (explicit lifecycle markers + control)
   #
-  # Locking note: `track_open_tools/2` is new in this slice, so these unit
-  # tests reference a helper that does not exist on the pre-fix commit (they
-  # fail to compile there). They document the pure surface; the behavioural
-  # locks live in the Elf lease-loop tests and the Codex session
-  # safe-boundary tests, which use only pre-existing APIs.
+  # Locking note: `track_open_tools/2`, `track_control/2`, and
+  # `tool_identity/1` are new in this slice, so these unit tests reference
+  # helpers that do not exist on the pre-fix commits (they fail to compile
+  # there). They document the pure surface; the behavioural locks live in
+  # the Elf lease-loop tests, the Codex session safe-boundary tests, and
+  # the normalizer marker tests, which use only pre-existing APIs.
   # ----------------------------------------------------------------------------
 
+  describe "tool_identity/1" do
+    test "prefers provider-native keys and skips blanks consistently" do
+      assert LeaseBounds.tool_identity(%{
+               "claude-headless:tool_use_id" => "toolu_1",
+               "codex-app-server:item_id" => "cmd-1",
+               "item_id" => "plain-1",
+               "id" => "raw-1"
+             }) == "toolu_1"
+
+      assert LeaseBounds.tool_identity(%{
+               "codex-app-server:item_id" => "cmd-1",
+               "item_id" => "plain-1",
+               "id" => "raw-1"
+             }) == "cmd-1"
+
+      assert LeaseBounds.tool_identity(%{"item_id" => "plain-1", "id" => "raw-1"}) ==
+               "plain-1"
+
+      assert LeaseBounds.tool_identity(%{"id" => "raw-1"}) == "raw-1"
+    end
+
+    test "blank, whitespace-only, nil, and missing ids resolve to nil" do
+      assert LeaseBounds.tool_identity(%{"codex-app-server:item_id" => ""}) == nil
+      assert LeaseBounds.tool_identity(%{"codex-app-server:item_id" => "   "}) == nil
+      assert LeaseBounds.tool_identity(%{"codex-app-server:item_id" => nil}) == nil
+      assert LeaseBounds.tool_identity(%{"other" => "x"}) == nil
+      assert LeaseBounds.tool_identity("not-a-map") == nil
+    end
+  end
+
   describe "track_open_tools/2" do
-    test "command START opens by item id; matching completion closes; unrelated ids never close" do
+    test "marked START opens by identity; marked END closes; unrelated ids never close" do
       open = MapSet.new()
 
       start =
         event(:command, 1, %{
           "codex-app-server:item_id" => "cmd-1",
+          "codex-app-server:boundary" => "start",
           "codex-app-server:status" => "inProgress"
         })
 
       other_done =
         event(:command, 2, %{
           "codex-app-server:item_id" => "cmd-2",
+          "codex-app-server:boundary" => "end",
           "codex-app-server:status" => "completed",
           "codex-app-server:exit_code" => 0
         })
@@ -185,6 +218,7 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
       done =
         event(:command, 3, %{
           "codex-app-server:item_id" => "cmd-1",
+          "codex-app-server:boundary" => "end",
           "codex-app-server:status" => "completed",
           "codex-app-server:exit_code" => 0
         })
@@ -199,54 +233,136 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
       assert MapSet.size(open) == 0
     end
 
-    test "overlapping tools drain independently" do
+    test "END closes independent of status spelling" do
       open = MapSet.new()
 
-      a_start =
+      start =
         event(:command, 1, %{
-          "codex-app-server:item_id" => "cmd-A",
+          "codex-app-server:item_id" => "cmd-1",
+          "codex-app-server:boundary" => "start",
           "codex-app-server:status" => "inProgress"
         })
 
-      b_start =
-        event(:tool, 2, %{
-          "codex-app-server:item_id" => "fc-B",
-          "codex-app-server:tool" => "fileChange",
+      # A hypothetical provider completion status the spend rules never
+      # enumerated still closes via the explicit end marker.
+      done =
+        event(:command, 2, %{
+          "codex-app-server:item_id" => "cmd-1",
+          "codex-app-server:boundary" => "end",
+          "codex-app-server:status" => "declined"
+        })
+
+      open = LeaseBounds.track_open_tools(open, start)
+      assert MapSet.member?(open, "cmd-1")
+
+      open = LeaseBounds.track_open_tools(open, done)
+      assert MapSet.size(open) == 0
+    end
+
+    test "marker-less shapes neither open nor close (no status inference)" do
+      open = MapSet.new()
+
+      start_no_marker =
+        event(:command, 1, %{
+          "codex-app-server:item_id" => "cmd-1",
           "codex-app-server:status" => "inProgress"
         })
 
-      a_done =
-        event(:command, 3, %{
-          "codex-app-server:item_id" => "cmd-A",
+      end_no_marker =
+        event(:command, 2, %{
+          "codex-app-server:item_id" => "cmd-1",
           "codex-app-server:status" => "completed",
           "codex-app-server:exit_code" => 0
         })
 
-      b_done =
-        event(:tool, 4, %{
-          "codex-app-server:item_id" => "fc-B",
+      open = LeaseBounds.track_open_tools(open, start_no_marker)
+      assert MapSet.size(open) == 0
+
+      open = LeaseBounds.track_open_tools(open, end_no_marker)
+      assert MapSet.size(open) == 0
+    end
+
+    test "genuine start without usable identity fails closed until the terminal" do
+      open = MapSet.new()
+
+      start_no_id =
+        event(:tool, 1, %{
+          "codex-app-server:boundary" => "start",
+          "codex-app-server:tool" => "fileChange",
+          "codex-app-server:status" => "inProgress"
+        })
+
+      open = LeaseBounds.track_open_tools(open, start_no_id)
+      assert MapSet.size(open) == 1
+
+      # No completion can match it: only a turn outcome clears it.
+      end_no_id =
+        event(:tool, 2, %{
+          "codex-app-server:boundary" => "end",
           "codex-app-server:tool" => "fileChange",
           "codex-app-server:status" => "completed"
         })
 
-      open =
-        open |> LeaseBounds.track_open_tools(a_start) |> LeaseBounds.track_open_tools(b_start)
+      open = LeaseBounds.track_open_tools(open, end_no_id)
+      assert MapSet.size(open) == 1
 
-      assert MapSet.size(open) == 2
-
-      open = LeaseBounds.track_open_tools(open, a_done)
-      assert open == MapSet.new(["fc-B"])
-
-      open = LeaseBounds.track_open_tools(open, b_done)
+      terminal = event(:result, 3, %{}, result: %{"status" => "completed"})
+      open = LeaseBounds.track_open_tools(open, terminal)
       assert MapSet.size(open) == 0
     end
 
-    test "message completions and lifecycle events never touch the open set" do
+    test "synthetic identity-less command evidence never blocks" do
+      open = MapSet.new()
+
+      synthetic = event(:command, 1, %{"shoestring.fake:detail" => "verify"})
+      open = LeaseBounds.track_open_tools(open, synthetic)
+      assert MapSet.size(open) == 0
+    end
+
+    test "unknown lifecycle shapes track by identity like tools" do
+      open = MapSet.new()
+
+      start =
+        event(:lifecycle, 1, %{
+          "codex-app-server:item_id" => "mcp-1",
+          "codex-app-server:boundary" => "start",
+          "codex-app-server:item_type" => "mcpToolCall"
+        })
+
+      done =
+        event(:lifecycle, 2, %{
+          "codex-app-server:item_id" => "mcp-1",
+          "codex-app-server:boundary" => "end",
+          "codex-app-server:item_type" => "mcpToolCall"
+        })
+
+      open = LeaseBounds.track_open_tools(open, start)
+      assert open == MapSet.new(["mcp-1"])
+
+      open = LeaseBounds.track_open_tools(open, done)
+      assert MapSet.size(open) == 0
+    end
+
+    test "lifecycle bookkeeping without a recorded type never tracks" do
+      open = MapSet.new()
+
+      tokenish =
+        event(:lifecycle, 1, %{
+          "codex-app-server:method" => "thread/tokenUsage/updated",
+          "codex-app-server:boundary" => "start"
+        })
+
+      open = LeaseBounds.track_open_tools(open, tokenish)
+      assert MapSet.size(open) == 0
+    end
+
+    test "message completions and plain lifecycle never touch the open set" do
       open =
         MapSet.new()
         |> LeaseBounds.track_open_tools(
           event(:command, 1, %{
             "codex-app-server:item_id" => "cmd-1",
+            "codex-app-server:boundary" => "start",
             "codex-app-server:status" => "inProgress"
           })
         )
@@ -254,7 +370,7 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
       message =
         event(:output, 2, %{
           "codex-app-server:item_id" => "msg-1",
-          "codex-app-server:phase" => "final_answer",
+          "codex-app-server:phase" => "commentary",
           "codex-app-server:text" => "done"
         })
 
@@ -265,33 +381,12 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
         open
         |> LeaseBounds.track_open_tools(message)
         |> LeaseBounds.track_open_tools(lifecycle)
-        |> LeaseBounds.track_open_tools(result)
 
       assert open == MapSet.new(["cmd-1"])
-    end
 
-    test "status-less single-shot tools never block" do
-      open = MapSet.new()
-
-      single_shot = event(:tool, 1, %{"codex-app-server:tool" => "fileChange"})
-      open = LeaseBounds.track_open_tools(open, single_shot)
-      assert MapSet.size(open) == 0
-    end
-
-    test "identity-less command evidence never blocks (synthetic/degraded shapes)" do
-      open = MapSet.new()
-
-      synthetic = event(:command, 1, %{"shoestring.fake:detail" => "verify"})
-      open = LeaseBounds.track_open_tools(open, synthetic)
-      assert MapSet.size(open) == 0
-
-      blank_id =
-        event(:command, 2, %{
-          "codex-app-server:item_id" => "  ",
-          "codex-app-server:status" => "inProgress"
-        })
-
-      open = LeaseBounds.track_open_tools(open, blank_id)
+      # The turn outcome clears even genuine entries (dropped/late
+      # completions can never wedge a later turn).
+      open = LeaseBounds.track_open_tools(open, result)
       assert MapSet.size(open) == 0
     end
 
@@ -317,12 +412,13 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
       assert MapSet.size(open) == 0
     end
 
-    test "duplicate starts are idempotent; unknown completions close nothing" do
+    test "duplicate starts are idempotent; unknown ends close nothing" do
       open = MapSet.new()
 
       start =
         event(:command, 1, %{
           "codex-app-server:item_id" => "cmd-1",
+          "codex-app-server:boundary" => "start",
           "codex-app-server:status" => "inProgress"
         })
 
@@ -336,12 +432,89 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
       unknown_done =
         event(:command, 2, %{
           "codex-app-server:item_id" => "cmd-ghost",
+          "codex-app-server:boundary" => "end",
           "codex-app-server:status" => "completed",
           "codex-app-server:exit_code" => 0
         })
 
       open = LeaseBounds.track_open_tools(open, unknown_done)
       assert open == MapSet.new(["cmd-1"])
+    end
+  end
+
+  describe "track_control/2" do
+    test "deltas establish control; tool ends invalidate it" do
+      state = {false, false}
+
+      start =
+        event(:command, 1, %{
+          "codex-app-server:item_id" => "cmd-1",
+          "codex-app-server:boundary" => "start",
+          "codex-app-server:status" => "inProgress"
+        })
+
+      done =
+        event(:command, 2, %{
+          "codex-app-server:item_id" => "cmd-1",
+          "codex-app-server:boundary" => "end",
+          "codex-app-server:status" => "completed",
+          "codex-app-server:exit_code" => 0
+        })
+
+      delta =
+        event(:output, 3, %{
+          "codex-app-server:method" => "item/agentMessage/delta",
+          "codex-app-server:delta" => "hi"
+        })
+
+      assert LeaseBounds.track_control(state, start) == {true, false}
+      assert LeaseBounds.track_control({true, false}, done) == {true, false}
+      assert LeaseBounds.track_control({true, false}, delta) == {true, true}
+    end
+
+    test "completions establish control only before any tool activity" do
+      completion =
+        event(:output, 1, %{
+          "codex-app-server:item_id" => "msg-1",
+          "codex-app-server:phase" => "commentary",
+          "codex-app-server:text" => "done"
+        })
+
+      # No tool seen: the completion demonstrates model control.
+      assert LeaseBounds.track_control({false, false}, completion) == {false, true}
+
+      # After tool activity the same completion proves nothing new — but
+      # it preserves control established by fresher evidence, which is
+      # safe because any intervening genuine tool lifecycle resets
+      # control first.
+      assert LeaseBounds.track_control({true, false}, completion) == {true, false}
+      assert LeaseBounds.track_control({true, true}, completion) == {true, true}
+    end
+
+    test "message starts invalidate; terminal outcomes reset control" do
+      started =
+        event(:output, 1, %{
+          "codex-app-server:item_id" => "msg-1",
+          "codex-app-server:phase" => "commentary"
+        })
+
+      terminal = event(:result, 2, %{}, result: %{"status" => "completed"})
+
+      assert LeaseBounds.track_control({false, true}, started) == {false, false}
+      assert LeaseBounds.track_control({true, true}, terminal) == {true, false}
+    end
+
+    test "synthetic marker-less tool shapes leave control untouched" do
+      state = {false, true}
+
+      synthetic =
+        event(:tool, 1, %{
+          "codex-app-server:item_id" => "fc-1",
+          "codex-app-server:tool" => "fileChange",
+          "codex-app-server:status" => "inProgress"
+        })
+
+      assert LeaseBounds.track_control(state, synthetic) == state
     end
   end
 

@@ -448,13 +448,14 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     assert count_types(goal.id, run_id, ["harness.event_recorded"]) == 5
   end
 
-  # LOCK (fails at 32a3fe6 and at base c1ae4a8): the live shape of
-  # final-acceptance.md §5.2. The deadline has passed, and the next event is
-  # the START of a Codex `fileChange`. Counting that START as a tool spend
-  # made it a boundary, so the Elf declined — expired, checkpoint, suspend —
-  # with the file write in flight. The decline must wait for the item's
-  # completion.
-  test "a passed deadline declines at the tool's completion, not at its start", %{
+  # LOCK (fails at 32a3fe6, at base c1ae4a8, and at e675c3b): the live
+  # shape of final-acceptance.md §5.2. The deadline has passed, and the
+  # next event is the START of a Codex `fileChange`. Counting that START
+  # as a tool spend made it a boundary (old bases), and treating the END
+  # alone as a boundary (e675c3b) still declines before model activity
+  # proves the provider moved on. The decline must wait for the item's
+  # completion AND subsequent model activity (here a delta).
+  test "a passed deadline declines after the tool end plus model activity, not at its start", %{
     sup: sup,
     goal: goal,
     task: task
@@ -468,6 +469,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
         Scenario.lifecycle_event(source_event_id: "evt-life"),
         codex_file_change("fc-1", "inProgress", source_event_id: "item-started-fc-1"),
         codex_file_change("fc-1", "completed", source_event_id: "item-completed-fc-1"),
+        delta_event(source_event_id: "evt-delta-after"),
         Scenario.output_event("after", source_event_id: "evt-out-after"),
         Scenario.result_event("completed", source_event_id: "evt-done")
       ])
@@ -506,10 +508,17 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     ordered = ordered_events(goal.id, run_id)
 
-    # The file change completed before the lease was declined.
+    # The file change completed — and model activity followed — before
+    # the lease was declined.
     assert sequence_before?(
              ordered,
              {:harness, "item-completed-fc-1"},
+             {"lease.expired", nil}
+           )
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "evt-delta-after"},
              {"lease.expired", nil}
            )
 
@@ -520,12 +529,13 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
            )
   end
 
-  # LOCK (fails behaviourally on the pre-fix commit): past the deadline, a
-  # message completion that spends while a command is still open must not
-  # be treated as a safe renewal/decline boundary. The decline waits for
-  # the tool's own completion. On base the Elf declines at the message
-  # (`lease.expired` lands before the command END).
-  test "a passed deadline with a message while a command is open declines at the tool end",
+  # LOCK (fails behaviourally on 1566acd and on e675c3b): past the
+  # deadline, a message completion that spends while a command is still
+  # open must not be treated as a safe renewal/decline boundary — and
+  # neither is the tool END alone. The decline waits for the tool's own
+  # completion plus subsequent model activity (here a delta). On 1566acd
+  # the Elf declines at the message; on e675c3b it declines at the END.
+  test "a passed deadline with a message while a command is open declines after the end plus activity",
        %{sup: sup, goal: goal, task: task} do
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
@@ -537,6 +547,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
         codex_command_start("cmd-1", source_event_id: "item-started-cmd-1"),
         Scenario.output_event("mid", source_event_id: "evt-out-mid"),
         command_event("cmd-1", "completed", source_event_id: "item-completed-cmd-1"),
+        delta_event(source_event_id: "evt-delta-after"),
         Scenario.output_event("after", source_event_id: "evt-out-after"),
         Scenario.result_event("completed", source_event_id: "evt-done")
       ])
@@ -575,11 +586,18 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     ordered = ordered_events(goal.id, run_id)
 
-    # The spend at the message did not decline: both the expiry and the
-    # reactive checkpoint follow the command's own completion.
+    # Neither the spend at the message nor the tool END alone declined:
+    # both the expiry and the reactive checkpoint follow the END plus the
+    # subsequent model activity.
     assert sequence_before?(
              ordered,
              {:harness, "item-completed-cmd-1"},
+             {"lease.expired", nil}
+           )
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "evt-delta-after"},
              {"lease.expired", nil}
            )
 
@@ -590,11 +608,12 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
            )
   end
 
-  # LOCK (fails behaviourally on the pre-fix commit): the Claude twin of
-  # the message-while-open rule. Tool boundaries correlate by
+  # LOCK (fails behaviourally on 1566acd and on e675c3b): the Claude twin
+  # of the message-while-open rule. Tool boundaries correlate by
   # `tool_use_id`; the output between START and END spends but must not
-  # decline until the END drains the open set.
-  test "a passed deadline with a message while a Claude tool is open declines at the tool end",
+  # decline, and neither does the END alone — the decline waits for
+  # subsequent model activity.
+  test "a passed deadline with a message while a Claude tool is open declines after the end plus activity",
        %{sup: sup, goal: goal, task: task} do
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
@@ -606,6 +625,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
         claude_tool_start("toolu_7", source_event_id: "evt-claude-start"),
         Scenario.output_event("mid", source_event_id: "evt-out-mid"),
         claude_tool_end("toolu_7", source_event_id: "evt-claude-end"),
+        delta_event(source_event_id: "evt-delta-after"),
         Scenario.output_event("after", source_event_id: "evt-out-after"),
         Scenario.result_event("completed", source_event_id: "evt-done")
       ])
@@ -652,7 +672,174 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     assert sequence_before?(
              ordered,
+             {:harness, "evt-delta-after"},
+             {"lease.expired", nil}
+           )
+
+    assert sequence_before?(
+             ordered,
              {:harness, "evt-claude-end"},
+             {"checkpoint.created", nil}
+           )
+  end
+
+  # LOCK (fails behaviourally on 1566acd and on e675c3b): the Elf half of
+  # the compound shape from the committed trace
+  # (normalized-codex-lease-stop-final.md: command end 141, bookkeeping
+  # 142-143, fileChange start 144). Past the deadline, the command END
+  # must not suspend while the file change has started but not finished;
+  # the decline waits for the fileChange END plus subsequent model
+  # activity. On 1566acd the Elf declines at the command END; on e675c3b
+  # it declines there too (spend plus empty set, no control gate).
+  test "a passed deadline across compound command/fileChange suspends only after the write plus activity",
+       %{sup: sup, goal: goal, task: task} do
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:deadline_expire, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        codex_command_start("cmd-1", source_event_id: "item-started-cmd-1"),
+        command_event("cmd-1", "completed", source_event_id: "item-completed-cmd-1"),
+        codex_file_change("fc-1", "inProgress", source_event_id: "item-started-fc-1"),
+        codex_file_change("fc-1", "completed", source_event_id: "item-completed-fc-1"),
+        delta_event(source_event_id: "evt-delta-after"),
+        Scenario.output_event("after", source_event_id: "evt-out-after"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    hold_before_first_event(pid)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 100,
+      tool_budget: 100,
+      reserves: %{response: 1, tool: 1},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), -60, :second)
+    )
+
+    release_elf(pid)
+
+    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+
+    ordered = ordered_events(goal.id, run_id)
+
+    # The command END did not suspend while the write was open, and the
+    # write END alone did not suspend either: both the expiry and the
+    # reactive checkpoint follow the write END plus model activity.
+    assert sequence_before?(
+             ordered,
+             {:harness, "item-completed-fc-1"},
+             {"lease.expired", nil}
+           )
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "evt-delta-after"},
+             {"lease.expired", nil}
+           )
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "item-completed-fc-1"},
+             {"checkpoint.created", nil}
+           )
+  end
+
+  # LOCK (fails behaviourally on 1566acd and on e675c3b): an unknown item
+  # shape (Codex normalizer `:lifecycle` fallback, e.g. `mcpToolCall`)
+  # with explicit start/end markers is a potentially mutating tool. Past
+  # the deadline, a parallel command completion and a message completion
+  # beside the still-open unknown tool must not decline; the decline waits
+  # for the unknown END plus subsequent model activity. Neither old commit
+  # tracks the unknown shape at the Elf layer at all.
+  test "a passed deadline with an unknown tool open declines after its end plus activity",
+       %{sup: sup, goal: goal, task: task} do
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:deadline_expire, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        unknown_tool_start("mcp-1", "mcpToolCall", source_event_id: "item-started-mcp-1"),
+        codex_command_start("cmd-1", source_event_id: "item-started-cmd-1"),
+        command_event("cmd-1", "completed", source_event_id: "item-completed-cmd-1"),
+        Scenario.output_event("mid", source_event_id: "evt-out-mid"),
+        unknown_tool_end("mcp-1", "mcpToolCall", source_event_id: "item-completed-mcp-1"),
+        delta_event(source_event_id: "evt-delta-after"),
+        Scenario.output_event("after", source_event_id: "evt-out-after"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    hold_before_first_event(pid)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 100,
+      tool_budget: 100,
+      reserves: %{response: 1, tool: 1},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), -60, :second)
+    )
+
+    release_elf(pid)
+
+    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+
+    ordered = ordered_events(goal.id, run_id)
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "item-completed-mcp-1"},
+             {"lease.expired", nil}
+           )
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "evt-delta-after"},
+             {"lease.expired", nil}
+           )
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "item-completed-mcp-1"},
              {"checkpoint.created", nil}
            )
   end
@@ -921,6 +1108,10 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     }
   end
 
+  # Explicit lifecycle boundary markers mirror what the Codex normalizer
+  # records from the raw RPC method. `command_event/3` is used for both
+  # starts and ends across these tests, so the marker derives from the
+  # status it expresses; genuinely ambiguous shapes have no marker at all.
   defp command_event(item_id, status, opts) do
     %{
       kind: :command,
@@ -931,11 +1122,18 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       capacity_snapshot: nil,
       extensions: %{
         "codex-app-server:item_id" => item_id,
+        "codex-app-server:boundary" => boundary_for(status),
         "codex-app-server:status" => status,
         "codex-app-server:exit_code" => 0
       }
     }
   end
+
+  defp boundary_for(status)
+       when status in ["inProgress", "in_progress", "started", "pending", "running"],
+       do: "start"
+
+  defp boundary_for(_status), do: "end"
 
   defp codex_file_change(item_id, status, opts) do
     %{
@@ -947,6 +1145,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       capacity_snapshot: nil,
       extensions: %{
         "codex-app-server:item_id" => item_id,
+        "codex-app-server:boundary" => boundary_for(status),
         "codex-app-server:tool" => "fileChange",
         "codex-app-server:status" => status
       }
@@ -967,7 +1166,43 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       capacity_snapshot: nil,
       extensions: %{
         "codex-app-server:item_id" => item_id,
+        "codex-app-server:boundary" => "start",
         "codex-app-server:status" => "inProgress"
+      }
+    }
+  end
+
+  # An unknown Codex item shape (normalizer `:lifecycle` fallback, e.g.
+  # `mcpToolCall`): kind `:lifecycle` with explicit boundary markers and
+  # the recorded type, exactly as the normalizer emits.
+  defp unknown_tool_start(item_id, item_type, opts) do
+    %{
+      kind: :lifecycle,
+      offset_ms: Keyword.get(opts, :offset_ms, 0),
+      source_event_id: Keyword.fetch!(opts, :source_event_id),
+      error: nil,
+      result: nil,
+      capacity_snapshot: nil,
+      extensions: %{
+        "codex-app-server:item_id" => item_id,
+        "codex-app-server:boundary" => "start",
+        "codex-app-server:item_type" => item_type
+      }
+    }
+  end
+
+  defp unknown_tool_end(item_id, item_type, opts) do
+    %{
+      kind: :lifecycle,
+      offset_ms: Keyword.get(opts, :offset_ms, 0),
+      source_event_id: Keyword.fetch!(opts, :source_event_id),
+      error: nil,
+      result: nil,
+      capacity_snapshot: nil,
+      extensions: %{
+        "codex-app-server:item_id" => item_id,
+        "codex-app-server:boundary" => "end",
+        "codex-app-server:item_type" => item_type
       }
     }
   end

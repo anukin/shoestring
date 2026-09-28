@@ -200,57 +200,187 @@ defmodule Shoestring.Cobbler.LeaseBounds do
     end
   end
 
+  # Sentinel for a genuine tool start that carries no usable identity: it
+  # blocks the boundary like any open tool but matches no completion, so
+  # only a turn outcome (`:result` / `:error`) clears it. A string id can
+  # never collide with it.
+  @unidentified_start :lease_open_unidentified_tool
+
+  # Item types that are model or user content, never mutating tools. Used
+  # to recognize unknown normalizer-fallback shapes as potential tools.
+  @non_tool_item_types ["reasoning", "thought", "thinking", "agentMessage", "userMessage"]
+
+  @doc """
+  Shared tool-identity resolver over string-keyed maps (raw provider items
+  and normalized extensions alike).
+  Returns the first present provider-native identity —
+  `claude-headless:tool_use_id`, `codex-app-server:item_id`, `item_id`, or
+  raw `id` — skipping blank values consistently, or `nil` when no usable
+  identity exists. Opening and closing use this same resolver, so a blank
+  id can neither open a phantom entry nor close a real one.
+  """
+  @spec tool_identity(map()) :: String.t() | nil
+  def tool_identity(map) when is_map(map) do
+    [
+      map["claude-headless:tool_use_id"],
+      map["codex-app-server:item_id"],
+      map["item_id"],
+      map["id"]
+    ]
+    |> Enum.find(&present?/1)
+  end
+
+  def tool_identity(_other), do: nil
+
   @doc """
   Folds one normalized event into an identity-keyed open set of
   still-running tool items.
 
-  The set keys are the provider-native correlation identity
-  (`claude-headless:tool_use_id`, then `codex-app-server:item_id`, then
-  `item_id`):
+  Opening and closing follow the EXPLICIT lifecycle boundary recorded by
+  the normalizer (`codex-app-server:boundary`, `claude-headless:boundary`,
+  or generic `boundary`, each start/end) — never inferred from status
+  spelling:
 
-  - `:command` START opens; `:command` completion closes.
-  - `:tool` START opens; any other `:tool` event closes (a status-less
-    single-shot tool never blocks, exactly as it spends immediately).
-  - Every other kind (`:output` messages, `:lifecycle`, `:result`,
-    `:error`, ...) leaves the set untouched: a response/message
-    completion must never close an open tool, and reasoning-adjacent
-    content never opens one.
+  - `:command` / `:tool` with a start marker opens by identity; a genuine
+    start without a usable identity opens the unidentified-start sentinel
+    instead, which fails closed until the natural terminal clears it.
+  - `:command` / `:tool` with an end marker closes by identity,
+    independent of status spelling.
+  - `:lifecycle` carrying an unknown-tool start/end marker (Codex
+    normalizer fallback for shapes like `mcpToolCall`/`webSearch`, or any
+    future mutating shape) tracks exactly like a tool; reasoned content,
+    messages, and user input never carry such markers.
+  - Marker-less `:command` / `:tool` / `:lifecycle` shapes are synthetic
+    or degraded evidence, not observed lifecycle: they neither open nor
+    close (spend counting keeps its own status-spelling rules, unchanged).
+  - `:result` / `:error` are turn outcomes: they clear the whole set,
+    including the sentinel, so dropped or late completions can never wedge
+    a later turn.
 
-  Pure and idempotent: an unknown id closes nothing, duplicate starts
-  open once, and anything still open is dropped by the caller at the
-  natural terminal. The Elf folds both the live buffer and the durable
-  rebuild through this function so the two views can never disagree.
-
-  Entries open only for events carrying a real tool identity (Claude
-  `tool_use_id`, Codex `item_id`, or plain `item_id`). Identity-less
-  `:command`/`:tool` shapes — synthetic or degraded evidence that spend
-  counting likewise never treats as an open tool — never block; a
-  status-less single-shot tool still closes instantaneously.
+  Pure and idempotent: an unknown id closes nothing, duplicate starts open
+  once. The Elf folds both the live buffer and the durable rebuild through
+  this function so the two views can never disagree.
   """
   @spec track_open_tools(MapSet.t(), HarnessEvent.t()) :: MapSet.t()
-  def track_open_tools(open, %HarnessEvent{kind: :command} = event) do
-    if command_completion?(event) do
-      MapSet.delete(open, correlation_id(event))
-    else
-      case real_identity(event) do
-        nil -> open
-        id -> MapSet.put(open, id)
-      end
+  def track_open_tools(_open, %HarnessEvent{kind: kind})
+      when kind in [:result, :error] do
+    MapSet.new()
+  end
+
+  def track_open_tools(open, %HarnessEvent{kind: kind} = event)
+      when kind in [:command, :tool] do
+    case explicit_boundary(event) do
+      :start ->
+        case tool_identity(event.extensions) do
+          nil -> MapSet.put(open, @unidentified_start)
+          id -> MapSet.put(open, id)
+        end
+
+      :end ->
+        case tool_identity(event.extensions) do
+          nil -> open
+          id -> MapSet.delete(open, id)
+        end
+
+      nil ->
+        open
     end
   end
 
-  def track_open_tools(open, %HarnessEvent{kind: :tool} = event) do
-    if tool_start?(event.extensions) do
-      case real_identity(event) do
-        nil -> open
-        id -> MapSet.put(open, id)
-      end
-    else
-      MapSet.delete(open, correlation_id(event))
+  def track_open_tools(open, %HarnessEvent{kind: :lifecycle} = event) do
+    case explicit_boundary(event) do
+      :start ->
+        if unknown_tool_shape?(event) do
+          case tool_identity(event.extensions) do
+            nil -> MapSet.put(open, @unidentified_start)
+            id -> MapSet.put(open, id)
+          end
+        else
+          open
+        end
+
+      :end ->
+        if unknown_tool_shape?(event) do
+          case tool_identity(event.extensions) do
+            nil -> open
+            id -> MapSet.delete(open, id)
+          end
+        else
+          open
+        end
+
+      nil ->
+        open
     end
   end
 
   def track_open_tools(open, _event), do: open
+
+  @doc """
+  Folds one normalized event into model-control evidence
+  `{tools_seen?, model_control?}` for the safe-renewal boundary:
+
+  - A marked tool start/end (`:command`, `:tool`, or unknown-tool
+    `:lifecycle`) records genuine tool activity and invalidates control:
+    `{true, false}`. Marker-less shapes are synthetic evidence and leave
+    both flags untouched.
+  - An `:output` delta proves the model is generating text: `{seen, true}`.
+  - An `:output` completion (message text with no delta) establishes
+    control on a turn with no tool activity yet, and otherwise preserves
+    whatever control holds. Preservation is safe: any intervening genuine
+    tool lifecycle resets control first, so `true` always means no tool
+    activity since the last fresh evidence. A completion that immediately
+    precedes the next tool call (committed trace: commentary 139 →
+    command 140) therefore cannot re-arm the boundary on its own.
+  - An `:output` start (commentary with no text yet) invalidates:
+    `{seen, false}` — narration routinely precedes the next tool call.
+  - `:result` / `:error` outcomes reset control to false.
+  - Everything else leaves both flags untouched.
+
+  Pure; the Elf folds live and durable events through it exactly like the
+  open set.
+  """
+  @spec track_control({boolean(), boolean()}, HarnessEvent.t()) :: {boolean(), boolean()}
+  def track_control({_seen, _control} = state, %HarnessEvent{kind: kind})
+      when kind in [:result, :error] do
+    {elem(state, 0), false}
+  end
+
+  def track_control({seen, control}, %HarnessEvent{kind: :output} = event) do
+    cond do
+      delta?(event.extensions) ->
+        {seen, true}
+
+      message_completion?(event.extensions) ->
+        # Establish control on a pristine turn; otherwise preserve it.
+        # Preservation is safe because any intervening genuine tool
+        # lifecycle resets control first, so `true` here always means no
+        # tool activity since the last fresh evidence.
+        {seen, control or not seen}
+
+      true ->
+        {seen, false}
+    end
+  end
+
+  def track_control({seen, control}, %HarnessEvent{kind: kind} = event)
+      when kind in [:command, :tool] do
+    if explicit_boundary(event) == nil do
+      {seen, control}
+    else
+      {true, false}
+    end
+  end
+
+  def track_control(state, %HarnessEvent{kind: :lifecycle} = event) do
+    if explicit_boundary(event) != nil and unknown_tool_shape?(event) do
+      {true, false}
+    else
+      state
+    end
+  end
+
+  def track_control(state, _event), do: state
 
   @doc """
   Folds the live normalized-event buffer for one `run_id`.
@@ -484,17 +614,27 @@ defmodule Shoestring.Cobbler.LeaseBounds do
       extensions["item_id"] || source_id
   end
 
-  # A trackable tool identity: the provider-native correlation keys only.
-  # The `source_event_id` fallback that spend dedup uses is deliberately
-  # excluded — an event with no provider identity is synthetic or degraded
-  # evidence, never an open tool.
-  defp real_identity(%HarnessEvent{extensions: extensions}) do
-    [
-      extensions["claude-headless:tool_use_id"],
-      extensions["codex-app-server:item_id"],
-      extensions["item_id"]
-    ]
-    |> Enum.find(&present?/1)
+  # The explicit lifecycle marker recorded by the normalizer from the raw
+  # RPC method — never inferred from status spelling. Reads the Codex
+  # namespaced marker first, then the Claude and generic conventions.
+  defp explicit_boundary(%HarnessEvent{extensions: extensions}) do
+    case extensions["codex-app-server:boundary"] || extensions["claude-headless:boundary"] ||
+           extensions["boundary"] do
+      "start" -> :start
+      "end" -> :end
+      _other -> nil
+    end
+  end
+
+  # An unknown Codex item shape (normalizer `:lifecycle` fallback) is
+  # treated as a potentially mutating tool unless its recorded type is a
+  # known non-tool. Shapes without any recorded type are provider
+  # bookkeeping, not tool lifecycle.
+  defp unknown_tool_shape?(%HarnessEvent{extensions: extensions}) do
+    case extensions["codex-app-server:item_type"] || extensions["item_type"] do
+      nil -> false
+      type -> type not in @non_tool_item_types
+    end
   end
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""

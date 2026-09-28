@@ -1,113 +1,196 @@
 # Lease-safe boundary: identity-keyed open-tool tracking (Codex session + Elf)
 
+Second revision (review blockers B1–B5, N1–N4). The first revision is
+commit `e675c3b`; this document describes the delta on top of it and
+replaces the earlier protocol claims, which cited a nonexistent fixture
+and unverified ordinals (see `Deviations and corrections`).
+
 ## Behavior change (VERIFIED by the new hermetic tests)
 
-- `CodexAppServer.Session` replaced the single-slot `in_flight_item` with an
-  identity-keyed `open_tools` map (`item.id`, else command `processId`, else
-  an anonymous fail-closed key cleared only at the natural terminal).
-  Reasoning/thought/thinking/agentMessage/userMessage items never open
-  entries and never close unrelated tools; unknown item types open entries
-  until their matching completion.
-- A pending safe stop / safe cancel now sends `turn/interrupt` at most once
-  per turn, and only on model-control evidence (agent-message delta /
-  completion, reasoning/thinking start-or-completion, turn start) with an
-  empty open set — never on a tool completion alone. `turn/completed`
-  resolves the pending stop with no send. Explicit immediate cancellation
-  still interrupts plus reaps the whole owned group unchanged.
-- The Elf folds every ingested normalized event (live and durable rebuild)
-  through the new pure `LeaseBounds.track_open_tools/2` (Codex `item_id` /
-  Claude `tool_use_id` / `item_id`; the `source_event_id` fallback is
-  spend-dedup only and never opens an entry, so synthetic or degraded
-  identity-less shapes never block) and requires an empty open set on top
-  of the spend-derived boundary before renew/decline. `:output` completions
-  with tools open are spend, never a boundary. Manual-mode, quota-fast-path,
-  wake, suspend, and checkpoint-id logic are untouched.
+- `CodexAppServer.Session` tracks open tools by identity (shared
+  blank-safe resolver `LeaseBounds.tool_identity/1`: provider id, else
+  command `processId`, else an anonymous fail-closed key cleared only at
+  the natural terminal). A safe stop / safe cancel request NEVER sends
+  synchronously — it always pends, because a request can interleave
+  between the provider emitting a tool completion and emitting the next
+  tool start, and no request-time state can rule out a start already in
+  transit. The pended interrupt fires at most once per turn, and only in
+  a frame handler for streaming agent-message deltas or
+  reasoning/thinking/thought starts observed while the open set is empty.
+  Completions of any kind never release the stop; the natural terminal
+  resolves it with no send. Explicit immediate cancellation still
+  interrupts plus reaps the whole owned group unchanged.
+- `EventNormalizer` (Codex) records an explicit `codex-app-server:boundary`
+  start/end marker on command, file-change, and unknown item shapes, taken
+  from the raw RPC method — never inferred from status spelling. The
+  marker is namespaced and invisible to spend counting (verified: no spend
+  test changed behavior). Unknown shapes (e.g. `mcpToolCall`) stay
+  `:lifecycle` (zero spend impact) but now carry markers plus identity and
+  the recorded type.
+- The Elf folds every ingested normalized event (live and durable
+  rebuild) through `LeaseBounds.track_open_tools/2` (marker-gated;
+  genuine starts without identity open a sentinel that fails closed until
+  a turn outcome clears it; marker-less synthetic shapes never open) and
+  `LeaseBounds.track_control/2` (`{tools_seen?, model_control?}`: tool
+  lifecycle invalidates, deltas establish, completions establish only on a
+  turn with no tool activity yet, message starts invalidate, turn outcomes
+  reset). Renewal/decline additionally requires an empty open set plus
+  demonstrated control on top of the spend-derived boundary. Manual-mode,
+  quota-fast-path, wake, suspend, and checkpoint-id logic are untouched.
 
-## Protocol justification (REPO-INSPECTION of the committed live trace)
+## Protocol justification (VERIFIED from the committed trace)
 
-`fixtures/live-final/normalized-closeout-codex-lease-stop.md` shows tools
-starting back-to-back with no intervening message (ordinals 42→43 command
-END→START adjacent; 44→47 with only token bookkeeping between), while
-commentary (57→133) routinely precedes the next tool (133→134 adjacent).
-Therefore neither "completion drains the slot" nor "message after tool"
-alone is a safe boundary; the fix waits for model-control evidence while
-the open set is empty, so a provider-pipelined next START (already in the
-pipe or milliseconds away, as in phase 19: command END → fileChange START
-2 ms later) re-opens tracking before any send. The residual provider-side
-race (interrupt in flight while the provider starts a genuinely new tool)
-is irreducible for any proactive stop and is documented, not claimed away.
-Background exec children remain covered by the unchanged OS backstop
-(`killpg` at turn teardown); the provider-declared completion still drains
-the boundary entry.
+All ordinals below are from the committed redacted artifact
+`plans/evidence/05-quota-aware-mvp/fixtures/live-final/normalized-codex-lease-stop-final.md`
+(the earlier revision cited a nonexistent file and wrong ordinals):
+
+- Command START 140 is immediately preceded by commentary completion 139;
+  command START 52 by commentary completion 51. Message completions
+  therefore cannot release a stop: the provider routinely starts the next
+  tool in the same step.
+- Command END 141 is followed by token/rate bookkeeping 142–143 and then
+  fileChange START 144 (still open when the turn is interrupted at 146).
+  A stop requested, or a drain observed, at 141 must not send: the next
+  START is already on its way.
+- Deltas (46–50 before completion 51; 63–138 before completion 139) always
+  precede their message completion, and no tool START ever directly
+  follows a delta in the trace. A send keyed on a delta therefore fires
+  while the provider must still emit at least the completion before any
+  tool START can follow — the strongest trigger the trace substantiates.
+- Reasoning-frame positions are NOT in any committed artifact
+  (reasoning is dropped from normalized traces; raw timing lives only in
+  non-committed provider logs, which are not evidence here). Keeping
+  reasoning starts as triggers rests on the review suggestion plus the
+  same residual bound as deltas, and is labeled accordingly — not as a
+  verified headroom claim.
+- No committed artifact distinguishes commentary-phase from
+  final-answer-phase completions (every observed agentMessage in the trace
+  is phase `commentary`; `final_answer` is only the normalizer's default
+  for a missing phase). All completions are therefore excluded as
+  triggers; no such distinction is invented.
+
+## Safety guarantee and its exact limit
+
+- Single-pipe FIFO ordering plus sequential handling proves a
+  frame-triggered send can never race a tool START the provider emitted
+  before the triggering evidence: that START's frame arrives first and
+  re-opens the set (or, at the Elf, records tool activity), suppressing
+  the send. This eliminates the observed failure classes (interrupt with
+  an observably running command; request/send at 141 racing START 144).
+- Request-time sends are abolished (not gated): GenServer-call/pipe
+  interleaving cannot cause a blind send at all. Cost: an idle stop waits
+  for the next model-activity frame instead of interrupting instantly;
+  the terminal always resolves liveness, as the contract permits.
+- Residual (documented, not claimed away): the provider may emit a NEW
+  tool START after the triggering evidence but before processing the
+  interrupt (RTT-bounded). It is irreducible for any interrupt-based
+  design over this transport, minimized here by triggering only on frames
+  that provably require further provider emissions first. If that window
+  is unacceptable for a given product decision, the conservative
+  alternative is terminal-only resolution (already the fallback); the two
+  cannot be combined without reintroducing the race. No timers or sleeps
+  were added.
+- Background exec children remain covered by the unchanged OS backstop
+  (`killpg` at turn teardown; immediate cancel proved by the new reap
+  test against a real owned group).
 
 ## Changed-file scope
 
-- `lib/shoestring/harness/codex_app_server/session.ex` (tracking + one-shot evidence-gated send)
-- `lib/shoestring/cobbler/lease_bounds.ex` (new pure `track_open_tools/2`)
-- `lib/shoestring/elves/elf.ex` (`lease_open_tools` state, boundary conjunct, durable rebuild fold)
-- Tests: new `test/shoestring/harness/codex_app_server/session_safe_boundary_test.exs`
-  (13 tests); `session_test.exs` (2 tests updated to the new contract);
-  `test/shoestring/elves/lease_boundary_test.exs` (2 tests updated to the
-  new contract: armed-at-completion, released-at-evidence);
-  `test/shoestring/cobbler/lease_bounds_test.exs` (+7 unit tests);
-  `test/shoestring/elves/elf_lease_loop_test.exs` (+2 tests, +3 helpers).
-- No scope expansion was needed; projection lag, terminal lease cleanup,
-  Claude background tools, and quiet-exit buffering were not touched.
+- `lib/shoestring/harness/codex_app_server/session.ex` (always-pend
+  requests; delta/reasoning-start triggers; shared identity resolver)
+- `lib/shoestring/harness/codex_app_server/event_normalizer.ex`
+  (explicit boundary markers; authorized scope expansion)
+- `lib/shoestring/cobbler/lease_bounds.ex` (`tool_identity/1`,
+  marker-based `track_open_tools/2`, `track_control/2`; spend untouched)
+- `lib/shoestring/elves/elf.ex` (`lease_tool_seen?` /
+  `lease_model_control?` state, boundary conjunct, durable rebuild fold)
+- Tests: `session_safe_boundary_test.exs` (16 tests incl. the Elf-driven
+  141→144 test via `LeaseBoundary.enforce` and the reap proof);
+  `session_test.exs` + `lease_boundary_test.exs` (contract updates);
+  `event_normalizer_test.exs` (+3 marker tests);
+  `lease_bounds_test.exs` (rewritten gate surface: identity, markers,
+  sentinel, terminal-clear, control);
+  `elf_lease_loop_test.exs` (marked helpers; reworked deadline/message/
+  Claude tests; new compound and unknown-tool tests).
+- Untouched as required: projection lag, terminal lease cleanup, Claude
+  background tools, quiet-exit buffering, spend counting.
 
 ## Tests plus pre-fix regression evidence
 
-- New session file: 13/13 pass on the fix; 12/13 fail on base `1566acd`
-  (verified via `git stash push -- lib/` + `mix test`, then pop). Each
-  failure is behavioural — e.g. `turn/interrupt` received while the command
-  was observably open; drain-then-message sent twice; stale pending flag
-  after terminal. The 13th ("no pending stop never interrupts") is the
-  control and passes on both, labeled as such in-file.
-- Updated `session_test.exs` contract tests (2): fail on base (interrupt
-  arrives at completion), pass fixed (armed at completion, sent at
-  evidence).
-- New Elf loop tests (2, Codex + Claude shapes): fail on base
-  (`lease.expired` lands before the tool END — decline at the message),
-  pass fixed (expiry + reactive checkpoint follow the tool END).
-- `track_open_tools/2` unit tests (7): fail to compile on base (new
-  helper) — documentation of the pure surface, labeled honestly in-file.
+Base `1566acd` (single slot) and `e675c3b` (first revision) were each
+verified by stashing `lib/` (tests use only pre-existing APIs, so every
+failure below is behavioral, not a missing helper):
+
+- New session file (16 tests): 14 fail on `1566acd`, 4 fail on `e675c3b`.
+  The 4 (`elf deadline stop`, `idle stop pends`, `message completion with
+  empty set`, `file change plus reasoning` second half) are the exact
+  second-revision deltas: request-never-sends and completions-never-
+  release. The 2 passing on both (`immediate cancel reaps`, `without a
+  pending stop`) are labeled documentation in-file.
+- Updated `session_test.exs` (3) and `lease_boundary_test.exs` (2): fail
+  on `1566acd`; the delta-release halves pass on `e675c3b`, the idle half
+  fails there too.
+- New/updated Elf loop tests (5 deadline shapes): all 5 fail on both
+  bases — on `1566acd` the Elf declines at the message or START, on
+  `e675c3b` at the tool END (expired lands before the delta).
+- New normalizer marker tests (3): fail behaviorally on both bases (no
+  marker key emitted).
+- `track_open_tools/2`, `track_control/2`, `tool_identity/1` unit tests:
+  fail to compile on both bases (new helpers) — documentation of the pure
+  surface, labeled honestly in-file (N4).
 - Full gate: `mix precommit < /dev/null` (foreground, per-pid state under
-  `System.tmp_dir!()` = `/tmp`, Elixir 1.19.5 / OTP 28).
-  Latest green run (exit 0): `mix format --check-formatted` clean,
-  `compile --warnings-as-errors` clean, 4 doctests + 1492 tests with
-  0 failures and 1 skipped (6 excluded, baseline was 1470/0/1),
-  Node 52/52, UI 7/7.
-  A second full run on the final tree (only a doc comment changed since)
-  exited 2 with ONE failure: `Trajectory.AppendTest` "concurrent appends"
-  (`Exqlite.Error Database busy` on `INSERT INTO goals`) — a file this
-  slice never touches, and 13/13 green in isolation. Intermittent SQLite
-  lock contention under parallel load (the known repo flake class), 1 of 4
-  full-suite executions; reported as-is, not retried until green.
-  An intermediate full run caught 3 failures honestly: 2
-  `lease_boundary_test.exs` tests encoding interrupt-on-completion (updated
-  to the new contract, same as the `session_test.exs` pair) and 1
-  `elf_checkpoint_resume_test.exs` reactive-decline test whose synthetic
-  identity-less `:command` event blocked the new Elf gate — that finding
-  produced the real-identity requirement above, after which the whole gate
-  went green. Nothing was retried until green; each deterministic failure
-  was fixed by a code or contract-test change.
+  `System.tmp_dir!()` = `/tmp`, Elixir 1.19.5 / OTP 28), exit 0:
+  `mix format --check-formatted` clean, `compile --warnings-as-errors`
+  clean, 4 doctests + 1509 tests with 0 failures and 1 skipped
+  (6 excluded; round-1 baseline was 1492/0/1), Node 52/52, UI 7/7.
+  Gate history is preserved, not erased: the round-1 run caught 3
+  deterministic failures (2 interrupt-on-completion tests, 1
+  checkpoint-resume identity issue that produced the real-identity rule);
+  one later full run showed a single intermittent SQLite-busy flake in
+  untouched `Trajectory.AppendTest` (13/13 in isolation), reported
+  as-is. During this revision one intermediate full run exposed a genuine
+  design bug (completions-after-tools wiped delta-established control, so
+  spend and control could never coincide — expired==0); fixed by making
+  tool lifecycle the only clearer, with a unit test pinning it.
 
-## Unresolved risks and deviations
+## Deviations and corrections (B5)
 
-- Residual provider-side race above (any proactive stop can in principle
-  meet a genuinely new tool START); no timer/sleep/timeout was added to
-  chase it, per the contract.
-- Claude session drain-kill has the analogous at-drain shape but no
-  observed failure; brief scopes Claude background handling out, so it was
-  checked (tool-id set already correct) and left unchanged — UNVERIFIED.
-- An unidentifiable tool START on the raw session (no id/pid) blocks the
-  session boundary until `turn/completed` by design (fail closed; raw
-  provider frames carry ids in practice). The Elf deliberately does not
-  mirror that: normalized events include synthetic/degraded shapes with no
-  provider identity (proven by the checkpoint-resume fixture), so
-  identity-less normalized commands are instantaneous evidence there,
-  mirroring spend semantics. The two layers agree on every real
-  provider-shaped event.
-- Deviation: none from the assigned scope. Four pre-existing tests encoding
-  the old interrupt-on-completion boundary were updated (required by the
-  contract), not weakened: they still assert no-early-send and now also
-  assert armed-not-sent plus exactly-once release at evidence.
+- The round-1 evidence cited `fixtures/live-final/
+  normalized-closeout-codex-lease-stop.md` (nonexistent) with ordinals
+  42→43, 57→133, 133→134 (unverified). Corrected above to the committed
+  `normalized-codex-lease-stop-final.md` with ordinals 51→52, 53→56,
+  139→140, 141→144. Factual claims now quote only that artifact.
+- The round-1 "Deviation: none" was inaccurate. Two deliberate design
+  corrections since: (a) identity-less Elf tracking went
+  block-everything → block-nothing → marker-gated (genuine marked starts
+  without identity fail closed via sentinel; unmarked synthetic shapes
+  never open — the checkpoint-resume fixture justifies only the latter);
+  (b) request-time sends were abolished rather than memory-gated, because
+  no request-time observation can rule out an in-transit START — a
+  stricter response to B1 than the suggested mechanism, with the idle-stop
+  latency tradeoff stated above.
+- Session/Elf asymmetry is deliberate and documented: the raw session
+  tracks every started shape (anonymous fail-closed keys) because raw
+  frames always carry explicit methods; the Elf tracks only marked,
+  identified lifecycle because normalized events include synthetic shapes.
+  The layers agree on every real provider-shaped event; the residual
+  class is identical (post-evidence provider decisions).
+
+## Unresolved risks and residual limits
+
+- The RTT-bounded post-evidence race above; terminal-only resolution is
+  the stated conservative alternative, with the lease-responsiveness cost
+  named (message-less tool loops defer stops to the turn end).
+- Claude session drain-kill keeps its at-drain shape (no observed
+  failure; out of scope) — UNVERIFIED. Claude Elf declines after tools
+  now wait for deltas that Claude never emits, i.e. effectively for the
+  turn outcome; one-shot Claude turns end promptly so this is bounded,
+  but it is a responsiveness change stated here, not hidden.
+- Long-lived plan/non-mutating provider items, if ever emitted as
+  unknown lifecycle shapes, conservatively delay the Elf boundary to the
+  terminal (accepted over-conservatism; no such shape is in any committed
+  artifact).
+- Unknown command statuses (e.g. `declined`): closing follows the
+  explicit end marker independent of status spelling (unit-pinned with a
+  hypothetical shape, labeled as such); no provider evidence for such
+  statuses is claimed.

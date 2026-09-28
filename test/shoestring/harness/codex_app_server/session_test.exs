@@ -514,23 +514,20 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       # START (compound exec), which re-opens tracking first.
       refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
-      # Model-control evidence (a finished agent message) with no open
-      # tools releases the pending stop exactly once.
+      # Model activity (a streaming delta) with no open tools releases
+      # the pending stop exactly once. Completions never release: the
+      # committed trace shows commentary completions immediately followed
+      # by tool starts.
       send(
         session,
         {:codex_transport_frame, transport,
          Jason.encode!(%{
-           "method" => "item/completed",
-           "params" => %{
-             "item" => %{
-               "type" => "agentMessage",
-               "id" => "msg-1",
-               "phase" => "final_answer",
-               "text" => "done"
-             }
-           }
+           "method" => "item/agentMessage/delta",
+           "params" => %{"delta" => "done"}
          })}
       )
+
+      _ = :sys.get_state(session)
 
       # CRITICAL ASSERTION: turn/interrupt MUST be sent immediately now!
       assert_receive {:sent_rpc,
@@ -654,7 +651,7 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       assert_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
     end
 
-    test "issues turn/interrupt immediately when stop requested while no item is in flight" do
+    test "idle stop pends; the first model activity releases it" do
       test_pid = self()
       req = make_test_run_request()
 
@@ -683,10 +680,26 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
 
       _ = :sys.get_state(session)
 
-      # Stop requested while idle (no item started)
+      # Stop requested while idle (no item started): even with an empty
+      # open set the request only pends — a request can interleave with a
+      # tool start already in transit, and no request-time state can rule
+      # that out.
       assert {:ok, :stop_requested} = Session.request_safe_stop(session)
+      refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
-      # Interrupt must be issued immediately
+      {:ok, status} = Session.status(session)
+      assert status.stop_requested == :safe_boundary
+
+      # The first model activity (a streaming delta) releases it.
+      send(
+        session,
+        {:codex_transport_frame, transport,
+         Jason.encode!(%{
+           "method" => "item/agentMessage/delta",
+           "params" => %{"delta" => "working"}
+         })}
+      )
+
       assert_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
     end
 

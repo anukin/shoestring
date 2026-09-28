@@ -9,6 +9,11 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
   - Namespaced provider fields (`codex-app-server:*`).
   - Quota refusal mapping from `turn.error.codexErrorInfo`.
   - Graceful degradation for optional or missing fields in tool/command frames.
+  - Explicit lifecycle boundary markers (`codex-app-server:boundary` start/end)
+    on command, file-change, and unknown item shapes, recorded from the raw
+    RPC method (never inferred from status spelling) so downstream
+    safe-boundary tracking can correlate starts and ends by identity. The
+    marker is namespaced and invisible to spend counting.
   """
 
   alias Shoestring.Harness.{Error, HarnessEvent}
@@ -145,6 +150,7 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
           provider_session_id: thread_id,
           extensions: %{
             "codex-app-server:item_id" => item_id,
+            "codex-app-server:boundary" => "start",
             "command" => sanitize_string(item["command"] || ""),
             "cwd" => sanitize_string(item["cwd"] || ""),
             "status" => item["status"] || "inProgress"
@@ -177,6 +183,7 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
           provider_session_id: thread_id,
           extensions: %{
             "codex-app-server:item_id" => item_id,
+            "codex-app-server:boundary" => "start",
             "tool" => "fileChange",
             "status" => item["status"] || "inProgress"
           }
@@ -208,6 +215,7 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
           provider_session_id: thread_id,
           extensions: %{
             "codex-app-server:item_id" => item_id,
+            "codex-app-server:boundary" => "start",
             "item_type" => other
           }
         )
@@ -243,6 +251,7 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
         extensions =
           %{
             "codex-app-server:item_id" => item_id,
+            "codex-app-server:boundary" => "end",
             "command" => sanitize_string(item["command"] || ""),
             "cwd" => sanitize_string(item["cwd"] || ""),
             "status" => item["status"] || "completed",
@@ -294,6 +303,7 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
           provider_session_id: thread_id,
           extensions: %{
             "codex-app-server:item_id" => item_id,
+            "codex-app-server:boundary" => "end",
             "tool" => "fileChange",
             "changes" => changes,
             "status" => item["status"] || "completed"
@@ -326,6 +336,7 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizer do
           provider_session_id: thread_id,
           extensions: %{
             "codex-app-server:item_id" => item_id,
+            "codex-app-server:boundary" => "end",
             "item_type" => other
           }
         )

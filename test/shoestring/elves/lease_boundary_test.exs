@@ -175,26 +175,22 @@ defmodule Shoestring.Elves.LeaseBoundaryTest do
     # next tool START may already be on its way (compound exec).
     refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
-    # Model-control evidence with an empty open set releases the stop.
+    # Model activity (a streaming delta) with no open tools releases the
+    # stop. Completions never release: the committed trace
+    # (normalized-codex-lease-stop-final.md) shows commentary completion
+    # 139 immediately followed by command start 140.
     send(
       session,
       {:codex_transport_frame, transport,
        Jason.encode!(%{
-         "method" => "item/completed",
-         "params" => %{
-           "item" => %{
-             "type" => "agentMessage",
-             "id" => "msg-1",
-             "phase" => "final_answer",
-             "text" => "done"
-           }
-         }
+         "method" => "item/agentMessage/delta",
+         "params" => %{"delta" => "done"}
        })}
     )
 
     _ = :sys.get_state(session)
 
-    # Only AFTER model-control evidence does the turn interrupt fire.
+    # Only AFTER model activity does the turn interrupt fire.
     assert_receive {:sent_rpc,
                     %{
                       "method" => "turn/interrupt",
