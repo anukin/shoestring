@@ -69,12 +69,17 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     task: task
   } do
     # response_budget 4, reserve 1 → due at the 3rd completion of each epoch:
-    # out-3 renews epoch 1, out-6 renews epoch 2.
+    # out-3 renews epoch 1, out-6 renews epoch 2. Each epoch probes twice —
+    # the dry-run preview then the real evaluation — so the script carries
+    # four distinct snapshots: the preview consumes the odd ones (no
+    # appends), the real evaluations renew on the even ones.
     admitted_id = Ecto.UUID.generate()
     fresh_s1 = Ecto.UUID.generate()
     fresh_s2 = Ecto.UUID.generate()
+    fresh_s3 = Ecto.UUID.generate()
+    fresh_s4 = Ecto.UUID.generate()
 
-    for snapshot_id <- [admitted_id, fresh_s1, fresh_s2] do
+    for snapshot_id <- [admitted_id, fresh_s1, fresh_s2, fresh_s3, fresh_s4] do
       FakeHelpers.append_capacity_snapshot(goal, snapshot_id)
     end
 
@@ -82,7 +87,13 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
 
     agent =
       start_supervised!(
-        {Agent, fn -> %{calls: 0, snapshots: [snap1(fresh_s1), snap2(fresh_s2)]} end}
+        {Agent,
+         fn ->
+           %{
+             calls: 0,
+             snapshots: [snap1(fresh_s1), snap2(fresh_s2), snap3(fresh_s3), snap4(fresh_s4)]
+           }
+         end}
       )
 
     scenario =
@@ -125,13 +136,15 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
     # The renewal sequence re-observed fresh capacity once per epoch: two
-    # probes, and the grant ends chained to the SECOND epoch's snapshot.
+    # probes per epoch — the mid-turn dry-run preview plus the real
+    # (appending) evaluation it gates — and the grant ends chained to the
+    # SECOND epoch's real snapshot (fresh_s4; the previews append nothing).
     # (Base: one probe, chained to fresh_s1.)
-    assert ScriptedProbeFake.calls(agent) == 2
+    assert ScriptedProbeFake.calls(agent) == 4
     record = Repo.get_by!(ExecutionLeaseRecord, run_id: run_id)
 
     assert record.admitted_snapshot_id ==
-             GoalLocalObservation.snapshot_id("lease-renewal", goal.id, record.id, fresh_s2)
+             GoalLocalObservation.snapshot_id("lease-renewal", goal.id, record.id, fresh_s4)
 
     # Lease events stay idempotent per epoch key: the Elf's legacy
     # observed-due marker plus one due/renewed pair per renewal epoch (each
@@ -168,9 +181,11 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     task: task
   } do
     # response_budget 2, zero reserve: the 2nd output exhausts the allowance
-    # in-flight with breached capacity, so the boundary declines: checkpoint
-    # contents, run.pausing/run.suspended, and a durable sleep wake — while
-    # the remaining items still flow to a normal terminal.
+    # in-flight with breached capacity. Terminal-only decline settles at the
+    # turn outcome: every item still flows to its own outcome first (no
+    # mid-item interrupt, no premature suspension), then the outcome
+    # checkpoints contents, suspends, and schedules the durable sleep wake
+    # with no terminal following. (Base: zero of each — no decline at all.)
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -186,7 +201,7 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
 
     request = ElvesHelpers.run_request(goal, task)
 
-    assert {:ok, _pid} =
+    assert {:ok, pid} =
              Elves.start_run(request, ElvesHelpers.fake_identity(),
                supervisor: sup,
                scenario: scenario,
@@ -197,6 +212,7 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
                notify: self()
              )
 
+    hold_before_first_event(pid)
     run_id = wait_running(goal, request.dispatch_id)
     on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
@@ -208,11 +224,13 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
 
-    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+    release_elf(pid)
 
-    # The run slept at the decline boundary: pausing then suspended, after
-    # the exhausting item and before the items that still flowed. (Base:
-    # zero of each.)
+    # The outcome consumed the decline: markers land, no terminal follows.
+    wait_decline_wake(goal.id, run_id)
+
+    # The run slept at the outcome decline: pausing then suspended, after
+    # every item flowed. (Base: zero of each.)
     assert count_types(goal.id, run_id, ["run.pausing"]) == 1
     assert count_types(goal.id, run_id, ["run.suspended"]) == 1
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
@@ -220,13 +238,15 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     assert reactive_checkpoint_count(goal.id, run_id) == 1
 
     ordered = ordered_events(goal.id, run_id)
-    assert sequence_before?(ordered, {:harness, "evt-out-2"}, {"checkpoint.created", nil})
-    assert sequence_before?(ordered, {"checkpoint.created", nil}, {"run.suspended", nil})
-    assert sequence_before?(ordered, {"run.suspended", nil}, {:harness, "evt-out-3"})
 
-    # Nothing was interrupted mid-item: the 3rd output and the verdict
-    # still landed after the suspend.
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"checkpoint.created", nil})
+    assert sequence_before?(ordered, {"checkpoint.created", nil}, {"run.suspended", nil})
+
+    # Nothing was interrupted mid-item: all three outputs and the verdict
+    # landed, and no terminal follows a suspended run.
     assert count_types(goal.id, run_id, ["harness.event_recorded"]) == 5
+    assert no_terminal_event?(goal.id, run_id)
+    refute_received {:elf_terminal, ^run_id, _}
 
     # The sleep wake: one durable row for this run, firing at the admission
     # delayed-recheck default past now, under the synthetic decline key.
@@ -243,11 +263,10 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
            ) == :eq
 
     # Projection applies the suspend (the run row reads suspended, which is
-    # what the wakeup resume path requires) and then the post-suspend
-    # terminal: `suspended → complete` is a legal `RunStateMachine` edge, so
-    # the goal's position advances instead of halting.
+    # what the wakeup resume path requires) with no post-suspend terminal:
+    # a suspended run is not over, so none is recorded.
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
-    assert Repo.get_by!(RunRecord, id: run_id).status == "completed"
+    assert Repo.get_by!(RunRecord, id: run_id).status == "suspended"
 
     assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status ==
              "checkpoint_required"
@@ -260,7 +279,10 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
   } do
     # Same decline shape as above, but with a live session double: the
     # decline must ask the session to stop at its next safe boundary.
-    # (Base: never asks — no stop call exists on the decline path.)
+    # Terminal-only: the outcome suspends the run (no terminal follows)
+    # and the live double keeps the Elf supervising. The ordering pins the
+    # terminal-only shape: on the mid-turn-decline base the suspend and
+    # checkpoint land before the outcome.
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -300,10 +322,20 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
 
     register_session_double(run_id)
 
-    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
+    # The outcome consumed the decline: the session double was asked to
+    # stop, the run suspended with its wake scheduled, and no terminal
+    # follows a suspended run.
+    wait_decline_wake(goal.id, run_id)
     assert_received :safe_stop_requested
     assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
     assert Repo.get_by!(WakeupRecord, run_id: run_id).status == "scheduled"
+    assert no_terminal_event?(goal.id, run_id)
+    refute_received {:elf_terminal, ^run_id, _terminal}
+
+    ordered = ordered_events(goal.id, run_id)
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"checkpoint.created", nil})
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
   end
 
   test "decline requests stop for a dispatch-keyed session", %{
@@ -313,7 +345,8 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
   } do
     # Sessions register under request.dispatch_id, which differs from the
     # run row id on dispatched continuation runs: the lookup must try the
-    # dispatch id first. (Base: run-id-only lookup misses.)
+    # dispatch id first. Terminal-only ordering (suspend/checkpoint after
+    # the outcome) is pinned as in the test above.
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -357,8 +390,18 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
       &Shoestring.Harness.CodexAppServer.lookup_session/1
     )
 
-    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
+    # Terminal-only: the outcome suspends (no terminal follows) after the
+    # dispatch-keyed session double is asked to stop.
+    wait_decline_wake(goal.id, run_id)
     assert_received :safe_stop_requested
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert no_terminal_event?(goal.id, run_id)
+    refute_received {:elf_terminal, ^run_id, _terminal}
+
+    ordered = ordered_events(goal.id, run_id)
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"checkpoint.created", nil})
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
   end
 
   test "decline requests stop for a Claude session", %{
@@ -367,8 +410,9 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     task: task
   } do
     # Claude owns a separate session table with its own safe-stop protocol;
-    # the decline path must reach it, not just Codex sessions. (Base: the
-    # Codex-only lookup misses and no stop is ever requested.)
+    # the decline path must reach it, not just Codex sessions.
+    # Terminal-only ordering pinned as above: suspend/checkpoint after the
+    # outcome, no terminal follows.
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -412,8 +456,18 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
       &Shoestring.Harness.ClaudeHeadless.lookup_session/1
     )
 
-    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
+    # Terminal-only: the outcome suspends (no terminal follows) after the
+    # Claude session double is asked to stop.
+    wait_decline_wake(goal.id, run_id)
     assert_received :safe_stop_requested
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert no_terminal_event?(goal.id, run_id)
+    refute_received {:elf_terminal, ^run_id, _terminal}
+
+    ordered = ordered_events(goal.id, run_id)
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"checkpoint.created", nil})
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
   end
 
   test "decline interrupted provider response restarts through the wake", %{
@@ -426,7 +480,10 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     # scripted provider honors by interrupting the turn; the interrupted
     # terminal is durable evidence (not a dead end); the scheduled wake
     # then admits on fresh capacity and dispatches the continuation.
-    # (Base: the wake rejects the interrupted run as unexpected state.)
+    # Terminal-only ordering pinned below: the decline artifacts follow
+    # the interrupted outcome (on the mid-turn-decline base they precede
+    # it); the interrupted terminal itself plus the wake restart hold on
+    # both trees.
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -485,6 +542,10 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     assert_received :safe_stop_requested
     assert count_types(goal.id, run_id, ["run.suspended"]) == 1
 
+    ordered = ordered_events(goal.id, run_id)
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"checkpoint.created", nil})
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
+
     wakeup = Repo.get_by!(WakeupRecord, run_id: run_id)
     assert wakeup.status == "scheduled"
 
@@ -508,8 +569,8 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     goal: goal,
     task: task
   } do
-    # Verdict-free stream + no session double: after the decline suspends
-    # the run and schedules its wake, the Elf stops supervising instead of
+    # No session double: after the outcome decline suspends the run and
+    # schedules its wake, the Elf stops supervising instead of
     # lingering — no terminal is recorded (the run sleeps; it is not over).
     # (Base: the Elf never exits on its own here.)
     fresh_id = Ecto.UUID.generate()
@@ -521,7 +582,8 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
         Scenario.lifecycle_event(source_event_id: "evt-life"),
         Scenario.output_event("one", source_event_id: "evt-out-1"),
         Scenario.output_event("two", source_event_id: "evt-out-2"),
-        Scenario.output_event("three", source_event_id: "evt-out-3")
+        Scenario.output_event("three", source_event_id: "evt-out-3"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
       ])
 
     request = ElvesHelpers.run_request(goal, task)
@@ -567,7 +629,10 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
   } do
     # Twin of the boundary decline through the quota fast path: the provider
     # already halted the turn, so the loop re-evaluates immediately and —
-    # on breached capacity — declines into the same suspend + sleep shape.
+    # on breached capacity — declines into the same suspend + sleep shape,
+    # with the quota terminal following. The quota path predates the
+    # terminal-only redesign and keeps its shape under it (verified present
+    # on the pre-fix base: documentation, not a red lock).
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -770,6 +835,33 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
 
   # -- Helpers --
 
+  # Holds the Elf before its first event (deterministic grant setup, mirroring
+  # the lease-loop tests) via process suspension — synchronization, not a
+  # sleep: the Elf makes no progress until released.
+  defp hold_before_first_event(pid), do: :ok = :sys.suspend(pid, 30_000)
+
+  defp release_elf(pid), do: :ok = :sys.resume(pid, 30_000)
+
+  # Synchronizes on the LAST durable marker of the decline chain
+  # (expired → checkpoint → suspend → wake): by the time the wake row is
+  # durable, every earlier marker is too. A decline consumed its turn
+  # outcome, so no terminal verdict follows — assert that absence only
+  # after this wait, when any terminal notification would already be
+  # queued.
+  defp wait_decline_wake(_goal_id, run_id) do
+    assert {:ok, wake} =
+             ElvesHelpers.wait_until(fn -> Repo.get_by(WakeupRecord, run_id: run_id) end)
+
+    assert wake.status == "scheduled"
+  end
+
+  defp no_terminal_event?(goal_id, run_id) do
+    not Enum.any?(ordered_events(goal_id, run_id), fn
+      {:terminal, _} -> true
+      _ -> false
+    end)
+  end
+
   defp wait_running(goal, dispatch_id) do
     assert {:ok, run_id} =
              ElvesHelpers.wait_until(fn -> ElvesHelpers.run_id_for_dispatch(dispatch_id) end)
@@ -843,6 +935,8 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
 
   defp snap1(snapshot_id), do: codex_snapshot(snapshot_id, 20.0)
   defp snap2(snapshot_id), do: codex_snapshot(snapshot_id, 22.0)
+  defp snap3(snapshot_id), do: codex_snapshot(snapshot_id, 21.0)
+  defp snap4(snapshot_id), do: codex_snapshot(snapshot_id, 23.0)
 
   defp codex_snapshot(snapshot_id, used_percent) do
     now = FixedClock.now()

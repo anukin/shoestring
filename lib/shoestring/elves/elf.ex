@@ -101,13 +101,11 @@ defmodule Shoestring.Elves.Elf do
           os_buffer: binary(),
           output_overflowed?: boolean(),
           lease_bounds: Shoestring.Cobbler.LeaseBounds.t() | nil,
-          lease_open_tools: MapSet.t(),
-          lease_tool_seen?: boolean(),
-          lease_model_control?: boolean(),
           lease_grant_id: Ecto.UUID.t() | nil,
           lease_deadline: DateTime.t() | nil,
           lease_stop_requested?: boolean(),
           lease_settled?: boolean(),
+          lease_refusal_pending?: boolean(),
           lease_checkpointed?: boolean(),
           lease_checkpoint_id: Ecto.UUID.t() | nil,
           lease_checkpoint_error: term(),
@@ -151,13 +149,11 @@ defmodule Shoestring.Elves.Elf do
     os_buffer: "",
     output_overflowed?: false,
     lease_bounds: nil,
-    lease_open_tools: nil,
-    lease_tool_seen?: false,
-    lease_model_control?: false,
     lease_grant_id: nil,
     lease_deadline: nil,
     lease_stop_requested?: false,
     lease_settled?: false,
+    lease_refusal_pending?: false,
     lease_checkpointed?: false,
     lease_checkpoint_id: nil,
     lease_checkpoint_error: nil,
@@ -1038,12 +1034,12 @@ defmodule Shoestring.Elves.Elf do
     }
 
     # Lease loop (WP C, loop-closure I2): advances the run's execution-lease
-    # bounds from this normalized event, folds the event into the
-    # identity-keyed open-tool set, marks renewal-due at the configured
-    # boundary or deadline, runs the renewal sequence at item.completed, and
-    # enters the reactive checkpoint path on in-flight exhaustion. Never
-    # interrupts a mutation mid-item and never crashes the run (see
-    # `lease_account/2`).
+    # bounds from this normalized event, marks renewal-due at the configured
+    # boundary or deadline, runs the renewal sequence at the authoritative
+    # turn outcome, and enters the reactive checkpoint path on in-flight
+    # exhaustion. Never interrupts a mutation mid-item and never crashes
+    # the run (see `lease_account/2`).
+    declined_before = state.lease_declined? || false
     state = lease_account(state, event)
 
     case verdict_of(event) do
@@ -1051,13 +1047,29 @@ defmodule Shoestring.Elves.Elf do
         schedule_next(state)
 
       verdict ->
-        state = %{state | adapter_verdict: verdict}
-        _ = terminate_owned_group(state)
+        # A :result outcome consumed by a lease decline (checkpoint +
+        # suspend + wake, decided at this very event): when the provider
+        # reports completion, the run is suspended, not terminal — keep
+        # supervising for the quiet exit instead of appending a terminal
+        # verdict for a run that is not over. A non-completed verdict
+        # (notably `interrupted`, which confirms the turn stopped early)
+        # still terminalizes: the interruption evidence is durable and must
+        # not be swallowed, while the decline's suspend + wake already
+        # scheduled the recheck. Anything else — a decline from an earlier
+        # event (quota), a renewed outcome, a failed checkpoint, or any
+        # :error verdict — proceeds exactly as before, so genuine failures
+        # keep their failure terminal and quota runs keep theirs.
+        classification = Classifier.classify(verdict, state.os_exit, state.cancel_requested?)
 
-        stop_with_terminal(
-          state,
-          Classifier.classify(verdict, state.os_exit, state.cancel_requested?)
-        )
+        if event.kind == :result and not declined_before and
+             state.lease_declined? == true and classification.class == :completed do
+          schedule_next(state)
+        else
+          state = %{state | adapter_verdict: verdict}
+          _ = terminate_owned_group(state)
+
+          stop_with_terminal(state, classification)
+        end
     end
   end
 
@@ -1091,38 +1103,45 @@ defmodule Shoestring.Elves.Elf do
   #   any unknown lease state) means no accounting — a leased-out run is never
   #   crashed by this path.
   # - Counting follows the `LeaseBounds` T2 rule (message completions, never
-  #   delta frames); the item.completed boundary is derived from the live
-  #   counters (this event incremented responses or tools), never redefined —
-  #   AND it additionally requires an empty open-tool set plus demonstrated
-  #   model control (identity-keyed `:command`/`:tool`/unknown-tool items
-  #   and control evidence folded from every normalized event, live and
-  #   durable). A spend with a tool still open — or right after one finished
-  #   with no intervening model activity — is spend, never a boundary.
+  #   delta frames) for spend, due markers, and budget levels; spend never
+  #   triggers renewal or decline by itself.
   # - On renewal-due or deadline: the durable `lease.renewal_due` marker is
-  #   appended, a safe stop is ensured through the existing `LeaseBoundary`
-  #   (exactly once — never restopped), and at the item.completed boundary the
-  #   T2 renewal sequence runs (fresh snapshot + re-evaluate → renewed, or
-  #   expired → decline: checkpoint contents plus `run.pausing` /
-  #   `run.suspended` plus a durable sleep wake, see `decline_lease/2`).
+  #   appended and a safe stop is ensured through the existing
+  #   `LeaseBoundary` (exactly once — never restopped). The safe stop only
+  #   pends at the session and resolves at the turn outcome; nothing is
+  #   ever sent proactively.
+  # - At the authoritative turn outcome (`:result` kind), with the lease
+  #   due or the deadline passed, the T2 renewal sequence runs (fresh
+  #   snapshot + re-evaluate → renewed, or expired → decline: checkpoint
+  #   contents plus `run.pausing` / `run.suspended` plus a durable sleep
+  #   wake, see `decline_lease/2`). The outcome is proof the turn stopped,
+  #   so every decline artifact lands after — never before — the stop, no
+  #   matter what tools ran, interleaved, or stayed unfinished. Mid-turn
+  #   spends only run a dry-run preview (`preview_renewal/1`): a renewable
+  #   verdict renews for real (re-arming the epoch), while a refusal arms
+  #   `lease_refusal_pending?` and appends nothing — the outcome decides.
+  #   A decline at the outcome consumes it: no terminal verdict is appended
+  #   for a suspended run (see `after_ingest/3`). Genuine failures
+  #   (turn-error outcomes) are never declined: they keep their failure
+  #   terminal.
   # - Renewal re-arms (re-loop P1): a `:renewed` outcome resets the spend
   #   baseline (`LeaseBounds.new_epoch/1`) and clears the settled/stop
   #   latches, so a later exhaustion re-fires the full sequence repeatedly
   #   (fresh snapshot + re-evaluate each time) until the unchanged deadline
   #   bounds total renewals. Stop hygiene (re-loop P3): the stop flag is set
-  #   only on an actual `:stop_requested`, and the boundary sequence runs
+  #   only on an actual `:stop_requested`, and the renewal sequence runs
   #   when a stop was requested OR none is required (budget-due renews with
   #   no session stop; only the deadline path stops first).
   # - On in-flight exhaustion the reactive checkpoint path builds checkpoint
-  #   contents through the T3 `Checkpoints` writer (used as-is) and stops at
-  #   the safe boundary; a mutation is never interrupted mid-item — every
-  #   branch below only appends durable events and flips in-memory flags.
+  #   contents through the T3 `Checkpoints` writer (used as-is) at the turn
+  #   outcome; a mutation is never interrupted mid-item — every branch below
+  #   only appends durable events and flips in-memory flags.
   # - No new trajectory event types, no timer processes. The deadline is
   #   evaluated inline on ingest with the Elf clock.
   #
   # For adapters without a live session (notably the hermetic `Fake`), no
   # session exists to interrupt: the safe stop is recorded virtually (the flag
-  # the renewal sequence requires) and ingestion still runs every item to its
-  # own completion, so the boundary guarantee holds without an external call.
+  # the renewal sequence requires) and the turn outcome still resolves it.
   defp lease_account(state, event) do
     lease_account_inner(state, event)
   rescue
@@ -1132,12 +1151,6 @@ defmodule Shoestring.Elves.Elf do
   end
 
   defp lease_account_inner(state, event) do
-    # The boundary trackers fold every ingested event, lease or not, so a
-    # tool that starts before its run's lease row exists is still seen when
-    # the lease loads (the durable rebuild below re-folds the same events
-    # idempotently).
-    state = track_lease_boundary(state, event)
-
     case load_lease(state) do
       {:ok, state} ->
         previous = state.lease_bounds
@@ -1146,10 +1159,6 @@ defmodule Shoestring.Elves.Elf do
           Shoestring.Cobbler.LeaseBounds.advance(previous, event)
 
         state = %{state | lease_bounds: bounds}
-
-        boundary? =
-          spent_more?(previous, bounds) and open_tools_empty?(state) and
-            model_control?(state)
 
         state =
           if :quota_refused in effects do
@@ -1160,7 +1169,7 @@ defmodule Shoestring.Elves.Elf do
 
         state = due_path(state, effects)
         state = stop_path(state)
-        renew_path(state, boundary?)
+        renew_path(state, event, previous)
 
       {:skip, state} ->
         state
@@ -1216,49 +1225,13 @@ defmodule Shoestring.Elves.Elf do
   defp project_own_goal(_state), do: {:error, :not_the_application_repo}
 
   # The item.completed boundary, derived — not redefined — from the T2 rule:
-  # this normalized event spent responses or tools. A spend alone is not
-  # enough: normalized tool items may still be open, or one may just have
-  # finished with no model activity since — renewal/decline additionally
-  # waits for an empty open set plus demonstrated model control.
+  # this normalized event spent responses or tools. Mid-turn spend drives a
+  # dry-run preview (a renewable verdict renews for real, which suspends
+  # nothing and stops nothing); a refusal appends nothing mid-turn — the
+  # expiry markers and the suspend/checkpoint/wake decision all wait for
+  # the authoritative turn outcome (see `renew_path/2`).
   defp spent_more?(previous, current) do
     current.responses > previous.responses or current.tools > previous.tools
-  end
-
-  # Identity-keyed open tool items plus model-control evidence, folded
-  # from every ingested normalized event (live buffer and durable rebuild
-  # alike, via `LeaseBounds`). A renewal/decline boundary requires all
-  # three: this event spent responses or tools, no tool is observably open,
-  # AND the provider demonstrated model control after the last tool
-  # activity — so neither a suspend nor a session stop is ever treated as
-  # safe while a tool is in flight or immediately after one finished.
-  defp track_lease_boundary(state, event) do
-    open = Shoestring.Cobbler.LeaseBounds.track_open_tools(open_tools(state), event)
-
-    {seen, control} =
-      Shoestring.Cobbler.LeaseBounds.track_control(control_state(state), event)
-
-    %{
-      state
-      | lease_open_tools: open,
-        lease_tool_seen?: seen,
-        lease_model_control?: control
-    }
-  end
-
-  defp open_tools(state) do
-    state.lease_open_tools || MapSet.new()
-  end
-
-  defp control_state(state) do
-    {state.lease_tool_seen? || false, state.lease_model_control? || false}
-  end
-
-  defp open_tools_empty?(state) do
-    MapSet.size(open_tools(state)) == 0
-  end
-
-  defp model_control?(state) do
-    elem(control_state(state), 1)
   end
 
   defp exhausted?(state) do
@@ -1317,18 +1290,7 @@ defmodule Shoestring.Elves.Elf do
             checkpoint_cadence: record.checkpoint_cadence
           })
 
-        {bounds, _effects, events} = rebuild_spend(state, bounds)
-
-        # A lease granted while the stream is already flowing may have
-        # tools open or control established: fold the same durable events
-        # for the full boundary state so a later message completion cannot
-        # look like a safe boundary. Both folds are idempotent, so
-        # overlapping the live fold (the current event re-advances below)
-        # is harmless.
-        state =
-          Enum.reduce(events, state, fn event, state ->
-            track_lease_boundary(state, event)
-          end)
+        {bounds, _effects} = rebuild_spend(state, bounds)
 
         {:ok,
          %{
@@ -1389,12 +1351,11 @@ defmodule Shoestring.Elves.Elf do
       )
 
     events = Enum.flat_map(rows, &persisted_harness_event(state, &1))
-    {bounds, effects} = Shoestring.Cobbler.LeaseBounds.drain(bounds, state.run_id, events)
-    {bounds, effects, events}
+    Shoestring.Cobbler.LeaseBounds.drain(bounds, state.run_id, events)
   rescue
-    _error -> {bounds, [], []}
+    _error -> {bounds, []}
   catch
-    _kind, _reason -> {bounds, [], []}
+    _kind, _reason -> {bounds, []}
   end
 
   defp persisted_harness_event(state, payload) when is_map(payload) do
@@ -1488,13 +1449,13 @@ defmodule Shoestring.Elves.Elf do
 
   # Ensures a safe stop was requested through the existing LeaseBoundary —
   # exactly once. With no live session (hermetic Fake runs) the stop is
-  # recorded virtually: ingestion still runs every in-flight item to its own
-  # completion, so nothing is ever interrupted mid-item either way.
+  # recorded virtually. The request only pends at the session and resolves
+  # at the turn outcome, so nothing is ever interrupted mid-item either way.
   #
   # Stop hygiene (lease re-loop): the stop-requested flag is set ONLY on an
   # actual `:stop_requested` from `LeaseBoundary.enforce/3`. A `:within_lease`
   # answer (budget-due with a live deadline — no session stop needed) leaves
-  # the flag clear; the budget path renews at the boundary through
+  # the flag clear; the budget path renews mid-turn through
   # `stop_satisfied?/1` instead of through a stop that never happened.
   defp stop_path(%{lease_stop_requested?: true} = state), do: state
 
@@ -1611,25 +1572,42 @@ defmodule Shoestring.Elves.Elf do
 
   defp session_settled?(_pid), do: false
 
-  # Runs the T2 renewal sequence at the item.completed boundary only: fresh
-  # snapshot + re-evaluate → renewed, or expired → decline (checkpoint +
-  # suspend + sleep wake, see `decline_lease/2`). Anything else (mid-item,
-  # stop still required, already settled) waits without appending.
+  # Runs the T2 renewal sequence. Mid-turn spend drives a dry-run preview:
+  # a RENEWABLE verdict runs the real evaluation immediately (a renewal
+  # rearms epochs and suspends nothing, so budget renewals keep working
+  # exactly as before); a REFUSAL records nothing durably mid-turn — no
+  # snapshot, no decision, no expiry markers — and only arms the
+  # `lease_refusal_pending?` flag. The full evaluation (with its markers)
+  # and the suspend/checkpoint/wake decision wait for the authoritative
+  # turn outcome, so no decline artifact ever precedes the proof the turn
+  # stopped. At the outcome the evaluation runs fresh (a recovered capacity
+  # can still renew) and only then may decline. Anything else
+  # (no due/deadline, stop still required, already settled, non-spend
+  # mid-turn event) only advances spend and waits without appending.
   #
-  # Re-loop gating: boundary + (due or deadline-passed) + (stop requested OR
-  # no stop required). Budget-due with a live deadline needs no session stop
-  # and renews at the boundary; only the expired-deadline path stops the
-  # session first.
-  defp renew_path(%{lease_settled?: true} = state, _boundary?), do: state
+  # Re-loop gating: (spend mids-turn OR turn outcome) + (due or
+  # deadline-passed) + (stop requested OR no stop required). Budget-due
+  # with a live deadline needs no session stop and renews mid-turn; only
+  # the expired-deadline path stops the session first (the stop pends and
+  # resolves at the outcome).
+  defp renew_path(%{lease_settled?: true} = state, _event, _previous), do: state
 
-  defp renew_path(state, boundary?) do
+  # A completed decline (suspend + wake durable) ends this run's renewal
+  # work: later events must not re-evaluate or re-decline. Every decline
+  # step is idempotent, but re-running it would only re-log. A decline
+  # whose checkpoint FAILED leaves `lease_declined?` false and stays open
+  # for retry.
+  defp renew_path(%{lease_declined?: true} = state, _event, _previous), do: state
+
+  defp renew_path(state, %HarnessEvent{} = event, previous) do
     cond do
       state.lease_bounds == nil -> state
       state.lease_grant_id == nil -> state
       not (due_level?(state) or deadline_passed?(state)) -> state
-      not boundary? -> state
       not stop_satisfied?(state) -> state
-      true -> run_renewal(state)
+      outcome_event?(event) -> run_renewal(state, :turn_outcome)
+      spent_more?(previous, state.lease_bounds) -> preview_renewal(state)
+      true -> state
     end
   rescue
     _error -> state
@@ -1637,14 +1615,30 @@ defmodule Shoestring.Elves.Elf do
     _kind, _reason -> state
   end
 
+  # Only the authoritative turn outcome resolves a pending decline. All
+  # other event kinds — spends, completions, deltas, bookkeeping — can
+  # renew but never suspend. Genuine failures arrive as `:error` and keep
+  # their failure terminal via the verdict path, never the decline path.
+  defp outcome_event?(%HarnessEvent{kind: :result}), do: true
+  defp outcome_event?(_event), do: false
+
   # The stop precondition for the renewal sequence: an actual requested
   # session stop, or none required because the deadline has not passed
-  # (budget-due renews at the boundary with no session stop).
+  # (budget-due renews mid-turn with no session stop).
   defp stop_satisfied?(state) do
     state.lease_stop_requested? or not deadline_passed?(state)
   end
 
-  defp run_renewal(state) do
+  # Mid-turn spend gate: a dry-run preview decides whether the real
+  # (appending) evaluation may run now. Renewable → run it for real: a
+  # renewal suspends nothing and rearms the epoch, so budget renewals keep
+  # their mid-turn behavior. Refused → arm `lease_refusal_pending?` and
+  # append NOTHING: expiry markers, checkpoint contents, suspension, and
+  # the wake all wait for the turn outcome, so no decline artifact can
+  # precede the proof the turn stopped — regardless of tools open,
+  # interleaved events, or unfinished items. The outcome re-evaluates
+  # fresh there (recovered capacity can still renew) and only then declines.
+  defp preview_renewal(state) do
     opts = [
       repo: state.repo,
       now: Clock.now(state.clock),
@@ -1653,49 +1647,80 @@ defmodule Shoestring.Elves.Elf do
       observe: fn -> probe_capacity(state) end
     ]
 
-    case Shoestring.Cobbler.LeaseRenewal.maybe_renew(state.goal_id, state.lease_grant_id, opts) do
-      {:ok, %{outcome: :renewed}} ->
-        rearm_epoch(state)
+    case Shoestring.Cobbler.LeaseRenewal.preview(state.goal_id, state.lease_grant_id, opts) do
+      {:ok, %{verdict: :renewable}} ->
+        run_renewal(state, :mid_turn)
 
-      {:ok, %{outcome: :expired}} ->
-        decline_lease(state, "lease_exhausted")
+      {:ok, %{verdict: :refused}} ->
+        %{state | lease_refusal_pending?: true}
 
       {:ok, :awaiting_boundary} ->
         state
 
       {:error, {:lease_not_renewable, status}} ->
-        # Already terminal elsewhere: still ensure checkpoint contents when
-        # the allowance is exhausted, then settle so later items stay quiet.
-        # A failed checkpoint never settles and still requests a safe stop:
-        # the run stays unlatched so the next boundary retries the
-        # (idempotent, stable-id) checkpoint instead of going quiet without
-        # contents, while the stop caps further provider spend. Same
-        # bounded-failure contract as `decline_lease/2`.
-        Logger.warning("elf lease not renewable at boundary",
+        # The lease already died elsewhere (force-expired, quota-halted, or
+        # refused by an earlier pass): ensure its checkpoint contents now —
+        # contents are a DB record, not an interruption — and settle on
+        # success so later items stay quiet. Never suspends, never wakes:
+        # only the turn outcome may decline. A failed write stays unlatched
+        # so the next boundary retries into a recovered checkpoint.
+        ensure_terminal_checkpoint(state, status)
+
+      {:error, reason} ->
+        Logger.warning("elf lease renewal preview failed at boundary",
           run_id: state.run_id,
           dispatch_id: state.dispatch_id,
-          lease_status: status
+          reason: inspect(reason)
         )
 
-        if exhausted?(state) do
-          case write_reactive_checkpoint(state, "lease_exhausted") do
-            {:ok, state} ->
-              %{state | lease_settled?: true}
+        state
+    end
+  rescue
+    _error -> state
+  catch
+    _kind, _reason -> state
+  end
 
-            {:error, failed_state, write_reason} ->
-              Logger.error("elf lease checkpoint failed at terminal boundary, retry left open",
-                run_id: state.run_id,
-                dispatch_id: state.dispatch_id,
-                reason: inspect(write_reason)
-              )
+  defp run_renewal(state, context) do
+    opts = [
+      repo: state.repo,
+      now: Clock.now(state.clock),
+      stop: :already_requested,
+      boundary: if(context == :turn_outcome, do: :turn_outcome, else: :item_completed),
+      observe: fn -> probe_capacity(state) end
+    ]
 
-              failed_state
-              |> request_decline_stop()
-              |> Map.put(:lease_checkpoint_error, write_reason)
-          end
-        else
-          %{state | lease_settled?: true}
-        end
+    case Shoestring.Cobbler.LeaseRenewal.maybe_renew(state.goal_id, state.lease_grant_id, opts) do
+      {:ok, %{outcome: :renewed}} ->
+        rearm_epoch(state)
+
+      {:ok, %{outcome: :expired}} when context == :turn_outcome ->
+        decline_lease(state, "lease_exhausted")
+
+      {:ok, %{outcome: :expired}} ->
+        # Mid-turn real refusal after a renewable preview (capacity moved
+        # between the two probes): stay unlatched and wait for the outcome
+        # WITHOUT suspending — suspending now could precede the next tool
+        # start. The outcome re-evaluates fresh and completes the decline
+        # there (see the `lease_not_renewable` + outcome arm below).
+        state
+
+      {:ok, :awaiting_boundary} ->
+        state
+
+      {:error, {:lease_not_renewable, status}} ->
+        # Already terminal elsewhere (`maybe_renew/3` replays the
+        # refusal-terminal states as an expired outcome, so this arm is
+        # only reachable for other terminal states or a lost race): still
+        # ensure checkpoint contents when the allowance is exhausted, then
+        # settle so later items stay quiet. A failed checkpoint never
+        # settles and still requests a safe stop: the run stays unlatched
+        # so the next boundary retries the (idempotent, stable-id)
+        # checkpoint instead of going quiet without contents, while the
+        # stop caps further provider spend. Same bounded-failure contract
+        # as `decline_lease/2` — but never suspends and never wakes: only
+        # the turn outcome may decline.
+        ensure_terminal_checkpoint(state, status)
 
       {:error, reason} ->
         Logger.warning("elf lease renewal failed at boundary",
@@ -1710,6 +1735,44 @@ defmodule Shoestring.Elves.Elf do
     _error -> state
   catch
     _kind, _reason -> state
+  end
+
+  # Already-terminal-lease path (shared by the mid-turn preview and the
+  # real evaluation): the lease died elsewhere — force-expired, quota-halted,
+  # or refused by an earlier pass — so there is nothing to decide here. Still
+  # ensure checkpoint contents when the allowance is exhausted, then settle
+  # so later items stay quiet. A failed checkpoint never settles and still
+  # requests a safe stop: the run stays unlatched so the next boundary (or a
+  # later outcome) retries the (idempotent, stable-id) checkpoint instead of
+  # going quiet without contents, while the stop caps further provider
+  # spend. Same bounded-failure contract as `decline_lease/2` — but never
+  # suspends and never wakes: only the turn outcome may decline.
+  defp ensure_terminal_checkpoint(state, status) do
+    Logger.warning("elf lease not renewable at boundary",
+      run_id: state.run_id,
+      dispatch_id: state.dispatch_id,
+      lease_status: status
+    )
+
+    if exhausted?(state) do
+      case write_reactive_checkpoint(state, "lease_exhausted") do
+        {:ok, state} ->
+          %{state | lease_settled?: true}
+
+        {:error, failed_state, write_reason} ->
+          Logger.error("elf lease checkpoint failed at terminal boundary, retry left open",
+            run_id: state.run_id,
+            dispatch_id: state.dispatch_id,
+            reason: inspect(write_reason)
+          )
+
+          failed_state
+          |> request_decline_stop()
+          |> Map.put(:lease_checkpoint_error, write_reason)
+      end
+    else
+      %{state | lease_settled?: true}
+    end
   end
 
   # Multi-renewal re-arm (lease re-loop P1): on a `:renewed` outcome the
@@ -1729,7 +1792,13 @@ defmodule Shoestring.Elves.Elf do
           state.lease_bounds
       end
 
-    %{state | lease_bounds: bounds, lease_settled?: false, lease_stop_requested?: false}
+    %{
+      state
+      | lease_bounds: bounds,
+        lease_settled?: false,
+        lease_stop_requested?: false,
+        lease_refusal_pending?: false
+    }
   end
 
   # The decline path (lease re-loop P2): checkpoint contents through the
@@ -1741,19 +1810,19 @@ defmodule Shoestring.Elves.Elf do
   #
   # Checkpoint persistence failure is bounded and recoverable: no suspend,
   # no wake, and no settle on a failed checkpoint — the run stays active so
-  # the next safe boundary retries the (idempotent, stable-id) checkpoint
+  # a later outcome retries the (idempotent, stable-id) checkpoint
   # instead of sleeping without recovery context. The failure is kept in
   # `lease_checkpoint_error` and logged with run/dispatch identity; the
   # already-appended `lease.checkpoint_required` transition is the durable
   # marker that contents are still owed. A safe stop IS still requested
-  # (the in-flight item already completed, so nothing is interrupted
-  # mid-item): this caps further provider spend while retries continue, and
-  # the ordinary terminal path still records its own (distinct-id) terminal
-  # checkpoint when the verdict arrives, so recovery context survives even
-  # when no further boundary ever fires. Nothing here kills the owned
-  # process group. Honest limit: under a total DB outage no durable record
-  # of any kind can land — the error log is the only trace, and the run
-  # ends with the stream.
+  # (it only pends at the session and resolves at the turn outcome, so
+  # nothing is interrupted mid-item): this caps further provider spend
+  # while retries continue, and the ordinary terminal path still records
+  # its own (distinct-id) terminal checkpoint when the verdict arrives, so
+  # recovery context survives even when no further outcome ever fires.
+  # Nothing here kills the owned process group. Honest limit: under a
+  # total DB outage no durable record of any kind can land — the error log
+  # is the only trace, and the run ends with the stream.
   defp decline_lease(state, reason) do
     case write_reactive_checkpoint(state, reason) do
       {:ok, state} ->
@@ -1763,6 +1832,7 @@ defmodule Shoestring.Elves.Elf do
         |> settle_on_checkpoint()
         |> request_decline_stop()
         |> Map.put(:lease_declined?, true)
+        |> Map.put(:lease_refusal_pending?, false)
 
       {:error, failed_state, write_reason} ->
         Logger.error("elf lease decline checkpoint failed, run stays active for retry",
@@ -1778,8 +1848,8 @@ defmodule Shoestring.Elves.Elf do
   end
 
   # A declined run sleeps durably — no further execution may start. Ask a
-  # live session to stop at its next safe boundary (the in-flight item
-  # already completed, so nothing is interrupted). Either provider (Codex
+  # live session to stop (it only pends at the session and resolves at the
+  # turn outcome, so nothing is interrupted). Either provider (Codex
   # or Claude); virtual when no live session is resolvable (Fake/test
   # legs): there is nothing to stop, and the quiet-exit below ends
   # supervision once the buffer drains.
@@ -1885,7 +1955,7 @@ defmodule Shoestring.Elves.Elf do
         # with a fresh snapshot (a latched quota renewal could never renew
         # again, stranding the lease exactly like the single-shot loop did).
         {:ok, %{outcome: :renewed}} ->
-          %{state | lease_settled?: false}
+          %{state | lease_settled?: false, lease_refusal_pending?: false}
 
         {:ok, %{outcome: :expired}} ->
           decline_lease(state, "lease_exhausted")
@@ -2159,9 +2229,10 @@ defmodule Shoestring.Elves.Elf do
       # session keeps the existing supervision paths until it winds down —
       # unless it already reports a terminal status (completed, interrupted,
       # failed, cancelled): such a session can do no more useful work, so
-      # waiting on it is not protecting work (notably the ClaudeHeadless
-      # immediate safe-stop, which kills the group and marks the session
-      # cancelled without emitting a further stream event). Staleness alone
+      # waiting on it is not protecting work. (A terminal status may arrive
+      # with no further stream event — notably a pended ClaudeHeadless
+      # safe stop, which resolves at the turn terminal without emitting
+      # anything further.) Staleness alone
       # still never triggers this: a merely quiet but non-terminal session
       # keeps the Elf supervising exactly as before.
       state.lease_declined? and no_useful_session?(state) ->

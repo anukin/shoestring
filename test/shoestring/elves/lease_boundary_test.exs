@@ -146,7 +146,7 @@ defmodule Shoestring.Elves.LeaseBoundaryTest do
     refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
   end
 
-  test "lease deadline during a command item: stop requested, in-flight completes, interrupt follows" do
+  test "lease deadline during a command item: stop requested, outcome resolves, never interrupts" do
     {session, transport} = start_session()
     turn_id = "01950000-0000-7000-8000-000000000002"
     turn_started(session, transport, turn_id)
@@ -171,14 +171,12 @@ defmodule Shoestring.Elves.LeaseBoundaryTest do
                event.extensions["codex-app-server:item_id"] == "exec-1"
            end)
 
-    # Draining the last open tool arms the stop but sends nothing yet: the
-    # next tool START may already be on its way (compound exec).
+    # Terminal-only: neither the drain nor later model activity releases
+    # anything. The committed trace (normalized-codex-lease-stop-final.md)
+    # shows why: commentary completion 139 is immediately followed by
+    # command start 140, so no mid-turn frame is a safe trigger.
     refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
-    # Model activity (a streaming delta) with no open tools releases the
-    # stop. Completions never release: the committed trace
-    # (normalized-codex-lease-stop-final.md) shows commentary completion
-    # 139 immediately followed by command start 140.
     send(
       session,
       {:codex_transport_frame, transport,
@@ -189,18 +187,12 @@ defmodule Shoestring.Elves.LeaseBoundaryTest do
     )
 
     _ = :sys.get_state(session)
-
-    # Only AFTER model activity does the turn interrupt fire.
-    assert_receive {:sent_rpc,
-                    %{
-                      "method" => "turn/interrupt",
-                      "params" => %{"turnId" => ^turn_id}
-                    }}
+    refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
     # Drive the provider's answer all the way through: the interrupted turn
     # completes, and the session reports it honestly — interrupted, never a
     # task failure — with the completed item evidence already buffered
-    # before teardown.
+    # before teardown. The outcome resolves the pending stop with no send.
     send(
       session,
       {:codex_transport_frame, transport,
@@ -219,6 +211,8 @@ defmodule Shoestring.Elves.LeaseBoundaryTest do
     _ = :sys.get_state(session)
     {:ok, status} = Session.status(session)
     assert status.status == :interrupted
+    assert status.stop_requested == nil
+    refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
     {:ok, events} = Session.stream_events(session)
     command_events = Enum.filter(events, &(&1.kind == :command))
@@ -259,7 +253,9 @@ defmodule Shoestring.Elves.LeaseBoundaryTest do
 
     item_completed(session, transport, "exec-1", "44444")
 
-    # Armed, not sent: the drain alone is not a boundary.
+    # Terminal-only: the drain sends nothing, and no later frame releases
+    # anything either. Only the authoritative turn outcome resolves the
+    # pending stop.
     refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
     send(
@@ -272,7 +268,28 @@ defmodule Shoestring.Elves.LeaseBoundaryTest do
     )
 
     _ = :sys.get_state(session)
-    assert_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+    refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+
+    send(
+      session,
+      {:codex_transport_frame, transport,
+       Jason.encode!(%{
+         "method" => "turn/completed",
+         "params" => %{
+           "turn" => %{
+             "id" => "01950000-0000-7000-8000-000000000002",
+             "status" => "interrupted"
+           }
+         }
+       })}
+    )
+
+    _ = :sys.get_state(session)
+    refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+
+    {:ok, status} = Session.status(session)
+    assert status.status == :interrupted
+    assert status.stop_requested == nil
   end
 
   test "enforcing against a dead session returns an error instead of raising" do

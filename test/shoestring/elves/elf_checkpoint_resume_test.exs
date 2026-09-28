@@ -77,14 +77,15 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
   - Terminal twins (completed / failed) carry the goal/task acceptance
     contract with descriptions.
 
-  Locking note (standing contract): on the pre-fix base commit the
-  reactive writer has no `reactive` kind and the decline suspends even
-  when the checkpoint write fails, so the kind/count/no-suspend/no-wake
-  assertions below fail behaviourally there; the terminal checkpoint
-  exists on base but carries the generic criterion, so the acceptance
-  assertions fail there too. This file references only base-present
-  modules. The no-extension fresh-start prompt pin passes on base as
-  well (documentation, stated honestly).
+  Locking note (standing contract): verified against the pre-fix base
+  `1566acd` in an isolated worktree (seed-0 order). The terminal-only
+  lock fails there behaviourally: `planned boundary decline` never
+  schedules its sleep wake (the outcome decline terminalizes instead of
+  suspending, so the `WakeupRecord` lookup fails). The
+  `lease_not_renewable` retry-into-recovery shape, the evidence-content
+  shapes, the quota-poison shape, and the terminal twins pass on base too
+  (preserved behavior, documentation — stated honestly). This file
+  references only base-present modules.
   """
 
   use Shoestring.DataCase, async: false
@@ -224,9 +225,11 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
     # the renewal layer reports not-renewable. The first write fails twice
     # (poisoned replay); the run must not settle quietly — the next
     # boundary retries into a recovered checkpoint — and must not suspend
-    # or wake without one. A safe stop is still requested.
-    # (Base: the failed write is swallowed AND settled, so no boundary
-    # ever retries and no reactive checkpoint ever appears.)
+    # or wake without one. A safe stop is still requested. This retry-into-
+    # recovery shape predates the terminal-only redesign (verified present
+    # on the pre-fix base): it pins that already-terminal leases still get
+    # bounded checkpoint retries at spend boundaries without ever
+    # suspending or waking there.
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -295,6 +298,11 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
     goal: goal,
     task: task
   } do
+    # The terminal-only outcome decline suspends instead of terminalizing;
+    # the assertions below pin the evidence contents of that checkpoint.
+    # The evidence-contract shape (kind `reactive`, lease stop reason,
+    # goal/task acceptance contract with descriptions, deterministic next
+    # step) predates the redesign (verified present on the pre-fix base).
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -332,10 +340,20 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
 
-    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+    # Terminal-only decline: the outcome suspends the run instead of
+    # terminalizing it. Wait for the suspension (which the sleep wake
+    # follows), then pin the absent terminal.
+    assert {:ok, true} =
+             ElvesHelpers.wait_until(fn ->
+               if count_types(goal.id, run_id, ["run.suspended"]) == 1, do: true
+             end)
+
+    refute_received {:elf_terminal, ^run_id, _terminal}
 
     # One reactive checkpoint (kind "reactive", never "terminal"), then the
-    # durable sleep shape. (Base: no `reactive` kind is ever emitted.)
+    # durable sleep shape. The terminal-only lock is above (suspend with no
+    # terminal); on the pre-fix base the decline terminalizes instead, so
+    # the wake is never scheduled and the lookup below fails there.
     [checkpoint] = reactive_checkpoints(goal.id, run_id)
     payload = checkpoint.payload
 
@@ -362,8 +380,8 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
   } do
     # The full collector path (not the floor): worktree identity, current
     # revision, dirty diff stat, changed-file list, verification lines,
-    # and last safe boundary are all real. (Base: generic criterion with
-    # no `reactive` kind and revision "unknown".)
+    # and last safe boundary are all real. This evidence shape predates the
+    # terminal-only redesign (verified present on the pre-fix base).
     run_id = Ecto.UUID.generate()
     fixture = ElfWorktreeFixture.create!(run_id)
     on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
@@ -420,7 +438,15 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
 
-    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+    # Terminal-only decline: the outcome suspends the run instead of
+    # terminalizing it. Wait for the suspension, then pin the absent
+    # terminal before asserting on the evidence contents.
+    assert {:ok, true} =
+             ElvesHelpers.wait_until(fn ->
+               if count_types(goal.id, run_id, ["run.suspended"]) == 1, do: true
+             end)
+
+    refute_received {:elf_terminal, ^run_id, _terminal}
 
     [checkpoint] = reactive_checkpoints(goal.id, run_id)
     payload = checkpoint.payload

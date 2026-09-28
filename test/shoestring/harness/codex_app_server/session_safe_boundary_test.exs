@@ -1,18 +1,19 @@
 defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
   @moduledoc """
-  Hermetic regression tests for the identity-keyed safe-stop boundary
-  (lease-stop interruption must never cut an observably running tool).
+  Hermetic regression tests for terminal-only lease safe stops: a pending
+  safe stop or safe cancel must NEVER send `turn/interrupt` — not on
+  request, delta, reasoning activity, completion, timeout, quiet, or
+  anything else — and resolves solely at the authoritative turn outcome.
 
   Each test drives a real `Session` with scripted provider frames through a
   recording transport double — never a provider CLI, never the network.
 
-  Locking note (standing contract): requests never send synchronously and
-  only streaming deltas / reasoning starts release a pended stop. On the
-  pre-fix commits (`1566acd` single slot; `e675c3b` interrupt-on-completion
-  and interrupt-on-request) every test asserting "no interrupt yet" fails
-  behaviourally — the interrupt arrives at the first unrelated completion
-  or at request time with an empty set. The immediate-cancel reap test is
-  documentation: that path is unchanged and passes on both.
+  Locking note (standing contract): on the pre-fix commits (`1566acd`
+  single slot sending on any completion; `e675c3b` sending on completion,
+  evidence, and request-time) every test asserting "no interrupt yet"
+  fails behaviourally — the interrupt arrives mid-stream. The
+  immediate-cancel tests are documentation: that distinct explicit path is
+  unchanged and passes on both.
   """
 
   use ExUnit.Case, async: true
@@ -157,21 +158,15 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
       "params" => %{"turn" => %{"id" => @turn_id, "status" => status}}
     }
 
-  defp interrupt_params do
-    %{
-      "method" => "turn/interrupt",
-      "params" => %{"threadId" => @thread_id, "turnId" => @turn_id}
-    }
-  end
-
-  defp assert_interrupt do
-    assert_receive {:sent_rpc, %{"method" => "turn/interrupt"} = frame}
-    assert frame["params"] == interrupt_params()["params"]
-  end
-
   defp refute_interrupt, do: refute_receive({:sent_rpc, %{"method" => "turn/interrupt"}})
 
-  test "reasoning completion with its start does not release a pending stop while a command is open" do
+  defp assert_terminal_resolution(session) do
+    {:ok, status} = Session.status(session)
+    assert status.stop_requested == nil
+    assert status.status in [:completed, :interrupted, :failed]
+  end
+
+  test "reasoning activity beside an open command never interrupts; the outcome resolves" do
     {session, transport} = start_session()
 
     send_frame(session, transport, item_started(command("exec-1", "1001")))
@@ -180,21 +175,23 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     assert {:ok, :stop_requested} = Session.request_safe_stop(session)
     refute_interrupt()
 
-    # The reasoning completion must not clear the open command.
+    # The reasoning completion must not clear the open command, and no
+    # frame class releases the stop.
     send_frame(session, transport, item_completed(reasoning("r-1")))
     refute_interrupt()
 
-    # Draining the last tool arms the stop but still sends nothing.
     send_frame(session, transport, item_completed(command_done("exec-1", "1001")))
     refute_interrupt()
 
-    # A streaming delta releases the pending stop exactly once.
     send_frame(session, transport, delta("more"))
-    assert_interrupt()
+    refute_interrupt()
 
-    # A later reasoning start sends nothing more.
     send_frame(session, transport, item_started(reasoning("r-2")))
     refute_interrupt()
+
+    send_frame(session, transport, turn_completed("interrupted"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
   end
 
   test "reasoning completion without its start is ignored while a command is open" do
@@ -211,7 +208,11 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     refute_interrupt()
 
     send_frame(session, transport, delta("done"))
-    assert_interrupt()
+    refute_interrupt()
+
+    send_frame(session, transport, turn_completed("completed"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
   end
 
   test "message completion does not clear an open command; a later stop still waits" do
@@ -230,12 +231,15 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     send_frame(session, transport, item_completed(command_done("exec-1", "1003")))
     refute_interrupt()
 
-    # A begun thinking segment releases the stop.
     send_frame(session, transport, item_started(reasoning("r-1")))
-    assert_interrupt()
+    refute_interrupt()
+
+    send_frame(session, transport, turn_completed("interrupted"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
   end
 
-  test "overlapping commands each hold the pending stop until every one finishes" do
+  test "overlapping commands each hold the pending stop until the outcome" do
     {session, transport} = start_session()
 
     send_frame(session, transport, item_started(command("exec-A", "1011")))
@@ -251,66 +255,40 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     refute_interrupt()
 
     send_frame(session, transport, delta("done"))
-    assert_interrupt()
     refute_interrupt()
+
+    send_frame(session, transport, turn_completed("interrupted"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
   end
 
-  # LOCK (fails behaviourally on 1566acd and on e675c3b): the 139→140
-  # shape from the committed trace
-  # (normalized-codex-lease-stop-final.md). A message completion with an
-  # empty open set must not release the stop — the provider routinely
-  # starts the next tool immediately after completing commentary. Only a
-  # later streaming delta releases it.
-  test "message completion with an empty set does not release the stop" do
-    {session, transport} = start_session()
-
-    send_frame(session, transport, item_started(command("exec-1", "1013")))
-    assert {:ok, :stop_requested} = Session.request_safe_stop(session)
-
-    send_frame(session, transport, item_completed(command_done("exec-1", "1013")))
-    refute_interrupt()
-
-    send_frame(session, transport, item_completed(message_done("msg-1")))
-    refute_interrupt()
-
-    {:ok, status} = Session.status(session)
-    assert status.stop_requested == :safe_boundary
-
-    send_frame(session, transport, delta("done"))
-    assert_interrupt()
-    refute_interrupt()
-  end
-
-  test "file change plus reasoning: completions never release while the write is open" do
+  test "file change plus reasoning: no frame class releases while the write is open" do
     {session, transport} = start_session()
 
     send_frame(session, transport, item_started(file_change("fc-1", "inProgress")))
     assert {:ok, :stop_requested} = Session.request_safe_stop(session)
 
-    # A reasoning start beside the open write releases nothing.
     send_frame(session, transport, item_started(reasoning("r-1")))
     refute_interrupt()
 
-    # A fresh episode for the completion half: reasoning completions and
-    # the tool drain release nothing; only a later delta does.
-    {session2, transport2} = start_session()
-    send_frame(session2, transport2, item_started(file_change("fc-2", "inProgress")))
-    assert {:ok, :stop_requested} = Session.request_safe_stop(session2)
-
-    send_frame(session2, transport2, item_completed(reasoning("r-9")))
+    send_frame(session, transport, item_completed(reasoning("r-1")))
     refute_interrupt()
 
-    send_frame(session2, transport2, item_completed(file_change("fc-2", "completed")))
+    send_frame(session, transport, item_completed(file_change("fc-1", "completed")))
     refute_interrupt()
 
-    send_frame(session2, transport2, item_completed(message_done("msg-9")))
+    send_frame(session, transport, item_completed(message_done("msg-9")))
     refute_interrupt()
 
-    send_frame(session2, transport2, delta("done"))
-    assert_interrupt()
+    send_frame(session, transport, delta("done"))
+    refute_interrupt()
+
+    send_frame(session, transport, turn_completed("interrupted"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
   end
 
-  test "unknown tool types fail conservatively until their matching completion" do
+  test "unknown tool types fail conservatively until the outcome" do
     {session, transport} = start_session()
 
     send_frame(session, transport, item_started(unknown_tool("x-1")))
@@ -324,7 +302,11 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     refute_interrupt()
 
     send_frame(session, transport, delta("done"))
-    assert_interrupt()
+    refute_interrupt()
+
+    send_frame(session, transport, turn_completed("interrupted"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
   end
 
   test "unidentifiable tool start blocks until the natural terminal" do
@@ -343,10 +325,30 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
 
     send_frame(session, transport, turn_completed("interrupted"))
     refute_interrupt()
+    assert_terminal_resolution(session)
+  end
+
+  # N4: a nil/missing item type opens conservatively in the session while
+  # the Elf layer ignores it — and NEITHER layer acts early. Both fail
+  # closed consistently: the stop resolves only at the outcome.
+  test "nil and missing item types open conservatively and resolve only at the outcome" do
+    {session, transport} = start_session()
+
+    send_frame(session, transport, item_started(%{"type" => nil, "id" => "nil-1"}))
+    send_frame(session, transport, item_started(%{"id" => "notype-1"}))
 
     {:ok, status} = Session.status(session)
-    assert status.status == :interrupted
-    assert status.stop_requested == nil
+    assert status.open_tool_count == 2
+
+    assert {:ok, :stop_requested} = Session.request_safe_stop(session)
+    refute_interrupt()
+
+    send_frame(session, transport, delta("done"))
+    refute_interrupt()
+
+    send_frame(session, transport, turn_completed("interrupted"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
   end
 
   test "compound exec: command completion followed by a file change never interrupts mid-item" do
@@ -368,16 +370,20 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     refute_interrupt()
 
     send_frame(session, transport, delta("done"))
-    assert_interrupt()
     refute_interrupt()
+
+    send_frame(session, transport, turn_completed("interrupted"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
   end
 
-  # LOCK (fails behaviourally on e675c3b and 1566acd): the Elf-driven
+  # LOCK (fails behaviourally on 1566acd and on e675c3b): the Elf-driven
   # shape from the committed trace (command end 141, bookkeeping 142-143,
   # fileChange start 144). The deadline stop is requested through the
   # Elf's own boundary module AFTER the command completed; the fileChange
-  # starts while the request is pending. Neither the request nor the drain
-  # may send: the write must survive until model activity or the terminal.
+  # starts while the request is pending. Neither the request nor any later
+  # frame may send: the write must survive until the turn outcome, which
+  # resolves the stop with no send.
   test "elf deadline stop between command completion and fileChange start sends nothing" do
     {session, transport} = start_session()
 
@@ -398,8 +404,44 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     refute_interrupt()
 
     send_frame(session, transport, delta("done"))
-    assert_interrupt()
     refute_interrupt()
+
+    send_frame(session, transport, turn_completed("interrupted"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
+  end
+
+  # LOCK (fails behaviourally on 1566acd and on e675c3b): the 139→140
+  # shape from the committed trace
+  # (normalized-codex-lease-stop-final.md). A message completion with an
+  # empty open set must not release the stop — the provider routinely
+  # starts the next tool immediately after completing commentary.
+  test "message completion with an empty set does not release the stop" do
+    {session, transport} = start_session()
+
+    send_frame(session, transport, item_started(command("exec-1", "1013")))
+    assert {:ok, :stop_requested} = Session.request_safe_stop(session)
+
+    send_frame(session, transport, item_completed(command_done("exec-1", "1013")))
+    refute_interrupt()
+
+    send_frame(session, transport, item_completed(message_done("msg-1")))
+    refute_interrupt()
+
+    {:ok, status} = Session.status(session)
+    assert status.stop_requested == :safe_boundary
+
+    # The next tool starts as part of the same model action; it must run
+    # to its own outcome untouched.
+    send_frame(session, transport, item_started(command("exec-2", "1014")))
+    refute_interrupt()
+
+    send_frame(session, transport, item_completed(command_done("exec-2", "1014")))
+    refute_interrupt()
+
+    send_frame(session, transport, turn_completed("interrupted"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
   end
 
   test "commentary start alone does not release; a tool after commentary still blocks" do
@@ -412,7 +454,7 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     refute_interrupt()
 
     # Commentary routinely precedes the next tool call in the same
-    # response, so its START is not model-activity evidence.
+    # response; nothing about it releases the stop.
     send_frame(session, transport, item_started(message_started("msg-1")))
     refute_interrupt()
 
@@ -423,7 +465,11 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     refute_interrupt()
 
     send_frame(session, transport, delta("done"))
-    assert_interrupt()
+    refute_interrupt()
+
+    send_frame(session, transport, turn_completed("interrupted"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
   end
 
   test "safe cancel defers like safe stop; immediate cancel interrupts at once" do
@@ -437,7 +483,11 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     refute_interrupt()
 
     send_frame(session, transport, delta("done"))
-    assert_interrupt()
+    refute_interrupt()
+
+    send_frame(session, transport, turn_completed("interrupted"))
+    refute_interrupt()
+    assert_terminal_resolution(session)
 
     # A fresh turn episode: immediate cancel still terminates now.
     {session2, transport2} = start_session()
@@ -473,6 +523,9 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     send_frame(session, transport, delta("done"))
     refute_interrupt()
 
+    send_frame(session, transport, turn_completed("completed"))
+    refute_interrupt()
+
     {:ok, status} = Session.status(session)
     assert status.stop_requested == nil
   end
@@ -485,17 +538,15 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
 
     send_frame(session, transport, turn_completed("interrupted"))
     refute_interrupt()
-
-    {:ok, status} = Session.status(session)
-    assert status.status == :interrupted
-    assert status.stop_requested == nil
+    assert_terminal_resolution(session)
   end
 
-  test "idle stop pends; the first model activity releases it exactly once" do
+  test "idle stop pends until the turn outcome" do
     {session, transport} = start_session()
 
     # No tool has run, but a request can still interleave with a start
-    # already in transit — so even the idle request only pends.
+    # already in transit — so even the idle request only pends, and only
+    # the authoritative outcome resolves it.
     assert {:ok, :stop_requested} = Session.request_safe_stop(session)
     refute_interrupt()
 
@@ -503,15 +554,10 @@ defmodule Shoestring.Harness.CodexAppServer.SessionSafeBoundaryTest do
     assert status.stop_requested == :safe_boundary
 
     send_frame(session, transport, delta("working"))
-    assert_interrupt()
-
-    assert {:ok, :stop_requested} = Session.request_safe_stop(session)
     refute_interrupt()
 
-    # Later tools and evidence in the same turn send nothing more.
-    send_frame(session, transport, item_started(command("exec-1", "1071")))
-    send_frame(session, transport, item_completed(command_done("exec-1", "1071")))
-    send_frame(session, transport, delta("more"))
+    send_frame(session, transport, turn_completed("interrupted"))
     refute_interrupt()
+    assert_terminal_resolution(session)
   end
 end

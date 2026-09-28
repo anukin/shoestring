@@ -611,7 +611,14 @@ defmodule Shoestring.Cobbler.HandoffCrashWindowTest do
 
     Application.put_env(:shoestring, :elf_dispatch_opts,
       supervisor: sup,
-      scenario: Shoestring.Harness.Fake.Scenario.normal_completion(),
+      # Same observation-consistency requirement as the handoff worker
+      # tests: the receiver is admitted under the handoff's account scope
+      # and its Elf observes on the system clock (see `receiver_capacity!`
+      # below).
+      scenario: %{
+        Shoestring.Harness.Fake.Scenario.normal_completion()
+        | capacity: receiver_capacity!()
+      },
       command: ["sleep", "30"],
       runner_opts: [kill_grace_ms: 200, reap_timeout_ms: 2_000]
     )
@@ -653,6 +660,45 @@ defmodule Shoestring.Cobbler.HandoffCrashWindowTest do
           extensions: %{}
         },
         now: @t0
+      )
+
+    snapshot
+  end
+
+  # The receiver Elf's renewal observation: same shape as
+  # `eligible_snapshot!/0` (both windows, account scope, high confidence)
+  # but timestamped at setup wall-clock, because the receiver Elf observes
+  # on the system clock while `eligible_snapshot!/0` is pinned to the
+  # frozen fixture instant.
+  defp receiver_capacity! do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, snapshot} =
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: Ecto.UUID.generate(),
+          capacity_state: :observed,
+          windows: [
+            %{kind: "five_hour", state: :observed, used_percent: 10.0, reset_at: nil},
+            %{kind: "weekly", state: :observed, used_percent: 12.0, reset_at: nil}
+          ],
+          observed_at: now,
+          freshness: %{max_age_seconds: 300},
+          source: %{
+            adapter_id: @receiver_adapter,
+            provider_id: @receiver_provider,
+            invocation_mode: "headless",
+            event: :explicit_read
+          },
+          scope: @receiver_scope,
+          confidence: :high,
+          support_tier: :proactive,
+          compatibility_state: :compatible,
+          reason: nil,
+          extensions: %{}
+        },
+        now: now
       )
 
     snapshot

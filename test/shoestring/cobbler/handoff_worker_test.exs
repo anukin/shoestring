@@ -71,7 +71,14 @@ defmodule Shoestring.Cobbler.HandoffWorkerTest do
 
     Application.put_env(:shoestring, :elf_dispatch_opts,
       supervisor: sup,
-      scenario: Scenario.normal_completion(),
+      # The receiver is admitted under the handoff's account scope and its
+      # Elf observes on the system clock, so its reading is built complete
+      # (both windows), fresh (timestamped now), and account-scoped below:
+      # Fake's minimal single-window, subscription-scoped, September-dated
+      # default would (correctly) refuse renewal as missing-window,
+      # provider/scope mismatch, or stale observation — a fixture artifact
+      # here, not the pinned cross-provider behavior.
+      scenario: %{Scenario.normal_completion() | capacity: receiver_capacity!()},
       command: ["sleep", "30"],
       runner_opts: [kill_grace_ms: 200, reap_timeout_ms: 2_000]
     )
@@ -481,6 +488,44 @@ defmodule Shoestring.Cobbler.HandoffWorkerTest do
   end
 
   defp eligible_snapshot!, do: snapshot!(:observed, :compatible, :high, nil)
+
+  # The receiver Elf's renewal observation: same shape as `snapshot!/4`
+  # (both windows, account scope, high confidence) but timestamped at
+  # setup wall-clock, because the receiver Elf observes on the system
+  # clock while `snapshot!/4` is pinned to the frozen fixture instant.
+  defp receiver_capacity! do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, snapshot} =
+      CapacitySnapshot.new(
+        %{
+          version: 2,
+          snapshot_id: Ecto.UUID.generate(),
+          capacity_state: :observed,
+          windows: [
+            %{kind: "five_hour", state: :observed, used_percent: 10.0, reset_at: nil},
+            %{kind: "weekly", state: :observed, used_percent: 12.0, reset_at: nil}
+          ],
+          observed_at: now,
+          freshness: %{max_age_seconds: 300},
+          source: %{
+            adapter_id: @receiver_adapter,
+            provider_id: @receiver_provider,
+            invocation_mode: "headless",
+            event: :explicit_read
+          },
+          scope: @receiver_scope,
+          confidence: :high,
+          support_tier: :proactive,
+          compatibility_state: :compatible,
+          reason: nil,
+          extensions: %{}
+        },
+        now: now
+      )
+
+    snapshot
+  end
 
   defp degraded_snapshot! do
     snapshot!(:degraded, :degraded, :medium, "receiver adapter surface is degraded")

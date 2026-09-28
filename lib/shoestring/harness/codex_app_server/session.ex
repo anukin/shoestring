@@ -5,26 +5,21 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   Key responsibilities:
   - Manages stdio JSON-RPC transport and executes handshake / start / turn sequence.
   - Buffers events live as they arrive (no backfill is possible from the provider).
-  - Implements the Lease Safe-Boundary Rule:
+  - Implements the Lease Safe-Boundary Rule (terminal-only):
     Open tool items are tracked by identity (`item.id`, falling back to
-    `processId` for commands). A safe stop / safe cancel request NEVER
-    sends synchronously: it always pends, because a request can interleave
-    between the provider emitting a tool completion and emitting the next
-    tool start, and no request-time state can rule out a start already in
-    transit. The pended interrupt fires at most once per turn, and only in
-    a frame handler for positive model-activity evidence — a streaming
-    agent-message delta or a reasoning/thinking start — observed while the
-    open set is empty. Single-pipe FIFO ordering guarantees such a send can
-    never race a tool start the provider emitted before the evidence; only
-    a genuinely new provider decision after the evidence (an RTT-bounded
-    residual shared by every interrupt-based design) can still meet the
-    interrupt. Completions (message, reasoning, or tool) never release the
-    stop: the committed trace shows commentary completions immediately
-    followed by tool starts. The natural terminal (`turn/completed`)
-    resolves a pending stop with no send. Non-tool items never open entries
-    and their completions never close unrelated tools; unknown item types
-    fail conservatively until their matching completion. Explicit immediate
-    cancellation still interrupts plus reaps the whole owned group.
+    `processId` for commands) for status observability. A safe stop / safe
+    cancel request NEVER sends `turn/interrupt` — not on request, delta,
+    reasoning activity, completion, timeout, quiet, or anything else: no
+    observable frame can rule out a tool start already in transit (the
+    committed trace shows commentary completion 139 immediately followed
+    by command start 140, and command end 141 followed by fileChange start
+    144), so any proactive interrupt can cut a just-started mutation. The
+    request only pends, and the authoritative turn outcome
+    (`turn/completed`) resolves it with no send. Deadline pressure
+    therefore waits for the turn to finish; that latency is the disclosed
+    cost of never interrupting unfinished work. Explicit immediate
+    cancellation (the default, no boundary option) is distinct: it
+    interrupts plus reaps the whole owned process group at once.
   - Owns descendant process tracking and executes `killpg` + process reaping as a backstop
     after turn interruption.
   - Handles line cap overflow (`:oversized_frame`) fail-closed: cancels the turn, reaps
@@ -54,15 +49,15 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     :owner,
     :thread_id,
     :current_turn_id,
-    # Identity-keyed open tool items (`tool_key/1` => raw item map). A
-    # pending safe stop / safe cancel waits until this map drains AND
-    # model-control evidence arrives; see `track_item_boundaries/3`.
+    # Identity-keyed open tool items (`tool_key/1` => raw item map),
+    # tracked for status observability only. Safe-stop decisions never
+    # consult it: nothing is ever sent proactively (see `pend_safe_stop/1`
+    # and `track_item_boundaries/3`).
     :open_tools,
     :in_flight_commands,
+    # A pended safe stop / safe cancel, resolved solely by the
+    # authoritative turn outcome. Never sent.
     :stop_requested,
-    # One-shot latch per turn: a pending safe stop / safe cancel sends
-    # `turn/interrupt` at most once. Reset on `turn/started`.
-    :stop_interrupt_sent,
     :buffered_events,
     :event_ordinal,
     :malformed_lines,
@@ -188,7 +183,6 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       open_tools: %{},
       in_flight_commands: %{},
       stop_requested: nil,
-      stop_interrupt_sent: false,
       buffered_events: [],
       event_ordinal: 0,
       malformed_lines: 0,
@@ -289,9 +283,10 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
     if boundary in [:safe, :safe_boundary, :item, "item", :lease, "lease"] or
          Map.get(opts_map, :safe) == true do
-      # Safe boundary stopping: always pend; the pended interrupt fires at
-      # most once, only on model-activity evidence with an empty open set
-      # (shared one-shot with safe stop).
+      # Safe boundary stopping: pend like a safe stop. The authoritative
+      # turn outcome resolves it; nothing is ever sent proactively, so no
+      # mutation can be cut mid-item. Explicit immediate cancellation
+      # (below) is the distinct path that terminates now.
       {_reply, state} = pend_safe_stop(state)
       {:reply, {:ok, :cancelled}, state}
     else
@@ -299,7 +294,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       state = do_interrupt(state)
       # Reap any child processes
       reap_descendants(state)
-      state = %{state | stop_requested: nil, stop_interrupt_sent: true}
+      state = %{state | stop_requested: nil}
       {:reply, {:ok, :cancelled}, state}
     end
   end
@@ -330,41 +325,21 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     {:stop, :normal, :ok, state}
   end
 
-  # A safe-stop request always pends — it never sends synchronously. A
-  # request is a GenServer call that can interleave between the provider
-  # emitting a tool completion and emitting the next tool start (committed
-  # trace: command end 141, bookkeeping 142-143, fileChange start 144), so
-  # no request-time observation (even "open set empty") can rule out a
-  # start already in transit. The pended interrupt completes only in a
-  # frame handler via `maybe_send_pending_stop/2`. Quiescence cost: an idle
-  # stop waits for the next model-activity frame instead of interrupting
-  # instantly; the natural terminal always resolves the pending stop.
+  # A safe-stop request always pends — it never sends. No observable
+  # frame can rule out a tool start already in transit (committed trace:
+  # commentary completion 139 immediately followed by command start 140;
+  # command end 141, bookkeeping 142-143, fileChange start 144), and a
+  # request is a GenServer call that can interleave anywhere in that
+  # window — so request-time, delta-time, and completion-time sends are
+  # all abolished. The authoritative turn outcome (`turn/completed`)
+  # resolves the pending stop with no send. Cost: deadline pressure waits
+  # for the turn to finish; explicit immediate cancellation stays the
+  # distinct path that terminates now.
   defp pend_safe_stop(state) do
-    if terminal_status?(state.status) or state.stop_interrupt_sent do
+    if terminal_status?(state.status) do
       {{:ok, :stop_requested}, state}
     else
       {{:ok, :stop_requested}, %{state | stop_requested: :safe_boundary}}
-    end
-  end
-
-  # Fires the pended safe interrupt exactly once, and only in a frame
-  # handler for model-activity evidence with no open tools. Tool
-  # completions — and message or reasoning completions — deliberately never
-  # send: the next tool start may already be on its way (commentary
-  # completion 139 is immediately followed by command start 140), and only
-  # frames the provider emits while doing model activity (streaming deltas,
-  # a begun thinking segment) prove the send cannot race an already-emitted
-  # start. Single-pipe FIFO ordering is what makes that true: any start
-  # emitted before the evidence was handled first and re-opened the set.
-  defp maybe_send_pending_stop(state, evidence?) do
-    if evidence? and state.stop_requested == :safe_boundary and
-         not state.stop_interrupt_sent and map_size(state.open_tools) == 0 and
-         state.thread_id != nil and state.current_turn_id != nil do
-      state
-      |> do_interrupt()
-      |> Map.merge(%{stop_requested: nil, stop_interrupt_sent: true})
-    else
-      state
     end
   end
 
@@ -492,8 +467,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
        state
        | status: :failed,
          terminal_result: {:error, error},
-         stop_requested: nil,
-         stop_interrupt_sent: true
+         stop_requested: nil
      }}
   end
 
@@ -695,28 +669,21 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   # --- Safe Boundary & Item Tracking ---
   #
   # Open tools are keyed by identity so unrelated completions can never
-  # close them: `item.id` when present, else the command `processId`, else
-  # a fresh anonymous key that only the natural terminal clears (fail
-  # closed). Completions delete by key and therefore no-op for ids that
-  # were never opened — including reasoning/thinking/agentMessage items,
-  # which never open entries in the first place.
-
+  # close them: the shared blank-safe resolver
+  # (`LeaseBounds.tool_identity/1`) when present, else the command
+  # `processId`, else a fresh anonymous key that only the natural terminal
+  # clears (fail closed). Tracking exists for status observability and
+  # conservative fail-closed bookkeeping — safe-stop decisions never
+  # consult it, because nothing is ever sent proactively (terminal-only).
+  #
   # Item types that are model or user content, never mutating tools. They
   # neither open safe-boundary entries nor (as completions) close them.
   # Anything else — commandExecution, fileChange, present or future MCP
   # tool shapes, or a missing type — is potentially mutating and tracked
-  # conservatively until its matching completion.
+  # conservatively until its matching completion (N4: a nil/missing type
+  # opens here while the Elf layer ignores it; both layers fail closed by
+  # never acting early).
   @non_tool_item_types ["reasoning", "thought", "thinking", "agentMessage", "userMessage"]
-
-  # Raw frames whose arrival proves the model (not a tool) is active. Only
-  # these release a pended stop, and only with an empty open set. Deltas
-  # stream mid-message — the provider must still emit the message
-  # completion before any tool start can follow (verified in the committed
-  # trace) — and a begun thinking segment precedes its tool calls. Message
-  # or reasoning COMPLETIONS are excluded: commentary completion 139 is
-  # immediately followed by command start 140. A message START alone is
-  # likewise excluded: narration routinely precedes the next tool call.
-  @model_activity_types ["reasoning", "thought", "thinking"]
 
   defp tool_item?(item) when is_map(item) do
     item["type"] not in @non_tool_item_types
@@ -743,10 +710,9 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   defp track_item_boundaries("turn/started", frame, state) do
     turn_id = get_in(frame, ["params", "turn", "id"])
 
-    # A fresh turn resets the one-shot latch. A stop pended before the
-    # turn stays pended: only model-activity evidence releases it, never
-    # the turn start itself.
-    %{state | current_turn_id: turn_id, status: :turn_in_progress, stop_interrupt_sent: false}
+    # A fresh turn keeps a pended stop pended: only the authoritative turn
+    # outcome resolves it, never the turn start itself.
+    %{state | current_turn_id: turn_id, status: :turn_in_progress}
   end
 
   defp track_item_boundaries("item/started", frame, state) do
@@ -767,8 +733,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         state.open_tools
       end
 
-    state = %{state | open_tools: open_tools, in_flight_commands: commands}
-    maybe_send_pending_stop(state, item["type"] in @model_activity_types)
+    %{state | open_tools: open_tools, in_flight_commands: commands}
   end
 
   defp track_item_boundaries("item/completed", frame, state) do
@@ -783,23 +748,13 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       end
 
     # Identity-keyed close: an unrelated completion (reasoning, message,
-    # or a different tool) cannot clear an open tool. A completion that
-    # drains the last entry only arms the pending stop — it never sends.
-    # The release comes from a later model-activity frame, or the natural
-    # terminal resolves the stop with no send at all.
-    state = %{
+    # or a different tool) cannot clear an open tool. Completions never
+    # release a pended stop under terminal-only semantics.
+    %{
       state
       | open_tools: Map.delete(state.open_tools, tool_key(item)),
         in_flight_commands: commands
     }
-
-    maybe_send_pending_stop(state, false)
-  end
-
-  # Streaming text proves model control (with an empty open-tool map the
-  # model is generating tokens, not executing a tool).
-  defp track_item_boundaries("item/agentMessage/delta", _frame, state) do
-    maybe_send_pending_stop(state, true)
   end
 
   defp track_item_boundaries("turn/completed", frame, state) do

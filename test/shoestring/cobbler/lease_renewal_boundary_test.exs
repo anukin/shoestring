@@ -70,12 +70,17 @@ defmodule Shoestring.Cobbler.LeaseRenewalBoundaryTest do
     assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "active"
   end
 
-  test "a non-renewable lease status is rejected without appending" do
+  test "an already-refused lease replays expired without appending" do
+    # A prior evaluation already recorded this refusal (`expired` plus
+    # `checkpoint_required`): re-running renewal must replay the expired
+    # outcome with zero appends — never attempt fresh transitions (the
+    # `:expire` transition is illegal from refusal-terminal states) — so a
+    # repeated refusal completes the deferred decline instead of erroring.
     %{goal: goal, grant_id: grant_id} = granted_lease()
     expire_fully(goal.id, grant_id)
     before = lease_event_types(goal.id)
 
-    assert {:error, {:lease_not_renewable, "checkpoint_required"}} =
+    assert {:ok, %{outcome: :expired, reason: :already_expired, events: []}} =
              LeaseRenewal.maybe_renew(goal.id, grant_id,
                now: @now,
                stop: :already_requested,
@@ -84,6 +89,47 @@ defmodule Shoestring.Cobbler.LeaseRenewalBoundaryTest do
              )
 
     assert lease_event_types(goal.id) == before
+  end
+
+  test "preview reports renewable with zero appends" do
+    %{goal: goal, grant_id: grant_id} = granted_lease()
+    before = lease_event_types(goal.id)
+
+    assert {:ok, %{verdict: :renewable, evaluation: evaluation}} =
+             LeaseRenewal.preview(goal.id, grant_id,
+               now: @now,
+               stop: :already_requested,
+               boundary: :item_completed,
+               observe: fn -> {:ok, fresh_snapshot(Ecto.UUID.generate())} end
+             )
+
+    assert evaluation.result == :admit
+    assert lease_event_types(goal.id) == before
+
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+    assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "active"
+  end
+
+  test "preview reports refused with zero appends" do
+    %{goal: goal, grant_id: grant_id} = granted_lease()
+    before = lease_event_types(goal.id)
+
+    breached_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, breached_id)
+
+    assert {:ok, %{verdict: :refused, evaluation: evaluation}} =
+             LeaseRenewal.preview(goal.id, grant_id,
+               now: @now,
+               stop: :already_requested,
+               boundary: :item_completed,
+               observe: fn -> {:ok, breached_snapshot(breached_id)} end
+             )
+
+    assert evaluation.result != :admit
+    assert lease_event_types(goal.id) == before
+
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+    assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "active"
   end
 
   test "renew chains the fresh snapshot, never reusing the admitted one" do

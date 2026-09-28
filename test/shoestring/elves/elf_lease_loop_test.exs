@@ -25,6 +25,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
   import Ecto.Query
 
   alias Shoestring.Cobbler.{GoalLocalObservation, Leases}
+  alias Shoestring.Cobbler.WakeupRecord
   alias Shoestring.Elves
 
   alias Shoestring.Harness.{
@@ -242,8 +243,10 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     goal: goal,
     task: task
   } do
-    # The deadline is already past: the first item.completed boundary must
-    # mark renewal_due and renew (healthy fresh capacity).
+    # The deadline is already past with no spend at all: the due marker
+    # lands on the first ingested event, and the renewal itself waits for
+    # the authoritative turn outcome (terminal-only: nothing mid-turn may
+    # suspend or interrupt, and a renewal needs no earlier trigger).
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -251,7 +254,6 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     scenario =
       fake_scenario(:deadline_renew, healthy_snapshot(fresh_id), [
         Scenario.lifecycle_event(source_event_id: "evt-life"),
-        Scenario.output_event("work", source_event_id: "evt-out-1"),
         Scenario.result_event("completed", source_event_id: "evt-done")
       ])
 
@@ -290,10 +292,10 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     ordered = ordered_events(goal.id, run_id)
 
     # The deadline had already passed, so due is marked on the first
-    # ingested event (even the lifecycle handshake); the renewal itself
-    # still waits for the item.completed boundary.
+    # ingested event (even the lifecycle handshake); the renewal lands
+    # after the result is durable.
     assert sequence_before?(ordered, {:harness, "evt-life"}, {"lease.renewal_due", nil})
-    assert sequence_before?(ordered, {:harness, "evt-out-1"}, {"lease.renewed", nil})
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"lease.renewed", nil})
     assert sequence_before?(ordered, {"lease.renewal_due", nil}, {"lease.renewed", nil})
 
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -305,11 +307,12 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
              GoalLocalObservation.snapshot_id("lease-renewal", goal.id, record.id, fresh_id)
   end
 
-  test "refused renewal expires then checkpoints at the boundary without interrupting the item",
+  test "refused renewal expires then checkpoints at the outcome without interrupting the item",
        %{sup: sup, goal: goal, task: task} do
-    # Breached fresh capacity: the first item.completed boundary expires the
-    # lease, requires a checkpoint, and writes checkpoint contents — while
-    # the remaining items still flow (no mid-item interrupt).
+    # Breached fresh capacity: mid-turn spends only record the expiry
+    # (durable marker, no suspend); the turn outcome completes the decline
+    # with checkpoint contents — while every item still flows to its own
+    # outcome (no mid-item interrupt, no premature suspension).
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -349,47 +352,46 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     release_elf(pid)
 
-    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+    # The outcome consumed the decline: markers land, no terminal follows.
+    wait_decline_wake(goal.id, run_id)
 
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
     assert count_types(goal.id, run_id, ["lease.checkpoint_required"]) == 1
     assert reactive_checkpoint_count(goal.id, run_id) == 1
-    assert terminal_checkpoint_count(goal.id, run_id) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
 
     ordered = ordered_events(goal.id, run_id)
 
     assert sequence_before?(ordered, {"lease.expired", nil}, {"lease.checkpoint_required", nil})
 
-    # The reactive checkpoint lands at the safe boundary: the completing
-    # item is durable first, and the terminal comes after the checkpoint.
-    assert sequence_before?(ordered, {:harness, "evt-out-1"}, {"checkpoint.created", nil})
-
-    assert sequence_before?(
-             ordered,
-             {"checkpoint.created", nil},
-             {:terminal, nil}
-           )
+    # The reactive checkpoint lands at the turn outcome: the result is
+    # durable first, and no terminal verdict follows a suspended run.
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"checkpoint.created", nil})
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
+    assert no_terminal_event?(goal.id, run_id)
+    refute_receive {:elf_terminal, ^run_id, _}
 
     # Nothing was interrupted mid-item: both outputs and the verdict landed.
     assert count_types(goal.id, run_id, ["harness.event_recorded"]) == 4
 
-    # Intended re-loop change (round-2 finding 4, P2): decline now suspends
-    # the run (`run.pausing`/`run.suspended`) before the verdict's terminal
-    # lands. `suspended → complete` is a legal `RunStateMachine` edge, so
-    # harness projection advances through the terminal instead of halting.
+    # Terminal-only (B1/B3a): the outcome decline suspends instead of
+    # terminalizing. The run row projects as suspended (not completed),
+    # and the lease row keeps the checkpoint_required status the mid-turn
+    # expiry recorded.
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
-    assert Repo.get_by!(RunRecord, id: run_id).status == "completed"
+    assert Repo.get_by!(RunRecord, id: run_id).status == "suspended"
     assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status == "checkpoint_required"
   end
 
-  test "in-flight exhaustion checkpoints at the boundary; the turn still completes", %{
+  test "in-flight exhaustion checkpoints at the outcome; the turn still completes", %{
     sup: sup,
     goal: goal,
     task: task
   } do
     # response_budget 2, zero reserve: the 2nd output exhausts the allowance
-    # in-flight. The loop must checkpoint at that boundary while the 3rd
-    # output and the verdict still flow to a normal completion.
+    # in-flight. Nothing suspends mid-turn; the outcome completes the
+    # decline with checkpoint contents while every item still flows to its
+    # own outcome (no mid-item interrupt, no premature suspension).
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -430,32 +432,33 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     release_elf(pid)
 
-    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
+    # The outcome consumed the decline: markers land, no terminal follows.
+    wait_decline_wake(goal.id, run_id)
 
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
     assert reactive_checkpoint_count(goal.id, run_id) == 1
-    assert terminal_checkpoint_count(goal.id, run_id) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+    assert terminal_checkpoint_count(goal.id, run_id) == 0
 
     ordered = ordered_events(goal.id, run_id)
 
-    # Exhaustion hit exactly at the 2nd output: the checkpoint follows that
-    # boundary, and the 3rd output plus the terminal still land after it.
-    assert sequence_before?(ordered, {:harness, "evt-out-2"}, {"checkpoint.created", nil})
-
-    assert sequence_before?(ordered, {"checkpoint.created", nil}, {:harness, "evt-out-3"})
-
-    assert sequence_before?(ordered, {"checkpoint.created", nil}, {:terminal, nil})
+    # Exhaustion hit exactly at the 2nd output but nothing suspended
+    # mid-turn: the checkpoint follows the turn outcome, and no terminal
+    # verdict follows a suspended run.
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"checkpoint.created", nil})
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
+    assert no_terminal_event?(goal.id, run_id)
+    refute_receive {:elf_terminal, ^run_id, _}
     assert count_types(goal.id, run_id, ["harness.event_recorded"]) == 5
   end
 
-  # LOCK (fails at 32a3fe6, at base c1ae4a8, and at e675c3b): the live
-  # shape of final-acceptance.md §5.2. The deadline has passed, and the
-  # next event is the START of a Codex `fileChange`. Counting that START
-  # as a tool spend made it a boundary (old bases), and treating the END
-  # alone as a boundary (e675c3b) still declines before model activity
-  # proves the provider moved on. The decline must wait for the item's
-  # completion AND subsequent model activity (here a delta).
-  test "a passed deadline declines after the tool end plus model activity, not at its start", %{
+  # LOCK (fails behaviourally on 1566acd and on e675c3b): the live shape
+  # of final-acceptance.md §5.2. The deadline has passed, and the next
+  # event is the START of a Codex `fileChange`. Past designs declined at
+  # the START (spend counting), at the END, or after model activity —
+  # each before the turn provably stopped. Terminal-only declines at the
+  # turn outcome: nothing suspends while the write may still be running.
+  test "a passed deadline with a file change suspends only at the turn outcome", %{
     sup: sup,
     goal: goal,
     task: task
@@ -501,41 +504,36 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     release_elf(pid)
 
-    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+    # The outcome consumed the decline: markers land, no terminal follows.
+    wait_decline_wake(goal.id, run_id)
 
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
     assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
 
     ordered = ordered_events(goal.id, run_id)
 
-    # The file change completed — and model activity followed — before
-    # the lease was declined.
-    assert sequence_before?(
-             ordered,
-             {:harness, "item-completed-fc-1"},
-             {"lease.expired", nil}
-           )
+    # Nothing suspended before the turn outcome proved it stopped: expiry,
+    # checkpoint, and suspension all follow the result.
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"lease.expired", nil})
 
     assert sequence_before?(
              ordered,
-             {:harness, "evt-delta-after"},
-             {"lease.expired", nil}
-           )
-
-    assert sequence_before?(
-             ordered,
-             {:harness, "item-completed-fc-1"},
+             {:harness, "evt-done"},
              {"checkpoint.created", nil}
            )
+
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
+    assert no_terminal_event?(goal.id, run_id)
+    refute_receive {:elf_terminal, ^run_id, _}
   end
 
   # LOCK (fails behaviourally on 1566acd and on e675c3b): past the
-  # deadline, a message completion that spends while a command is still
-  # open must not be treated as a safe renewal/decline boundary — and
-  # neither is the tool END alone. The decline waits for the tool's own
-  # completion plus subsequent model activity (here a delta). On 1566acd
-  # the Elf declines at the message; on e675c3b it declines at the END.
-  test "a passed deadline with a message while a command is open declines after the end plus activity",
+  # deadline, spends beside an open command must not decline — and neither
+  # may the tool END alone. Terminal-only declines at the turn outcome, so
+  # no suspension precedes the proof the turn stopped. On 1566acd the Elf
+  # declines at the message; on e675c3b it declines at the END.
+  test "a passed deadline with a message while a command is open suspends only at the outcome",
        %{sup: sup, goal: goal, task: task} do
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
@@ -579,41 +577,36 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     release_elf(pid)
 
-    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+    # The outcome consumed the decline: markers land, no terminal follows.
+    wait_decline_wake(goal.id, run_id)
 
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
     assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
 
     ordered = ordered_events(goal.id, run_id)
 
-    # Neither the spend at the message nor the tool END alone declined:
-    # both the expiry and the reactive checkpoint follow the END plus the
-    # subsequent model activity.
-    assert sequence_before?(
-             ordered,
-             {:harness, "item-completed-cmd-1"},
-             {"lease.expired", nil}
-           )
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"lease.expired", nil})
 
     assert sequence_before?(
              ordered,
-             {:harness, "evt-delta-after"},
-             {"lease.expired", nil}
-           )
-
-    assert sequence_before?(
-             ordered,
-             {:harness, "item-completed-cmd-1"},
+             {:harness, "evt-done"},
              {"checkpoint.created", nil}
            )
+
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
+    assert no_terminal_event?(goal.id, run_id)
+    refute_receive {:elf_terminal, ^run_id, _}
   end
 
   # LOCK (fails behaviourally on 1566acd and on e675c3b): the Claude twin
-  # of the message-while-open rule. Tool boundaries correlate by
-  # `tool_use_id`; the output between START and END spends but must not
-  # decline, and neither does the END alone — the decline waits for
-  # subsequent model activity.
-  test "a passed deadline with a message while a Claude tool is open declines after the end plus activity",
+  # of the message-while-open rule with real Claude shapes only (tool
+  # start/end by `tool_use_id`, text completions, result — no deltas, which
+  # the Claude normalizer never emits). Spends beside the open tool must
+  # not decline, and neither may the tool END alone: terminal-only declines
+  # at the turn outcome. On 1566acd the Elf declines at the message; on
+  # e675c3b it declines at the END.
+  test "a passed deadline with a message while a Claude tool is open suspends only at the outcome",
        %{sup: sup, goal: goal, task: task} do
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
@@ -625,7 +618,6 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
         claude_tool_start("toolu_7", source_event_id: "evt-claude-start"),
         Scenario.output_event("mid", source_event_id: "evt-out-mid"),
         claude_tool_end("toolu_7", source_event_id: "evt-claude-end"),
-        delta_event(source_event_id: "evt-delta-after"),
         Scenario.output_event("after", source_event_id: "evt-out-after"),
         Scenario.result_event("completed", source_event_id: "evt-done")
       ])
@@ -657,41 +649,101 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     release_elf(pid)
 
-    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+    # The outcome consumed the decline: markers land, no terminal follows.
+    wait_decline_wake(goal.id, run_id)
 
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
     assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
 
     ordered = ordered_events(goal.id, run_id)
 
-    assert sequence_before?(
-             ordered,
-             {:harness, "evt-claude-end"},
-             {"lease.expired", nil}
-           )
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"lease.expired", nil})
 
     assert sequence_before?(
              ordered,
-             {:harness, "evt-delta-after"},
-             {"lease.expired", nil}
-           )
-
-    assert sequence_before?(
-             ordered,
-             {:harness, "evt-claude-end"},
+             {:harness, "evt-done"},
              {"checkpoint.created", nil}
            )
+
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
+    assert no_terminal_event?(goal.id, run_id)
+    refute_receive {:elf_terminal, ^run_id, _}
+  end
+
+  # LOCK vs e675c3b (fails there behaviourally; passes on 1566acd, so
+  # documentation against the original base): the Claude budget-due twin
+  # with real Claude shapes only (no deltas). e675c3b's control gate
+  # (completions after tools never re-arm) made Claude renewal unreachable
+  # — no delta ever arrives to establish control — while terminal-only
+  # keeps the mid-turn budget renewal working: a healthy budget exhaustion
+  # renews, and the terminal proceeds normally with exactly one renewal.
+  test "a budget-due Claude turn renews once and completes normally",
+       %{sup: sup, goal: goal, task: task} do
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 20.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:budget_renew, healthy_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        claude_tool_start("toolu_3", source_event_id: "evt-claude-start"),
+        Scenario.output_event("one", source_event_id: "evt-out-1"),
+        claude_tool_end("toolu_3", source_event_id: "evt-claude-end"),
+        Scenario.output_event("two", source_event_id: "evt-out-2"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    hold_before_first_event(pid)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 2,
+      tool_budget: 25,
+      reserves: %{response: 0, tool: 0},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), 3_600, :second)
+    )
+
+    release_elf(pid)
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
+
+    # Exactly one renewal (mid-turn at the 2nd response spend; the outcome
+    # finds the rearmed epoch below due), no suspend, no wake, and the
+    # normal terminal checkpoint still lands.
+    assert count_types(goal.id, run_id, ["lease.renewed"]) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 0
+    assert reactive_checkpoint_count(goal.id, run_id) == 0
+    assert terminal_checkpoint_count(goal.id, run_id) == 1
+
+    ordered = ordered_events(goal.id, run_id)
+    assert sequence_before?(ordered, {:harness, "evt-out-2"}, {"lease.renewed", nil})
+    assert sequence_before?(ordered, {"lease.renewed", nil}, {:terminal, nil})
   end
 
   # LOCK (fails behaviourally on 1566acd and on e675c3b): the Elf half of
   # the compound shape from the committed trace
   # (normalized-codex-lease-stop-final.md: command end 141, bookkeeping
-  # 142-143, fileChange start 144). Past the deadline, the command END
-  # must not suspend while the file change has started but not finished;
-  # the decline waits for the fileChange END plus subsequent model
-  # activity. On 1566acd the Elf declines at the command END; on e675c3b
-  # it declines there too (spend plus empty set, no control gate).
-  test "a passed deadline across compound command/fileChange suspends only after the write plus activity",
+  # 142-143, fileChange start 144). Past the deadline, neither the command
+  # END nor the write END may suspend: terminal-only declines at the turn
+  # outcome, after proof the turn stopped. On 1566acd the Elf declines at
+  # the command END; on e675c3b it declines at a tool END.
+  test "a passed deadline across compound command/fileChange suspends only at the outcome",
        %{sup: sup, goal: goal, task: task} do
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
@@ -736,43 +788,38 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     release_elf(pid)
 
-    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+    # The outcome consumed the decline: markers land, no terminal follows.
+    wait_decline_wake(goal.id, run_id)
 
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
     assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
 
     ordered = ordered_events(goal.id, run_id)
 
-    # The command END did not suspend while the write was open, and the
-    # write END alone did not suspend either: both the expiry and the
-    # reactive checkpoint follow the write END plus model activity.
-    assert sequence_before?(
-             ordered,
-             {:harness, "item-completed-fc-1"},
-             {"lease.expired", nil}
-           )
+    # Neither END suspended while work remained: expiry, checkpoint, and
+    # suspension all follow the turn outcome.
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"lease.expired", nil})
 
     assert sequence_before?(
              ordered,
-             {:harness, "evt-delta-after"},
-             {"lease.expired", nil}
-           )
-
-    assert sequence_before?(
-             ordered,
-             {:harness, "item-completed-fc-1"},
+             {:harness, "evt-done"},
              {"checkpoint.created", nil}
            )
+
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
+    assert no_terminal_event?(goal.id, run_id)
+    refute_receive {:elf_terminal, ^run_id, _}
   end
 
   # LOCK (fails behaviourally on 1566acd and on e675c3b): an unknown item
-  # shape (Codex normalizer `:lifecycle` fallback, e.g. `mcpToolCall`)
-  # with explicit start/end markers is a potentially mutating tool. Past
-  # the deadline, a parallel command completion and a message completion
-  # beside the still-open unknown tool must not decline; the decline waits
-  # for the unknown END plus subsequent model activity. Neither old commit
-  # tracks the unknown shape at the Elf layer at all.
-  test "a passed deadline with an unknown tool open declines after its end plus activity",
+  # shape (Codex normalizer `:lifecycle` fallback, e.g. `mcpToolCall`).
+  # Past the deadline, a parallel command completion and a message
+  # completion beside the still-open unknown tool must not decline — and
+  # neither may any tool END: terminal-only declines at the turn outcome.
+  # Neither old commit declines at the outcome (1566acd declines at the
+  # message/START spend; e675c3b declines at a tool END).
+  test "a passed deadline with an unknown tool open suspends only at the outcome",
        %{sup: sup, goal: goal, task: task} do
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
@@ -818,30 +865,233 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     release_elf(pid)
 
-    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+    # The outcome consumed the decline: markers land, no terminal follows.
+    wait_decline_wake(goal.id, run_id)
 
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
     assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
 
     ordered = ordered_events(goal.id, run_id)
 
-    assert sequence_before?(
-             ordered,
-             {:harness, "item-completed-mcp-1"},
-             {"lease.expired", nil}
-           )
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"lease.expired", nil})
 
     assert sequence_before?(
              ordered,
-             {:harness, "evt-delta-after"},
-             {"lease.expired", nil}
-           )
-
-    assert sequence_before?(
-             ordered,
-             {:harness, "item-completed-mcp-1"},
+             {:harness, "evt-done"},
              {"checkpoint.created", nil}
            )
+
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
+    assert no_terminal_event?(goal.id, run_id)
+    refute_receive {:elf_terminal, ^run_id, _}
+  end
+
+  # LOCK (fails behaviourally on 1566acd and on e675c3b): a turn that
+  # produces model activity and an outcome but never completes any tool
+  # (the tool START is recorded; no END ever arrives). Past the deadline
+  # with an exhausted-boundary spend absent entirely, nothing mid-turn may
+  # decline; the outcome still yields the full decline sequence —
+  # expiry, checkpoint naming the unfinished tool, suspension, and wake.
+  # On both old commits no spend means no boundary, so no decline ever
+  # fires (the interrupt-based design additionally needed a completion
+  # that never comes).
+  test "a passed deadline with an unfinished tool declines at the outcome",
+       %{sup: sup, goal: goal, task: task} do
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:deadline_expire, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        codex_command_start("cmd-1", source_event_id: "item-started-cmd-1"),
+        delta_event(source_event_id: "evt-delta-mid"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    hold_before_first_event(pid)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 100,
+      tool_budget: 100,
+      reserves: %{response: 1, tool: 1},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), -60, :second)
+    )
+
+    release_elf(pid)
+
+    # The outcome consumed the decline: markers land, no terminal follows.
+    wait_decline_wake(goal.id, run_id)
+
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+
+    ordered = ordered_events(goal.id, run_id)
+
+    # The checkpoint names the unfinished tool (its START is recorded with
+    # no completion before the checkpoint).
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"lease.expired", nil})
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "evt-done"},
+             {"checkpoint.created", nil}
+           )
+
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
+    assert no_terminal_event?(goal.id, run_id)
+    refute_receive {:elf_terminal, ^run_id, _}
+  end
+
+  # LOCK (fails behaviourally on 1566acd and on e675c3b): the
+  # completion→command-start shape (trace: commentary 139 → command 140).
+  # Past the deadline, the message spend must not decline — and the
+  # following command's whole lifecycle must not either. Terminal-only
+  # declines at the outcome. On 1566acd the Elf declines at the message;
+  # on e675c3b it declines at the command END.
+  test "a passed deadline across message-then-command suspends only at the outcome",
+       %{sup: sup, goal: goal, task: task} do
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:deadline_expire, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.output_event("mid", source_event_id: "evt-out-mid"),
+        codex_command_start("cmd-1", source_event_id: "item-started-cmd-1"),
+        command_event("cmd-1", "completed", source_event_id: "item-completed-cmd-1"),
+        Scenario.output_event("after", source_event_id: "evt-out-after"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    hold_before_first_event(pid)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 100,
+      tool_budget: 100,
+      reserves: %{response: 1, tool: 1},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), -60, :second)
+    )
+
+    release_elf(pid)
+
+    # The outcome consumed the decline: markers land, no terminal follows.
+    wait_decline_wake(goal.id, run_id)
+
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+
+    ordered = ordered_events(goal.id, run_id)
+
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"lease.expired", nil})
+
+    assert sequence_before?(
+             ordered,
+             {:harness, "evt-done"},
+             {"checkpoint.created", nil}
+           )
+
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
+    assert no_terminal_event?(goal.id, run_id)
+    refute_receive {:elf_terminal, ^run_id, _}
+  end
+
+  # N4 companion (session half lives in the Codex safe-boundary suite):
+  # nil-typed lifecycle shapes are inert at the Elf layer — no tracking,
+  # no spend — and a pending deadline still resolves only at the outcome.
+  # Both layers fail closed consistently: neither acts early on shapes
+  # without a usable type.
+  test "nil item types never decline mid-turn; the outcome still declines",
+       %{sup: sup, goal: goal, task: task} do
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:deadline_expire, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        unknown_tool_start("nil-1", nil, source_event_id: "item-started-nil-1"),
+        Scenario.output_event("mid", source_event_id: "evt-out-mid"),
+        unknown_tool_end("nil-1", nil, source_event_id: "item-completed-nil-1"),
+        Scenario.output_event("after", source_event_id: "evt-out-after"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    hold_before_first_event(pid)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    grant_for_run!(goal, run_id, fresh_id,
+      response_budget: 100,
+      tool_budget: 100,
+      reserves: %{response: 1, tool: 1},
+      checkpoint_cadence: 100,
+      deadline: DateTime.add(FixedClock.now(), -60, :second)
+    )
+
+    release_elf(pid)
+
+    # The outcome consumed the decline: markers land, no terminal follows.
+    wait_decline_wake(goal.id, run_id)
+
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
+    assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+
+    ordered = ordered_events(goal.id, run_id)
+
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"lease.expired", nil})
+    assert no_terminal_event?(goal.id, run_id)
+    refute_receive {:elf_terminal, ^run_id, _}
   end
 
   # LOCK (fails at 8c97eb7 and at base c1ae4a8): the `/runs/new` shape. The
@@ -898,13 +1148,17 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     release_elf(pid)
 
-    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
-
     # The Elf loaded the grant it was given and enforced it: exhaustion at
-    # the 2nd output checkpoints at that boundary, the turn still completes.
+    # the 2nd output records the expiry mid-turn without suspending, and
+    # the turn outcome completes the decline (suspend, no terminal).
+    wait_decline_wake(goal.id, run_id)
+
     assert count_types(goal.id, run_id, ["lease.expired"]) == 1
     assert reactive_checkpoint_count(goal.id, run_id) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
     assert Repo.get(ExecutionLeaseRecord, grant_id) != nil
+    assert no_terminal_event?(goal.id, run_id)
+    refute_receive {:elf_terminal, ^run_id, _}
   end
 
   test "quota fast path expires immediately with zero spend and checkpoints", %{
@@ -1074,6 +1328,26 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
   defp release_elf(pid), do: :ok = :sys.resume(pid, 30_000)
 
+  # Synchronizes on the LAST durable marker of the decline chain
+  # (expired → checkpoint → suspend → wake): by the time the wake row is
+  # durable, every earlier marker is too. A decline consumed its turn
+  # outcome, so no terminal verdict follows — assert that absence only
+  # after this wait, when any terminal notification would already be
+  # queued.
+  defp wait_decline_wake(_goal_id, run_id) do
+    assert {:ok, wake} =
+             ElvesHelpers.wait_until(fn -> Repo.get_by(WakeupRecord, run_id: run_id) end)
+
+    assert wake.status == "scheduled"
+  end
+
+  defp no_terminal_event?(goal_id, run_id) do
+    not Enum.any?(ordered_events(goal_id, run_id), fn
+      {:terminal, _} -> true
+      _ -> false
+    end)
+  end
+
   defp wait_running(goal, dispatch_id) do
     assert {:ok, run_id} =
              ElvesHelpers.wait_until(fn -> ElvesHelpers.run_id_for_dispatch(dispatch_id) end)
@@ -1122,18 +1396,11 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       capacity_snapshot: nil,
       extensions: %{
         "codex-app-server:item_id" => item_id,
-        "codex-app-server:boundary" => boundary_for(status),
         "codex-app-server:status" => status,
         "codex-app-server:exit_code" => 0
       }
     }
   end
-
-  defp boundary_for(status)
-       when status in ["inProgress", "in_progress", "started", "pending", "running"],
-       do: "start"
-
-  defp boundary_for(_status), do: "end"
 
   defp codex_file_change(item_id, status, opts) do
     %{
@@ -1145,7 +1412,6 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       capacity_snapshot: nil,
       extensions: %{
         "codex-app-server:item_id" => item_id,
-        "codex-app-server:boundary" => boundary_for(status),
         "codex-app-server:tool" => "fileChange",
         "codex-app-server:status" => status
       }
@@ -1153,8 +1419,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
   end
 
   # A Codex command START: in-progress status with no exit code spends
-  # nothing and (with the safe-boundary gate) opens the tool until the
-  # matching END. The pre-existing `command_event/3` always carries
+  # nothing. The pre-existing `command_event/3` always carries
   # `exit_code: 0`, so it can only express completions.
   defp codex_command_start(item_id, opts) do
     %{
@@ -1166,15 +1431,15 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       capacity_snapshot: nil,
       extensions: %{
         "codex-app-server:item_id" => item_id,
-        "codex-app-server:boundary" => "start",
         "codex-app-server:status" => "inProgress"
       }
     }
   end
 
   # An unknown Codex item shape (normalizer `:lifecycle` fallback, e.g.
-  # `mcpToolCall`): kind `:lifecycle` with explicit boundary markers and
-  # the recorded type, exactly as the normalizer emits.
+  # `mcpToolCall`): kind `:lifecycle` with identity and the recorded type.
+  # Terminal-only decline never fires mid-turn, so these shapes simply
+  # ride along as spend-neutral evidence until the turn outcome.
   defp unknown_tool_start(item_id, item_type, opts) do
     %{
       kind: :lifecycle,
@@ -1185,7 +1450,6 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       capacity_snapshot: nil,
       extensions: %{
         "codex-app-server:item_id" => item_id,
-        "codex-app-server:boundary" => "start",
         "codex-app-server:item_type" => item_type
       }
     }
@@ -1201,7 +1465,6 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
       capacity_snapshot: nil,
       extensions: %{
         "codex-app-server:item_id" => item_id,
-        "codex-app-server:boundary" => "end",
         "codex-app-server:item_type" => item_type
       }
     }

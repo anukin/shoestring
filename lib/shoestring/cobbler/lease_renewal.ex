@@ -3,13 +3,17 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   Lease renewal at the safe boundary (Milestone 05, work package C).
 
   On renewal-due or deadline, renewal proceeds only after the safe stop was
-  already requested and the in-flight item reached its `item.completed`
-  boundary:
+  already requested and a terminal boundary for in-flight work has been
+  reached:
 
   - `stop: :already_requested` is required. This module never requests a stop
     itself (no restop, no session handle, no timer): anything else returns
     `{:error, :safe_stop_not_requested}` before any event is appended.
-  - `boundary: :item_completed` is required. Anything else returns
+  - `boundary:` is required to be `:item_completed` (a mid-turn tool
+    boundary, the historical trigger) or `:turn_outcome` (the authoritative
+    turn result/error, proving no provider item is still running — the only
+    trigger the Elf uses, since no observable mid-turn frame can rule out a
+    tool start already in transit). Anything else returns
     `{:ok, :awaiting_boundary}` with zero appends — the caller waits for the
     boundary and retries.
   - The capacity snapshot is always fetched fresh through the caller-supplied
@@ -58,6 +62,15 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
 
   @renewable_statuses ["active", "renewal_due", "renewed"]
 
+  # Durable refusal-terminal states: a prior evaluation already recorded the
+  # refusal (`lease.expired` + `lease.checkpoint_required`). Any later renewal
+  # attempt — mid-turn or at the turn outcome — must replay the expired
+  # outcome, never attempt fresh transitions (the `:expire` transition is
+  # illegal from these states, and the stored row lags appends until the
+  # projector runs, so a fresh load can even look renewable while the refusal
+  # is already durable).
+  @refusal_terminal_statuses ["expired", "checkpoint_required"]
+
   @type renew_result :: %{
           required(:outcome) => :renewed | :expired,
           required(:grant_id) => Ecto.UUID.t(),
@@ -71,8 +84,8 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   Renews (or expires) a lease at the safe boundary.
 
   Options: `:repo`, `:now` (required `%DateTime{}`, explicit), `stop:`
-  (`:already_requested` required), `:boundary` (`:item_completed` required),
-  `:observe` (required zero-arity fresh-snapshot fun), `:policy` (default
+  (`:already_requested` required), `:boundary` (`:item_completed` or
+  `:turn_outcome` required), `:observe` (required zero-arity fresh-snapshot fun), `:policy` (default
   `AdmissionPolicy.default/0`), `:occupancy` (default `false`),
   `:writer_opts`.
   """
@@ -83,6 +96,52 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
          :ok <- stop_requested(opts),
          :ok <- boundary_reached(opts) do
       resolve(goal_id, lease, run, opts)
+    else
+      {:awaiting_boundary} ->
+        {:ok, :awaiting_boundary}
+
+      {:error, {:lease_not_renewable, status}} when status in @refusal_terminal_statuses ->
+        # A prior evaluation already recorded this refusal. Replay the
+        # expired outcome with zero appends so the caller (mid-turn wait or
+        # turn-outcome decline) proceeds instead of stalling on an error.
+        {:ok,
+         %{
+           outcome: :expired,
+           grant_id: grant_id,
+           decision: nil,
+           events: [],
+           reason: :already_expired
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Dry-run renewal evaluation with zero appends.
+
+  Runs the same load/stop/boundary gating plus the fresh observe, localize,
+  and re-evaluation as `maybe_renew/3`, but persists nothing: no snapshot,
+  no decision, no projection, no lease markers. Lets a mid-turn caller learn
+  whether the fresh capacity would renew or refuse before deciding to run
+  the real (appending) evaluation.
+
+  Returns `{:ok, %{verdict: :renewable | :refused, evaluation: ...}}`,
+  `{:ok, :awaiting_boundary}`, or `{:error, term()}` (including
+  `{:lease_not_renewable, status}` for already-terminal leases — the caller,
+  not this function, decides what a repeated refusal means).
+  """
+  @spec preview(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, %{verdict: :renewable | :refused, evaluation: AdmissionDecision.t()}}
+          | {:ok, :awaiting_boundary}
+          | {:error, term()}
+  def preview(goal_id, grant_id, opts \\ []) do
+    with {:ok, lease, run} <- load(goal_id, grant_id, opts),
+         :ok <- stop_requested(opts),
+         :ok <- boundary_reached(opts),
+         {:ok, evaluation, _snapshot} <- evaluate_fresh(goal_id, lease, run, opts) do
+      {:ok, %{verdict: verdict(evaluation), evaluation: evaluation}}
     else
       {:awaiting_boundary} -> {:ok, :awaiting_boundary}
       {:error, reason} -> {:error, reason}
@@ -107,6 +166,26 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   # ----------------------------------------------------------------------------
   # Private
   # ----------------------------------------------------------------------------
+
+  # The pure evaluation prefix shared by the real (appending) `resolve/4`
+  # and the dry-run `preview/3`: original admission, fresh observation,
+  # goal-local snapshot derivation, and re-evaluation. Zero appends, zero
+  # projection — safe to run mid-turn as often as spends arrive.
+  defp evaluate_fresh(goal_id, lease, run, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with {:ok, decision_event} <- admission_event(repo, lease),
+         {:ok, decision} <- admission_decision(decision_event),
+         {:ok, observed} <- observe(opts),
+         {:ok, snapshot} <-
+           GoalLocalObservation.localize(observed, "lease-renewal", goal_id, lease.id),
+         {:ok, evaluation} <- evaluate(goal_id, lease, run, decision, snapshot, opts) do
+      {:ok, evaluation, snapshot}
+    end
+  end
+
+  defp verdict(%AdmissionDecision{result: :admit}), do: :renewable
+  defp verdict(%AdmissionDecision{}), do: :refused
 
   defp load(goal_id, grant_id, opts) do
     repo = Keyword.get(opts, :repo, Repo)
@@ -136,7 +215,7 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   end
 
   defp boundary_reached(opts) do
-    if Keyword.get(opts, :boundary) == :item_completed do
+    if Keyword.get(opts, :boundary) in [:item_completed, :turn_outcome] do
       :ok
     else
       {:awaiting_boundary}
@@ -146,19 +225,29 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   defp resolve(goal_id, lease, run, opts) do
     repo = Keyword.get(opts, :repo, Repo)
 
-    with {:ok, decision_event} <- admission_event(repo, lease),
-         {:ok, decision} <- admission_decision(decision_event),
-         {:ok, observed} <- observe(opts),
-         {:ok, snapshot} <-
-           GoalLocalObservation.localize(observed, "lease-renewal", goal_id, lease.id),
-         {:ok, evaluation} <- evaluate(goal_id, lease, run, decision, snapshot, opts),
+    with {:ok, evaluation, snapshot} <- evaluate_fresh(goal_id, lease, run, opts),
          {:ok, _snapshot_event} <- persist_renewal_snapshot(repo, goal_id, lease, snapshot, opts),
          {:ok, _position} <- Projector.project(goal_id, clock: renewal_clock(opts)),
          {:ok, _fresh_event, fresh_decision} <-
            persist_renewal_decision(repo, goal_id, lease, evaluation, snapshot, opts),
          {:ok, lease} <- reread_lease(repo, goal_id, lease) do
       opts = Keyword.put(opts, :epoch_snapshot_id, snapshot.snapshot_id)
-      settle(goal_id, lease, fresh_decision, snapshot, opts)
+
+      if lease.status in @refusal_terminal_statuses do
+        # The mid-flow projection caught up with a refusal another pass
+        # already recorded (the stored row lags appends): replay expired
+        # with zero appends instead of re-transitioning.
+        {:ok,
+         %{
+           outcome: :expired,
+           grant_id: lease.id,
+           decision: fresh_decision,
+           events: [],
+           reason: :already_expired
+         }}
+      else
+        settle(goal_id, lease, fresh_decision, snapshot, opts)
+      end
     else
       {:error, {:observation_failed, _reason} = reason} ->
         expire_closed(goal_id, lease, nil, reason, opts)
@@ -373,12 +462,18 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   defp expire_closed(goal_id, lease, evaluation, reason, opts) do
     checkpoint_opts = Keyword.put(opts, :from, :expired)
 
+    # Chain from the freshly re-read status: the stored row lags appends
+    # until the projector runs, so validating against it can reject a legal
+    # expiry (or accept against a stale predecessor). The `:from` override
+    # carries the logical predecessor exactly like the renewed path does.
+    expire_opts = Keyword.put(opts, :from, String.to_atom(lease.status))
+
     with {:ok, %{event: expired}} <-
            Leases.transition(
              goal_id,
              lease.id,
              :expire,
-             epoch_opts(opts, "lease-expired", lease.id)
+             epoch_opts(expire_opts, "lease-expired", lease.id)
            ),
          {:ok, %{event: checkpoint}} <-
            Leases.transition(

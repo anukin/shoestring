@@ -1,15 +1,18 @@
 defmodule Shoestring.Elves.LeaseBoundary do
   @moduledoc """
-  Lease-deadline enforcement at the next safe boundary.
+  Lease-deadline enforcement with terminal-only safe stops.
 
-  When a lease deadline passes, the lease is not renewed and the session is
-  asked to stop at the next safe boundary through
-  `Session.request_safe_stop/1`: an in-flight command or tool item always
-  runs to its own `item.completed` first, and the turn is interrupted only
-  after that boundary. A deadline therefore never destroys in-flight work.
+  When a lease deadline passes, the lease is not renewed and the session's
+  safe stop is requested through `Session.request_safe_stop/1`. That
+  request only pends: the session never sends `turn/interrupt` for it —
+  not on request, delta, reasoning activity, completion, timeout, or
+  quiet — because no observable frame can rule out a tool start already
+  in transit. The authoritative turn outcome resolves the pending stop
+  with no send. A deadline therefore never destroys in-flight work, at the
+  disclosed cost that deadline pressure waits for the turn to finish.
 
-  This module performs exactly one effect — the safe-boundary stop request —
-  and optionally records the deadline as staleness evidence. It never
+  This module performs exactly one effect — the safe-stop request — and
+  optionally records the deadline as staleness evidence. It never
   terminates anything on its own: explicit human/orchestrator action remains
   the only termination path. Polling a deadline until it passes is covered by
   `Shoestring.Elves.LeaseWatcher`.
@@ -32,9 +35,10 @@ defmodule Shoestring.Elves.LeaseBoundary do
   Enforces `deadline` against `session`.
 
   Returns `{:ok, :within_lease}` while the deadline is in the future.
-  Once the deadline has passed, requests the safe-boundary stop and returns
-  `{:ok, :stop_requested}` — the in-flight item still completes normally and
-  the turn is interrupted only after `item.completed`.
+  Once the deadline has passed, requests the safe stop and returns
+  `{:ok, :stop_requested}` — the request pends at the session and the
+  authoritative turn outcome resolves it; the turn is never interrupted
+  proactively, so in-flight items always run to their own outcome.
 
   ## Options
 

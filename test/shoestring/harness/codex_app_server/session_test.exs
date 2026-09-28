@@ -509,15 +509,12 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
 
       _ = :sys.get_state(session)
 
-      # Draining the last open tool ARMS the pending stop but must NOT
-      # send yet: the provider may have already emitted the next tool
-      # START (compound exec), which re-opens tracking first.
+      # Draining the last open tool must NOT send: the provider may have
+      # already emitted the next tool START (compound exec), which
+      # re-opens tracking first. Terminal-only: no later frame releases
+      # it either.
       refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
-      # Model activity (a streaming delta) with no open tools releases
-      # the pending stop exactly once. Completions never release: the
-      # committed trace shows commentary completions immediately followed
-      # by tool starts.
       send(
         session,
         {:codex_transport_frame, transport,
@@ -528,16 +525,7 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       )
 
       _ = :sys.get_state(session)
-
-      # CRITICAL ASSERTION: turn/interrupt MUST be sent immediately now!
-      assert_receive {:sent_rpc,
-                      %{
-                        "method" => "turn/interrupt",
-                        "params" => %{
-                          "threadId" => "01950000-0000-7000-8000-000000000001",
-                          "turnId" => "01950000-0000-7000-8000-000000000002"
-                        }
-                      }}
+      refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
 
       # Finally simulate turn/completed with status interrupted
       send(
@@ -556,8 +544,14 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       )
 
       _ = :sys.get_state(session)
+
+      # CRITICAL ASSERTION: no interrupt was EVER sent; the authoritative
+      # outcome resolved the pending stop.
+      refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+
       {:ok, status} = Session.status(session)
       assert status.status == :interrupted
+      assert status.stop_requested == nil
 
       {:ok, events} = Session.stream_events(session)
       last_event = List.last(events)
@@ -648,10 +642,36 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
          })}
       )
 
-      assert_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+      _ = :sys.get_state(session)
+
+      # Terminal-only: no frame class releases the stop. The authoritative
+      # turn outcome resolves it with no send.
+      refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+
+      send(
+        session,
+        {:codex_transport_frame, transport,
+         Jason.encode!(%{
+           "method" => "turn/completed",
+           "params" => %{
+             "turn" => %{
+               "id" => "01950000-0000-7000-8000-000000000002",
+               "status" => "interrupted",
+               "durationMs" => 1500
+             }
+           }
+         })}
+      )
+
+      _ = :sys.get_state(session)
+      refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+
+      {:ok, status} = Session.status(session)
+      assert status.status == :interrupted
+      assert status.stop_requested == nil
     end
 
-    test "idle stop pends; the first model activity releases it" do
+    test "idle stop pends until the turn outcome" do
       test_pid = self()
       req = make_test_run_request()
 
@@ -690,7 +710,8 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
       {:ok, status} = Session.status(session)
       assert status.stop_requested == :safe_boundary
 
-      # The first model activity (a streaming delta) releases it.
+      # Model activity also releases nothing now: only the authoritative
+      # turn outcome resolves the pending stop.
       send(
         session,
         {:codex_transport_frame, transport,
@@ -700,7 +721,29 @@ defmodule Shoestring.Harness.CodexAppServer.SessionTest do
          })}
       )
 
-      assert_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+      _ = :sys.get_state(session)
+      refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+
+      send(
+        session,
+        {:codex_transport_frame, transport,
+         Jason.encode!(%{
+           "method" => "turn/completed",
+           "params" => %{
+             "turn" => %{
+               "id" => "01950000-0000-7000-8000-000000000002",
+               "status" => "interrupted"
+             }
+           }
+         })}
+      )
+
+      _ = :sys.get_state(session)
+      refute_receive {:sent_rpc, %{"method" => "turn/interrupt"}}
+
+      {:ok, status} = Session.status(session)
+      assert status.status == :interrupted
+      assert status.stop_requested == nil
     end
 
     test "default cancel without boundary interrupts immediately even mid-command (Nit 1)" do

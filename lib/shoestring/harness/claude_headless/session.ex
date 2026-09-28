@@ -11,11 +11,22 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     exists for this protocol either.
   - Tracks tool boundaries by `toolu_` id: START (`assistant`/`tool_use`)
     adds the id to the in-flight set, END (`user`/`tool_result`) removes
-    it. No alternation is assumed.
-  - Cancellation is process-kill only. There is no in-band interrupt
-    equivalent to Codex `turn/interrupt`, and the lease path does not
-    pretend otherwise: a safe-boundary cancel defers the `killpg` until
-    the in-flight set drains, then kills the whole owned process group.
+    it. No alternation is assumed. Tracking is observability only:
+    safe-stop decisions never consult it.
+  - Terminal-only lease safe stop: `request_safe_stop/1` NEVER kills —
+    not on request, tool END, timeout, quiet, or anything else. No
+    observable frame can rule out a tool already running (or starting) in
+    the child, and there is no in-band interrupt to aim between tools, so
+    any proactive kill can cut a live mutation. The request only pends
+    (`stop_requested: :safe_boundary`) and the turn terminal
+    (`completed`/`failed`) resolves it with no send and no kill. Deadline
+    pressure therefore waits for the turn to finish; that latency is the
+    disclosed cost of never killing unfinished work. A safe-boundary
+    `cancel/2` pends identically — it is the lease-flavored cancel.
+  - Explicit immediate cancellation (`cancel/2` with no boundary option,
+    the user/orchestrator path) still kills the whole owned process group
+    at once plus reaps it. Lease safe stop and explicit cancel are
+    deliberately distinct operations.
   - Oversized lines fail closed (`:oversized_frame`): kill, reap, record
     a transport error. Oversized output is never silently truncated.
   - Terminal classification comes from the normalized `result` frame
@@ -109,7 +120,14 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     GenServer.call(server, :stream_events)
   end
 
-  @doc "Requests stopping at the next safe boundary (in-flight tools report first)."
+  @doc """
+  Requests a lease safe stop. Terminal-only: always pends, never kills.
+
+  The request is recorded (`stop_requested: :safe_boundary`) and resolved
+  by the turn terminal with no kill — even with nothing in flight, since a
+  request can interleave anywhere around a tool the child already started.
+  Use `cancel/2` (no boundary option) for explicit immediate termination.
+  """
   @spec request_safe_stop(GenServer.server()) :: {:ok, :stop_requested} | {:error, term()}
   def request_safe_stop(server) do
     GenServer.call(server, :request_safe_stop)
@@ -134,18 +152,22 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   end
 
   @doc """
-  Cancels the running session by killing the whole owned process group.
+  Cancels the running session.
 
   Options:
 
     * `:boundary` — when `:safe`, `:item`, `:lease` (or `:safe_boundary`),
-      the kill is deferred until the in-flight tool set drains, so an
-      in-flight command's `tool_result` is observed before the group is
-      reaped. There is no in-band interrupt: deferred or not, cancellation
-      always ends in `killpg`. By default (no boundary option) the group
-      is killed immediately.
+      the cancel pends exactly like a lease safe stop: it is recorded and
+      resolved by the turn terminal with no kill, because killing on a
+      tool END can still cut the next tool the child already started.
+      There is no in-band interrupt on this protocol, so a pended
+      safe-boundary cancel performs no kill at all.
+    * By default (no boundary option — the explicit user/orchestrator
+      path) the whole owned process group is killed immediately plus
+      reaped. Lease safe stop and explicit cancel are deliberately
+      distinct operations.
   """
-  @spec cancel(GenServer.server(), keyword() | map()) :: {:ok, :cancelled} | {:error, Error.t()}
+  @spec cancel(GenServer.server(), keyword() | map()) :: {:ok, :cancelled} | {:error, term()}
   def cancel(server, opts \\ %{}) do
     GenServer.call(server, {:cancel, opts}, @default_request_timeout)
   end
@@ -290,19 +312,19 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     end
   end
 
-  # Safe-boundary stop: in-flight tools report first (deferred kill, same
-  # as a safe cancel); with nothing in flight the group is reaped now.
+  # Safe-boundary stop: terminal-only, so it always pends and never kills.
   # Replies mirror `CodexAppServer.Session.request_safe_stop/1` so either
   # provider's session answers the Elf's stop request identically.
   def handle_call(:request_safe_stop, _from, state) do
-    if MapSet.size(state.in_flight) > 0 do
-      {:reply, {:ok, :stop_requested}, %{state | stop_requested: :safe_boundary}}
-    else
-      state = do_kill(state)
-      {:reply, {:ok, :stop_requested}, state}
-    end
+    {:reply, {:ok, :stop_requested}, %{state | stop_requested: :safe_boundary}}
   end
 
+  # Explicit immediate cancellation kills the whole owned process group at
+  # once (the user/orchestrator path — never weakened). A safe-boundary
+  # cancel instead pends exactly like a safe stop: it is recorded and
+  # resolved by the turn terminal with no kill, because killing when the
+  # in-flight set drains can still cut the next tool the child already
+  # started — the same race that abolished the deferred kill.
   def handle_call({:cancel, opts}, _from, state) do
     if terminal?(state) do
       {:reply, {:ok, :cancelled}, state}
@@ -312,15 +334,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
 
       if boundary in [:safe, :safe_boundary, :item, "item", :lease, "lease"] or
            Map.get(opts_map, :safe) == true do
-        if MapSet.size(state.in_flight) > 0 do
-          # Deferred kill: let the in-flight tools report, then reap the
-          # group before the next tool starts. Kill-based throughout —
-          # there is no turn/interrupt to issue.
-          {:reply, {:ok, :cancelled}, %{state | stop_requested: :safe_boundary}}
-        else
-          state = do_kill(state)
-          {:reply, {:ok, :cancelled}, state}
-        end
+        {:reply, {:ok, :cancelled}, %{state | stop_requested: :safe_boundary}}
       else
         state = do_kill(state)
         {:reply, {:ok, :cancelled}, state}
@@ -511,33 +525,27 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
 
     case {ext["claude-headless:boundary"], tool_id} do
       {"start", id} when is_binary(id) and id != "" ->
-        state = %{state | in_flight: MapSet.put(state.in_flight, id)}
-        maybe_drain_kill(state)
+        %{state | in_flight: MapSet.put(state.in_flight, id)}
 
       {"end", id} when is_binary(id) and id != "" ->
-        state = %{state | in_flight: MapSet.delete(state.in_flight, id)}
-        maybe_drain_kill(state)
+        %{state | in_flight: MapSet.delete(state.in_flight, id)}
 
       _ ->
         state
     end
   end
 
-  # Deferred safe-boundary kill: the in-flight set just drained while a
-  # stop was requested — reap the group before the next tool starts.
-  defp maybe_drain_kill(%{stop_requested: :safe_boundary} = state) do
-    if MapSet.size(state.in_flight) == 0 and not terminal?(state) do
-      do_kill(state)
-    else
-      state
-    end
+  # A pended safe stop / safe-boundary cancel resolves at the turn
+  # terminal with no kill: the terminal itself proves nothing is left to
+  # protect, so the flag simply clears.
+  defp resolve_pending_stop(state) do
+    %{state | stop_requested: nil}
   end
-
-  defp maybe_drain_kill(state), do: state
 
   defp maybe_terminal(state, %HarnessEvent{kind: :result} = event) do
     if event.extensions["claude-headless:terminal"] == true do
       %{state | status: :completed, terminal_result: {:ok, :completed}}
+      |> resolve_pending_stop()
       |> reply_terminal_waiters()
       |> reply_identity_waiters()
     else
@@ -548,6 +556,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   defp maybe_terminal(state, %HarnessEvent{kind: :error} = event) do
     if event.extensions["claude-headless:terminal"] == true do
       %{state | status: :failed, terminal_result: {:error, event.error}}
+      |> resolve_pending_stop()
       |> reply_terminal_waiters()
       |> reply_identity_waiters()
     else

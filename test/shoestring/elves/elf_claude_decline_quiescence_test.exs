@@ -11,34 +11,39 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
   the OS process was gone, the run was suspended, and the Elf was still
   supervising 25 minutes later with no terminal and no further events.
 
-  The strand: a session that is alive but already terminal (notably the
-  ClaudeHeadless immediate safe-stop, which kills the group and marks the
-  session `cancelled` without emitting a further stream event) never reads
-  as `:none` to the old liveness check, so the quiet exit never fired and
-  the Elf waited on work that could never arrive.
+  The strand: a session that is alive but already terminal (terminal
+  sessions emit no further stream events, so nothing downstream ever
+  re-observes them) never reads as `:none` to the old liveness check, so
+  the quiet exit never fired and the Elf waited on work that could never
+  arrive.
 
-  Lock-vs-documentation ledger (verified against base `733c39b`):
+  Lock-vs-documentation ledger (verified against base `733c39b`, and
+  re-verified against `1566acd` in an isolated worktree, seed-0 order):
 
   - `"a declined run with a terminal Claude session exits quietly"` —
     **lock**. Base never exits: the DOWN assertion times out where it is
-    asserted.
+    asserted. On `1566acd` the failure mode is sharper: the mid-turn
+    decline suspends, then the outcome terminalizes anyway, so the
+    no-terminal assertion fails — the exact terminal-after-suspend shape
+    the consume-only-completed rule abolishes.
   - `"a declined run with a terminal Codex session exits quietly"` —
     **lock** (twin provider through the same helper). Base lingers the same
-    way.
+    way; on `1566acd` it fails with the same terminal-after-suspend mode.
   - `"a declined run with a working session keeps supervising"` —
     **documentation**. Passes on base too; it pins the fail-safe direction:
     a merely quiet but non-terminal session never triggers the quiet exit
     (staleness is evidence, never a trigger), and explicit cancellation
     still owns and terminates the whole group.
   - `"adapter-owned quiet exit releases the adapter session"` — **lock**.
-    Base never exits (DOWN timeout) and never releases. The release claim
-    is exact: the adapter registry table is created and owned by the test
-    process before the Elf starts, so it survives Elf death, and the
-    entry's absence afterwards — with the session double still alive —
-    proves the quiet-exit's `release_adapter/1` delete ran. Verified by
-    mutation: with the `release_adapter/1` call bypassed, the Elf still
-    exits quietly but the entry remains, failing exactly at the lookup
-    assertion.
+    Base never exits (DOWN timeout) and never releases. On `1566acd` it
+    fails the same no-terminal assertion (terminal-after-suspend). The
+    release claim is exact: the adapter registry table is created and
+    owned by the test process before the Elf starts, so it survives Elf
+    death, and the entry's absence afterwards — with the session double
+    still alive — proves the quiet-exit's `release_adapter/1` delete ran.
+    Verified by mutation: with the `release_adapter/1` call bypassed, the
+    Elf still exits quietly but the entry remains, failing exactly at the
+    lookup assertion.
 
   Hermetic: `Fake` adapter legs, trivial local commands, ETS session
   doubles — never a provider CLI, never the network. No sleeps; Elf exit
@@ -265,7 +270,8 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
         Scenario.lifecycle_event(source_event_id: "evt-life"),
         Scenario.output_event("one", source_event_id: "evt-out-1"),
         Scenario.output_event("two", source_event_id: "evt-out-2"),
-        Scenario.output_event("three", source_event_id: "evt-out-3")
+        Scenario.output_event("three", source_event_id: "evt-out-3"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
       ])
 
     request =
@@ -394,12 +400,13 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
 
   # -- Helpers --
 
-  # Starts a Fake leg that declines at its boundary (response_budget 2, zero
-  # reserve, breached capacity) with a verdict-free stream, registers the
-  # given session double BEFORE the lease exists (registration is
-  # independent of the grant, so the decline can never race it), and waits
-  # until the run is streaming. Returns the run id, Elf pid, and request
-  # for the caller's settle assertions.
+  # Starts a Fake leg that declines at its turn outcome (response_budget 2,
+  # zero reserve, breached capacity) with the given session double registered
+  # BEFORE the lease exists (registration is independent of the grant, so
+  # the decline can never race it), and waits until the run is streaming.
+  # Terminal-only: mid-turn spends only arm the refusal; the `completed`
+  # outcome carries the decline (checkpoint + suspend + wake). Returns the
+  # run id, Elf pid, and request for the caller's settle assertions.
   defp start_declined_run(sup, goal, task, name, register_session) do
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
@@ -410,7 +417,8 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
         Scenario.lifecycle_event(source_event_id: "evt-life"),
         Scenario.output_event("one", source_event_id: "evt-out-1"),
         Scenario.output_event("two", source_event_id: "evt-out-2"),
-        Scenario.output_event("three", source_event_id: "evt-out-3")
+        Scenario.output_event("three", source_event_id: "evt-out-3"),
+        Scenario.result_event("completed", source_event_id: "evt-done")
       ])
 
     request = ElvesHelpers.run_request(goal, task)
