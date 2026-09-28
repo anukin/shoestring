@@ -155,9 +155,10 @@ defmodule ShoestringWeb.RunNewManualLeaseTest do
   # reaped while its rows still exist, and nothing it owns can run
   # Repo work on a later test's sandbox connection. Only this test's
   # run_id pid is ever terminated — never a registry sweep.
-  # terminate_child shuts down with :shutdown, so Elf.terminate/2 takes
-  # its no-append path (no crash marker, no checkpoint): the teardown
-  # itself performs zero Repo writes. The Fake-path OS child (sleep) is
+  # No append follows on this path: no trap_exit was found in Elf, so
+  # no claim is made that terminate_child even invokes Elf.terminate/2;
+  # if invoked, :shutdown is excluded from the crash marker in the
+  # terminate/2 code. The Fake-path OS child (sleep) is
   # NOT reaped here — it exits alone; live group reaping is proven only
   # by the explicit-cancel tests, never claimed here.
   defp stop_elf_before_sandbox_exit(run_id) do

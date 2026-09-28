@@ -393,7 +393,7 @@ marks a new API (labeled as such, never as regression evidence):
 ## Independent gate at `de889c2` (1 failure: contention, cause NOT established)
 
 This run must remain in evidence. Exact command (independent):
-`cd /Users/anukin/projects/shoestring-lease-boundary-finish-20260928 && mix precommit < /dev/null > /tmp/lease-boundary-independent-de889c2.log 2>&1`.
+`cd <worktree> && mix precommit < /dev/null > /tmp/lease-boundary-independent-de889c2.log 2>&1`.
 Exit 2; 4 doctests, 1506 tests, **1 failure**, 1 skipped (6 excluded);
 Node 52/52, UI 7/7. The prior independent gate at parent `11b0460`
 was green, and this round's own diff is prose/comments only — neither
@@ -423,9 +423,17 @@ fact proves cause or unrelatedness.
   (`/tmp/opencode/diag-neighborhood.log`); a smaller subset is 42/42
   green (`/tmp/opencode/diag-subset1.log`). No leaked `sleep 30` OS
   children remained after the subset runs.
-- VERIFIED — nothing in this branch's diff is in the failing path:
-  `Writer`, `Observatory`, trajectory, Repo, and config are untouched
-  by both `11b0460` and `de889c2` (file-list proof from the diff).
+- SUPERSEDED/LIMITED (was: "VERIFIED — nothing in this branch's
+  diff is in the failing path"): `Writer`, `Observatory`, trajectory,
+  Repo, and config are still untouched by this branch (file-list
+  proof), BUT the examiner pair reproduction puts the branch-changed
+  Elf in the contending stack (`Elf.crash_land ->
+  TerminalCheckpoint.record -> task_criterion`), so the earlier
+  untouched-path inference no longer bounds the failure. The same
+  reproduced leak also exists at `1566acd` (examiner base-pair runs),
+  which bounds the leak's age but NOT the original failure: the exact
+  causal link from the original run's Writer-client strand to this
+  leak is unestablished.
 - VERIFIED — retry mechanics (`writer.ex:224-246`, `:38`, `:78`):
   default max 2 retries with NO inter-attempt delay (tight recursion),
   so 3 rapid attempts overlapping any concurrent writer's transaction
@@ -437,20 +445,18 @@ fact proves cause or unrelatedness.
   run (the owner-exited background Writer transaction above); the
   failing test's own process spawns nothing.
 - NOT ESTABLISHED (INFERENCE at best): which exact earlier test's
-  process held the write lock, and for how long — leaked Elf, leaked
-  monitor, teardown burst, or async-phase overlap were all considered;
-  neighbor files use `start_supervised!` + `on_exit` cleanup with no
-  bare-supervisor leak found by inspection, and manual-lease Elves die
-  at launch (atom scenario raises in `Fake.start/2`, rescued to
-  `crash_land`). One failure in 5+ full runs is consistent with a rare
+  process held the write lock in the ORIGINAL run, and for how long.
+  The earlier "manual-lease Elves die at launch" reasoning is WITHDRAWN
+  (contradicted by the examiner trace: live registered Elf at test
+  end). One failure in 5+ full runs is consistent with a rare
   timing collision, but rarity is not a root cause and is not claimed
   as one.
 
 ### Update: examiner diagnosis reproduced a manual-run Elf leak; test-only repair committed
 
 Examiner read-only trial results (diagnostic evidence, NOT committed
-proof — reported here, not re-run by the implementer):
-`task68c4271efa9f4d57bc86c591f90ed46b` traced the pair
+proof — reported here, not re-run by the implementer): the examiner
+traced the pair
 (manual-lease + observatory, seed 0) with registry/DB-lock probes and
 found a LIVE registered Elf at lease-test end in 27/27 cases across
 HEAD and base: `/runs/new` submits reach `run_new_live.ex:340`
