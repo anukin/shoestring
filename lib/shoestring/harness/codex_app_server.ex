@@ -134,11 +134,12 @@ defmodule Shoestring.Harness.CodexAppServer do
   Cancels a running session.
 
   Options:
-    * `:boundary` - when set to `:safe`, `:item`, or `:lease`, cancellation defers
-      issuing `turn/interrupt` until the in-flight `commandExecution` item reaches
-      completion (`item.completed`), issuing the interrupt before any subsequent
-      item begins. By default (no boundary option or `%{}`), `cancel/2` interrupts
-      immediately.
+    * `:boundary` - when set to `:safe`, `:item`, or `:lease`, the cancel
+      pends exactly like a lease safe stop: it is recorded and resolved by
+      the authoritative turn outcome (`turn/completed`) with no
+      `turn/interrupt` sent — no observable frame can rule out a tool
+      start already in transit. By default (no boundary option or `%{}`),
+      `cancel/2` interrupts immediately.
   """
   @impl Shoestring.Harness.Adapter
   @spec cancel(RunIdentity.t(), map()) :: {:ok, :cancelled} | {:error, Error.t()}

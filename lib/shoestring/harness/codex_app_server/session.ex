@@ -126,14 +126,16 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   Requests cancellation of the running session.
 
   Options:
-  - `:boundary` - `:safe_boundary` (wait for current item.completed) or `:immediate` (default).
+  - `:boundary` - `:safe_boundary` (pend like a safe stop: recorded and
+    resolved by the turn outcome with no interrupt sent) or `:immediate`
+    (default: interrupt at once).
   """
   @spec cancel(GenServer.server(), keyword() | map()) :: {:ok, :cancelled} | {:error, Error.t()}
   def cancel(server, opts \\ %{}) do
     GenServer.call(server, {:cancel, opts}, @default_request_timeout)
   end
 
-  @doc "Requests stopping at the next safe boundary (after in-flight item.completed)."
+  @doc "Requests a lease safe stop. Terminal-only: always pends, never sends — the turn outcome resolves it."
   @spec request_safe_stop(GenServer.server()) :: {:ok, :stop_requested}
   def request_safe_stop(server) do
     GenServer.call(server, :request_safe_stop)

@@ -206,8 +206,9 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   Returns the first present provider-native identity —
   `claude-headless:tool_use_id`, `codex-app-server:item_id`, `item_id`, or
   raw `id` — skipping blank values consistently, or `nil` when no usable
-  identity exists. Opening and closing use this same resolver, so a blank
-  id can neither open a phantom entry nor close a real one.
+  identity exists. Used for observability keying only: no safe-stop or
+  renewal decision consults it (terminal-only resolution never consults
+  open-tool state).
   """
   @spec tool_identity(map()) :: String.t() | nil
   def tool_identity(map) when is_map(map) do

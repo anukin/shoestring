@@ -91,41 +91,45 @@ defmodule Shoestring.Cobbler.LeaseRenewalBoundaryTest do
     assert lease_event_types(goal.id) == before
   end
 
-  test "preview reports renewable with zero appends" do
+  test "renew_only renews on admit with a single evaluation" do
     %{goal: goal, grant_id: grant_id} = granted_lease()
-    before = lease_event_types(goal.id)
 
-    assert {:ok, %{verdict: :renewable, evaluation: evaluation}} =
-             LeaseRenewal.preview(goal.id, grant_id,
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    local_id = GoalLocalObservation.snapshot_id("lease-renewal", goal.id, grant_id, fresh_id)
+
+    assert {:ok, %{outcome: :renewed, admitted_snapshot_id: ^local_id}} =
+             LeaseRenewal.renew_only(goal.id, grant_id,
                now: @now,
                stop: :already_requested,
                boundary: :item_completed,
-               observe: fn -> {:ok, fresh_snapshot(Ecto.UUID.generate())} end
+               observe: fn -> {:ok, fresh_snapshot(fresh_id)} end
              )
 
-    assert evaluation.result == :admit
-    assert lease_event_types(goal.id) == before
-
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
-    assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "active"
+    assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "renewed"
   end
 
-  test "preview reports refused with zero appends" do
+  test "renew_only refuses with zero appends" do
+    # Atomicity: one evaluation, appended if and only if admitted. A
+    # refusal records nothing — no snapshot, no decision, no markers —
+    # so mid-turn refusals can never precede the turn outcome.
     %{goal: goal, grant_id: grant_id} = granted_lease()
     before = lease_event_types(goal.id)
 
     breached_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, breached_id)
 
-    assert {:ok, %{verdict: :refused, evaluation: evaluation}} =
-             LeaseRenewal.preview(goal.id, grant_id,
+    assert {:ok, %{verdict: :refused}} =
+             LeaseRenewal.renew_only(goal.id, grant_id,
                now: @now,
                stop: :already_requested,
                boundary: :item_completed,
                observe: fn -> {:ok, breached_snapshot(breached_id)} end
              )
 
-    assert evaluation.result != :admit
     assert lease_event_types(goal.id) == before
 
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)

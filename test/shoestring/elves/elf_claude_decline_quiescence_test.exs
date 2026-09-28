@@ -1,49 +1,41 @@
 defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
   @moduledoc """
-  Hermetic declined-lease quiescence tests for provider sessions.
+  Hermetic declined-lease exit-hygiene tests for provider sessions.
 
-  After a lease decline the run sleeps durably (`run.pausing` /
-  `run.suspended` plus a sleep wake) and the Elf must stop supervising once
-  its buffer drains — leaving no useful-work Elf and no owned process group
-  behind, and settling through the canonical suspension state (no terminal).
-  Observed live against a ClaudeHeadless receiver in
-  `plans/evidence/05-quota-aware-mvp/live-cross-provider-handoff.md` §7.5:
-  the OS process was gone, the run was suspended, and the Elf was still
-  supervising 25 minutes later with no terminal and no further events.
+  An interrupted turn outcome with a refused lease declines (reactive
+  checkpoint contents, `run.pausing` / `run.suspended`, sleep wake) and
+  keeps its interrupted terminal: the interruption evidence is durable,
+  and the wake owns the continuation of unfinished work. The Elf then
+  exits through the terminal path — releasing the adapter session and
+  reaping the whole owned group, leaving no useful-work Elf behind.
+  Completed turns, by contrast, terminalize with no suspend and no wake
+  (covered in the lease-loop files); a merely quiet but non-terminal
+  session with only a pending refusal never triggers any exit at all.
 
-  The strand: a session that is alive but already terminal (terminal
-  sessions emit no further stream events, so nothing downstream ever
-  re-observes them) never reads as `:none` to the old liveness check, so
-  the quiet exit never fired and the Elf waited on work that could never
-  arrive.
+  Lock-vs-documentation ledger (verified against base `1566acd` in an
+  isolated worktree, seed-0 order):
 
-  Lock-vs-documentation ledger (verified against base `733c39b`, and
-  re-verified against `1566acd` in an isolated worktree, seed-0 order):
-
-  - `"a declined run with a terminal Claude session exits quietly"` —
-    **lock**. Base never exits: the DOWN assertion times out where it is
-    asserted. On `1566acd` the failure mode is sharper: the mid-turn
-    decline suspends, then the outcome terminalizes anyway, so the
-    no-terminal assertion fails — the exact terminal-after-suspend shape
-    the consume-only-completed rule abolishes.
-  - `"a declined run with a terminal Codex session exits quietly"` —
-    **lock** (twin provider through the same helper). Base lingers the same
-    way; on `1566acd` it fails with the same terminal-after-suspend mode.
-  - `"a declined run with a working session keeps supervising"` —
-    **documentation**. Passes on base too; it pins the fail-safe direction:
-    a merely quiet but non-terminal session never triggers the quiet exit
-    (staleness is evidence, never a trigger), and explicit cancellation
-    still owns and terminates the whole group.
-  - `"adapter-owned quiet exit releases the adapter session"` — **lock**.
-    Base never exits (DOWN timeout) and never releases. On `1566acd` it
-    fails the same no-terminal assertion (terminal-after-suspend). The
-    release claim is exact: the adapter registry table is created and
-    owned by the test process before the Elf starts, so it survives Elf
-    death, and the entry's absence afterwards — with the session double
-    still alive — proves the quiet-exit's `release_adapter/1` delete ran.
-    Verified by mutation: with the `release_adapter/1` call bypassed, the
-    Elf still exits quietly but the entry remains, failing exactly at the
-    lookup assertion.
+  - `"an interrupted decline with a terminal Claude session exits with its
+    terminal"` — **lock**. On base the mid-turn decline suspends, then
+    the outcome terminalizes anyway; the no-suspend/no-wake completed
+    shape is new, and the interrupted ordering (artifacts after the
+    outcome) fails there.
+  - `"an interrupted decline with a terminal Codex session exits with its
+    terminal"` — **lock** (twin provider through the same helper).
+  - `"a pending refusal with a working session keeps supervising"` —
+    **documentation**. Passes on base too; it pins the fail-safe
+    direction: a merely quiet but non-terminal session never triggers an
+    exit (staleness is evidence, never a trigger), a pending refusal
+    without an outcome suspends nothing, and explicit cancellation still
+    owns and terminates the whole group.
+  - `"adapter-owned interrupted exit releases the adapter session"` —
+    **lock**. The release claim is exact: the adapter registry table is
+    created and owned by the test process before the Elf starts, so it
+    survives Elf death, and the entry's absence afterwards — with the
+    session double still alive — proves the terminal path's
+    `release_adapter/1` delete ran. Verified by mutation: with the
+    `release_adapter/1` call bypassed, the Elf still exits but the entry
+    remains, failing exactly at the lookup assertion.
 
   Hermetic: `Fake` adapter legs, trivial local commands, ETS session
   doubles — never a provider CLI, never the network. No sleeps; Elf exit
@@ -51,6 +43,8 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
   """
 
   use Shoestring.DataCase, async: false
+
+  import Ecto.Query
 
   alias Shoestring.Cobbler.{Leases, WakeupRecord}
   alias Shoestring.Elves
@@ -65,6 +59,8 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
   alias Shoestring.Test.ElvesHelpers
   alias Shoestring.Test.Fixtures.FakeHelpers
   alias Shoestring.Test.FixedClock
+
+  alias Shoestring.Trajectory.TrajectoryEvent
 
   defmodule AdapterOwnedDeclineAdapter do
     @moduledoc false
@@ -172,7 +168,7 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
     {:ok, sup: sup, goal: goal, task: task}
   end
 
-  test "a declined run with a terminal Claude session exits quietly", %{
+  test "an interrupted decline with a terminal Claude session exits with its terminal", %{
     sup: sup,
     goal: goal,
     task: task
@@ -193,31 +189,38 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
 
     ref = Process.monitor(elf_pid)
     assert_receive {:DOWN, ^ref, :process, ^elf_pid, :normal}, 15_000
+    assert_receive {:elf_terminal, ^run_id, %{class: :interrupted}}, 15_000
     assert_received :safe_stop_requested
-    refute_received {:elf_terminal, ^run_id, _terminal}
 
-    # Canonical suspension settle: pausing then suspended, no terminal, and
-    # the sleep wake owns the future.
+    # Decline artifacts plus the interrupted terminal: pausing then
+    # suspended, then interrupted — and the sleep wake owns the
+    # continuation of the unfinished work. The artifacts follow the
+    # outcome (on the mid-turn-decline base they precede it).
     assert count_types(goal.id, run_id, ["run.pausing"]) == 1
     assert count_types(goal.id, run_id, ["run.suspended"]) == 1
     assert count_types(goal.id, run_id, ["run.completed"]) == 0
     assert count_types(goal.id, run_id, ["run.failed"]) == 0
+    assert ElvesHelpers.terminal_event(goal.id, run_id).type == "run.interrupted"
+
+    ordered = ordered_events(goal.id, run_id)
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"checkpoint.created", nil})
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
 
     wakeup = Repo.get_by!(WakeupRecord, run_id: run_id)
     assert wakeup.command_id == "elf-lease-decline:#{request.dispatch_id}"
     assert wakeup.status == "scheduled"
 
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
-    assert Repo.get_by!(RunRecord, id: run_id).status == "suspended"
+    assert Repo.get_by!(RunRecord, id: run_id).status == "interrupted"
 
     # No owned process group left running: the run recorded a pgid at
-    # `run.running`, and it is reaped.
+    # `run.running`, and the terminal path reaped it.
     pgid = ElvesHelpers.recorded_pgid(goal.id, run_id)
     assert is_integer(pgid)
     refute PortRunner.alive_id?(pgid)
   end
 
-  test "a declined run with a terminal Codex session exits quietly", %{
+  test "an interrupted decline with a terminal Codex session exits with its terminal", %{
     sup: sup,
     goal: goal,
     task: task
@@ -238,21 +241,25 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
 
     ref = Process.monitor(elf_pid)
     assert_receive {:DOWN, ^ref, :process, ^elf_pid, :normal}, 15_000
+    assert_receive {:elf_terminal, ^run_id, %{class: :interrupted}}, 15_000
     assert_received :safe_stop_requested
-    refute_received {:elf_terminal, ^run_id, _terminal}
 
     assert count_types(goal.id, run_id, ["run.suspended"]) == 1
-    assert ElvesHelpers.terminal_event(goal.id, run_id) == nil
+    assert ElvesHelpers.terminal_event(goal.id, run_id).type == "run.interrupted"
+
+    ordered = ordered_events(goal.id, run_id)
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"checkpoint.created", nil})
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
 
     wakeup = Repo.get_by!(WakeupRecord, run_id: run_id)
     assert wakeup.command_id == "elf-lease-decline:#{request.dispatch_id}"
     assert wakeup.status == "scheduled"
 
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
-    assert Repo.get_by!(RunRecord, id: run_id).status == "suspended"
+    assert Repo.get_by!(RunRecord, id: run_id).status == "interrupted"
   end
 
-  test "adapter-owned quiet exit releases the adapter session and reaps the group", %{
+  test "adapter-owned interrupted exit releases the adapter session and reaps the group", %{
     sup: sup,
     goal: goal,
     task: task
@@ -271,7 +278,7 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
         Scenario.output_event("one", source_event_id: "evt-out-1"),
         Scenario.output_event("two", source_event_id: "evt-out-2"),
         Scenario.output_event("three", source_event_id: "evt-out-3"),
-        Scenario.result_event("completed", source_event_id: "evt-done")
+        Scenario.result_event("interrupted", source_event_id: "evt-done")
       ])
 
     request =
@@ -333,19 +340,23 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
 
     ref = Process.monitor(elf_pid)
     assert_receive {:DOWN, ^ref, :process, ^elf_pid, :normal}, 15_000
+    assert_receive {:elf_terminal, ^run_id, %{class: :interrupted}}, 15_000
     assert_received :safe_stop_requested
-    refute_received {:elf_terminal, ^run_id, _terminal}
 
     assert count_types(goal.id, run_id, ["run.pausing"]) == 1
     assert count_types(goal.id, run_id, ["run.suspended"]) == 1
-    assert ElvesHelpers.terminal_event(goal.id, run_id) == nil
+    assert ElvesHelpers.terminal_event(goal.id, run_id).type == "run.interrupted"
+
+    ordered = ordered_events(goal.id, run_id)
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"checkpoint.created", nil})
+    assert sequence_before?(ordered, {:harness, "evt-done"}, {"run.suspended", nil})
 
     wakeup = Repo.get_by!(WakeupRecord, run_id: run_id)
     assert wakeup.command_id == "elf-lease-decline:#{request.dispatch_id}"
     assert wakeup.status == "scheduled"
 
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
-    assert Repo.get_by!(RunRecord, id: run_id).status == "suspended"
+    assert Repo.get_by!(RunRecord, id: run_id).status == "interrupted"
 
     # The whole owned process group is reaped, unconditionally: the setup
     # guarantees the pgid.
@@ -359,34 +370,41 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
     assert Process.alive?(double)
   end
 
-  test "a declined run with a working session keeps supervising", %{
+  test "a pending refusal with a working session keeps supervising", %{
     sup: sup,
     goal: goal,
     task: task
   } do
     declined =
-      start_declined_run(sup, goal, task, :decline_working_session, fn dispatch_id ->
-        register_terminal_session_double(
-          :claude_headless_sessions,
-          dispatch_id,
-          &Shoestring.Harness.ClaudeHeadless.lookup_session/1,
-          :running
-        )
-      end)
+      start_declined_run(
+        sup,
+        goal,
+        task,
+        :decline_working_session,
+        fn dispatch_id ->
+          register_terminal_session_double(
+            :claude_headless_sessions,
+            dispatch_id,
+            &Shoestring.Harness.ClaudeHeadless.lookup_session/1,
+            :running
+          )
+        end,
+        nil
+      )
 
     run_id = declined.run_id
     elf_pid = declined.elf_pid
 
-    # The decline still suspends and wakes — but the Elf stays on duty while
-    # the session reports useful work.
-    assert {:ok, true} =
-             ElvesHelpers.wait_until(fn ->
-               if count_types(goal.id, run_id, ["run.suspended"]) == 1, do: true
-             end)
-
+    # No outcome arrives, so the armed refusal suspends nothing, wakes
+    # nothing, and terminalizes nothing — but the Elf stays on duty while
+    # the session reports useful work. (Staleness is evidence, never a
+    # trigger.)
     _ = :sys.get_state(elf_pid)
     assert Process.alive?(elf_pid)
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 0
+    assert Repo.get_by(WakeupRecord, run_id: run_id) == nil
     assert ElvesHelpers.terminal_event(goal.id, run_id) == nil
+    refute_received {:elf_terminal, ^run_id, _terminal}
 
     pgid = ElvesHelpers.recorded_pgid(goal.id, run_id)
     assert pgid != nil
@@ -400,26 +418,37 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
 
   # -- Helpers --
 
-  # Starts a Fake leg that declines at its turn outcome (response_budget 2,
-  # zero reserve, breached capacity) with the given session double registered
+  # Starts a Fake leg that arms a lease refusal (response_budget 2, zero
+  # reserve, breached capacity) with the given session double registered
   # BEFORE the lease exists (registration is independent of the grant, so
   # the decline can never race it), and waits until the run is streaming.
-  # Terminal-only: mid-turn spends only arm the refusal; the `completed`
-  # outcome carries the decline (checkpoint + suspend + wake). Returns the
-  # run id, Elf pid, and request for the caller's settle assertions.
-  defp start_declined_run(sup, goal, task, name, register_session) do
+  # The `outcome` is the turn result event (`"interrupted"` for the
+  # decline-exit locks, `nil` for the still-supervising control, which
+  # models a turn with no outcome yet). Returns the run id, Elf pid, and
+  # request for the caller's settle assertions.
+  defp start_declined_run(sup, goal, task, name, register_session, outcome \\ "interrupted") do
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
 
+    tail =
+      if outcome == nil do
+        []
+      else
+        [Scenario.result_event(outcome, source_event_id: "evt-done")]
+      end
+
     scenario =
-      fake_scenario(name, breached_snapshot(fresh_id), [
-        Scenario.lifecycle_event(source_event_id: "evt-life"),
-        Scenario.output_event("one", source_event_id: "evt-out-1"),
-        Scenario.output_event("two", source_event_id: "evt-out-2"),
-        Scenario.output_event("three", source_event_id: "evt-out-3"),
-        Scenario.result_event("completed", source_event_id: "evt-done")
-      ])
+      fake_scenario(
+        name,
+        breached_snapshot(fresh_id),
+        [
+          Scenario.lifecycle_event(source_event_id: "evt-life"),
+          Scenario.output_event("one", source_event_id: "evt-out-1"),
+          Scenario.output_event("two", source_event_id: "evt-out-2"),
+          Scenario.output_event("three", source_event_id: "evt-out-3")
+        ] ++ tail
+      )
 
     request = ElvesHelpers.run_request(goal, task)
 
@@ -607,5 +636,35 @@ defmodule Shoestring.Elves.ElfClaudeDeclineQuiescenceTest do
 
   defp count_types(goal_id, run_id, types) do
     ElvesHelpers.count_events(goal_id, run_id, types)
+  end
+
+  defp ordered_events(goal_id, run_id) do
+    Repo.all(
+      from event in TrajectoryEvent,
+        where: event.goal_id == ^goal_id and event.run_id == ^run_id,
+        order_by: [asc: event.sequence],
+        select: {event.sequence, event.type, event.payload}
+    )
+    |> Enum.map(fn {_sequence, type, payload} ->
+      cond do
+        type == "harness.event_recorded" ->
+          {:harness, payload["source_event_id"]}
+
+        type in ["run.completed", "run.failed", "run.interrupted", "run.cancelled"] ->
+          {:terminal, nil}
+
+        true ->
+          {type, nil}
+      end
+    end)
+  end
+
+  defp sequence_before?(ordered, left, right) do
+    left_index = Enum.find_index(ordered, &(&1 == left))
+    right_index = Enum.find_index(ordered, &(&1 == right))
+
+    assert left_index != nil, "expected event #{inspect(left)} in #{inspect(ordered)}"
+    assert right_index != nil, "expected event #{inspect(right)} in #{inspect(ordered)}"
+    left_index < right_index
   end
 end

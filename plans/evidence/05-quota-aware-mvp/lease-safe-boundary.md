@@ -1,263 +1,240 @@
-# Lease-safe boundary: terminal-only resolution (Codex + Claude sessions, Elf)
+# Lease-safe boundary: terminal-only resolution with outcome-kind settlement
 
-Third revision. The second revision (commit `917f2d8`, marker-gated
-identity tracking with delta/reasoning-start interrupt triggers) is
-superseded in full: no interrupt is ever sent for a lease stop on any
-frame class, and the Elf-side open-tool / model-control tracking is
-removed. This document replaces the second revision's protocol claims;
-its trace citations (ordinals below) are unchanged and re-verified, but
-they now motivate abolition rather than gating.
+Fourth revision (third Opus review, verdict FAIL on `24d059e`). The
+third revision's completed-outcome suspends (decline consuming the
+verdict, quiet exits without terminals) is superseded: a confirmed
+completed outcome remains completed. Suspend/wake now happens ONLY for
+early-stop outcomes (interrupted turns, quota halts). This document
+replaces the third revision's outcome-consumption and quiet-exit claims;
+its trace citations are unchanged and re-verified.
 
-Review-recovery note: the full prior Opus 5.5 review text could not be
-recovered (session history truncated to tool calls plus the verdict
-tail). The six blockers below follow the brief's record: (1) successful
-interrupts bypassing decline/checkpoint/suspension/wake, (2) unsafe Elf
-completion boundary, (3) unreachable Claude renewal (real Claude emits
-no Codex deltas), (4) race between model activity and next tool,
-(5) teardown regression-test correctness, (6) evidence inaccuracies.
-Each is disposed under `Blocker dispositions`.
+Review-recovery note: the full prior Opus review text could not be
+recovered (session history truncated); the four blockers below follow
+the brief's record (B1 completed-consumption/continuation, B2 outcome
+re-renewal + unread pending flag, B3 mid-turn refusal appends/double
+probe/already-dead settlement, B4 storm/evidence). Each is disposed
+under `Blocker dispositions`.
 
-## Behavior change (VERIFIED by the new hermetic tests)
+## Behavior change (VERIFIED by the hermetic tests)
 
-- `CodexAppServer.Session` implements the terminal-only safe-boundary
-  rule. A safe stop / safe cancel request NEVER sends `turn/interrupt` —
-  not on request, delta, reasoning activity, completion, timeout, quiet,
-  or anything else: no observable frame can rule out a tool start
-  already in transit (committed trace: commentary completion 139
-  immediately followed by command start 140; command end 141,
-  bookkeeping 142–143, fileChange start 144), so any proactive interrupt
-  can cut a just-started mutation. The request only pends
-  (`stop_requested: :safe_boundary`), and the authoritative turn outcome
-  (`turn/completed`) resolves it with no send. Open-tool tracking remains
-  for status observability only; safe-stop decisions never consult it.
-  Explicit immediate cancellation (no boundary option) still interrupts
-  plus reaps the whole owned process group unchanged.
-- `ClaudeHeadless.Session` is terminal-only likewise.
-  `request_safe_stop/1` always pends and never kills — even with nothing
-  in flight, since a request can interleave anywhere around a tool the
-  child already started. A safe-boundary `cancel/2` pends identically
-  (it is the lease-flavored cancel). Explicit immediate `cancel/2` (no
-  boundary option — the user/orchestrator path) still kills the whole
-  owned process group at once plus reaps it. Lease safe stop and
-  explicit cancel are deliberately distinct operations; the old
-  at-drain deferred kill is abolished (same race: killing on a tool END
-  can cut the next tool already starting in the child). A pended stop
-  resolves at the turn terminal (`completed`/`failed`) with no kill.
-  Oversized-frame fail-closed (kill + transport error) is untouched: it
-  is transport safety, not a lease path.
-- `EventNormalizer` (Codex) no longer emits lifecycle boundary markers:
-  with nothing consulting them, the `codex-app-server:boundary`
-  start/end keys are removed (spend counting never saw them).
-- `LeaseRenewal.preview/3` (new, dry-run, zero appends) runs the same
-  gating plus fresh observe/localize/evaluate as `maybe_renew/3` and
-  reports `:renewable` / `:refused`. Already-refused leases
-  (`expired`, `checkpoint_required`) replay `{:ok, %{outcome: :expired,
-  reason: :already_expired, events: []}}` from `maybe_renew/3` instead of
-  erroring, so a repeated refusal completes the deferred decline instead
-  of stalling; the `:expire` transition chains `:from` the freshly
-  re-read status, and a post-projection refusal short-circuits before
-  settling (this closes a projection-lag race where a stale load met an
-  already-terminal row with `lease_transition_rejected`).
-- The Elf runs the T2 renewal sequence on mid-turn spend through the
-  preview only: a renewable verdict runs the real evaluation immediately
-  (a renewal rearms epochs and suspends nothing, so budget renewals keep
-  their mid-turn behavior, including multi-epoch re-loop); a refusal
-  arms `lease_refusal_pending?` and appends NOTHING — no snapshot, no
-  decision, no expiry markers. The full evaluation (with its markers)
-  and the suspend/checkpoint/wake decision wait for the authoritative
-  turn outcome (`:result` kind), so no decline artifact ever precedes the
-  proof the turn stopped, regardless of tools open, interleaved events,
-  or unfinished items. Leases already dead elsewhere (force-expired,
-  quota-halted) keep the pre-existing bounded path: ensure checkpoint
-  contents at spend boundaries plus settle on success, never suspending
-  or waking there; a failed write stays unlatched for retry.
-- A decline at the outcome consumes the verdict only when it classifies
-  `:completed`: the run suspends with no terminal following. A
-  non-completed verdict (`interrupted`, and any other class) still
-  terminalizes — interruption evidence is durable and must not be
-  swallowed — while the decline's suspend + wake already scheduled the
-  recheck. `:error`-kind outcomes never decline and keep their failure
-  terminal, as before. The quota fast path is untouched (the provider
-  already halted the turn, so it re-evaluates and declines immediately).
-- Manual-mode, wake, suspend, checkpoint-id, and spend-counting logic are
-  untouched.
+- `CodexAppServer.Session` and `ClaudeHeadless.Session` implement the
+  terminal-only safe-boundary rule (unchanged from the prior round, all
+  session tests still green): a safe stop / safe-boundary cancel request
+  NEVER sends or kills — not on request, delta, reasoning activity,
+  completion, timeout, quiet, or anything else. The request only pends
+  and the turn terminal resolves it. Explicit immediate cancellation
+  (no boundary option) still interrupts (Codex) / kills plus reaps the
+  whole owned process group (both providers) unchanged. Commit
+  `normalized-codex-lease-stop-final.md` ordinals re-verified with
+  `awk -F'\t'`: 139 (commentary completion) → 140 (command START); 141
+  (command END), bookkeeping 142–143 → 144 (fileChange START). The Claude
+  twin needs no trace: real Claude emits no Codex deltas, and renewal /
+  decline key only on the provider-agnostic `:result` outcome.
+- `LeaseRenewal.renew_only/3` (new; the `preview/3` dry-run is removed)
+  is the single atomic admit-only evaluation for mid-turn spends:
+  exactly ONE fresh observe/evaluate cycle, appended if and only if
+  admitted (same epoch-keyed idempotency as the full path). On refusal
+  it appends NOTHING — no snapshot, no decision, no markers — and
+  returns `{:ok, %{verdict: :refused}}`. One evaluation per trigger
+  means no preview/real double probe and no TOCTOU between two readings.
+  Already-refused leases (`expired`, `checkpoint_required`) still replay
+  `{:ok, %{outcome: :expired, reason: :already_expired, events: []}}`
+  from `maybe_renew/3`; the `:expire` transition chains `:from` the
+  freshly re-read status through an explicit finite status→atom mapping
+  (no `String.to_atom/1` on database content), with a post-projection
+  refusal short-circuit.
+- The Elf runs `renew_only/3` on mid-turn spends (a renewal appends and
+  rearms, preserving multi-epoch re-loop; a refusal arms
+  `lease_refusal_pending?` and appends nothing) and the full
+  `maybe_renew/3` at the turn outcome — but only with undecided
+  business: a pending refusal, or spends since the last real evaluation
+  (`lease_unjudged_spend?`, set on every spend advance, cleared by every
+  completed evaluation and re-arm). An outcome with nothing new to judge
+  skips instead of minting a duplicate epoch. The removed
+  `output_event("work", evt-out-1)` is restored in the deadline-renew
+  test with an exactly-one-renewal ordering pin, plus a dedicated
+  distinct-snapshot gate test (verified by mutation: bypassing the gate
+  yields 2 renewals).
+- At the outcome, a refusal settles per the outcome kind: a completed
+  (failed/cancelled) turn keeps its terminal with the expiry markers
+  and the ordinary terminal checkpoint — NO suspension, NO wake, NO
+  reactive checkpoint, NO continuation (resuming a completed run
+  errors, so a wake could never usefully fire). Only an interrupted
+  turn (early stop proven) runs `decline_lease/2` (reactive contents,
+  `run.pausing`/`run.suspended`, durable sleep wake, safe-stop request)
+  and keeps its interrupted terminal. `:error`-kind outcomes never
+  decline. Every verdict terminalizes — nothing is swallowed into a
+  suspension — and the terminal path now also releases adapter-owned
+  sessions (`release_adapter/1`); the quiet-exit (no-terminal) path and
+  its liveness machinery are removed as unreachable. The quota fast
+  path is untouched (provider already halted: immediate re-evaluate,
+  decline plus terminal on refusal).
+- Dead latches removed with the redesign: `lease_settled?`,
+  `lease_declined?`, `lease_checkpointed?`, `settle_on_checkpoint/1`,
+  the mid-turn ensure-checkpoint path, and the Elf-side open-tool /
+  model-control tracking (already gone). Session-side open-tool maps are
+  RETAINED for status observability only — nothing consults them for
+  decisions (stated in the moduledocs; no consumers exist outside the
+  two session modules) — reported here per the review rather than
+  removed, to keep this round's diff focused on behavior.
+- Stop documentation/UI text says turn end, not boundary:
+  `Elves.request_stop/1` doc and the run-show flash
+  ("Safe stop requested; resolves at turn end."). Adapter `cancel/2`
+  docs (Codex, Claude, both session modules) describe pend-only safe
+  variants vs immediate explicit cancel.
+- Untouched as required: spend counting (T2), due markers, quota path,
+  wake/resume/dispatch semantics, spend-affecting normalizer output
+  (`event_normalizer.ex` has zero net difference from the overall base
+  and is NOT in scope), Fake fixtures (handoff receiver setups restored
+  byte-identical to base — the refused-capacity handoff runs below are
+  the required regression).
 
-## Protocol justification (VERIFIED from the committed trace)
+## Runs, turns, and what the outcome proves (no guessing)
 
-All ordinals below are ordinals (first column) from the committed
-redacted artifact
-`plans/evidence/05-quota-aware-mvp/fixtures/live-final/normalized-codex-lease-stop-final.md`
-(re-verified for this revision with `awk -F'\t'`):
+Provider sessions can observe multiple turns per run (`turn/started`
+resets per-turn latches in the Codex session). The Elf does not track
+turns: every `:result`-kind normalized event runs the outcome rule, and
+every decline now pairs with a terminal in the same `after_ingest/3`
+(the run always ends with its decline). No run can therefore outlive
+its decline, and continuations are always new runs via wake dispatch —
+there is no multi-turn staleness by construction. The outcome proves
+the turn stopped because the provider emitted its terminal frame for
+it; Fake legs model one turn per run, and the rule is identical for
+multi-turn streams (each outcome judges only undecided business).
 
-- Ordinal 139 (output, commentary completion) is immediately followed by
-  140 (command START). Message completions therefore cannot release or
-  trigger a stop: the provider routinely starts the next tool in the
-  same step.
-- Ordinal 141 (command END) is followed by token/rate bookkeeping
-  142–143 and then 144 (fileChange START, inProgress). A stop requested,
-  a drain observed, or a completion seen at 141 must not send: the next
-  START is already on its way.
-- Deltas precede their completion, but that headroom is irrelevant once
-  sends are abolished: even a delta cannot rule out a tool START already
-  in transit behind it (the request itself is a GenServer call that can
-  interleave anywhere). Hence terminal-only resolution replaces the
-  second revision's delta/reasoning triggers entirely, rather than
-  re-gating them.
-- The Claude twin needs no trace: real Claude emits no Codex deltas, so
-  any delta-keyed renewal/decline is unreachable for Claude by
-  construction. The outcome (`:result` kind) is provider-agnostic, so
-  renewal and decline work identically for Codex and Claude shapes
-  (pinned by the Claude twin tests using real normalizer shapes:
-  `toolu_` start/end, text, result — no deltas).
+## Changed-file scope (net vs overall base `1566acd`)
 
-## Safety guarantee and its exact limit
-
-- Nothing is ever sent or killed for a lease stop: the abolished class
-  (interrupt/kill racing an in-transit START) cannot occur by
-  construction. Mid-turn refusal markers cannot precede the outcome
-  either, because mid-turn refusals append nothing at all.
-- Cost (documented, not claimed away): deadline pressure waits for the
-  turn to finish — including message-only tool loops with no outcome in
-  sight. Stops pend; renewals for live turns still evaluate mid-turn, so
-  only the refusal suspend waits.
-- Residuals (documented, not claimed away):
-  - Preview then real evaluation probes twice per spend (one dry-run,
-    one appending). Freshness is never reused across the two by design
-    (the admitted snapshot is never reused, extended to the preview
-    reading); a capacity flap between the two probes can therefore
-    append mid-turn markers on the real refusal. The window is
-    microseconds within one ingest, the suspend still waits for the
-    outcome, and the epoch-keyed idempotency keeps markers singular.
-  - A turn with no outcome event at all (stream ends or stalls with no
-    `:result`/`:error`) never declines: mid-turn state only arms the
-    pending flag, and supervision continues under the locked staleness
-    rules. Fake legs demonstrate this: an outcome-less scenario drains
-    and re-materializes without declining.
-  - Background exec children remain covered by the unchanged OS backstop
-    (`killpg` at turn teardown; immediate cancel proved by the reap
-    tests against real owned groups, Codex and Elf level).
-
-## Changed-file scope
-
-- `lib/shoestring/harness/codex_app_server/session.ex` (terminal-only:
-  always-pend requests, no model-activity triggers; open tools kept for
-  observability)
-- `lib/shoestring/harness/codex_app_server/event_normalizer.ex`
-  (boundary markers removed)
+- `lib/shoestring/harness/codex_app_server/session.ex` (terminal-only
+  session; open tools kept for observability)
 - `lib/shoestring/harness/claude_headless/session.ex` (terminal-only
-  safe stop / safe-boundary cancel; immediate cancel unchanged;
-  pending-stop resolution at the terminal)
-- `lib/shoestring/cobbler/lease_renewal.ex` (`preview/3`, already-
-  expired replay, `:from`-chained expiry, post-projection refusal
-  short-circuit)
-- `lib/shoestring/cobbler/lease_bounds.ex` (open-tool / control
-  tracking removed; identity resolver and spend counting retained)
-- `lib/shoestring/elves/elf.ex` (`lease_refusal_pending?`,
-  preview-gated mid-turn path, outcome decline, consume-only-completed
-  verdicts, already-terminal ensure-checkpoint path, declined-run
-  re-entry guard)
-- Tests: `session_safe_boundary_test.exs` (rewritten for terminal-only:
-  no frame class releases; outcome resolves);
-  `claude_headless/session_test.exs` (safe stop / safe cancel pend with
-  no kill; terminal resolves; immediate cancel still kills);
-  `session_test.exs` + `lease_boundary_test.exs` (contract updates);
-  `event_normalizer_test.exs` (marker removal);
-  `lease_bounds_test.exs` (tracking surface removed);
-  `lease_renewal_boundary_test.exs` (replay + preview zero-append pins);
-  `elf_lease_loop_test.exs` (19 tests: outcome-decline shapes across
-  tools/twins/unknown/nil/compound/unfinished);
-  `elf_lease_reloop_test.exs` (outcome-decline + multi-epoch renewal +
-  interrupted/quota twins + session-stop doubles);
-  `elf_checkpoint_resume_test.exs` (outcome-decline evidence +
-  preserved retry-into-recovery);
-  `elf_claude_decline_quiescence_test.exs` (outcome-decline quiet
-  exit / supervision).
-- Explicit scope addition carried over (review-authorized):
-  `test/shoestring/harness/capacity/supervision_storm_eval_test.exs`
-  (teardown-leak repair + regression test, commit `238b161`) and this
-  evidence file. Lib/test changes from the second revision that the
-  terminal-only design supersedes are not retained.
+  safe stop / safe-boundary cancel; immediate cancel unchanged)
+- `lib/shoestring/harness/codex_app_server.ex`,
+  `lib/shoestring/harness/claude_headless.ex` (cancel-doc truth)
+- `lib/shoestring/cobbler/lease_renewal.ex` (`renew_only/3`,
+  already-expired replay, `:from`-chained expiry with explicit status
+  mapping, post-projection short-circuit)
+- `lib/shoestring/cobbler/lease_bounds.ex` (`tool_identity/1` resolver
+  only; spend counting byte-identical)
+- `lib/shoestring/elves/lease_boundary.ex` (pend-only wording)
+- `lib/shoestring/elves/elf.ex` (outcome gating, kind-split refusal
+  settlement, always-terminalize verdicts, dead-latch/quiet-exit
+  removal, adapter release on the terminal path)
+- `lib/shoestring/elves.ex` (`request_stop` doc truth)
+- `lib/shoestring_web/live/run_show_live.ex` (flash truth)
+- Tests: `session_safe_boundary_test.exs`, `claude_headless/
+  session_test.exs`, `session_test.exs`, `lease_boundary_test.exs`,
+  `event_normalizer_test.exs`, `lease_bounds_test.exs` (carried over,
+  green); `lease_renewal_boundary_test.exs` (replay + renew-only pins);
+  `elf_lease_loop_test.exs` (21 tests: completed-terminal shapes,
+  restored deadline event, exactly-once gate test, flap atomicity
+  test, unfinished-tool terminal evidence);
+  `elf_lease_reloop_test.exs` (multi-epoch renewal, interrupted
+  session-stop twins, interrupted restart, quota, budget/deadline
+  documentation); `elf_checkpoint_resume_test.exs` (already-dead
+  completed/interrupted twins, terminal evidence contents);
+  `elf_claude_decline_quiescence_test.exs` (interrupted exit hygiene,
+  release/reap proofs, pending-supervision control);
+  `supervision_storm_eval_test.exs` (deterministic teardown rewrite,
+  see below).
+- Explicitly out of scope (verified zero net diff vs `1566acd`):
+  `event_normalizer.ex`, handoff worker/crash-window fixtures, Fake
+  scenario support.
 
 ## Tests plus pre-fix regression evidence
 
 Proof worktrees at `1566acd` (PR base), `e675c3b` (first revision),
-and `238b161` (direct parent) were built in isolation with the new test
-files overlaid on the old lib (deps symlinked, no network); `mix test
---seed 0` per file. Every failure below is behavioral (the suites
-compile and run on all three bases) except where `UndefinedFunctionError`
-marks a new API (labeled as such):
+and `238b161` (direct parent) were built in isolation with the final
+test files overlaid on the old lib (deps symlinked, no network) and are
+PRESERVED with their logs (`/tmp/opencode/proof2-*`, plus
+`/tmp/opencode/proof-storm-prefix`); `mix test --seed 0` per file.
+This round adds the same isolation proof against its own base
+`24d059e` (`/tmp/opencode/proof-24d059e-prefix` with
+`/tmp/opencode/proof-24d059e-{loop,rest,storm}.log`), itemized
+immediately below. Every failure below is behavioral (the suites
+compile and run on all four bases) except where `UndefinedFunctionError`
+marks a new API (labeled as such, never as regression evidence):
 
-- `elf_lease_loop_test.exs` (19 tests): 11 fail on `1566acd`, 11 fail
-  on `e675c3b`, 11 fail on `238b161` — all decline-shape locks (deadline
-  across command/fileChange/message/compound/unknown/nil/Claude/unfinished
-  twins, in-flight exhaustion, refused renewal). On `1566acd` the lease
-  markers land mid-turn with no outcome decline; on `e675c3b` the Elf
-  declines at the tool END (expired before the outcome); on `238b161`
-  the boundary decline suspends mid-turn and the outcome terminalizes.
-  The 8 passing-on-base tests are healthy-renewal/terminal documentation.
-- `elf_lease_reloop_test.exs` (10 tests): 7 fail on `1566acd`
-  (multi-epoch renewal count, outcome-decline sleeps, dispatch/Claude
-  session-stop twins with ordering, interrupted ordering, quiet exit),
-  7 fail on `238b161` (same set). Quota, budget-renew, and deadline-stop
-  twins pass on base (preserved behavior, labeled documentation
-  in-file).
-- `elf_checkpoint_resume_test.exs` (5 tests): `planned boundary
-  decline` fails on `1566acd` in isolation and seed-0 order (the outcome
-  decline terminalizes instead of suspending, so the sleep wake is never
-  scheduled). Suite-order on base is sensitive for this file (a passing
-  full-file run was observed under a random seed — an artifact of base's
-  mid-turn decline, not of the new tests); the isolation/seed-0 result
-  is the recorded proof. The retry-into-recovery, evidence-content,
-  quota-poison, and terminal-twin shapes pass on base (preserved
-  behavior, labeled documentation in-file).
+- `elf_lease_loop_test.exs` (21 tests): 12 fail on `1566acd`, 11 on
+  `e675c3b`, 12 on `238b161` — all completed-terminal shapes (expiry
+  after the outcome, terminal follows markers, no suspend/wake), the
+  unfinished-tool terminal evidence, the flap atomicity counts/ordering,
+  and the unprojected-lease enforcement. Healthy-renewal, spend-count,
+  quota, no-lease, and lifecycle-noise tests pass on base
+  (documentation). The exactly-once deadline test passes on all bases
+  (mid-turn renewal, no outcome re-evaluation there); its lock is the
+  distinct-snapshot gate test, verified by mutation on-tree (gate
+  bypassed → 2 renewals; gate restored → 1).
+- `elf_lease_reloop_test.exs` (10 tests): 6 fail on `1566acd`
+  (multi-epoch count, outcome-terminal sleeps, interrupted twins with
+  ordering, interrupted restart ordering, quiet-exit terminal), 6 on
+  `238b161` (same set plus the budget-Claude twin, whose control gate
+  blocks there — matching its in-file LOCK note). Quota, budget-renew,
+  and deadline-stop twins pass on base (preserved behavior, labeled
+  documentation in-file).
+- `elf_checkpoint_resume_test.exs` (6 tests): 4 fail on `1566acd`
+  (already-dead completed: reactive checkpoint appears mid-turn there;
+  already-dead interrupted: no safe-stop request there; both evidence
+  tests: suspension appears there). Quota-poison and terminal twins
+  pass on base (preserved behavior, labeled documentation).
 - `elf_claude_decline_quiescence_test.exs` (4 tests): 3 fail on
-  `1566acd`, each with a terminal following the suspension
-  (terminal-after-suspend — the exact shape consume-only-completed
-  abolishes). The working-session control passes on base
-  (documentation).
+  `1566acd` (decline artifacts precede the outcome there). The
+  pending-supervision control passes on base (documentation).
 - `session_safe_boundary_test.exs` + `claude_headless/session_test.exs`
-  (new terminal-only halves): 15 + 2 fail on `1566acd` (proactive
-  interrupt/kill on delta/completion/drain/empty-set/idle paths). The
-  immediate-cancel reap proofs pass on both (documentation).
+  (27 tests combined): 17 fail on `1566acd` (proactive interrupt/kill
+  on delta/completion/drain/empty-set/idle paths). Immediate-cancel
+  reap proofs pass on both (documentation).
 - `lease_renewal_boundary_test.exs`: the already-refused replay fails
-  behaviorally on `1566acd` (old error shape); the two preview tests
-  fail with `UndefinedFunctionError` (new API — documentation of the new
-  surface, labeled honestly).
+  behaviorally on `1566acd` (old error shape); the two `renew_only`
+  tests fail with `UndefinedFunctionError` (new API — documentation of
+  the new surface, labeled honestly, never counted as regression
+  evidence).
+- Handoff worker/crash-window with DEFAULT fixtures (restored
+  byte-identical to base): green on-tree (23 tests) with
+  terminal-completed despite the mismatch/stale/single-window refusal
+  — the required refused-capacity handoff regression. No fixture
+  changes were needed or made.
+- Pre-fix proofs against THIS round's base `24d059e` (the commit Opus
+  failed): proof worktree `/tmp/opencode/proof-24d059e-prefix`
+  (detached HEAD `24d059e`, deps symlinked read-only, the six final
+  test files overlaid — `test/support` is byte-identical, zero diff —
+  never committed there), `mix test --seed 0` per file:
+  - `elf_lease_loop_test.exs`: 21 tests, **14 behavioral failures**
+    (log `/tmp/opencode/proof-24d059e-loop.log`). #1 is B2 exactly
+    (3 probes vs exactly 1 — the outcome re-evaluates after the
+    mid-turn renewal); #2 is B2 exactly (2 `lease.renewal_due`
+    markers vs 1); #3–#14 are B1 exactly (no `{:elf_terminal,
+    completed}` within 15 s — the completed outcome suspends instead
+    of terminalizing). Zero compile/new-API failures in this file.
+  - `elf_lease_reloop_test.exs` + `elf_checkpoint_resume_test.exs` +
+    `elf_claude_decline_quiescence_test.exs` +
+    `lease_renewal_boundary_test.exs`: 28 tests, **9 failures** (log
+    `/tmp/opencode/proof-24d059e-rest.log`). The two `renew_only`
+    tests fail with `UndefinedFunctionError` (new API — documentation
+    of the new surface, never regression evidence). Behavioral: the
+    already-dead completed twin finds a mid-turn reactive checkpoint
+    (1 vs 0 — B3); the already-dead interrupted twin sees no
+    safe-stop request at the outcome (B3/B1); both completed-evidence
+    tests see no completed terminal (B1); the reloop second-exhaustion
+    test probes 4 times vs exactly 2 (preview+real double probe —
+    B2/B3); the reloop exhausted-completes and completed-no-session
+    tests see no completed terminal (B1). The 4 quiescence tests pass
+    on base (documentation, labeled in-file).
+  - `supervision_storm_eval_test.exs`: 4/4 green on BOTH base and tree
+    (log `/tmp/opencode/proof-24d059e-storm.log`) — by design: the
+    teardown helpers are self-contained, and the pre-fix-insufficiency
+    test passes everywhere because it demonstrates the old helper
+    leaves the detached member alive.
 - Full gate (exact command `mix precommit < /dev/null`, foreground,
-  per-pid state under `System.tmp_dir!()`, Elixir 1.19.5 / OTP 28),
-  exit 0: `mix format --check-formatted` clean,
-  `compile --warnings-as-errors` clean, 4 doctests + 1502 tests,
-  0 failures, 1 skipped (6 excluded); Node 52/52; UI 7/7. (Baseline at
-  `238b161` was 1510 tests; the delta is removed second-revision-only
-  surface — marker/open-tool/control unit tests — plus the new
-  replay/preview/pend-only pins.) No retry-until-green; one intermediate
-  full run during this round showed 7 failures, all diagnosed, none
-  retried away: 1 `Database busy` setup flake in `DispatcherTest`
-  (same setup-INSERT signature as the preserved `917f2d8` family) plus 6
-  handoff receiver regressions where outcome renewal met
-  fixture-inconsistent Fake observations (account-scoped grant vs
-  subscription-scoped reading, then wall-clock staleness, then the
-  missing weekly window — each refused correctly by renewal, each an
-  artifact of the static fixture, fixed fixture-locally with
-  receiver-scoped fresh complete readings and all protocol assertions
-  intact). The green run above is the single full run after the last
-  edit, quoted exactly.
-
-## Deviations and corrections
-
-- The second revision's evidence (delta/reasoning-start triggers,
-  marker-gated open sets, Elf control evidence, request-never-sends
-  with model-activity release) is superseded, not amended: triggers of
-  any kind cannot rule out an in-transit START, so the design resolves
-  lease stops only at the turn terminal. Its trace ordinals (51→52,
-  53→56, 139→140, 141→144) were re-verified and are re-cited above as
-  the motivation for abolition.
-- The second revision's "no request-time sends, marker-gated tracking"
-  close-out and its session/Elf asymmetry discussion no longer apply;
-  both layers are pend-only and neither tracks for decisions.
-- Normalizer scope note: the explicit boundary markers added in
-  revisions 1–2 are removed in this revision (nothing consults them).
-  Spend counting is byte-identical.
+  per-pid state under `System.tmp_dir!()`, Elixir 1.19.5 / OTP 28):
+  exit 0 — `compile --warnings-as-errors` clean, format clean, 4
+  doctests + 1506 tests with 0 failures, 1 skipped (6 `:live`
+  excluded); Node pass 52 / fail 0; UI tests 7 / pass 7 / fail 0.
+  Complete log `/tmp/opencode/precommit-lease-boundary-finish-final2.log`
+  (two earlier full runs with identical counts preserved at
+  `/tmp/opencode/precommit-lease-boundary-finish-final.log` and
+  `/tmp/opencode/precommit-lease-boundary-finish.log`).
+  No retry-until-green; a single full run after the last edit, quoted
+  exactly.
 
 ## Independent gate record (FAILED on teardown leak, root-caused;
 ## history preserved, not erased)
@@ -276,79 +253,126 @@ marks a new API (labeled as such):
   never executed.
 - Root-cause record (carried over, unchanged): the storm file's teardown
   helper killed the unlinked test root and awaited only the root's DOWN.
-  But the healthy `CodexMonitor` traps exits, so the root's death arrives
-  as an EXIT message that waits behind the monitor's queued timer/work
-  messages — each able to issue further Repo calls — while the monitor
-  stays alive. Proven by the regression test added in `238b161` (alive
-  immediately after root DOWN on the old helper) plus a throwaway
-  diagnostic (same monitor dead ~3s later with reason `:killed`); the
-  independent log independently names the storm as the lingering Repo
-  client. The leak was confirmed present on base `1566acd`.
-- INFERENCE (medium confidence, stated as such, unchanged): the zombie
-  monitor's Repo contention produced the exact `Database busy` in
-  ManualRecheck's setup INSERT. The exact busy was NOT reproduced
-  deterministically, so the precise lock mechanics remain inference;
-  what is VERIFIED is the leak and its elimination.
-- Repair (minimal, test-file only, commit `238b161`):
-  `stop_root_synchronously` snapshots every live pid in the tree BEFORE
-  the kill (recursing only into `:supervisor` children), kills the root,
-  and awaits EVERY DOWN until one overall deadline, raising loudly on
-  timeout. No sleeps, no retries, no skips, no assertion changes, no DB
-  `busy_timeout`/pool changes. Storm file 3/3 green in this round's
-  gate (re-verified, unchanged coverage).
+  The healthy `CodexMonitor` traps exits (`Process.flag(:trap_exit,
+  true)`) and its catch-all `handle_info(_other, ...)` ignores unmatched
+  messages — verified in code, not assumed. What is VERIFIED: a
+  Repo-touching monitor was observed alive after root teardown in
+  diagnosis, and dead ~3s later; the independent log independently names
+  the storm as the lingering Repo client; the leak was confirmed present
+  on base `1566acd`. What remains INFERENCE (medium confidence, stated
+  as such): that the zombie's Repo contention produced the exact
+  `Database busy` in ManualRecheck's setup INSERT (observed once, in
+  that run; the precise lock mechanics were never reproduced
+  deterministically). Earlier wording that implied the SQLite cause was
+  established is corrected here.
+- Repair and its deterministic rewrite: the `238b161` repair (snapshot
+  every tree pid pre-kill, kill root, await every DOWN) is superseded in
+  this round by a stronger helper (kill the root, then kill every
+  snapshot pid directly — idempotent for the already-dying, required
+  for members detached from the root — then await every DOWN until one
+  overall deadline, default 10 s, deliberately distinct from the 5 s
+  per-child shutdown budgets). The teardown regression is rebuilt
+  deterministically with controlled processes: a self-unlinking parked
+  Repo-capable worker models the observed outliving (survival
+  structural, death after observed DOWN monotonic — no timing anywhere,
+  no sleeps/retries/polling, no `Process.alive?` synchronization).
+  Proof (preserved worktree `/tmp/opencode/proof-storm-prefix`, log
+  `/tmp/opencode/proof-storm-prefix-red.log`): the new test fails on
+  the pre-fix helper semantics (detached member observably alive) and
+  passes on the fixed helper. The old scheduling-race characterization
+  is retired.
 - Post-repair gate at `238b161` (independent): exit 0 — format clean,
   `compile --warnings-as-errors` clean, 4 doctests + 1510 tests,
   0 failures, 1 skipped (6 excluded); Node 52/52; UI 7/7. Preserved as
   the baseline this round builds on.
-- NOT fixed (recorded unresolved, unchanged): a separate app-level
+- During this round one intermediate full run showed 7 failures, all
+  diagnosed, none retried away: 1 `Database busy` setup failure in
+  `DispatcherTest` (exact run: the round-2 full gate in this worktree,
+  1502 tests, `INSERT INTO "goals"` in `__ex_unit_setup_1` — same
+  signature as the `917f2d8` family; occurrence 1 in that run,
+  0 in the quoted green run below; no denominator beyond those two runs
+  is claimed) plus 6 handoff receiver regressions from outcome renewal
+  meeting the default Fake observations (scope mismatch, wall-clock
+  staleness, missing weekly window — each refused correctly by
+  renewal). Per the required behavior the handoff tests now pass with
+  DEFAULT fixtures (terminal-completed despite refusal, no
+  suspension/wake): the fixtures were restored byte-identical to base
+  and no fixture change was needed or made.
+- NOT fixed here (recorded unresolved, unchanged): a separate app-level
   trajectory-writer leak named by the investigator. Out of scope.
 
 ## Blocker dispositions
 
-1. Successful interrupts bypassing decline/checkpoint/suspension/wake —
-   CLOSED by construction: no lease path sends or kills, so there is no
-   successful interrupt to bypass anything. The outcome decline always
-   runs checkpoint → suspend → wake in that order (single function,
-   idempotent keys), and the completed-verdict consumption rule keeps a
-   suspended run terminal-free while interrupted/failed verdicts keep
-   their terminals plus the same artifacts.
-2. Unsafe Elf completion boundary — CLOSED: mid-turn spends run a
-   zero-append preview; refusals defer everything to the outcome. No
-   completion, delta, message, reasoning frame, deadline, or silence
-   triggers renewal or decline mid-turn. Leases already dead elsewhere
-   still get bounded checkpoint retries (never suspend/wake) at spend
-   boundaries.
-3. Unreachable Claude renewal — CLOSED: renewal/decline key only on the
-   provider-agnostic `:result` outcome. Claude twin tests use authentic
-   normalizer shapes (no deltas); the Claude session safe stop pends so
-   the outcome always arrives unkilled.
-4. Race between model activity and next tool — CLOSED by abolition (see
-   trace justification): the residual class the second revision
-   documented (RTT-bounded post-evidence START) no longer exists because
-   nothing fires post-evidence.
-5. Teardown regression-test correctness — PRESERVED: the `238b161`
-   repair and its regression test are untouched by this round and green
-   in this round's gate; the red proof (fails on the old helper) and the
-   VERIFIED-vs-INFERENCE split above are carried over unchanged.
-6. Evidence inaccuracies — CLOSED by this rewrite: wrong-file citation
-   and unverified ordinals from round 1 stay corrected; round-2 claims
-   are marked superseded (not silently kept); base-failure claims in
-   test comments were re-verified per test with over-claims corrected
-  in-file (documentation vs lock labeled per test); the home-path command
-   line is redacted; gate history (red `917f2d8`, green `238b161`) is
-   preserved with exact counts.
+1. Completed-consumption/continuation — CLOSED: completed (failed/
+   cancelled) outcomes terminalize with expiry markers plus the
+   ordinary terminal checkpoint; no suspend, wake, reactive checkpoint,
+   or continuation (a wake on a completed run would error
+   `unexpected_run_state`, verified in `Wakeups.resume_run/2`).
+   Suspend/wake happens ONLY for interrupted outcomes (early stop
+   proven) and the quota fast path (provider already halted) — each
+   with its terminal standing. Loop/reloop tests asserting
+   suspended/no-terminal were corrected to the required behavior (and
+   their titles with them); the restored deadline event plus the
+   distinct-snapshot exactly-once gate test pin B2's scenario.
+2. Outcome re-renewal / unread pending flag — CLOSED: the outcome
+   evaluates only with undecided business (pending refusal, or spends
+   since the last real evaluation — tracked explicitly and now READ).
+   The restored `output_event("work", evt-out-1)` plus ordering
+   assertions keep exactly 1 renewal; the new gate test (distinct
+   snapshots, mutation-verified both directions) locks it. Legitimate
+   multi-epoch renewal is preserved (re-loop twins green). Deadline
+   checks were not removed.
+3. Mid-turn refusal appends / double probe / already-dead settlement —
+   CLOSED: `renew_only/3` is a single atomic evaluation that appends
+   only on admit; refusals (including already-dead leases) append
+   nothing mid-turn — no markers, no checkpoint, no settle. The
+   flap test (admit-then-refuse, 3 probes total, expired only after the
+   outcome) and the already-dead twins (completed: negatives plus clean
+   terminal; interrupted: suspend/wake/terminal proving the outcome
+   evaluated) pin it. No live-probe-latency assumption remains (the
+   microsecond-TOCTOU note is retired with the preview it described).
+4. Storm/evidence — CLOSED except as noted: deterministic teardown
+   helper + regression (both directions, no timing, preserved proof);
+    the false catch-all comment replaced with code-verified mechanism;
+    no `Process.alive?`-based synchronization and no sleep-polling in the
+    new work (`refute Process.alive?/1` appears only as post-DOWN
+    monotonic death assertions, never as synchronization; pre-existing
+    storm-driver pacing left untouched and labeled in code);
+   10 s helper deadline distinct from 5 s shutdown budgets; evidence
+   boundaries restored (observed leak vs this run, lock-mechanism
+   inference, exact-run busy statistics with no invented denominator);
+   README model-control description rewritten for terminal-only;
+   `event_normalizer` removed from scope (zero net diff); proof
+   worktrees/logs preserved (never deleted this round); new-API
+   `UndefinedFunctionError` results labeled documentation, never
+   regression evidence.
+- NITs, each addressed: stale `track_open_tools`/`track_control`
+  references (none remain in lib); event-marker/model-control release
+  descriptions (normalizer markers gone with the tracking that consumed
+  them; session docs describe pend-only); contradictory mid-turn expiry
+  comments (rewritten); unfinished-tool test now asserts terminal
+  checkpoint evidence naming the tool; `String.to_atom/1` on the lease
+  status replaced with an explicit finite mapping (the one remaining
+  `String.to_atom` in `Leases.validate_transition/2` predates this work
+  and is out of scope); `request_stop` doc and UI flash say turn end;
+  duplicate probes gone with preview (flap test pins 3 probes for
+  3 triggers); observability-only open-tool maps RETAINED (bounded,
+  cleared per turn/outcome, status-only) and reported here per the
+  review instead of removed, to keep this round focused on behavior.
 
 ## Unresolved risks and residual limits
 
 - Deadline pressure waits for the turn to finish (stated cost).
-- Preview/real double probe with a documented microsecond TOCTOU (see
-  Safety guarantee): a flap can append mid-turn markers, but never
-  suspends mid-turn.
-- Turns with no outcome event never decline; supervision continues
-  under the locked staleness rules (demonstrated hermetically by
-  outcome-less Fake scenarios draining without declining).
+- A turn with no outcome event at all never declines; supervision
+  continues under the locked staleness rules (demonstrated hermetically
+  by outcome-less scenarios draining without declining).
 - `:error`-kind outcomes with a pending refusal keep their failure
   terminal without declining; recovery context survives through the
   ordinary terminal checkpoint (distinct id), not the reactive one.
-- The second revision's RTT-bounded post-evidence race is gone with the
-  triggers; no replacement headroom claim is made.
+- Mid-turn evaluations run once per spend when due/deadline holds (one
+  probe each, appends only on admit); spend-heavy turns probe more, but
+  never append refusals.
+- The teardown helper's snapshot requires a live root (a dead tree
+  cannot be traversed); orphans of an already-dead tree are reaped by
+  pid. Crash-loop reincarnation between snapshot and kill is a bounded
+  pre-existing window, unchanged by this round.

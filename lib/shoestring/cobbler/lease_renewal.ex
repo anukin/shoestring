@@ -119,29 +119,35 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   end
 
   @doc """
-  Dry-run renewal evaluation with zero appends.
+  Atomic admit-only renewal for mid-turn spends: exactly ONE fresh
+  observe/evaluate cycle, appended if and only if admitted.
 
   Runs the same load/stop/boundary gating plus the fresh observe, localize,
-  and re-evaluation as `maybe_renew/3`, but persists nothing: no snapshot,
-  no decision, no projection, no lease markers. Lets a mid-turn caller learn
-  whether the fresh capacity would renew or refuse before deciding to run
-  the real (appending) evaluation.
+  and re-evaluation as `maybe_renew/3`. On admit it persists and settles
+  exactly like `maybe_renew/3` (same epoch-keyed idempotency). On refusal
+  it appends NOTHING — no snapshot, no decision, no markers — and returns
+  `{:ok, %{verdict: :refused}}`, so a mid-turn refusal can never precede
+  the turn outcome with durable artifacts; the caller records the pending
+  refusal and the turn outcome runs the full evaluation. Single evaluation
+  means no preview/real double probe and no TOCTOU between two readings.
 
-  Returns `{:ok, %{verdict: :renewable | :refused, evaluation: ...}}`,
+  Returns `{:ok, renew_result()}`, `{:ok, %{verdict: :refused}}`,
   `{:ok, :awaiting_boundary}`, or `{:error, term()}` (including
-  `{:lease_not_renewable, status}` for already-terminal leases — the caller,
-  not this function, decides what a repeated refusal means).
+  `{:lease_not_renewable, status}` for already-terminal leases — the
+  caller, not this function, decides what a repeated refusal means).
   """
-  @spec preview(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
-          {:ok, %{verdict: :renewable | :refused, evaluation: AdmissionDecision.t()}}
-          | {:ok, :awaiting_boundary}
-          | {:error, term()}
-  def preview(goal_id, grant_id, opts \\ []) do
+  @spec renew_only(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, renew_result() | %{verdict: :refused} | :awaiting_boundary} | {:error, term()}
+  def renew_only(goal_id, grant_id, opts \\ []) do
     with {:ok, lease, run} <- load(goal_id, grant_id, opts),
          :ok <- stop_requested(opts),
          :ok <- boundary_reached(opts),
-         {:ok, evaluation, _snapshot} <- evaluate_fresh(goal_id, lease, run, opts) do
-      {:ok, %{verdict: verdict(evaluation), evaluation: evaluation}}
+         {:ok, evaluation, snapshot} <- evaluate_fresh(goal_id, lease, run, opts) do
+      if evaluation.result == :admit do
+        persist_and_settle(goal_id, lease, evaluation, snapshot, opts)
+      else
+        {:ok, %{verdict: :refused}}
+      end
     else
       {:awaiting_boundary} -> {:ok, :awaiting_boundary}
       {:error, reason} -> {:error, reason}
@@ -167,8 +173,8 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   # Private
   # ----------------------------------------------------------------------------
 
-  # The pure evaluation prefix shared by the real (appending) `resolve/4`
-  # and the dry-run `preview/3`: original admission, fresh observation,
+  # The pure evaluation prefix shared by the full `resolve/4` and the
+  # atomic `renew_only/3`: original admission, fresh observation,
   # goal-local snapshot derivation, and re-evaluation. Zero appends, zero
   # projection — safe to run mid-turn as often as spends arrive.
   defp evaluate_fresh(goal_id, lease, run, opts) do
@@ -183,9 +189,6 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
       {:ok, evaluation, snapshot}
     end
   end
-
-  defp verdict(%AdmissionDecision{result: :admit}), do: :renewable
-  defp verdict(%AdmissionDecision{}), do: :refused
 
   defp load(goal_id, grant_id, opts) do
     repo = Keyword.get(opts, :repo, Repo)
@@ -223,10 +226,28 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   end
 
   defp resolve(goal_id, lease, run, opts) do
+    with {:ok, evaluation, snapshot} <- evaluate_fresh(goal_id, lease, run, opts) do
+      persist_and_settle(goal_id, lease, evaluation, snapshot, opts)
+    else
+      {:error, {:observation_failed, _reason} = reason} ->
+        expire_closed(goal_id, lease, nil, reason, opts)
+
+      {:error, {:evaluation_failed, _reason} = reason} ->
+        expire_closed(goal_id, lease, nil, reason, opts)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The appending tail shared by the full `resolve/4` and the atomic
+  # `renew_only/3` admit path: persist the fresh snapshot and decision,
+  # project, re-read, and settle. Callers only reach here after deciding
+  # to append (full evaluation, or an admitted dry-run verdict).
+  defp persist_and_settle(goal_id, lease, evaluation, snapshot, opts) do
     repo = Keyword.get(opts, :repo, Repo)
 
-    with {:ok, evaluation, snapshot} <- evaluate_fresh(goal_id, lease, run, opts),
-         {:ok, _snapshot_event} <- persist_renewal_snapshot(repo, goal_id, lease, snapshot, opts),
+    with {:ok, _snapshot_event} <- persist_renewal_snapshot(repo, goal_id, lease, snapshot, opts),
          {:ok, _position} <- Projector.project(goal_id, clock: renewal_clock(opts)),
          {:ok, _fresh_event, fresh_decision} <-
            persist_renewal_decision(repo, goal_id, lease, evaluation, snapshot, opts),
@@ -249,12 +270,6 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
         settle(goal_id, lease, fresh_decision, snapshot, opts)
       end
     else
-      {:error, {:observation_failed, _reason} = reason} ->
-        expire_closed(goal_id, lease, nil, reason, opts)
-
-      {:error, {:evaluation_failed, _reason} = reason} ->
-        expire_closed(goal_id, lease, nil, reason, opts)
-
       {:error, reason} ->
         {:error, reason}
     end
@@ -347,6 +362,21 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
   # replays. Without the snapshot discriminator every renewal after the
   # first replays the first epoch's markers and its decision, making
   # repeated renewal unobservable and unauditable.
+  # Fixed-vocabulary lease statuses to state-machine atoms. Never
+  # `String.to_atom/1` on database content: an unknown status fails
+  # closed instead of exhausting the atom table.
+  defp lease_status_atom("proposed"), do: :proposed
+  defp lease_status_atom("granted"), do: :granted
+  defp lease_status_atom("active"), do: :active
+  defp lease_status_atom("renewal_due"), do: :renewal_due
+  defp lease_status_atom("renewed"), do: :renewed
+  defp lease_status_atom("expired"), do: :expired
+  defp lease_status_atom("revoked"), do: :revoked
+  defp lease_status_atom("checkpoint_required"), do: :checkpoint_required
+
+  defp lease_status_atom(other),
+    do: raise(ArgumentError, "unknown lease status: #{inspect(other)}")
+
   defp epoch_opts(opts, type, grant_id) do
     case Keyword.fetch(opts, :epoch_snapshot_id) do
       {:ok, snapshot_id} when is_binary(snapshot_id) ->
@@ -466,7 +496,9 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
     # until the projector runs, so validating against it can reject a legal
     # expiry (or accept against a stale predecessor). The `:from` override
     # carries the logical predecessor exactly like the renewed path does.
-    expire_opts = Keyword.put(opts, :from, String.to_atom(lease.status))
+    # The status comes from our own reread of a fixed-vocabulary column;
+    # the explicit mapping below keeps user input far from `String.to_atom`.
+    expire_opts = Keyword.put(opts, :from, lease_status_atom(lease.status))
 
     with {:ok, %{event: expired}} <-
            Leases.transition(
