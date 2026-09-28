@@ -176,6 +176,44 @@ failure below is behavioral, not a missing helper):
   The layers agree on every real provider-shaped event; the residual
   class is identical (post-evidence provider decisions).
 
+## Independent gate record (FAILED on environment flake, preserved)
+
+- Independent gate at `917f2d8`, exact command
+  `cd /Users/anukin/projects/shoestring-fix-lease-safe-boundary && mix precommit < /dev/null`
+  (log `/tmp/shoestring-917f2d8-independent-gate.log`), exited 2:
+  4 doctests, 1509 tests, **1 failure**, 1 skipped (6 excluded);
+  Node 52/52, UI 7/7.
+- The single failure is `Shoestring.Cobbler.ManualRecheckTest` "a live
+  goal gets an immediate due wake keyed by operator"
+  (`test/shoestring/cobbler/manual_recheck_test.exs:98`), failing in test
+  SETUP (`__ex_unit_setup_1`, line 24: `create_goal!()`) with
+  `Exqlite.Error Database busy` on `INSERT INTO "goals"` — the test body
+  never executed.
+- Causal finding (environment contention, not a regression):
+  (1) the failing statement is a plain setup-time goal INSERT through a
+  code path this slice never touches — the commit contains zero DB-layer
+  files (no repo, schema, DataCase/sandbox, `create_goal!`, `Wakeups`,
+  storm-test, or ManualRecheck changes);
+  (2) the same log, at the same timestamp, shows the concurrently running
+  `supervision_storm_eval_test` crash-loop test with async DB owner
+  disconnections (`:healthy_codex_storm` client holding connections from
+  exited owners) under `max_cases: 40` against file-based SQLite —
+  writer-lock contention;
+  (3) the identical signature (`Database busy` on `INSERT INTO goals`)
+  was already observed in `Trajectory.AppendTest` during this slice's own
+  gate history, then green in isolation and green on the next full run;
+  (4) targeted hermetic rerun here: `mix test
+  test/shoestring/cobbler/manual_recheck_test.exs < /dev/null` → 7 tests,
+  0 failures in 0.1s.
+- No code change was made for this: the failure is in test setup, so no
+  assertion change could address it, and serializing the DB suite or
+  adding retries would be broad test-infra refactoring outside the
+  authorized scope (and prohibited by the standing contract). The full
+  gate was deliberately NOT re-run for green. Blocker status: unrelated
+  environment flake, reported with evidence; corrective action, if
+  wanted,   belongs to test-infrastructure ownership (SQLite contention
+  under parallel load), not this slice.
+
 ## Unresolved risks and residual limits
 
 - The RTT-bounded post-evidence race above; terminal-only resolution is
