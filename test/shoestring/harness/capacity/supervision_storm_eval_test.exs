@@ -71,28 +71,80 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
   end
 
   # Deterministic teardown helper: the tree under `root` can touch the
-  # Repo (the healthy monitor's sink calls `Observatory.ingest/1`, which
-  # goes through `Observatory.ensure_provisioned/1` -> `Repo.get/2`), so
-  # it must be fully DOWN before the Ecto sandbox owner — released by the
-  # earlier-registered `on_exit` in `Shoestring.DataCase.setup_sandbox/1`
-  # — goes away. A fire-and-forget `Process.exit(root, :kill)` returns
-  # immediately and lets the sandbox owner win that race, producing
-  # `DBConnection` ownership errors ("owner exited while client still
-  # holds a connection"). Monitoring `root` and awaiting its `:DOWN`
-  # makes the ordering deterministic: this `on_exit` only returns once
-  # the tree is dead, so the sandbox `stop_owner` running after it can
-  # never race a live Repo client. The timeout is a bounded backstop, not
-  # a sleep: on the happy path the `receive` returns as soon as `:DOWN`
-  # arrives, and `:kill` is untrappable so the wait always terminates.
+  # Repo, and awaiting only the root's DOWN is NOT enough. The healthy
+  # monitor traps exits, so the root's death arrives as an EXIT message
+  # that waits behind its queued timer/work messages — each of which can
+  # issue further Repo calls (slow under suite load) — while the monitor
+  # stays alive. Every live pid in the tree is therefore monitored BEFORE
+  # the kill; the kill goes to the root (propagating to the linked
+  # children); then each DOWN is awaited until a single overall deadline,
+  # raising loudly on timeout. This `on_exit` only returns once the whole
+  # tree is dead, so the sandbox `stop_owner` running after it (registered
+  # earlier in `Shoestring.DataCase.setup_sandbox/1`, LIFO) can never race
+  # a live Repo client. The timeout is a bounded backstop, not a sleep:
+  # every DOWN short-circuits the wait.
   defp stop_root_synchronously(root, timeout \\ 5_000) do
-    ref = Process.monitor(root)
-    Process.exit(root, :kill)
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    pids =
+      [root | live_tree_pids(root)]
+      |> Enum.filter(&is_pid/1)
+      |> Enum.uniq()
+
+    refs = for pid <- pids, into: %{}, do: {Process.monitor(pid), pid}
+
+    if is_pid(root) and Process.alive?(root) do
+      Process.exit(root, :kill)
+    end
+
+    await_tree_down(refs, deadline)
+  end
+
+  # Live descendants of a supervisor, recursively. Only `:supervisor`
+  # children are descended into: probing a worker with `which_children`
+  # would crash it (no such `handle_call`), and with a live `:permanent`
+  # parent that crash would instantly restart it under the same name —
+  # reincarnating the very process teardown is trying to reap. Guards and
+  # catches make it safe against a tree that is dying concurrently: dead
+  # branches contribute nothing.
+  defp live_tree_pids(sup) do
+    if is_pid(sup) and Process.alive?(sup) do
+      try do
+        sup
+        |> Supervisor.which_children()
+        |> Enum.flat_map(fn
+          {_id, pid, :supervisor, _modules} when is_pid(pid) ->
+            [pid | live_tree_pids(pid)]
+
+          {_id, pid, _type, _modules} when is_pid(pid) ->
+            [pid]
+
+          _other ->
+            []
+        end)
+      catch
+        :exit, _ -> []
+      end
+    else
+      []
+    end
+  end
+
+  defp await_tree_down(refs, _deadline) when map_size(refs) == 0, do: :ok
+
+  defp await_tree_down(refs, deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      raise "root teardown timed out waiting for DOWN from #{inspect(Map.values(refs))}"
+    end
 
     receive do
-      {:DOWN, ^ref, :process, ^root, _reason} -> :ok
+      {:DOWN, ref, :process, _pid, _reason} ->
+        await_tree_down(Map.delete(refs, ref), deadline)
     after
-      timeout ->
-        raise "root supervisor #{inspect(root)} did not shut down within #{timeout} ms"
+      remaining ->
+        raise "root teardown timed out waiting for DOWN from #{inspect(Map.values(refs))}"
     end
   end
 
@@ -299,6 +351,70 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
     assert html =~ "codex"
     assert has_element?(view, "#observations-list")
     refute has_element?(view, "#observations-empty")
+  end
+
+  # LOCK: teardown must leave no Repo-touching process alive. The healthy
+  # monitor traps exits and swallows EXIT messages in its catch-all
+  # `handle_info`, so killing the root and awaiting only the root's DOWN
+  # leaves the monitor running: it keeps ingesting through `Observatory`
+  # into `Repo` after the sandbox owner is released, producing
+  # `DBConnection` ownership errors and `Database busy` contention in
+  # later tests. Fails pre-fix (monitor still alive after teardown);
+  # passes once the helper guarantees the whole tree is down.
+  test "teardown leaves no Repo-touching monitor alive" do
+    test_pid = self()
+    normal_read = Fixtures.load_fixture!("codex/normal-read.json")["payload"]["result"]
+
+    sink = fn snapshot ->
+      send(test_pid, {:teardown_probe_ingested, snapshot})
+      Observatory.ingest(snapshot)
+    end
+
+    {:ok, fake} =
+      start_supervised(
+        {FakeTransport,
+         [owner: self(), emit_connected: false, auto_respond: codex_auto_respond(normal_read)]}
+      )
+
+    monitor_opts = [
+      name: :teardown_probe_monitor,
+      version: "0.150.1",
+      transport_pid: fake,
+      sink: sink,
+      clock: fn -> @codex_time end,
+      base_backoff_ms: 50,
+      max_backoff_ms: 100
+    ]
+
+    children = [
+      %{
+        id: :probe_monitor,
+        start: {CodexMonitor, :start_link, [monitor_opts]},
+        restart: :permanent,
+        shutdown: 5_000,
+        type: :worker
+      }
+    ]
+
+    # Unlinked on purpose, mirroring the storm topology: teardown (not a
+    # link) must reap the tree.
+    {:ok, root} = Supervisor.start_link(children, strategy: :one_for_one)
+    Process.unlink(root)
+
+    monitor_pid = Process.whereis(:teardown_probe_monitor)
+    assert is_pid(monitor_pid)
+
+    # Prove it is alive AND Repo-touching before teardown (event-driven,
+    # no sleeps: the sink itself notifies).
+    assert_receive {:teardown_probe_ingested, %_{capacity_state: :observed}}, 5_000
+
+    stop_root_synchronously(root)
+
+    refute Process.alive?(monitor_pid),
+           "monitor survived root teardown and can keep touching Repo after sandbox release"
+
+    assert Process.whereis(:teardown_probe_monitor) == nil,
+           "monitor name still registered after teardown"
   end
 
   # Kills the victim monitor inside whichever capacity supervisor incarnation

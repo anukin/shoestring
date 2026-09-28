@@ -114,6 +114,10 @@ All ordinals below are from the committed redacted artifact
   Claude tests; new compound and unknown-tool tests).
 - Untouched as required: projection lag, terminal lease cleanup, Claude
   background tools, quiet-exit buffering, spend counting.
+- Explicit scope addition for this round (review-authorized): 
+  `test/shoestring/harness/capacity/supervision_storm_eval_test.exs`
+  (teardown-leak repair + regression test) and this evidence file.
+  Safe-boundary lib/test changes retained unchanged.
 
 ## Tests plus pre-fix regression evidence
 
@@ -176,7 +180,7 @@ failure below is behavioral, not a missing helper):
   The layers agree on every real provider-shaped event; the residual
   class is identical (post-evidence provider decisions).
 
-## Independent gate record (FAILED on environment flake, preserved)
+## Independent gate record (FAILED on teardown leak, root-caused)
 
 - Independent gate at `917f2d8`, exact command
   `cd /Users/anukin/projects/shoestring-fix-lease-safe-boundary && mix precommit < /dev/null`
@@ -189,30 +193,58 @@ failure below is behavioral, not a missing helper):
   SETUP (`__ex_unit_setup_1`, line 24: `create_goal!()`) with
   `Exqlite.Error Database busy` on `INSERT INTO "goals"` — the test body
   never executed.
-- Causal finding (environment contention, not a regression):
-  (1) the failing statement is a plain setup-time goal INSERT through a
-  code path this slice never touches — the commit contains zero DB-layer
-  files (no repo, schema, DataCase/sandbox, `create_goal!`, `Wakeups`,
-  storm-test, or ManualRecheck changes);
-  (2) the same log, at the same timestamp, shows the concurrently running
-  `supervision_storm_eval_test` crash-loop test with async DB owner
-  disconnections (`:healthy_codex_storm` client holding connections from
-  exited owners) under `max_cases: 40` against file-based SQLite —
-  writer-lock contention;
-  (3) the identical signature (`Database busy` on `INSERT INTO goals`)
-  was already observed in `Trajectory.AppendTest` during this slice's own
-  gate history, then green in isolation and green on the next full run;
-  (4) targeted hermetic rerun here: `mix test
-  test/shoestring/cobbler/manual_recheck_test.exs < /dev/null` → 7 tests,
-  0 failures in 0.1s.
-- No code change was made for this: the failure is in test setup, so no
-  assertion change could address it, and serializing the DB suite or
-  adding retries would be broad test-infra refactoring outside the
-  authorized scope (and prohibited by the standing contract). The full
-  gate was deliberately NOT re-run for green. Blocker status: unrelated
-  environment flake, reported with evidence; corrective action, if
-  wanted,   belongs to test-infrastructure ownership (SQLite contention
-  under parallel load), not this slice.
+- CORRECTION of this document's earlier causal claim: the prior revision
+  said the storm test ran "concurrently" with ManualRecheck under
+  `max_cases: 40`. That is WRONG — both files are `async: false`, so they
+  never overlap; cross-file execution order is not controllable either
+  (verified: argument order does not determine it). Contamination flows
+  strictly forward in time inside one VM: a leaked process outlives its
+  test's teardown and interferes with LATER tests, whatever they are.
+- VERIFIED root cause (deterministic, in-repo): the storm file's teardown
+  helper killed the unlinked test root and awaited only the root's DOWN
+  (prior repair `4e344cd`). But the healthy `CodexMonitor` traps exits,
+  so the root's death arrives as an EXIT message that waits behind the
+  monitor's queued timer/work messages — each able to issue further Repo
+  calls — while the monitor stays alive. Proven by the new regression
+  test below (alive immediately after root DOWN on the old helper) and by
+  a throwaway diagnostic (same monitor dead ~3s later with reason
+  `:killed`); the independent log independently names `:healthy_codex_storm`
+  as the lingering Repo client. The leak was also confirmed present on
+  base `1566acd` by the investigator's ordered probe (leak VERIFIED on
+  base; this slice did not re-run that probe, it trusts the brief's
+  record).
+- INFERENCE (medium confidence, stated as such): the zombie monitor's
+  Repo contention produced the exact `Database busy` in ManualRecheck's
+  setup INSERT. The exact busy was NOT reproduced deterministically, so
+  the precise lock mechanics remain inference; what is VERIFIED is the
+  leak and its elimination (below).
+- Repair (minimal, test-file only): `stop_root_synchronously` now
+  snapshots every live pid in the tree BEFORE the kill (recursing only
+  into `:supervisor` children — probing a worker with `which_children`
+  crashes it, and the live `:permanent` parent instantly restarts it
+  under the same name, a reincarnation observed during diagnosis), kills
+  the root, and awaits EVERY DOWN until one overall deadline, raising
+  loudly on timeout. No sleeps, no retries, no skips, no assertion
+  changes, no DB `busy_timeout`/pool changes.
+- Regression proof: new test "teardown leaves no Repo-touching monitor
+  alive" FAILS on the old helper (monitor alive after teardown — observed
+  in this worktree before the repair) and PASSES after; the storm file is
+  3/3 green; ManualRecheck is 7/7 in isolation; storm+ManualRecheck
+  together are 10/10 with zero ownership/`Database busy` lines in output.
+  The temporary ordering probes used during diagnosis were deleted before
+  commit (cross-file ExUnit order is not forceable; the deterministic
+  in-file lock plus the full gate is the verification, stated honestly).
+- Post-repair full gate (exact command `mix precommit < /dev/null`,
+  foreground, per-pid state under `System.tmp_dir!()`, Elixir 1.19.5 /
+  OTP 28), exit 0: format clean, `compile --warnings-as-errors` clean,
+  4 doctests + 1510 tests (1509 + the new regression test), 0 failures,
+  1 skipped (6 excluded); Node 52/52; UI 7/7. Run exactly once after the
+  repair — no retry-until-green.
+- NOT fixed here (recorded unresolved, not proven cause): a separate
+  app-level trajectory-writer leak named by the investigator. Deliberately
+  out of scope for this round.
+- The full gate was deliberately NOT re-run for green on the red result;
+  it is re-run exactly once below, after the actual repair.
 
 ## Unresolved risks and residual limits
 
