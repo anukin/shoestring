@@ -141,9 +141,43 @@ defmodule ShoestringWeb.RunNewManualLeaseTest do
     {:error, {:live_redirect, %{to: "/runs/" <> run_id}}} =
       view |> form("#manual-run-form", payload) |> render_submit()
 
+    stop_elf_before_sandbox_exit(run_id)
     run = Repo.get!(RunRecord, run_id)
     assert {:ok, _} = Projector.project(run.goal_id)
     Repo.get_by!(ExecutionLeaseRecord, run_id: run_id)
+  end
+
+  # The /runs/new submit starts a real Elf under the application's
+  # Shoestring.Elves.Supervisor — the LiveView path threads no test
+  # supervisor, so the test's own `_sup` never owns it. Registered in
+  # the test body, this on_exit runs BEFORE the setup-registered ones
+  # (sandbox owner stop, env restore, worktree rm_rf): the owned Elf is
+  # reaped while its rows still exist, and nothing it owns can run
+  # Repo work on a later test's sandbox connection. Only this test's
+  # run_id pid is ever terminated — never a registry sweep.
+  # terminate_child shuts down with :shutdown, so Elf.terminate/2 takes
+  # its no-append path (no crash marker, no checkpoint): the teardown
+  # itself performs zero Repo writes. The Fake-path OS child (sleep) is
+  # NOT reaped here — it exits alone; live group reaping is proven only
+  # by the explicit-cancel tests, never claimed here.
+  defp stop_elf_before_sandbox_exit(run_id) do
+    case Shoestring.Elves.whereis(run_id) do
+      nil ->
+        :ok
+
+      pid ->
+        on_exit(fn -> terminate_owned_elf(run_id, pid) end)
+    end
+  end
+
+  defp terminate_owned_elf(run_id, pid) do
+    ref = Process.monitor(pid)
+    _ = DynamicSupervisor.terminate_child(Shoestring.Elves.Supervisor, pid)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 10_000
+
+    # Regression postcondition, checked after cleanup and before the
+    # sandbox owner stops: this test's Elf is gone.
+    assert Shoestring.Elves.whereis(run_id) == nil
   end
 
   # Exactly the fields `Elf.ensure_lease_bounds/1` reads off the grant row.

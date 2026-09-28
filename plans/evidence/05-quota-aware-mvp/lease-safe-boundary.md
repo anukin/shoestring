@@ -446,13 +446,72 @@ fact proves cause or unrelatedness.
   timing collision, but rarity is not a root cause and is not claimed
   as one.
 
+### Update: examiner diagnosis reproduced a manual-run Elf leak; test-only repair committed
+
+Examiner read-only trial results (diagnostic evidence, NOT committed
+proof — reported here, not re-run by the implementer):
+`task68c4271efa9f4d57bc86c591f90ed46b` traced the pair
+(manual-lease + observatory, seed 0) with registry/DB-lock probes and
+found a LIVE registered Elf at lease-test end in 27/27 cases across
+HEAD and base: `/runs/new` submits reach `run_new_live.ex:340`
+`Elves.start_elf` with no `supervisor` option, so the Elf runs under
+the APPLICATION `Shoestring.Elves.Supervisor`, while the test's own
+`_sup` (test file line 74) never owns it. The stranded client's stack
+in the pair runs is `Elf.crash_land -> TerminalCheckpoint.record ->
+task_criterion`, i.e. the leaked Elf doing Repo work on a
+neighboring test's sandbox owner connection; the next Writer then
+fails 3 rapid busy attempts. Pair rates: seed-0 HEAD `03b4ae4`
+instrumented 2/6 failures, plain 2/6; base `1566acd` instrumented 1/3,
+plain 1/6; trial repair instrumented 0/6, plain 0/6 with 0 owner
+disconnects, 0 `run_not_found`, 0 live Elves at end. Artifacts
+retained at `/tmp/claude-busy/` (driver, proposed patch, pair/plain/
+fix logs); the proposed patch was reviewed, not blindly applied.
+
+Explicit NON-claims (uncertainty retained): the original independent
+failure's stranded client was a Writer, the pair's was an Elf — the
+original caller was never captured, so the exact original cause is
+NOT proven. The early nearby `database is locked` events were the
+separate writer_contention test's own DB file, unrelated. Sandbox
+busy-timeout behavior in this path remains unknown.
+
+Repair (test-only, this round; production behavior untouched):
+`run_new_manual_lease_test.exs:manual_grant!/3` now registers an
+on_exit (test body, so before the setup-registered sandbox stop) that
+terminates ONLY this test's run_id pid via `DynamicSupervisor.
+terminate_child` on the application supervisor, awaits its DOWN
+(monitors; already-exited safe), then asserts the regression
+postcondition `Elves.whereis(run_id) == nil`. No registry sweep; no
+new helpers (public `whereis/1` only); no sleeps/polling/retries;
+teardown performs zero Repo writes (`:shutdown` → no crash marker).
+The Fake-path `sleep` child is deliberately NOT reaped here — live
+group reaping stays proven only by the explicit-cancel tests.
+
+Implementer proofs (this worktree):
+- Pre-fix behavior: with termination skipped (temporary local
+  mutation, reverted), all 3 tests fail with the owned Elf alive —
+  `assert whereis(run_id) == nil`, `left: #PID<0.499.0>` (and .514,
+  .529), `right: nil` (`/tmp/opencode/mutation-no-teardown.log`).
+  Behavioral reason (live owned pid), no structural error.
+- Fixed HEAD: manual-lease file green; manual-lease + observatory
+  pair (seed 0) 28/28 green with no lingering `sleep 30` children.
+- Full gate after the repair (exact command
+  `mix precommit < /dev/null`, foreground, single run): exit 0 — 4
+  doctests + 1506 tests, 0 failures, 1 skipped (6 excluded); Node
+  pass 52 / fail 0; UI 7/7/0. Log
+  `/tmp/opencode/precommit-lease-elf-teardown-fix.log`. No rerun.
+- Twin defect REPORTED, not fixed (out of scope):
+  `test/shoestring_web/live/run_live_test.exs` submits the same
+  `/runs/new` form repeatedly with the same app-supervisor ownership
+  and no Elf teardown — same leak shape, needs its own round.
+
 ### Blocker and proposed next step (no code change made)
 
-BLOCKER: trigger not identified within the bounded investigation; no
-test-isolation defect was reproduced, so no fix was attempted (no
-guessing, no weakened assertions, no retries added, production
-behavior untouched). The observatory test is NOT at fault by any
-evidence above and was not modified.
+BLOCKER (SUPERSEDED by the repair above, kept for history): at the
+time of writing the trigger was not identified within the bounded
+investigation, so no fix was attempted. That decision is superseded
+by the examiner diagnosis and the committed test-only repair; the
+original-cause linkage remains INFERENCE per the non-claims above.
+The observatory test was never at fault and was not modified.
 
 Proposed next step (needs a brief): a single instrumented run that
 captures the lock holder on busy — e.g. test-env-only logging of the
