@@ -390,6 +390,78 @@ marks a new API (labeled as such, never as regression evidence):
   cleared per turn/outcome, status-only) and reported here per the
   review instead of removed, to keep this round focused on behavior.
 
+## Independent gate at `de889c2` (1 failure: contention, cause NOT established)
+
+This run must remain in evidence. Exact command (independent):
+`cd /Users/anukin/projects/shoestring-lease-boundary-finish-20260928 && mix precommit < /dev/null > /tmp/lease-boundary-independent-de889c2.log 2>&1`.
+Exit 2; 4 doctests, 1506 tests, **1 failure**, 1 skipped (6 excluded);
+Node 52/52, UI 7/7. The prior independent gate at parent `11b0460`
+was green, and this round's own diff is prose/comments only — neither
+fact proves cause or unrelatedness.
+
+- Failure (log line ~777, seed 5938): `Shoestring.Harness.ObservatoryTest`
+  "semantic deduplication reading with changed source event is persisted"
+  (`test/shoestring/harness/observatory_test.exs:573`): first
+  `Observatory.ingest` returned `{:error, {:retry_exhausted, :busy}}`
+  instead of `{:ok, :persisted, _}`. The test itself is a plain
+  two-ingest dedup check — no concurrency, no lease content.
+- Log line ~745, same second: `owner #PID<0.5772.0> exited` while client
+  `#PID<0.5750.0> (:proc_lib)` was inside `Writer.default_attempt /
+  invoke_attempt / append_with_retries / handle_append` (a GenServer
+  mid trajectory-append transaction as its sandbox owner died).
+  Earlier (~18 s before): three simultaneous `database is locked` on
+  `BEGIN IMMEDIATE` across three pool connections. `run_not_found` Elf
+  checkpoint errors span several neighboring tests.
+
+### Discrimination (bounded diagnosis, implementer-verified)
+
+- VERIFIED — not a deterministic ingest-path regression: the file
+  alone with the exact seed is 25/25 green; the FULL suite with the
+  exact seed 5938 plus `--trace` is 1506/0 failures
+  (`/tmp/opencode/diag-5938-trace.log`); the 21-file seed-order
+  neighborhood block ending at ObservatoryTest is 179/179 green
+  (`/tmp/opencode/diag-neighborhood.log`); a smaller subset is 42/42
+  green (`/tmp/opencode/diag-subset1.log`). No leaked `sleep 30` OS
+  children remained after the subset runs.
+- VERIFIED — nothing in this branch's diff is in the failing path:
+  `Writer`, `Observatory`, trajectory, Repo, and config are untouched
+  by both `11b0460` and `de889c2` (file-list proof from the diff).
+- VERIFIED — retry mechanics (`writer.ex:224-246`, `:38`, `:78`):
+  default max 2 retries with NO inter-attempt delay (tight recursion),
+  so 3 rapid attempts overlapping any concurrent writer's transaction
+  fail the call with `retry_exhausted`. Inside the test sandbox the
+  savepoint-upgrade busy path fails at once (code comment at
+  `writer.ex:260-266`); `busy_timeout: 2000` (`config.exs:19-20`, not
+  overridden in test) does not cover that path.
+- VERIFIED — cross-test-boundary Repo activity existed in the failing
+  run (the owner-exited background Writer transaction above); the
+  failing test's own process spawns nothing.
+- NOT ESTABLISHED (INFERENCE at best): which exact earlier test's
+  process held the write lock, and for how long — leaked Elf, leaked
+  monitor, teardown burst, or async-phase overlap were all considered;
+  neighbor files use `start_supervised!` + `on_exit` cleanup with no
+  bare-supervisor leak found by inspection, and manual-lease Elves die
+  at launch (atom scenario raises in `Fake.start/2`, rescued to
+  `crash_land`). One failure in 5+ full runs is consistent with a rare
+  timing collision, but rarity is not a root cause and is not claimed
+  as one.
+
+### Blocker and proposed next step (no code change made)
+
+BLOCKER: trigger not identified within the bounded investigation; no
+test-isolation defect was reproduced, so no fix was attempted (no
+guessing, no weakened assertions, no retries added, production
+behavior untouched). The observatory test is NOT at fault by any
+evidence above and was not modified.
+
+Proposed next step (needs a brief): a single instrumented run that
+captures the lock holder on busy — e.g. test-env-only logging of the
+DBConnection owner/holder plus a live-process census when a Writer
+attempt fails — followed by a targeted pair-run against the
+identified predecessor; alternatively a Writer retry backoff
+(production change, separate brief). Do not claim resolution from the
+isolated green runs recorded here.
+
 ## Unresolved risks and residual limits
 
 - Deadline pressure waits for the turn to finish (stated cost). An
