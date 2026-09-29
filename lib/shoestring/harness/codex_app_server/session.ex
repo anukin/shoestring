@@ -5,9 +5,21 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   Key responsibilities:
   - Manages stdio JSON-RPC transport and executes handshake / start / turn sequence.
   - Buffers events live as they arrive (no backfill is possible from the provider).
-  - Implements the Lease Safe-Boundary Rule:
-    When a safe stop is requested during an in-flight command, allows the command to reach
-    `item.completed`, then issues `turn/interrupt` before the next item starts.
+  - Implements the Lease Safe-Boundary Rule (terminal-only):
+    Open tool items are tracked by identity (`item.id`, falling back to
+    `processId` for commands) for status observability. A safe stop / safe
+    cancel request NEVER sends `turn/interrupt` — not on request, delta,
+    reasoning activity, completion, timeout, quiet, or anything else: no
+    observable frame can rule out a tool start already in transit (the
+    committed trace shows commentary completion 139 immediately followed
+    by command start 140, and command end 141 followed by fileChange start
+    144), so any proactive interrupt can cut a just-started mutation. The
+    request only pends, and the authoritative turn outcome
+    (`turn/completed`) resolves it with no send. Deadline pressure
+    therefore waits for the turn to finish; that latency is the disclosed
+    cost of never interrupting unfinished work. Explicit immediate
+    cancellation (the default, no boundary option) is distinct: it
+    interrupts plus reaps the whole owned process group at once.
   - Owns descendant process tracking and executes `killpg` + process reaping as a backstop
     after turn interruption.
   - Handles line cap overflow (`:oversized_frame`) fail-closed: cancels the turn, reaps
@@ -18,6 +30,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   require Logger
 
   alias Shoestring.Harness.{Error, HarnessEvent, RunIdentity}
+  alias Shoestring.Cobbler.LeaseBounds
   alias Shoestring.Harness.Capacity.Codex.StdioTransport
   alias Shoestring.Harness.CodexAppServer.EventNormalizer
 
@@ -36,8 +49,14 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     :owner,
     :thread_id,
     :current_turn_id,
-    :in_flight_item,
+    # Identity-keyed open tool items (`tool_key/1` => raw item map),
+    # tracked for status observability only. Safe-stop decisions never
+    # consult it: nothing is ever sent proactively (see `pend_safe_stop/1`
+    # and `track_item_boundaries/3`).
+    :open_tools,
     :in_flight_commands,
+    # A pended safe stop / safe cancel, resolved solely by the
+    # authoritative turn outcome. Never sent.
     :stop_requested,
     :buffered_events,
     :event_ordinal,
@@ -107,14 +126,16 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   Requests cancellation of the running session.
 
   Options:
-  - `:boundary` - `:safe_boundary` (wait for current item.completed) or `:immediate` (default).
+  - `:boundary` - `:safe_boundary` (pend like a safe stop: recorded and
+    resolved by the turn outcome with no interrupt sent) or `:immediate`
+    (default: interrupt at once).
   """
   @spec cancel(GenServer.server(), keyword() | map()) :: {:ok, :cancelled} | {:error, Error.t()}
   def cancel(server, opts \\ %{}) do
     GenServer.call(server, {:cancel, opts}, @default_request_timeout)
   end
 
-  @doc "Requests stopping at the next safe boundary (after in-flight item.completed)."
+  @doc "Requests a lease safe stop. Terminal-only: always pends, never sends — the turn outcome resolves it."
   @spec request_safe_stop(GenServer.server()) :: {:ok, :stop_requested}
   def request_safe_stop(server) do
     GenServer.call(server, :request_safe_stop)
@@ -161,7 +182,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       owner: owner,
       thread_id: Keyword.get(opts, :thread_id),
       current_turn_id: nil,
-      in_flight_item: nil,
+      open_tools: %{},
       in_flight_commands: %{},
       stop_requested: nil,
       buffered_events: [],
@@ -264,32 +285,25 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
     if boundary in [:safe, :safe_boundary, :item, "item", :lease, "lease"] or
          Map.get(opts_map, :safe) == true do
-      # Safe boundary stopping: wait for in-flight item.completed
-      if state.in_flight_item != nil do
-        # Let the in-flight item finish; mark stop_requested
-        state = %{state | stop_requested: :safe_boundary}
-        {:reply, {:ok, :cancelled}, state}
-      else
-        # No item in flight; issue turn/interrupt immediately
-        state = do_interrupt(state)
-        {:reply, {:ok, :cancelled}, state}
-      end
+      # Safe boundary stopping: pend like a safe stop. The authoritative
+      # turn outcome resolves it; nothing is ever sent proactively, so no
+      # mutation can be cut mid-item. Explicit immediate cancellation
+      # (below) is the distinct path that terminates now.
+      {_reply, state} = pend_safe_stop(state)
+      {:reply, {:ok, :cancelled}, state}
     else
-      # Immediate cancellation
+      # Immediate cancellation: interrupt now and reap the owned group.
       state = do_interrupt(state)
       # Reap any child processes
       reap_descendants(state)
+      state = %{state | stop_requested: nil}
       {:reply, {:ok, :cancelled}, state}
     end
   end
 
   def handle_call(:request_safe_stop, _from, state) do
-    if state.in_flight_item != nil do
-      {:reply, {:ok, :stop_requested}, %{state | stop_requested: :safe_boundary}}
-    else
-      state = do_interrupt(state)
-      {:reply, {:ok, :stop_requested}, state}
-    end
+    {reply, state} = pend_safe_stop(state)
+    {:reply, reply, state}
   end
 
   def handle_call(:status, _from, state) do
@@ -297,7 +311,8 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       status: state.status,
       thread_id: state.thread_id,
       turn_id: state.current_turn_id,
-      in_flight_item: state.in_flight_item,
+      in_flight_item: representative_open_tool(state.open_tools),
+      open_tool_count: map_size(state.open_tools),
       stop_requested: state.stop_requested,
       event_count: length(state.buffered_events),
       malformed_lines: state.malformed_lines
@@ -310,6 +325,24 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     reap_descendants(state)
     close_owned_transport(state)
     {:stop, :normal, :ok, state}
+  end
+
+  # A safe-stop request always pends — it never sends. No observable
+  # frame can rule out a tool start already in transit (committed trace:
+  # commentary completion 139 immediately followed by command start 140;
+  # command end 141, bookkeeping 142-143, fileChange start 144), and a
+  # request is a GenServer call that can interleave anywhere in that
+  # window — so request-time, delta-time, and completion-time sends are
+  # all abolished. The authoritative turn outcome (`turn/completed`)
+  # resolves the pending stop with no send. Cost: deadline pressure waits
+  # for the turn to finish; explicit immediate cancellation stays the
+  # distinct path that terminates now.
+  defp pend_safe_stop(state) do
+    if terminal_status?(state.status) do
+      {{:ok, :stop_requested}, state}
+    else
+      {{:ok, :stop_requested}, %{state | stop_requested: :safe_boundary}}
+    end
   end
 
   # --- Transport Notifications & Handshake ---
@@ -430,7 +463,14 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
     state = emit_synthetic_error(state, error)
     state = reply_identity_waiters(state, {:error, error})
-    {:noreply, %{state | status: :failed, terminal_result: {:error, error}}}
+
+    {:noreply,
+     %{
+       state
+       | status: :failed,
+         terminal_result: {:error, error},
+         stop_requested: nil
+     }}
   end
 
   def handle_info({:codex_transport_closed, _pid, reason}, state) do
@@ -629,9 +669,51 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   defp handle_rpc_frame(_other, state), do: state
 
   # --- Safe Boundary & Item Tracking ---
+  #
+  # Open tools are keyed by identity so unrelated completions can never
+  # close them: the shared blank-safe resolver
+  # (`LeaseBounds.tool_identity/1`) when present, else the command
+  # `processId`, else a fresh anonymous key that only the natural terminal
+  # clears (fail closed). Tracking exists for status observability and
+  # conservative fail-closed bookkeeping — safe-stop decisions never
+  # consult it, because nothing is ever sent proactively (terminal-only).
+  #
+  # Item types that are model or user content, never mutating tools. They
+  # neither open safe-boundary entries nor (as completions) close them.
+  # Anything else — commandExecution, fileChange, present or future MCP
+  # tool shapes, or a missing type — is potentially mutating and tracked
+  # conservatively until its matching completion (N4: a nil/missing type
+  # opens here while the Elf layer ignores it; both layers fail closed by
+  # never acting early).
+  @non_tool_item_types ["reasoning", "thought", "thinking", "agentMessage", "userMessage"]
+
+  defp tool_item?(item) when is_map(item) do
+    item["type"] not in @non_tool_item_types
+  end
+
+  defp tool_key(item) when is_map(item) do
+    cond do
+      # Shared blank-safe resolver with the Elf layer
+      # (`LeaseBounds.tool_identity/1`); falls through on blank/missing.
+      identity = LeaseBounds.tool_identity(item) -> {:id, identity}
+      item["processId"] != nil -> {:pid, to_string(item["processId"])}
+      true -> {:anon, System.unique_integer([:positive, :monotonic])}
+    end
+  end
+
+  # Legacy-compat view of the open-tool map for status readers (notably
+  # the live-eval driver): the deterministically-first open item, or nil.
+  defp representative_open_tool(open_tools) when map_size(open_tools) == 0, do: nil
+
+  defp representative_open_tool(open_tools) do
+    open_tools |> Enum.min_by(fn {key, _item} -> key end) |> elem(1)
+  end
 
   defp track_item_boundaries("turn/started", frame, state) do
     turn_id = get_in(frame, ["params", "turn", "id"])
+
+    # A fresh turn keeps a pended stop pended: only the authoritative turn
+    # outcome resolves it, never the turn start itself.
     %{state | current_turn_id: turn_id, status: :turn_in_progress}
   end
 
@@ -646,7 +728,14 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         state.in_flight_commands
       end
 
-    %{state | in_flight_item: item, in_flight_commands: commands}
+    open_tools =
+      if tool_item?(item) do
+        Map.put(state.open_tools, tool_key(item), item)
+      else
+        state.open_tools
+      end
+
+    %{state | open_tools: open_tools, in_flight_commands: commands}
   end
 
   defp track_item_boundaries("item/completed", frame, state) do
@@ -660,16 +749,14 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         state.in_flight_commands
       end
 
-    state = %{state | in_flight_item: nil, in_flight_commands: commands}
-
-    # CRITICAL LEASE RULE:
-    # If stop was requested at safe boundary, and the in-flight command just completed,
-    # issue turn/interrupt before the next item begins!
-    if state.stop_requested == :safe_boundary do
-      do_interrupt(state)
-    else
+    # Identity-keyed close: an unrelated completion (reasoning, message,
+    # or a different tool) cannot clear an open tool. Completions never
+    # release a pended stop under terminal-only semantics.
+    %{
       state
-    end
+      | open_tools: Map.delete(state.open_tools, tool_key(item)),
+        in_flight_commands: commands
+    }
   end
 
   defp track_item_boundaries("turn/completed", frame, state) do
@@ -699,7 +786,9 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         _ -> :completed
       end
 
-    %{state | status: status, current_turn_id: nil, in_flight_item: nil}
+    # Natural terminal resolves any pending safe stop without an
+    # interrupt: the turn is over, so there is nothing left to stop.
+    %{state | status: status, current_turn_id: nil, open_tools: %{}, stop_requested: nil}
   end
 
   defp track_item_boundaries(_method, _frame, state), do: state

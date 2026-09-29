@@ -144,9 +144,12 @@ defmodule Shoestring.Elves do
   end
 
   @doc """
-  Requests stopping at the next safe boundary (after in-flight item/command completion).
+  Requests a safe stop: the request pends at the provider session and
+  resolves at the turn end — nothing running is interrupted or killed.
   Dispatches to the adapter session's safe stop handler when supported, or returns
-  `{:error, :safe_stop_unsupported}` for adapters that cannot honour a safe-boundary stop (e.g. Claude).
+  `{:error, :safe_stop_unsupported}` for adapters that cannot honour a safe stop
+  through this path (e.g. Claude runs, whose sessions stop via the Elf's
+  decline path instead).
   """
   @spec request_stop(Ecto.UUID.t(), keyword()) ::
           {:ok, :stop_requested | :already_terminal} | {:error, term()}

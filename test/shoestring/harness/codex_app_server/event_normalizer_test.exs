@@ -347,4 +347,44 @@ defmodule Shoestring.Harness.CodexAppServer.EventNormalizerTest do
       refute Map.has_key?(event.extensions, "codex-app-server:exit_code")
     end
   end
+
+  describe "unknown item shapes" do
+    # Unknown shapes (e.g. `mcpToolCall`) stay `:lifecycle` with identity
+    # and the recorded type, and carry no boundary marker and no
+    # spend-shaped fields: under terminal-only safe stops the Elf layer
+    # never declines mid-turn, so the fallback must not invent lifecycle
+    # structure spend counting could misread.
+    test "unknown item shapes stay lifecycle with identity and type, spend-neutral" do
+      started = %{"type" => "mcpToolCall", "id" => "mcp-9", "status" => "inProgress"}
+      completed = %{"type" => "mcpToolCall", "id" => "mcp-9", "status" => "completed"}
+
+      assert {:ok, start_event} =
+               EventNormalizer.normalize(
+                 %{"method" => "item/started", "params" => %{"item" => started}},
+                 @run_id,
+                 1,
+                 %{provider_session_id: @session_id}
+               )
+
+      assert start_event.kind == :lifecycle
+      assert start_event.extensions["codex-app-server:item_id"] == "mcp-9"
+      assert start_event.extensions["codex-app-server:item_type"] == "mcpToolCall"
+      refute Map.has_key?(start_event.extensions, "codex-app-server:boundary")
+      refute Map.has_key?(start_event.extensions, "codex-app-server:exit_code")
+
+      assert {:ok, end_event} =
+               EventNormalizer.normalize(
+                 %{"method" => "item/completed", "params" => %{"item" => completed}},
+                 @run_id,
+                 2,
+                 %{provider_session_id: @session_id}
+               )
+
+      assert end_event.kind == :lifecycle
+      assert end_event.extensions["codex-app-server:item_id"] == "mcp-9"
+      assert end_event.extensions["codex-app-server:item_type"] == "mcpToolCall"
+      refute Map.has_key?(end_event.extensions, "codex-app-server:boundary")
+      refute Map.has_key?(end_event.extensions, "codex-app-server:exit_code")
+    end
+  end
 end

@@ -98,7 +98,7 @@ defmodule ShoestringWeb.RunShowLive do
           {:ok, :stop_requested} ->
             {:noreply,
              socket
-             |> put_flash(:info, "Safe stop requested at next boundary.")
+             |> put_flash(:info, "Safe stop requested; resolves at turn end.")
              |> reload_run_state()}
 
           {:ok, :already_terminal} ->

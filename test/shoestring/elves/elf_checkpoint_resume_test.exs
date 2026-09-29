@@ -77,14 +77,14 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
   - Terminal twins (completed / failed) carry the goal/task acceptance
     contract with descriptions.
 
-  Locking note (standing contract): on the pre-fix base commit the
-  reactive writer has no `reactive` kind and the decline suspends even
-  when the checkpoint write fails, so the kind/count/no-suspend/no-wake
-  assertions below fail behaviourally there; the terminal checkpoint
-  exists on base but carries the generic criterion, so the acceptance
-  assertions fail there too. This file references only base-present
-  modules. The no-extension fresh-start prompt pin passes on base as
-  well (documentation, stated honestly).
+  Locking note (standing contract): a completed turn with a refused
+  lease keeps its terminal (expiry markers plus the ordinary terminal
+  checkpoint; no suspension, no wake), while an interrupted one declines
+  (reactive contents, suspension, wake) and keeps its interrupted
+  terminal. Mid-turn spends append nothing for already-dead leases. The
+  evidence-content shapes and the quota-poison shape predate the redesign
+  (verified present on the pre-fix base): they pin preserved behavior,
+  not red locks. This file references only base-present modules.
   """
 
   use Shoestring.DataCase, async: false
@@ -96,6 +96,7 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
   alias Shoestring.Elves
   alias Shoestring.Elves.PoisonCheckpointRepo
   alias Shoestring.Harness.{CapacitySnapshot, ExecutionLease, ExecutionLeaseRecord, Projector}
+  alias Shoestring.Harness.RunRecord
   alias Shoestring.Harness.Fake.Scenario
   alias Shoestring.Repo
   alias Shoestring.Test.CobblerHelpers
@@ -215,24 +216,23 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
     assert criteria =~ "Deterministic acceptance description for the task."
   end
 
-  test "lease_not_renewable boundary with unreadable write stays bounded and recovers", %{
+  test "already-terminal lease appends nothing mid-turn; completed outcome terminates cleanly", %{
     sup: sup,
     goal: goal,
     task: task
   } do
-    # The lease is already terminal (expired) when the boundary fires, so
-    # the renewal layer reports not-renewable. The first write fails twice
-    # (poisoned replay); the run must not settle quietly — the next
-    # boundary retries into a recovered checkpoint — and must not suspend
-    # or wake without one. A safe stop is still requested.
-    # (Base: the failed write is swallowed AND settled, so no boundary
-    # ever retries and no reactive checkpoint ever appears.)
+    # The lease is force-expired before events flow. Mid-turn spends must
+    # append nothing — no checkpoint contents, no settlement, no suspend:
+    # the outcome replays the refusal and the run completes with its
+    # terminal plus the ordinary terminal checkpoint. (A mid-turn
+    # settlement would skip the outcome evaluation; a mid-turn checkpoint
+    # would appear below as a reactive record.)
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
 
     scenario =
-      fake_scenario(:poison_not_renewable, breached_snapshot(fresh_id), [
+      fake_scenario(:already_dead, breached_snapshot(fresh_id), [
         Scenario.lifecycle_event(source_event_id: "evt-life"),
         Scenario.output_event("one", source_event_id: "evt-out-1"),
         Scenario.output_event("two", source_event_id: "evt-out-2"),
@@ -242,59 +242,117 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
 
     request = ElvesHelpers.run_request(goal, task)
 
-    log =
-      capture_log(fn ->
-        assert {:ok, elf_pid} =
-                 Elves.start_run(request, ElvesHelpers.fake_identity(),
-                   supervisor: sup,
-                   scenario: scenario,
-                   command: ["sleep", "30"],
-                   runner_opts: @runner_opts,
-                   clock: FixedClock,
-                   event_interval_ms: @interval_ms,
-                   notify: self()
-                 )
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
 
-        run_id = wait_running(goal, request.dispatch_id)
-        on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
 
-        %{grant_id: grant_id} =
-          grant_for_run!(goal, run_id, fresh_id,
-            response_budget: 2,
-            tool_budget: 25,
-            reserves: %{response: 0, tool: 0},
-            checkpoint_cadence: 100,
-            deadline: DateTime.add(FixedClock.now(), 3_600, :second)
-          )
+    %{grant_id: grant_id} =
+      grant_for_run!(goal, run_id, fresh_id,
+        response_budget: 2,
+        tool_budget: 25,
+        reserves: %{response: 0, tool: 0},
+        checkpoint_cadence: 100,
+        deadline: DateTime.add(FixedClock.now(), 3_600, :second)
+      )
 
-        assert {:ok, _} = Leases.transition(goal.id, grant_id, :expire)
-        assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+    assert {:ok, _} = Leases.transition(goal.id, grant_id, :expire)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
 
-        start_gate(2)
-        swap_repo(elf_pid)
-        register_session_double(request.dispatch_id)
+    register_session_double(request.dispatch_id)
 
-        assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
-        send(self(), {:run_done, run_id})
-      end)
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
-    assert_received {:run_done, run_id}
-
-    # Recovered on retry: exactly one reactive checkpoint, never preceded
-    # by a suspension or a wake without contents.
-    assert length(reactive_checkpoints(goal.id, run_id)) == 1
+    assert length(reactive_checkpoints(goal.id, run_id)) == 0
+    assert length(terminal_checkpoints(goal.id, run_id)) == 1
     assert count_types(goal.id, run_id, ["run.suspended"]) == 0
     assert Repo.get_by(WakeupRecord, run_id: run_id) == nil
-
-    assert_received :safe_stop_requested
-    assert log =~ "retry left open"
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
   end
 
-  test "planned boundary decline persists an evidence-backed reactive checkpoint", %{
+  test "already-terminal lease declines at an interrupted outcome", %{
     sup: sup,
     goal: goal,
     task: task
   } do
+    # Same force-expired setup with an interrupted outcome (early stop
+    # proven): the outcome replay declines — reactive checkpoint contents,
+    # suspension, and sleep wake — and keeps the interrupted terminal. This
+    # proves the outcome evaluates even though mid-turn spends appended
+    # nothing at all.
+    fresh_id = Ecto.UUID.generate()
+    FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    scenario =
+      fake_scenario(:already_dead_interrupted, breached_snapshot(fresh_id), [
+        Scenario.lifecycle_event(source_event_id: "evt-life"),
+        Scenario.output_event("one", source_event_id: "evt-out-1"),
+        Scenario.output_event("two", source_event_id: "evt-out-2"),
+        Scenario.output_event("three", source_event_id: "evt-out-3"),
+        Scenario.result_event("interrupted", source_event_id: "evt-done")
+      ])
+
+    request = ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, _pid} =
+             Elves.start_run(request, ElvesHelpers.fake_identity(),
+               supervisor: sup,
+               scenario: scenario,
+               command: ["sleep", "30"],
+               runner_opts: @runner_opts,
+               clock: FixedClock,
+               event_interval_ms: @interval_ms,
+               notify: self()
+             )
+
+    run_id = wait_running(goal, request.dispatch_id)
+    on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+
+    %{grant_id: grant_id} =
+      grant_for_run!(goal, run_id, fresh_id,
+        response_budget: 2,
+        tool_budget: 25,
+        reserves: %{response: 0, tool: 0},
+        checkpoint_cadence: 100,
+        deadline: DateTime.add(FixedClock.now(), 3_600, :second)
+      )
+
+    assert {:ok, _} = Leases.transition(goal.id, grant_id, :expire)
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+
+    register_session_double(request.dispatch_id)
+
+    assert_receive {:elf_terminal, ^run_id, %{class: :interrupted}}, 15_000
+    assert_received :safe_stop_requested
+
+    assert length(reactive_checkpoints(goal.id, run_id)) == 1
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
+    assert Repo.get_by!(WakeupRecord, run_id: run_id).status == "scheduled"
+
+    assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
+    assert Repo.get_by!(RunRecord, id: run_id).status == "interrupted"
+  end
+
+  test "completed decline persists an evidence-backed terminal checkpoint", %{
+    sup: sup,
+    goal: goal,
+    task: task
+  } do
+    # A completed turn with a refused lease keeps its terminal: the expiry
+    # markers land and the ordinary terminal checkpoint carries the
+    # evidence — no suspension, no wake, no reactive checkpoint. The
+    # terminal checkpoint shares the acceptance-contract collector with
+    # the reactive path, so the same content assertions apply.
     fresh_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, fresh_id, used_percent: 95.0)
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
@@ -332,15 +390,20 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
 
-    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+    # The completed outcome keeps its terminal: wait for it, then pin
+    # its checkpoint and the absence of any suspension or wake.
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
-    # One reactive checkpoint (kind "reactive", never "terminal"), then the
-    # durable sleep shape. (Base: no `reactive` kind is ever emitted.)
-    [checkpoint] = reactive_checkpoints(goal.id, run_id)
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 0
+    assert Repo.get_by(WakeupRecord, run_id: run_id) == nil
+    assert length(reactive_checkpoints(goal.id, run_id)) == 0
+
+    # One terminal checkpoint (kind "terminal"), carrying the evidence.
+    [checkpoint] = terminal_checkpoints(goal.id, run_id)
     payload = checkpoint.payload
 
-    assert payload["stop_reason"] == "lease_exhausted"
-    assert payload["extensions"]["shoestring.elf:checkpoint_kind"] == "reactive"
+    assert payload["stop_reason"] == "run.completed"
+    assert payload["extensions"]["shoestring.elf:checkpoint_kind"] == "terminal"
 
     criteria = Enum.join(payload["acceptance_contract"]["criteria"], "\n")
     assert criteria =~ "Elf goal"
@@ -349,21 +412,18 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
     assert criteria =~ "Deterministic acceptance description for the task."
 
     assert payload["next_action"] =~ "rerunning the recorded verification commands"
-    assert payload["next_action"] =~ "lease_exhausted"
 
-    assert count_types(goal.id, run_id, ["run.suspended"]) == 1
-    assert Repo.get_by!(WakeupRecord, run_id: run_id).status == "scheduled"
+    assert count_types(goal.id, run_id, ["lease.expired"]) == 1
   end
 
-  test "reactive decline through a fixture worktree carries full repository evidence", %{
+  test "completed decline through a fixture worktree carries full repository evidence", %{
     sup: sup,
     goal: goal,
     task: task
   } do
     # The full collector path (not the floor): worktree identity, current
     # revision, dirty diff stat, changed-file list, verification lines,
-    # and last safe boundary are all real. (Base: generic criterion with
-    # no `reactive` kind and revision "unknown".)
+    # and last safe boundary are all real on the terminal checkpoint.
     run_id = Ecto.UUID.generate()
     fixture = ElfWorktreeFixture.create!(run_id)
     on_exit(fn -> ElfWorktreeFixture.cleanup!(fixture) end)
@@ -420,14 +480,22 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
       deadline: DateTime.add(FixedClock.now(), 3_600, :second)
     )
 
-    assert_receive {:elf_terminal, ^run_id, _terminal}, 15_000
+    # The completed outcome keeps its terminal: wait for it, then pin
+    # the terminal checkpoint's evidence contents (the full collector
+    # path, not the floor: worktree identity, current revision, dirty
+    # diff stat, changed-file list, verification lines, and boundary are
+    # all real).
+    assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
-    [checkpoint] = reactive_checkpoints(goal.id, run_id)
+    assert count_types(goal.id, run_id, ["run.suspended"]) == 0
+    assert Repo.get_by(WakeupRecord, run_id: run_id) == nil
+
+    [checkpoint] = terminal_checkpoints(goal.id, run_id)
     payload = checkpoint.payload
 
     assert payload["repository_state"]["revision"] == fixture.base_commit
     assert payload["repository_state"]["dirty"] == true
-    assert payload["extensions"]["shoestring.elf:checkpoint_kind"] == "reactive"
+    assert payload["extensions"]["shoestring.elf:checkpoint_kind"] == "terminal"
 
     evidence = Enum.join(payload["evidence"]["items"], "\n")
     assert evidence =~ fixture.base_commit
@@ -436,7 +504,6 @@ defmodule Shoestring.Elves.ElfCheckpointResumeTest do
     assert evidence =~ "diff stat"
     assert evidence =~ "command cmd-verify-1"
     assert evidence =~ "last safe boundary"
-    assert evidence =~ "lease_exhausted"
   end
 
   test "terminal twins carry the goal/task acceptance contract with descriptions", %{

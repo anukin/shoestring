@@ -43,6 +43,7 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
   alias Shoestring.Harness.Capacity.Fixtures
   alias Shoestring.Harness.Capacity.Supervisor, as: CapacitySupervisor
   alias Shoestring.Harness.Observatory
+  alias Shoestring.Repo
 
   @claude_time ~U[2026-08-29 07:34:25Z]
   @codex_time ~U[2026-08-29 04:38:25Z]
@@ -70,34 +71,98 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
     end
   end
 
-  # Deterministic teardown helper: the tree under `root` can touch the
-  # Repo (the healthy monitor's sink calls `Observatory.ingest/1`, which
-  # goes through `Observatory.ensure_provisioned/1` -> `Repo.get/2`), so
-  # it must be fully DOWN before the Ecto sandbox owner — released by the
-  # earlier-registered `on_exit` in `Shoestring.DataCase.setup_sandbox/1`
-  # — goes away. A fire-and-forget `Process.exit(root, :kill)` returns
-  # immediately and lets the sandbox owner win that race, producing
-  # `DBConnection` ownership errors ("owner exited while client still
-  # holds a connection"). Monitoring `root` and awaiting its `:DOWN`
-  # makes the ordering deterministic: this `on_exit` only returns once
-  # the tree is dead, so the sandbox `stop_owner` running after it can
-  # never race a live Repo client. The timeout is a bounded backstop, not
-  # a sleep: on the happy path the `receive` returns as soon as `:DOWN`
-  # arrives, and `:kill` is untrappable so the wait always terminates.
-  defp stop_root_synchronously(root, timeout \\ 5_000) do
-    ref = Process.monitor(root)
-    Process.exit(root, :kill)
+  # Deterministic whole-tree teardown helper: the tree under `root` can
+  # touch the Repo, and awaiting only the root's DOWN is NOT enough (see
+  # the regression test below). Every live pid in the tree is therefore
+  # monitored BEFORE the kill — monitors on already-dead pids fire
+  # immediately, so no liveness pre-check can race — then the root is
+  # killed (linked descendants die by propagation) and every remaining
+  # snapshot pid is killed directly (idempotent for the already-dying;
+  # required for members that detached from the root, which propagation
+  # can never reach), and each DOWN is awaited until a single overall
+  # deadline. The deadline (default 10 s, deliberately distinct from the
+  # 5 s per-child shutdown budgets in the fixtures) bounds total hangs;
+  # every DOWN short-circuits the wait, so it is a backstop, not a sleep.
+  # This `on_exit` only returns once the whole tree is dead, so the
+  # sandbox `stop_owner` running after it (registered earlier in
+  # `Shoestring.DataCase.setup_sandbox/1`, LIFO) can never race a live
+  # Repo client. No sleeps, no retries, no polling, no `Process.alive?`
+  # synchronization (post-DOWN death assertions elsewhere are monotonic,
+  # not synchronization). Residual: the snapshot requires a live root — a
+  # dead root cannot be traversed, so orphans of an already-dead tree must
+  # be reaped by pid (as the pre-fix test below does for its survivor).
+  defp stop_root_synchronously(root, timeout \\ 10_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    pids =
+      [root | live_tree_pids(root)]
+      |> Enum.filter(&is_pid/1)
+      |> Enum.uniq()
+
+    refs = for pid <- pids, into: %{}, do: {Process.monitor(pid), pid}
+
+    if is_pid(root) do
+      Process.exit(root, :kill)
+    end
+
+    for pid <- pids, pid != root do
+      Process.exit(pid, :kill)
+    end
+
+    await_tree_down(refs, deadline)
+  end
+
+  # Live descendants of a supervisor, recursively. Only `:supervisor`
+  # children are descended into: probing a worker with `which_children`
+  # would crash it (no such `handle_call`), and with a live `:permanent`
+  # parent that crash would instantly restart it under the same name —
+  # reincarnating the very process teardown is trying to reap. No
+  # liveness pre-checks (a monitor on a dead pid fires immediately, and
+  # `which_children` on a dead supervisor exits into the catch below):
+  # dead branches contribute nothing, deterministically.
+  defp live_tree_pids(sup) do
+    if is_pid(sup) do
+      try do
+        sup
+        |> Supervisor.which_children()
+        |> Enum.flat_map(fn
+          {_id, pid, :supervisor, _modules} when is_pid(pid) ->
+            [pid | live_tree_pids(pid)]
+
+          {_id, pid, _type, _modules} when is_pid(pid) ->
+            [pid]
+
+          _other ->
+            []
+        end)
+      catch
+        :exit, _ -> []
+      end
+    else
+      []
+    end
+  end
+
+  defp await_tree_down(refs, _deadline) when map_size(refs) == 0, do: :ok
+
+  defp await_tree_down(refs, deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      raise "root teardown timed out waiting for DOWN from #{inspect(Map.values(refs))}"
+    end
 
     receive do
-      {:DOWN, ^ref, :process, ^root, _reason} -> :ok
+      {:DOWN, ref, :process, _pid, _reason} ->
+        await_tree_down(Map.delete(refs, ref), deadline)
     after
-      timeout ->
-        raise "root supervisor #{inspect(root)} did not shut down within #{timeout} ms"
+      remaining ->
+        raise "root teardown timed out waiting for DOWN from #{inspect(Map.values(refs))}"
     end
   end
 
   defp root_child_pid(root, id) do
-    if is_pid(root) and Process.alive?(root) do
+    if is_pid(root) do
       try do
         root
         |> Supervisor.which_children()
@@ -109,7 +174,7 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
   end
 
   defp cap_child_pid(cap_sup, id) do
-    if is_pid(cap_sup) and Process.alive?(cap_sup) do
+    if is_pid(cap_sup) do
       try do
         cap_sup
         |> Supervisor.which_children()
@@ -118,30 +183,6 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
         :exit, _ -> nil
       end
     end
-  end
-
-  defp wait_for(fun, attempts \\ 200) do
-    Enum.reduce_while(1..attempts, nil, fn _, _ ->
-      case fun.() do
-        nil ->
-          Process.sleep(10)
-          {:cont, nil}
-
-        false ->
-          Process.sleep(10)
-          {:cont, nil}
-
-        value ->
-          {:halt, value}
-      end
-    end)
-  end
-
-  defp wait_connected(monitor) do
-    wait_for(fn ->
-      _ = :sys.get_state(monitor)
-      if CodexMonitor.status(monitor) == :connected, do: true, else: false
-    end)
   end
 
   test "production wiring is transient: intensity exhaustion never propagates" do
@@ -245,9 +286,12 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
 
     # The healthy provider connects and persists a real ledger observation
     # BEFORE the storm, giving the UI honest last-known state to serve after.
-    assert wait_connected(healthy_pid) == true
+    # Deterministic sync without polling: the sink message proves a frame
+    # was ingested, and `:sys.get_state/1` guarantees all prior messages
+    # were handled before the status is read.
     assert_receive {:storm_healthy_ingested, %_{capacity_state: :observed}}, 5_000
     _ = :sys.get_state(healthy_pid)
+    assert CodexMonitor.status(healthy_pid) == :connected
     assert %{} = CodexMonitor.last_observation(healthy_pid)
 
     victim0 = cap_child_pid(cap_pid, :claude_monitor)
@@ -301,6 +345,147 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
     refute has_element?(view, "#observations-empty")
   end
 
+  # LOCK: teardown must reap the whole tree — including members that
+  # outlive the root's death. Awaiting only the root's DOWN (the pre-fix
+  # helper below) returns while such a member is still alive; the fixed
+  # helper monitors every snapshot pid and kills each directly, so its
+  # return implies every member dead. Both directions below are
+  # deterministic (no timing): the detached member is unlinked and parked,
+  # so nothing the root's death propagates can ever kill it (survival is
+  # structural), while death after an observed DOWN is monotonic.
+  #
+  # The detached member is a SYNTHETIC model of the whole-snapshot
+  # teardown postcondition — every snapshot pid dead when the helper
+  # returns — not a faithful reproduction of the historical shutdown
+  # mechanism. What code reasoning supports (REPO-INSPECTION, not a
+  # runtime proof): the real `CodexMonitor` sets `Process.flag(:trap_exit,
+  # true)` in `init/1` and has a catch-all `handle_info(_other, ...)`
+  # clause that keeps its state. What is NOT established: that a
+  # parent's EXIT ever reached that clause and was swallowed there.
+  # OTP itself handles a parent EXIT inside gen_server after the
+  # messages already queued in the mailbox, and the monitor's direct
+  # parent is the capacity supervisor, not the test root — so the exact
+  # historical path by which a Repo-touching monitor outlived root
+  # teardown was never determined. Likewise a root DOWN does not
+  # establish that descendants have finished asynchronous shutdown;
+  # that is exactly what the fixed helper refuses to assume.
+  test "teardown reaps the whole tree including members detached from the root" do
+    test_pid = self()
+
+    children = [
+      %{
+        id: :linked_worker,
+        start: {Agent, :start_link, [fn -> :ok end, []]},
+        restart: :temporary,
+        shutdown: 5_000,
+        type: :worker
+      },
+      %{
+        id: :detached_worker,
+        start: {Task, :start_link, [fn -> detach_and_park(test_pid) end]},
+        restart: :temporary,
+        shutdown: 5_000,
+        type: :worker
+      }
+    ]
+
+    {:ok, root} = Supervisor.start_link(children, strategy: :one_for_one)
+    Process.unlink(root)
+
+    on_exit(fn -> stop_root_synchronously(root) end)
+
+    assert_receive {:detached_repo_ok, detached_pid}, 5_000
+    assert is_pid(detached_pid)
+
+    stop_root_synchronously(root)
+
+    # Every snapshot pid is dead: the helper observed each DOWN before
+    # returning, and dead stays dead.
+    refute Process.alive?(root), "root survived synchronous teardown"
+
+    refute Process.alive?(detached_pid),
+           "detached member survived synchronous teardown and can keep touching Repo"
+  end
+
+  # Documentation of the pre-fix helper's insufficiency, pinned
+  # deterministically: kill the root and await only the root's DOWN (the
+  # exact pre-fix helper semantics, preserved below). The detached member
+  # is structurally alive afterwards — root-only evidence cannot prove
+  # tree teardown. This test passes on every commit by construction (the
+  # helper under test is local to this file); it documents the property,
+  # it is not a regression lock on production behavior. Cleans up with
+  # the fixed helper.
+  test "root-only teardown demonstrably leaves a detached member alive" do
+    test_pid = self()
+
+    children = [
+      %{
+        id: :detached_worker,
+        start: {Task, :start_link, [fn -> detach_and_park(test_pid) end]},
+        restart: :temporary,
+        shutdown: 5_000,
+        type: :worker
+      }
+    ]
+
+    {:ok, root} = Supervisor.start_link(children, strategy: :one_for_one)
+    Process.unlink(root)
+
+    on_exit(fn -> stop_root_synchronously(root) end)
+
+    assert_receive {:detached_repo_ok, detached_pid}, 5_000
+    assert is_pid(detached_pid)
+
+    pre_fix_stop_root_synchronously(root)
+
+    assert Process.alive?(detached_pid),
+           "detached member died: root-only evidence cannot prove tree teardown"
+
+    # Direct, deterministic cleanup: the dead root can no longer be
+    # traversed for a snapshot, so the known survivor is reaped by pid
+    # (its DOWN observed, death monotonic).
+    ref = Process.monitor(detached_pid)
+    Process.exit(detached_pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^detached_pid, _}, 5_000
+    refute Process.alive?(detached_pid)
+  end
+
+  # Parked Repo-capable worker that detaches from its supervisor after
+  # start: unlinks every link it holds except the test's (in a fresh tree,
+  # exactly the supervisor link), proves Repo access from its own pid,
+  # notifies, then parks until killed. A SYNTHETIC stand-in for "a member
+  # that outlives its root" — it models the teardown postcondition, not
+  # the real monitor's shutdown path.
+  defp detach_and_park(test_pid) do
+    {:links, links} = Process.info(self(), :links)
+
+    for pid <- links, pid != test_pid do
+      Process.unlink(pid)
+    end
+
+    _count = Repo.aggregate("goals", :count)
+    send(test_pid, {:detached_repo_ok, self()})
+
+    receive do
+      :stop -> :stopped
+    end
+  end
+
+  # The exact pre-fix helper semantics (kill the root, await only the
+  # root's DOWN), preserved to pin its insufficiency. Not used by any
+  # production path.
+  defp pre_fix_stop_root_synchronously(root, timeout \\ 5_000) do
+    ref = Process.monitor(root)
+    Process.exit(root, :kill)
+
+    receive do
+      {:DOWN, ^ref, :process, ^root, _reason} -> :ok
+    after
+      timeout ->
+        raise "root supervisor #{inspect(root)} did not shut down within #{timeout} ms"
+    end
+  end
+
   # Kills the victim monitor inside whichever capacity supervisor incarnation
   # is currently alive under `root`, until `deadline`. Returns when the root
   # is dead, the deadline passes, or the capacity child stays down past a
@@ -331,6 +516,10 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
 
               _ ->
                 # Victim restarting inside a live capacity supervisor; keep driving.
+                # Storm-driver pacing only (yields so the supervisor can
+                # re-arm the victim): no assertion depends on this duration —
+                # every kill below is confirmed by an observed DOWN, and every
+                # test assertion syncs on monitor DOWNs plus `:sys.get_state/1`.
                 Process.sleep(10)
                 drive_storm(root, deadline)
             end
@@ -339,7 +528,11 @@ defmodule Shoestring.Harness.Capacity.SupervisionStormEvalTest do
             # Capacity child currently down. On the fixed wiring it stays
             # down (storm contained); on the old wiring the root re-arms it
             # within milliseconds (storm continues). Give it a grace window
-            # before declaring the storm over.
+            # before declaring the storm over. Storm-driver pacing only (it
+            # bounds how long the driver waits before re-checking, so the
+            # old-wiring re-arm has time to show): no assertion depends on
+            # the duration — the stay-down assertion reads supervisor state
+            # after the driver returns, and teardown syncs on DOWNs.
             Process.sleep(500)
 
             if Process.alive?(root) and

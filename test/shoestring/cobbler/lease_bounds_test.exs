@@ -155,6 +155,48 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
     assert state.tools == 1
   end
 
+  # ----------------------------------------------------------------------------
+  # `tool_identity/1` surface (observability keying only)
+  #
+  # Locking note: only `tool_identity/1` is new in this slice.
+  # `track_open_tools/2` and `track_control/2` name a removed design —
+  # no such helpers exist anywhere in lib or test, and no safe-stop or
+  # renewal decision consults open-tool state. These unit tests document
+  # the pure surface; the behavioural locks live in the Elf lease-loop
+  # tests, the Codex session safe-boundary tests, and the normalizer
+  # marker tests, which use only pre-existing APIs.
+  # ----------------------------------------------------------------------------
+
+  describe "tool_identity/1" do
+    test "prefers provider-native keys and skips blanks consistently" do
+      assert LeaseBounds.tool_identity(%{
+               "claude-headless:tool_use_id" => "toolu_1",
+               "codex-app-server:item_id" => "cmd-1",
+               "item_id" => "plain-1",
+               "id" => "raw-1"
+             }) == "toolu_1"
+
+      assert LeaseBounds.tool_identity(%{
+               "codex-app-server:item_id" => "cmd-1",
+               "item_id" => "plain-1",
+               "id" => "raw-1"
+             }) == "cmd-1"
+
+      assert LeaseBounds.tool_identity(%{"item_id" => "plain-1", "id" => "raw-1"}) ==
+               "plain-1"
+
+      assert LeaseBounds.tool_identity(%{"id" => "raw-1"}) == "raw-1"
+    end
+
+    test "blank, whitespace-only, nil, and missing ids resolve to nil" do
+      assert LeaseBounds.tool_identity(%{"codex-app-server:item_id" => ""}) == nil
+      assert LeaseBounds.tool_identity(%{"codex-app-server:item_id" => "   "}) == nil
+      assert LeaseBounds.tool_identity(%{"codex-app-server:item_id" => nil}) == nil
+      assert LeaseBounds.tool_identity(%{"other" => "x"}) == nil
+      assert LeaseBounds.tool_identity("not-a-map") == nil
+    end
+  end
+
   test "lifecycle, capacity, result, and non-quota error events never spend" do
     state = bounds()
 

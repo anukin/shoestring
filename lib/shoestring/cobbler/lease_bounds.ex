@@ -201,6 +201,29 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   end
 
   @doc """
+  Shared tool-identity resolver over string-keyed maps (raw provider items
+  and normalized extensions alike).
+  Returns the first present provider-native identity —
+  `claude-headless:tool_use_id`, `codex-app-server:item_id`, `item_id`, or
+  raw `id` — skipping blank values consistently, or `nil` when no usable
+  identity exists. Used for observability keying only: no safe-stop or
+  renewal decision consults it (terminal-only resolution never consults
+  open-tool state).
+  """
+  @spec tool_identity(map()) :: String.t() | nil
+  def tool_identity(map) when is_map(map) do
+    [
+      map["claude-headless:tool_use_id"],
+      map["codex-app-server:item_id"],
+      map["item_id"],
+      map["id"]
+    ]
+    |> Enum.find(&present?/1)
+  end
+
+  def tool_identity(_other), do: nil
+
+  @doc """
   Folds the live normalized-event buffer for one `run_id`.
 
   Events carrying another `run_id` are ignored; effects accumulate in order.
@@ -431,4 +454,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
     extensions["claude-headless:tool_use_id"] || extensions["codex-app-server:item_id"] ||
       extensions["item_id"] || source_id
   end
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
 end

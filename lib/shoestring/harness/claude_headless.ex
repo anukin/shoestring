@@ -125,15 +125,17 @@ defmodule Shoestring.Harness.ClaudeHeadless do
   end
 
   @doc """
-  Cancels a running session by killing the whole owned process group.
+  Cancels a running session.
 
   Options:
 
-    * `:boundary` — when `:safe`, `:item`, or `:lease`, the kill is
-      deferred until the in-flight tool set drains (the in-flight
-      command's `tool_result` is observed first). Deferred or not, the
-      outcome is always `killpg`: Claude has no in-band interrupt, and
-      this path does not pretend otherwise.
+    * `:boundary` — when `:safe`, `:item`, or `:lease`, the cancel pends
+      exactly like a lease safe stop: it is recorded and resolved by the
+      turn terminal with no kill, because killing on a tool END can still
+      cut the next tool the child already started. By default (no boundary
+      option — the explicit user/orchestrator path) the whole owned
+      process group is killed immediately plus reaped. Lease safe stop
+      and explicit cancel are deliberately distinct operations.
   """
   @impl Shoestring.Harness.Adapter
   @spec cancel(RunIdentity.t(), map()) :: {:ok, :cancelled} | {:error, Error.t()}

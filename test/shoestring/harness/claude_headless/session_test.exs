@@ -176,7 +176,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.SessionTest do
       assert {:ok, :cancelled} = Session.cancel(session)
     end
 
-    test "safe-boundary cancel defers the kill until the in-flight set drains" do
+    test "safe-boundary cancel pends like a safe stop; the terminal resolves it with no kill" do
       lines = fixture_lines("stream-json-tool-exec.jsonl")
       {transport, session} = start_scripted_session(lines)
 
@@ -190,30 +190,66 @@ defmodule Shoestring.Harness.ClaudeHeadless.SessionTest do
       assert {:ok, :cancelled} = Session.cancel(session, %{boundary: :safe})
       _ = :sys.get_state(session)
 
-      # Deferred: still running, nothing killed yet.
+      # Pended: still running, nothing killed.
       {:ok, status} = Session.status(session)
       assert status.status == :running
       assert status.stop_requested == :safe_boundary
       assert GenServer.call(transport, :was_terminated) == false
 
-      # First END drains one tool — still deferred.
+      # Both ENDs drain the set — still no kill. Terminal-only never kills
+      # on a tool END: the next tool may already be starting in the child,
+      # and there is no in-band interrupt to aim between tools.
       :ok = ScriptedTransport.emit(transport)
       _ = :sys.get_state(session)
       assert GenServer.call(transport, :was_terminated) == false
 
-      # Second END drains the set — the group is reaped before the next tool.
+      :ok = ScriptedTransport.emit(transport)
+      _ = :sys.get_state(session)
+      assert GenServer.call(transport, :was_terminated) == false
+
+      {:ok, status} = Session.status(session)
+      assert status.status == :running
+      assert status.stop_requested == :safe_boundary
+
+      # The turn terminal resolves the pend with no kill; late frames past
+      # the terminal state are ignored.
+      :ok = ScriptedTransport.replay_all(transport)
+      _ = :sys.get_state(session)
+      assert GenServer.call(transport, :was_terminated) == false
+      {:ok, status} = Session.status(session)
+      assert status.status == :completed
+      assert status.stop_requested == nil
+    end
+
+    test "safe stop pends with nothing in flight; the terminal resolves it with no kill" do
+      lines = fixture_lines("stream-json-tool-exec.jsonl")
+      {transport, session} = start_scripted_session(lines)
+
+      # init only: nothing in flight — a safe stop still must not kill, as
+      # the request can interleave anywhere around a tool the child starts
+      # next.
       :ok = ScriptedTransport.emit(transport)
       _ = :sys.get_state(session)
 
-      assert GenServer.call(transport, :was_terminated) == true
       {:ok, status} = Session.status(session)
-      assert status.status == :cancelled
+      assert status.in_flight == []
 
-      # Late frames (final text + result) are ignored past the terminal state.
+      assert {:ok, :stop_requested} = Session.request_safe_stop(session)
+      _ = :sys.get_state(session)
+
+      {:ok, status} = Session.status(session)
+      assert status.status == :running
+      assert status.stop_requested == :safe_boundary
+      assert GenServer.call(transport, :was_terminated) == false
+
+      # The whole turn still streams to its terminal with no kill.
       :ok = ScriptedTransport.replay_all(transport)
       _ = :sys.get_state(session)
+
+      assert GenServer.call(transport, :was_terminated) == false
       {:ok, status} = Session.status(session)
-      assert status.status == :cancelled
+      assert status.status == :completed
+      assert status.stop_requested == nil
     end
   end
 
