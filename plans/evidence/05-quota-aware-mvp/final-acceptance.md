@@ -749,3 +749,13 @@ pre-registered rule after `turn1`: codex-cli 0.158.0 could not commit in the
 worktree (its sandbox denies the worktree's git dir). So L1–L8 were **not
 measured**, and the terminal-only lease stop stays hermetic-only. §10's
 superseding criterion stands unchanged.
+
+## 12. Standalone lease stop after #85 (2026-09-29 UTC)
+
+Pre-registered in `live-closeout-post85.md` §13, and run once from `setup`'s
+committed fixture head. L1–L7 pass live: the deadline was marked while tools
+ran, no interrupt, every started item completed, one renewal evaluation at
+the outcome, `run.completed` with its checkpoint, no suspend or wake, no
+duplicate. L8 fails as registered: the trajectory records the lease expired,
+but the stored row lags at `renewal_due` (post85 §14.3). §10's superseding
+criterion stands.

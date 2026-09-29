@@ -759,3 +759,54 @@ status below supersedes it.*
 
   Recommended but not ruled blocking here: resolve the codex-cli 0.158.0
   commit block before any further live Codex sender or handoff work.
+
+### Completion-record addendum — final decision (2026-09-29 UTC, after the standalone lease stop)
+
+*This addendum supersedes the previous addendum's "Final status", its Acceptance
+8 row, and its iteration-6 conditions 2 and 3. Everything above is left as
+written. Record: `plans/evidence/05-quota-aware-mvp/live-closeout-post85.md`
+§§13–15.*
+
+- **Final status: acceptance met on evidence; no contract blocker found.**
+  Every gate item 1–9 and every iteration-4 bullet is met at the evidence
+  level stated in the record's §15. The milestone takes effect when this PR
+  passes independent review and is **merged by the human**.
+  **Completed on:** 2026-09-29 (evidence), subject to that merge.
+- **Iteration-4 bullet 6 (lease stopping at safe boundaries): met live after
+  #85.** It was pre-registered at `f3a8557` as a standalone `lease_stop` from
+  `setup`'s committed head, because the original sequence had stopped after
+  `turn1` on the Codex commit restriction. One Codex run: the 60 s deadline
+  passed at a tool START, and `lease.renewal_due` was marked 27.5 ms later.
+  That item completed. The turn continued 6.5 min (16 more items, 11 of them
+  commands, all ending by themselves) to its own `completed` outcome. The outcome evaluated
+  renewal once (`reject`, `snapshot_provider_mismatch`) and recorded
+  `lease.expired`, then the terminal checkpoint and `run.completed`. There
+  was no interrupt, driver cancel, suspension, wake or duplicate. The Elf was
+  deregistered and its process group dead. Source checkout unchanged.
+  Criteria L1–L7 pass.
+- **L8 failed as registered.** The lease is terminal in the trajectory, but
+  the stored lease row still reads `renewal_due`: the goal's projector
+  stopped before the decision and markers, and nothing projects after the
+  terminal. This is a read-model follow-up (the twin of "run rows not
+  projected after start"), not an unsafe stop, because the trajectory is
+  authoritative. It is recorded, not redefined.
+- **Acceptance 8: met as a measurement; no product advantage shown.** The
+  gate requires the eval to show receiver behaviour and handoff tax. The
+  live three-arm, two-cycle measurement does that; the independent audit
+  concluded the measurement requirement is met, and beating the other arms is
+  not required. The failed pre-registered projection arm, the post-hoc repair
+  and the unreproduced scripted quota refusal remain as limits.
+- **Live budget this closeout:** 2 of 3 authorized Codex runs (`turn1`,
+  `lease_stop`); the third is unspent. 0 Claude, 0 retries.
+- **Follow-ups (nonblocking):** the lease/run row projection lag on terminal
+  paths. The codex-cli 0.158.0/0.159.0 commit restriction in worktrees, with
+  no proven safe repair and no sandbox change made. #85's N1–N7. The
+  `run_live_test.exs` and trajectory-writer test leaks. Providers acting on
+  the operator's global instructions. The projector raising on busy.
+  Redacted ids and the old `.pyc` in `main`'s history. Failed/crash stops, a
+  real quota refusal, late handoff delivery and the crash window, none
+  exercised live.
+- **Iteration 6: unlocked when this closeout PR passes independent review
+  and the human merges it.** Recommended first in iteration 6, not a
+  condition: resolve the Codex commit restriction before any live Codex
+  sender or handoff work.

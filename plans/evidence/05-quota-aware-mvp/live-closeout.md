@@ -319,3 +319,18 @@ host paths, login name, state-dir name, credential shapes, reasoning keys,
 non-synthetic UUIDs and prefixed ids, and the random secret all came back
 clean. They ran over the raw bytes, the reassembled delta stream (escaped and
 unescaped) and the newline-joined text.
+
+## 12. Post-#85 correction (2026-09-29, appended; §§0–11 unchanged)
+
+The new finding in §5 and §7.1 (a lease-deadline stop interrupted a Codex turn
+at a command START with no completion, and the decline never ran) was fixed
+**hermetically** by #85 (`lease-safe-boundary.md`): a lease safe stop now only
+pends until the provider's own turn outcome. It is now also **verified live**
+at `f3a8557`, codex-cli 0.159.0 (`live-closeout-post85.md` §14). The first
+event after the 60 s deadline was again a tool START; that item completed 3 ms
+later, the turn ran another 6.5 min to its own `completed` outcome, and no
+interrupt, suspension or wake occurred. Under #85, finding 1's manual-scope
+wake is no longer reachable from a completed turn (`final-acceptance.md` §10).
+The lease row still reads `renewal_due`, because projection lags the terminal
+path (post85 §14.3). This record's negative observations stand as history of
+the pre-#85 design.

@@ -473,3 +473,180 @@ Interpretation, fixed now:
 - The node runs in the foreground of a `tmux` pane with no `timeout`. The
   observation window is 2700 s. Its expiry records a block and never stops the
   Elf. The wake observation after the stop is 150 s.
+
+---
+
+*Everything below was written after the standalone run.*
+
+## 14. Standalone `lease_stop` result (2026-09-29 UTC)
+
+Run `…006` in `fixtures/live-final/normalized-post85-codex-lease-stop.md`
+(725 normalized events). Phase record: `post85-lease-stop-summary.json`, 4th
+of its 5 records. Code `f3a8557…`, tree `0395dbf…`, `dirty: false` for both
+`lease_stop` and the `audit` after it (P1 VERIFIED). Base `ed06095…` from
+`setup`, pinned. codex-cli 0.159.0. Pre-spend reading (P4 VERIFIED): Codex
+`degraded / proactive`, primary 7.0 %, secondary 62.0 % used, observed
+19:49:21.18Z, after the node's boot at 19:49:19.51Z. The node also ran the
+capacity monitor's own `codex app-server --stdio` (its non-inference
+rate-limit read) in a separate process group. Only the Elf's group
+(`pgid` recorded at `run.running`) carried the turn.
+
+### 14.1 Timeline (VERIFIED from committed events)
+
+| Time (UTC) | Seq | Event |
+|---|---|---|
+| 19:49:30.97 | 7–8 | lease granted and active; 60 s manual deadline 19:50:30.95 |
+| 19:49:31.16 | 11 | `run.running` |
+| 19:50:14.91 | 170 | last event before the deadline (a command completion) |
+| 19:51:13.840 | 171 | first event after the deadline: a tool **START** |
+| 19:51:13.868 | 172 | `lease.renewal_due` (27.5 ms later) |
+| 19:51:13.871 | 173 | **that tool item completed** |
+| 19:51:13 – 19:57:41 | 173–736 | the turn continued: 16 more items started after the due marker (11 commands, 5 other tools); all 17 that finished after it ended by themselves (15 `completed`, 2 commands `failed` with a nonzero exit), none left open |
+| 19:57:41.346 | 737 | turn outcome `completed` (ordinal 725), from the provider itself |
+| 19:57:41.370 | 738–739 | renewal snapshot; one `admission.decided`: `reject` / `snapshot_provider_mismatch` |
+| 19:57:41.370 | 740–741 | `lease.expired`, `lease.checkpoint_required` |
+| 19:57:41.729 | 742 | terminal `checkpoint.created` |
+| 19:57:41.732 | 743 | `run.completed` |
+
+It is the same shape as the 2026-09-27 negative (`live-closeout.md` §5): the
+first event after the deadline was a tool START, with `renewal_due` right
+behind it. There the turn was interrupted 2.5 s later with no completion.
+Here the item completed 3 ms later, and the turn ran for another 6 min 27.5 s
+to its own outcome.
+
+### 14.2 Criteria (§2.2 / §13.4), as registered
+
+| Id | Result | Evidence |
+|---|---|---|
+| L1 due marked while tools run | **PASS** | due at 172 < outcome 737; tool events at 173, 176–185, … before 737 |
+| L2 no interrupt, no driver cancel | **PASS** | outcome `completed`; no `run.interrupted`; driver cancels 0; no continuation |
+| L3 started tools all completed | **PASS** | 22 tool items started in the run, 0 left open (every last status `completed` or `failed`) |
+| L4 exactly one renewal evaluation, at the outcome | **PASS** | one `lease-renewal-decision:*` (seq 739 > 737); one renewal snapshot. `renew_only/3`'s mid-turn refusals appended nothing |
+| L5 `run.completed` with a terminal checkpoint | **PASS** | one terminal (743), checkpoint 742 before it |
+| L6 no suspend or wake | **PASS** | 0 `run.pausing`, 0 `run.suspended`, 0 wakeup rows, 0 `wakeup` jobs, 0 wake decisions, after the 150 s observation and again after `audit` |
+| L7 no duplicate dispatch | **PASS** | 1 run in the goal, 1 dispatch row (`effect_completed`), 1 `run.starting`, 1 terminal |
+| L8 lease row no longer live | **FAIL, as registered.** Canonical lease state is terminal | the trajectory ends the lease `lease.expired` → `lease.checkpoint_required` (740, 741). The stored `harness_execution_leases` row still reads `renewal_due` (§14.3) |
+| P3 process lifecycle | **PASS** | `elf_registered: false`, `group_alive: false`, 0 members. After `audit`, no `beam.smp`, `codex app-server --stdio` or `claude --print` from this sequence |
+| P2 source checkout | **PASS** | identical to the session's first snapshot |
+| A1 audit invariants | **PASS** | 4 of 4 over both runs; Oban: dispatch 2 `completed`, nothing else |
+
+`session_at_end: none`: the session had ended with its turn, which is
+expected after a terminal.
+
+### 14.3 L8: why the row is stale (VERIFIED + REPO-INSPECTION)
+
+- The goal's `harness` projector stopped at sequence **738**, status `ok`
+  (read-only query). Seqs 739–745 — the decision, both lease markers, the
+  checkpoint, the terminal and the claim release — were appended but never
+  projected. `run.completed` is not reflected in the run row either (it reads
+  `running`), which is the carried "run rows not projected after start"
+  finding.
+- `LeaseRenewal.persist_and_settle/5` projects once, after the renewal
+  snapshot, then appends the decision and the expiry markers without
+  projecting. Its own comment says "the stored row lags appends until the
+  projector runs". Nothing projects this goal after the terminal
+  (REPO-INSPECTION).
+- **Not established:** every reader of the stale row. The ones inspected are
+  safe: `Leases.transition` chains from an explicit `:from`, no wake exists,
+  the run is terminal and the claim is released. The visible effect is a lease
+  shown as `renewal_due`, the same as OPEN N2's symptom, but on the success
+  path.
+- **Classification:** a read-model defect (projection lag on the terminal
+  path), not an unsafe stop. The milestone makes the trajectory
+  authoritative ("persisted Cobbler intent and the trajectory remain
+  authoritative"), and the trajectory records the lease terminal. L8 stays
+  **FAIL as registered**. It is not redefined after the fact.
+
+### 14.4 Other observations
+
+- The worktree ended at `ed06095` with `?? DESIGN.md`, `?? engine/`. The
+  model's own summary: `go test -race` and `go vet ./engine/...` pass;
+  `go vet ./...` fails only on the planted `legacy/scoreboard` defect.
+- Although the prompt asked for no commit, the model tried to stage ("Staging
+  was blocked by Git metadata permissions") and ran `git push` ("No
+  configured push destination"). That is the carried "provider acts on the
+  operator's global instructions" finding, and the §4 commit restriction
+  again. Neither affected the outcome.
+- **Commit restriction, correction to §4's example.** §4 suggested, as an
+  example, a fix of "adding the worktree's git dir as a writable root". The
+  orchestrator relays an independent investigation: the worktree's own git
+  dir alone does not enable a commit, and the shared objects/refs/logs a
+  commit also needs would let the sandbox write other branches' refs. I did
+  not verify this myself (UNVERIFIED here). So that example is **not a proven
+  safe repair**. The restriction stays a separate, unresolved limit of the
+  current CLI (0.158.0 and 0.159.0, VERIFIED blocked, §13.1). No sandbox
+  permission was changed.
+
+### 14.5 Budget
+
+2 of the 3 authorized Codex model runs in total (`turn1`, the standalone
+`lease_stop`); the third is unspent. 0 Claude runs, 0 retries. There were 2
+runs in the state DB at the end.
+
+## 15. Final status (supersedes §§10–12 where they differ)
+
+### 15.1 Iteration-4 dependency
+
+| # | Bullet | Status |
+|---|---|---|
+| 1 | Source checkout unchanged | **Met** on evidence (every snapshot, including §14); adapter runs fail closed on an unresolved worktree |
+| 2 | Adapter contract suites | **Met** (hermetic, every gate) |
+| 3 | A provider completes the live disposable demo | **Met on combined evidence**: a bounded implementation task in a fixture repo with its timeline and diff (this record, `final-acceptance.md`), node restarts (one boot per phase), explicit cancellation and a lease-decline suspension live (`final-acceptance.md` §5), and both providers live (`harness-live-verification.md`). **Unknown:** no single scripted run shows every demo element at once, and milestone 04's own file (untracked, not edited) still says NOT MET |
+| 4 | Durable run/process/session/worktree/compatibility metadata | **Met** |
+| 5 | Crash/cancellation retains work, classifies terminal | **Met** |
+| 6 | Lease stopping respects safe harness boundaries | **Met live** after #85 (§14): deadline at a tool START, the item completed, no interrupt, the turn ended by itself. The 2026-09-27 negative remains as history |
+| 7 | No credential or hidden reasoning persisted | **Met** |
+
+### 15.2 Acceptance gate 1–9
+
+| # | Gate | Status | Evidence level |
+|---|---|---|---|
+| 1 | Reserves never violated by automatic dispatch | Met | HERMETIC. No live automatic refusal was exercised |
+| 2 | Unknown/stale/reactive-only policy | Met | HERMETIC + LIVE |
+| 3 | Every planned/failure stop checkpoints | Met | LIVE for completed (again here), cancelled, lease-suspended and interrupted; failed/crash HERMETIC |
+| 4 | Fallback without inference | Met | HERMETIC + REPO-INSPECTION |
+| 5 | Idempotent wakes/dispatches | Met | dispatch LIVE (every boot, 2 runs here); settled replay LIVE; manual-scope wake, late delivery and crash window HERMETIC. The completed-run wake is not required (`final-acceptance.md` §10) |
+| 6 | Resume + fake handoff | Met | HERMETIC |
+| 7 | Real cross-provider handoff | Met | LIVE at `22c1e72`, `32a3fe6`, `1566acd` |
+| 8 | Semantic eval shows receiver behaviour and handoff tax | **Met as a measurement; no product advantage shown** | LIVE, three arms, two cycles (§9). The milestone asks the eval to *show* behaviour and tax, and it does. It does not require the projection to beat the other arms, and the independent audit concluded the measurement requirement is met. The failed pre-registered projection arm, the post-hoc repair, and the unreproduced scripted quota refusal all stand as limits. No human ruling is claimed |
+| 9 | Decisions explainable from persisted inputs | Met for the decisions inspected | LIVE (here: `operator_confirmed_manual`, and `snapshot_provider_mismatch` with its explanation) |
+
+### 15.3 Contract blockers vs follow-ups
+
+**Contract blockers found: none.** Every gate item and every iteration-4
+bullet is met at the evidence level stated. The remaining condition is
+procedural: this PR's independent review, and a merge by the human.
+
+**Follow-ups (nonblocking), carried or new:**
+
+1. NEW: the lease row (and run row) projection lags on the terminal path, so a
+   finished lease reads `renewal_due` (§14.3; failed L8).
+2. NEW, environmental: codex-cli 0.158.0/0.159.0 cannot commit in a
+   Shoestring worktree (§4, §13.1). There is no proven safe repair (§14.4).
+   It affects future live Codex sender/handoff runs, not the recorded
+   evidence.
+3. #85's N1–N7 (§12), unchanged.
+4. Test leaks: `run_live_test.exs` Elf leak; the trajectory-writer leak.
+5. Carried: providers act on the operator's global instructions (seen again,
+   §14.4); the projector raises on busy; redacted provider ids and the old
+   `.pyc` remain in `main`'s history; automatic Codex admission against
+   `primary`/`secondary` window names was not traced (§2.7).
+6. Not exercised live, and not required: failed and crash stops, a real quota
+   refusal, late handoff delivery, the crash window.
+
+### 15.4 Fixtures for §14
+
+- `normalized-post85-codex-lease-stop.md` (725 events) and
+  `post85-lease-stop-summary.json` (5 phase records: `setup`, `turn1`,
+  `audit`, `lease_stop`, `audit`). They were exported in one process with
+  `normalized-post85-codex-turn1.md`, which came out **byte-identical** to
+  its committed copy.
+- `post85-summary.json` (§8) is left unchanged. In the new summary, turn 1's
+  goal maps to a different synthetic id (`…010`, not `…005`), because the
+  series is assigned per export. That is the only difference in the three
+  shared records.
+- The scans for host paths, the login name, the scratch/session directory
+  names, real run and goal ids, reasoning keys and non-synthetic UUIDs came
+  back clean on all three files. The model's final answer quoted an absolute
+  worktree path, and `ls -la` output carried the login name. Both are
+  substituted same-length, as `$WORKSPACE`/`$REDACTED_PATH` and padding.
