@@ -719,3 +719,25 @@ left pending ran at `1566acd` (merged `main`). Its full record is
 
 Iteration 6 stays locked: finding 1 is unverified live, and the new
 lease-stop finding bears on the "safe harness boundaries" rule.
+
+## 10. Superseding criterion after #85 (pre-registered 2026-09-28)
+
+§§1–9 stand as written, including §2 (the 42fde95 pre-registration) and §8.4.
+This section changes one criterion going forward and says why.
+
+- **Superseded:** §8.4's "manual-scope wake settled once" as a live
+  requirement reached through a lease **deadline**. After #85
+  (`lease-safe-boundary.md`), a lease stop only pends until the turn's own
+  outcome, and a **completed** outcome keeps its terminal: no suspend, no
+  `lease_decline_recheck` wake, no continuation. The only live routes to that
+  wake left are an interrupted outcome or a quota halt, and neither may be
+  manufactured (no forced interrupt, no synthetic quota).
+- **Kept as evidence for that path:** the hermetic locks
+  `test/shoestring/cobbler/wakeup_manual_scope_test.exs` and
+  `test/shoestring/harness/live_missing_session_stream_test.exs` (7 tests,
+  0 failures at `a01da97`'s tree plus the cherry-picked evidence). Finding 1
+  therefore stays **LIVE-UNVERIFIED**, now with the reason that its live
+  trigger is unreachable by design for completed turns, not merely unexercised.
+- **Replacing it:** the post-#85 lease-stop criteria L1–L8 in
+  `live-closeout-post85.md` §2.2, fixed before that sequence's first provider
+  call.
