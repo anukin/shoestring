@@ -741,3 +741,11 @@ This section changes one criterion going forward and says why.
 - **Replacing it:** the post-#85 lease-stop criteria L1–L8 in
   `live-closeout-post85.md` §2.2, fixed before that sequence's first provider
   call.
+
+## 11. Result of the post-#85 closeout (2026-09-29 UTC)
+
+`live-closeout-post85.md` records it. The sequence stopped by its own
+pre-registered rule after `turn1`: codex-cli 0.158.0 could not commit in the
+worktree (its sandbox denies the worktree's git dir). So L1–L8 were **not
+measured**, and the terminal-only lease stop stays hermetic-only. §10's
+superseding criterion stands unchanged.

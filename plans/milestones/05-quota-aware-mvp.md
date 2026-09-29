@@ -693,3 +693,69 @@ It used 3 Codex runs and 1 Claude run, with no retries and no comparison arms.
   2 of 2 passes with no consistent advantage, and the missing scripted quota
   refusal all stand.
 - **Iteration 6 stays locked.**
+
+### Completion-record addendum — post-#85 closeout (2026-09-29 UTC)
+
+*Branch `polly/iter5-final-closeout-post85`, base `a01da97` (#85 merged). The
+full record is `plans/evidence/05-quota-aware-mvp/live-closeout-post85.md`;
+its §1–§2 were pre-registered at `b344a0b` and amended before any provider call
+at `17dd1bd`. Earlier bullets and addenda are left exactly as written. The
+header's `Status: proposed` is original milestone text and is not edited; the
+status below supersedes it.*
+
+- **Final status (2026-09-29):** implementation complete and hermetically
+  green. Of the nine gate items, eight are met at the evidence levels below,
+  and **Acceptance 8 is measured with no product advantage shown, pending the
+  human's ruling**. The hard dependency has **one open item**: iteration-4
+  bullet 6 (lease stopping at safe boundaries) is not verified live since #85.
+  **Completed on:** not yet. The conditions are under "Iteration 6" below.
+- **#85 supersedes the lease-stop design recorded above.** A lease safe stop
+  now only pends until the provider's own turn outcome. A completed turn keeps
+  its terminal (no suspend, no wake, no continuation); only an interrupted
+  turn or a quota halt declines. The 2026-09-25 "met after two fixes" and
+  2026-09-27 "not met" lease-stop bullets are history of the previous design.
+  The 2026-09-27 interrupt at a command START is fixed **hermetically** by #85
+  (`lease-safe-boundary.md`). It was **not** re-verified live (below). The
+  deadline-driven manual-scope wake is superseded as a live requirement
+  (`final-acceptance.md` §10); its hermetic locks remain.
+- **Live this round: 1 of 3 authorized Codex runs, then a stop by the
+  pre-registered rule.** `turn1` completed at `17dd1bd` (clean; group dead,
+  Elf deregistered) but could not commit. codex-cli 0.158.0's
+  `workspace-write` sandbox denies writes to a git worktree's own git dir
+  (VERIFIED with no-model sandbox probes; at 0.157.1 the same turns
+  committed). **New finding, not fixed:** at the installed CLI a Codex Elf
+  cannot commit in a Shoestring worktree. `turn2` and `lease_stop` were not
+  run, and no retry was made. Source checkout VERIFIED unchanged.
+- **Gate 1–9** (evidence levels in the record §11):
+
+  | # | Status |
+  |---|---|
+  | 1 reserves | Met — hermetic; no live automatic refusal exercised |
+  | 2 unknown/stale policy | Met — hermetic + live (owner-confirmed Claude `unknown`) |
+  | 3 checkpoint on every stop | Met with limits — live for completed, cancelled, lease-suspended, interrupted; failed/crash hermetic |
+  | 4 no inference in fallback | Met — hermetic / repo-inspection |
+  | 5 idempotent wakes/dispatches | Met with limits — dispatch and settled replay live; manual-scope wake, late delivery, crash window hermetic |
+  | 6 resume + fake handoff | Met — hermetic |
+  | 7 real cross-provider handoff | Met — live at `22c1e72`, `32a3fe6`, `1566acd`; at-risk at codex-cli 0.158.0 (sender cannot commit) |
+  | 8 semantic eval / handoff tax | **Measured, no advantage shown; the pre-registered projection arm failed, the post-hoc repair showed no consistent advantage, and the scripted quota refusal was never reproduced. An independent reviewer judged it meets the contract; no human ruling is recorded** |
+  | 9 explainable decisions | Met for the decisions inspected |
+
+- **Iteration-4 dependency** (record §10): bullets 1–5 and 7 met on committed
+  evidence; bullet 6 open live.
+- **Carried, nonblocking, unchanged:** #85's follow-ups N1–N7, the
+  `run_live_test.exs` Elf leak and the trajectory-writer leak, unprojected
+  run rows, and the other items in the record's §12.
+- **Gate:** the historical independent gate at `0344989` (4 doctests, 1506
+  tests, 0 failures, 1 skipped; Node 52/52; UI 7/7) is as reported by the
+  orchestrator. It is not recorded elsewhere in the repository and was not
+  re-run here. This branch's own gate is reported with its commit.
+- **Iteration 6: unlocks only when ALL of these hold.**
+  1. This closeout PR passes independent review and is **merged by the
+     human**.
+  2. The human rules on Acceptance 8.
+  3. Iteration-4 bullet 6 is closed, either by one live `lease_stop` under a
+     new brief (it needs no commit, so it is not blocked by the Codex
+     finding) or by a human ruling that #85's hermetic locks suffice.
+
+  Recommended but not ruled blocking here: resolve the codex-cli 0.158.0
+  commit block before any further live Codex sender or handoff work.

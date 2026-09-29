@@ -1,0 +1,192 @@
+{
+ "phases": [
+  {
+   "at": "2026-09-29T04:34:02.355057Z",
+   "baseline_test": "?   \texample.com/tictactoe/legacy/scoreboard\t[no test files]\n",
+   "baseline_test_exit": 0,
+   "baseline_vet": "# example.com/tictactoe/legacy/scoreboard\nlegacy/scoreboard/scoreboard.go:24:9: Total passes lock by value: example.com/tictactoe/legacy/scoreboard.Board contains sync.Mutex\n",
+   "baseline_vet_exit": 1,
+   "code": {
+    "dirty": false,
+    "sha": "17dd1bdae65ec8a85562adb26ac628296a469d46",
+    "status_lines": [],
+    "tree": "399ec02f4f594d244645af9ab66a0f80c9506646"
+   },
+   "codex_capacity_clear": true,
+   "files": [
+    "TASK.md",
+    "docs/HISTORY.md",
+    "go.mod",
+    "legacy/scoreboard/scoreboard.go"
+   ],
+   "head": "ed060957751b1fedd91310cee063c84a201a9ba6",
+   "ledger": [
+    {
+     "observed_at": null,
+     "provider": "claude",
+     "scope": "subscription",
+     "state": "unknown",
+     "tier": "conservative_partial",
+     "windows": []
+    },
+    {
+     "observed_at": "2026-09-29T04:33:51.976707Z",
+     "provider": "codex",
+     "scope": "subscription",
+     "state": "degraded",
+     "tier": "proactive",
+     "windows": [
+      {
+       "kind": "primary",
+       "state": "observed",
+       "used_percent": 35.0
+      },
+      {
+       "kind": "secondary",
+       "state": "observed",
+       "used_percent": 60.0
+      }
+     ]
+    }
+   ],
+   "phase": "setup",
+   "remotes": ""
+  },
+  {
+   "at": "2026-09-29T04:37:28.585986Z",
+   "base_revision": "ed060957751b1fedd91310cee063c84a201a9ba6",
+   "code": {
+    "dirty": false,
+    "sha": "17dd1bdae65ec8a85562adb26ac628296a469d46",
+    "status_lines": [],
+    "tree": "399ec02f4f594d244645af9ab66a0f80c9506646"
+   },
+   "goal_id": "55555555-0000-4000-9000-000000000005",
+   "lease": {
+    "checkpoint_cadence": 4000,
+    "deadline": "2026-09-29T04:39:32.244042Z",
+    "response_budget": 4000,
+    "response_reserve": 0,
+    "status": "active",
+    "tool_budget": 4000,
+    "tool_reserve": 0
+   },
+   "ledger_before": [
+    {
+     "observed_at": null,
+     "provider": "claude",
+     "scope": "subscription",
+     "state": "unknown",
+     "tier": "conservative_partial",
+     "windows": []
+    },
+    {
+     "observed_at": "2026-09-29T04:33:51.976707Z",
+     "provider": "codex",
+     "scope": "subscription",
+     "state": "degraded",
+     "tier": "proactive",
+     "windows": [
+      {
+       "kind": "primary",
+       "state": "observed",
+       "used_percent": 35.0
+      },
+      {
+       "kind": "secondary",
+       "state": "observed",
+       "used_percent": 60.0
+      }
+     ]
+    }
+   ],
+   "lifecycle_types": [
+    "capacity.snapshot_observed",
+    "admission.decided",
+    "cobbler.command.accepted",
+    "cobbler.claim.acquired",
+    "run.requested",
+    "lease.proposed",
+    "lease.granted",
+    "lease.active",
+    "dispatch.requested",
+    "run.starting",
+    "run.running",
+    "checkpoint.created",
+    "run.completed"
+   ],
+   "normalized_event_rows": 371,
+   "normalized_events": 371,
+   "observation_window_s": 2700,
+   "phase": "turn1",
+   "process_after": {
+    "elf_registered": false,
+    "group_alive": false,
+    "group_member_count": 0,
+    "pgid_recorded": true
+   },
+   "projector": {
+    "last_sequence": 12,
+    "status": "ok"
+   },
+   "provider_id": "codex_app_server_stdio",
+   "run_id": "55555555-0000-4000-9000-000000000002",
+   "run_row_status": "running",
+   "terminal": {
+    "payload": {
+     "run_id": "55555555-0000-4000-9000-000000000002"
+    },
+    "type": "run.completed"
+   },
+   "wait": "ok",
+   "worktree": {
+    "dirty": true,
+    "head": "ed060957751b1fedd91310cee063c84a201a9ba6",
+    "status": "?? game/\n"
+   }
+  },
+  {
+   "at": "2026-09-29T04:39:51.216129Z",
+   "code": {
+    "dirty": false,
+    "sha": "17dd1bdae65ec8a85562adb26ac628296a469d46",
+    "status_lines": [],
+    "tree": "399ec02f4f594d244645af9ab66a0f80c9506646"
+   },
+   "invariants": {
+    "at_most_one_starting_per_run": true,
+    "at_most_one_terminal_per_run": true,
+    "every_stop_has_checkpoint_before_it": true,
+    "one_dispatch_row_per_started_run": true
+   },
+   "jobs": [
+    {
+     "count": 1,
+     "queue": "dispatch",
+     "state": "completed"
+    }
+   ],
+   "phase": "audit",
+   "replay": null,
+   "runs": [
+    {
+     "checkpoint_before_stop": true,
+     "checkpoints": 1,
+     "dispatch_rows": [
+      {
+       "outcome_code": null,
+       "status": "effect_completed"
+      }
+     ],
+     "provider_id": "codex_app_server_stdio",
+     "run_id": "55555555-0000-4000-9000-000000000002",
+     "running": 1,
+     "starting": 1,
+     "suspended": false,
+     "terminal": "run.completed",
+     "terminals": 1
+    }
+   ]
+  }
+ ]
+}
