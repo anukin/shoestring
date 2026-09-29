@@ -346,17 +346,58 @@ defmodule FinalEval do
   # `five_hour`/`weekly`. A refused or exhausted state, a missing reading or
   # any unknown window blocks the phase before submit. Pure; checked by
   # `selftest`.
-  def capacity_clear?(ledger, provider) do
+  def capacity_clear?(ledger, provider), do: capacity_clear?(ledger, provider, nil)
+
+  # With `since`, the clearing reading must also have been observed at or
+  # after it (the standalone `lease_stop`, §13: read by this boot).
+  def capacity_clear?(ledger, provider, since) do
     below = fn w ->
       w["state"] == "observed" and is_number(w["used_percent"]) and w["used_percent"] < 80
+    end
+
+    fresh = fn r ->
+      since == nil or
+        (match?(%DateTime{}, r["observed_at"]) and
+           DateTime.compare(r["observed_at"], since) != :lt)
     end
 
     ledger
     |> Enum.filter(&(&1["provider"] == provider))
     |> Enum.any?(fn r ->
       r["state"] not in ["refused", "exhausted"] and length(r["windows"]) >= 2 and
-        Enum.all?(r["windows"], below)
+        Enum.all?(r["windows"], below) and fresh.(r)
     end)
+  end
+
+  # When this node's VM started (wall clock minus VM uptime).
+  def boot_at do
+    {uptime_ms, _} = :erlang.statistics(:wall_clock)
+    DateTime.add(DateTime.utc_now(), -uptime_ms, :millisecond)
+  end
+
+  # The `lease_stop` base commit named by `from`, from the recorded phase
+  # results: `"setup"` is the fixture's committed baseline head, `"turn2"`
+  # turn 2's committed worktree head. Anything else, or a phase with no
+  # record, is nil (the phase then blocks before submit). Pure; checked by
+  # `selftest`.
+  def lease_stop_base(results, from) do
+    latest = Enum.find(Enum.reverse(results), &(&1["phase"] == from))
+
+    case {from, latest} do
+      {"setup", %{"head" => head}} when is_binary(head) -> head
+      {"turn2", %{"worktree" => %{"head" => head}}} when is_binary(head) -> head
+      _other -> nil
+    end
+  end
+
+  # Installed CLI version, recorded as evidence (no model call).
+  def cli_version(exe) do
+    case System.cmd(exe, ["--version"], stderr_to_stdout: true) do
+      {out, 0} -> String.trim(out)
+      {out, code} -> "exit #{code}: " <> String.slice(String.trim(out), 0, 200)
+    end
+  rescue
+    error -> "error: " <> Exception.message(error)
   end
 
   def wait_run_created(goal_id, run_id, bound_s) do
@@ -1169,6 +1210,53 @@ case phase do
             "codex"
           ),
         "capacity_refused" => not FinalEval.capacity_clear?([reading.("refused", 1, 1)], "codex"),
+        "capacity_fresh_since_boot" =>
+          FinalEval.capacity_clear?(
+            [Map.put(reading.("degraded", 1, 1), "observed_at", ~U[2026-09-29 10:00:05Z])],
+            "codex",
+            ~U[2026-09-29 10:00:00Z]
+          ),
+        "capacity_stale_before_boot" =>
+          not FinalEval.capacity_clear?(
+            [Map.put(reading.("degraded", 1, 1), "observed_at", ~U[2026-09-29 09:59:59Z])],
+            "codex",
+            ~U[2026-09-29 10:00:00Z]
+          ),
+        "capacity_no_observed_at" =>
+          not FinalEval.capacity_clear?(
+            [reading.("degraded", 1, 1)],
+            "codex",
+            ~U[2026-09-29 10:00:00Z]
+          ),
+        "base_setup" =>
+          FinalEval.lease_stop_base(
+            [
+              %{"phase" => "setup", "head" => "aaa"},
+              %{"phase" => "turn2", "worktree" => %{"head" => "bbb"}}
+            ],
+            "setup"
+          ) == "aaa",
+        "base_turn2" =>
+          FinalEval.lease_stop_base(
+            [
+              %{"phase" => "setup", "head" => "aaa"},
+              %{"phase" => "turn2", "worktree" => %{"head" => "bbb"}}
+            ],
+            "turn2"
+          ) == "bbb",
+        "base_latest_setup_wins" =>
+          FinalEval.lease_stop_base(
+            [%{"phase" => "setup", "head" => "old"}, %{"phase" => "setup", "head" => "new"}],
+            "setup"
+          ) == "new",
+        "base_missing_turn2" =>
+          FinalEval.lease_stop_base([%{"phase" => "setup", "head" => "aaa"}], "turn2") == nil,
+        "base_unknown_phase" =>
+          FinalEval.lease_stop_base(
+            [%{"phase" => "turn1", "worktree" => %{"head" => "c"}}],
+            "turn1"
+          ) ==
+            nil,
         "capacity_missing" => not FinalEval.capacity_clear?([], "codex"),
         "capacity_unknown_window" =>
           not FinalEval.capacity_clear?(
@@ -1611,13 +1699,37 @@ case phase do
     # evaluates renewal once, is refused, and keeps its terminal — no
     # suspension and no wake (`live-closeout-post85.md` §2.2). The pre-#85
     # decline expectations above stay as the historical design.
-    base = FinalEval.result_for("turn2")["worktree"]["head"]
+    #
+    # Base: turn 2's committed head by default (the original sequence), or an
+    # explicitly named earlier phase (`LIVE_LEASE_STOP_BASE_FROM=setup`, the
+    # standalone run of `live-closeout-post85.md` §13), optionally pinned to an
+    # exact SHA (`LIVE_LEASE_STOP_BASE_EXPECT`). A missing or mismatched base
+    # blocks before submit.
+    base_from = System.get_env("LIVE_LEASE_STOP_BASE_FROM", "turn2")
+    base = FinalEval.lease_stop_base(FinalEval.latest_results(), base_from)
+    expected_base = System.get_env("LIVE_LEASE_STOP_BASE_EXPECT")
+
+    if base == nil or (expected_base not in [nil, ""] and base != expected_base) do
+      FinalEval.record("lease_stop:base_block", %{
+        "base_from" => base_from,
+        "base" => base,
+        "expected" => expected_base
+      })
+
+      raise "lease_stop base not resolved or not the expected commit; not submitted"
+    end
+
+    # Capacity must be read by THIS boot (the monitor's non-inference
+    # rate-limit read), not carried over from an earlier node.
+    boot_at = FinalEval.boot_at()
     ledger = FinalEval.ledger()
 
-    unless FinalEval.capacity_clear?(ledger, "codex") do
-      FinalEval.record("lease_stop:capacity_block", %{"ledger" => ledger})
-      raise "capacity not clear for codex; lease_stop not submitted"
+    unless FinalEval.capacity_clear?(ledger, "codex", boot_at) do
+      FinalEval.record("lease_stop:capacity_block", %{"ledger" => ledger, "boot_at" => boot_at})
+      raise "capacity not clear (or not freshly observed) for codex; lease_stop not submitted"
     end
+
+    codex_cli = FinalEval.cli_version("codex")
 
     {:ok, run_id} =
       FinalEval.submit_turn("codex", String.trim(lease_stop_prompt), base,
@@ -1736,6 +1848,10 @@ case phase do
     FinalEval.record("lease_stop", %{
       "wait" => status,
       "observation_window_s" => observe_s,
+      "base_from" => base_from,
+      "base" => base,
+      "boot_at" => boot_at,
+      "codex_cli" => codex_cli,
       "ledger_before" => ledger,
       "process_after" => process_after,
       "facts" => facts,

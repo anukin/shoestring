@@ -372,3 +372,104 @@ VERIFIED by committed tests in the gate; REPO-INSPECTION as labelled.
   global instructions; the projector still raises on busy; redacted provider
   ids and the old `.pyc` remain in `main`'s history.
 - The lease row left `active` after a completed run that never came due (§5).
+
+---
+
+## 13. Standalone `lease_stop` (pre-registered 2026-09-29, before its provider call)
+
+§§1–12 stand as committed at `9c26950`. This section was committed before
+the standalone run's only provider call. The phase record carries the commit
+that adds it (`code.sha`, `code.tree`, `dirty`).
+
+### 13.1 Why the original sequence stopped, and why this one is distinct
+
+- **Stopped:** the pre-registered sequence (`setup → turn1 → release → turn2 →
+  lease_stop → audit`) ended after `turn1` under the §2.5 stop rule. `turn1`
+  completed but could not commit, because the Codex sandbox denies the
+  worktree's own git dir (§4). `turn2` needs turn 1's committed head, and the
+  original `lease_stop` base was turn 2's head, so the rest of the sequence
+  had no committed base.
+- **New brief:** a **standalone** `lease_stop` from `setup`'s committed
+  fixture head `ed060957751b1fedd91310cee063c84a201a9ba6` (baseline: `TASK.md`,
+  `docs/`, `go.mod`, `legacy/`), not from turn 2's head. Its prompt (unchanged
+  since `final-acceptance.md` §2) asks for `DESIGN.md` and an `engine/`
+  package with tests, and **for no commit**, so the commit block cannot decide
+  its outcome. It uses the same product path as before: `/runs/new` submit →
+  manual admission → claim → lease grant (60 s manual lease) → durable
+  dispatch → Elf → `codex app-server --stdio`. No sandbox, access or product
+  change.
+- **Not a retry:** `turn1` is not re-run, and `turn2` is not run. This is a
+  different phase from a different base, under a new authorization.
+- **Commit block at 0.159.0 (VERIFIED, no model call):** the installed CLI is
+  now codex-cli 0.159.0. The same `codex sandbox -c
+  'sandbox_mode="workspace-write"'` probe from inside a scratch `git worktree`
+  allowed a file write in the worktree and denied `git commit`
+  (`Unable to create …/.git/worktrees/wt/index.lock: Operation not
+  permitted`). This agrees with the orchestrator's report of an independent
+  check.
+
+### 13.2 Budget and state
+
+- At most **one** Codex model run (this phase). With `turn1`, the total is at
+  most 2 of the 3 originally authorized, and the third stays unspent. No
+  Claude, no handoff, no ablation, no retry. A phase that blocks before
+  submit (base or capacity) has spent nothing and is recorded; it is not
+  relaunched without a recorded cause.
+- **Same state directory** as §6 (the second one, release-migrated), so the
+  fixture repository holds `ed06095`. Before boot, read-only: 1 run (`turn1`,
+  terminal `run.completed`; its row still reads `running`, the known
+  unprojected-run-row issue), 1 dispatch job `completed`, 0 wakeups, the one
+  claim `released`. No node, Elf or Shoestring provider session was running.
+  The only Codex processes were the user's own app-server daemon and one
+  app-server, not started by Shoestring.
+
+### 13.3 Driver change (this commit) and its check
+
+`lease_stop` takes its base from `LIVE_LEASE_STOP_BASE_FROM` (`turn2` by
+default; `setup` here), pinned by `LIVE_LEASE_STOP_BASE_EXPECT`. A missing or
+different base records `lease_stop:base_block` and submits nothing. The
+capacity check now also requires the clearing Codex reading to be observed
+**at or after this node's boot** (`capacity_clear?/3`, `boot_at/0`), so a
+reading from an earlier boot cannot clear it. The phase records the base, its
+source, `boot_at` and `codex --version`. `selftest` (no provider, throwaway
+DB): 45 of 45 checks pass, 8 of them new here (fresh/stale/missing
+`observed_at`, base from `setup`/`turn2`, latest record wins, missing and
+unknown phases). The functions are new, so this is DOCUMENTATION, not a
+regression lock.
+
+### 13.4 Acceptance, pre-registered
+
+The criteria are §2.2's L1–L8, unchanged and computed by the same
+`lease_stop_facts/3` and `lease_stop_verdict/1`, plus §2.4's P1–P4 and A1.
+Against the brief's gate:
+
+| Brief gate | Criteria |
+|---|---|
+| Lease deadline stays pending while tools/turn run | L1, L2; `session_at_end` recorded as a diagnostic |
+| No unsafe lease-driven interrupt | L2, L3 |
+| Natural completed outcome stays completed | L5 |
+| Lease final state is terminal | L8 (actual status and `lease.*` sequence recorded) |
+| No suspension, wakeup or duplicate dispatch for completed work | L6, L7 |
+| Process group reaped, Elf deregistered | P3 (`process_after`: `elf_registered: false`, `group_alive: false`) |
+| Exactly one renewal evaluation, at the outcome | L4 (`renew_only/3` appends nothing on refusal, REPO-INSPECTION; the one decision is the outcome's `maybe_renew/3`) |
+| Per-phase exact code SHA / dirty | P1 for `lease_stop` and the `audit` that follows |
+
+Interpretation, fixed now:
+
+- If the turn ends **before** the 60 s deadline, L1, L4 and L8 are **not
+  exercised**. That is reported, and not retried.
+- If the deadline passes but **no tool item** is recorded between
+  `lease.renewal_due` and the outcome, L1 fails as written. It is then
+  reported as "pending held through the rest of the turn, but not while a
+  tool ran", which is a limit, not an unsafe stop.
+- A provider-originated `interrupted` or `failed` outcome, a continuation, or
+  a second run is a finding, recorded as observed.
+- The continuation rule is unchanged from `final-acceptance.md` §2.6: record
+  it, then one explicit operator cancel once it runs, to bound spend. It is
+  expected to be unreachable, because a completed turn never declines and a
+  manual-scope recheck settles `require_confirmation` (REPO-INSPECTION). No
+  other cancel is issued.
+- `audit` (no provider) follows at the same commit.
+- The node runs in the foreground of a `tmux` pane with no `timeout`. The
+  observation window is 2700 s. Its expiry records a block and never stops the
+  Elf. The wake observation after the stop is 150 s.
