@@ -337,26 +337,26 @@ defmodule FinalEval do
     )
   end
 
-  # Pre-spend capacity check (pre-registered, `live-closeout-post85.md` §2):
-  # a Codex phase spends only when the ledger holds a Codex reading whose
-  # `five_hour` and `weekly` windows are both observed and below the product's
-  # default reserve thresholds (80 % and 90 % used). Anything else blocks the
-  # phase before submit. Pure; checked by `selftest`.
+  # Pre-spend capacity check (`live-closeout-post85.md` §2.4 P4, as amended
+  # in §2.7): a phase spends only when the ledger holds a reading for the
+  # provider with at least two windows, every one observed and below 80 %
+  # used — the stricter of the product's default reserve thresholds, applied
+  # to every window because the Codex reading names its windows
+  # `primary`/`secondary` and carries no duration to map them onto
+  # `five_hour`/`weekly`. A refused or exhausted state, a missing reading or
+  # any unknown window blocks the phase before submit. Pure; checked by
+  # `selftest`.
   def capacity_clear?(ledger, provider) do
-    readings = Enum.filter(ledger, &(&1["provider"] == provider))
-
-    window = fn reading, kind -> Enum.find(reading["windows"], &(&1["kind"] == kind)) end
-
-    below = fn w, max ->
-      w != nil and w["state"] == "observed" and is_number(w["used_percent"]) and
-        w["used_percent"] < max
+    below = fn w ->
+      w["state"] == "observed" and is_number(w["used_percent"]) and w["used_percent"] < 80
     end
 
-    readings != [] and
-      Enum.any?(readings, fn r ->
-        r["state"] not in ["refused", "exhausted"] and below.(window.(r, "five_hour"), 80) and
-          below.(window.(r, "weekly"), 90)
-      end)
+    ledger
+    |> Enum.filter(&(&1["provider"] == provider))
+    |> Enum.any?(fn r ->
+      r["state"] not in ["refused", "exhausted"] and length(r["windows"]) >= 2 and
+        Enum.all?(r["windows"], below)
+    end)
   end
 
   def wait_run_created(goal_id, run_id, bound_s) do
@@ -1077,13 +1077,14 @@ case phase do
     # a live Elf, the pre-spend capacity check, and the lease-stop verdict
     # over synthetic facts — one passing shape and one failing shape per
     # criterion, including the 1566acd interrupted shape.
-    reading = fn state, five, weekly ->
+    # The window names the live Codex reading uses (setup record, §2.7).
+    reading = fn state, primary, secondary ->
       %{
         "provider" => "codex",
         "state" => state,
         "windows" => [
-          %{"kind" => "five_hour", "state" => "observed", "used_percent" => five},
-          %{"kind" => "weekly", "state" => "observed", "used_percent" => weekly}
+          %{"kind" => "primary", "state" => "observed", "used_percent" => primary},
+          %{"kind" => "secondary", "state" => "observed", "used_percent" => secondary}
         ]
       }
     end
@@ -1136,11 +1137,37 @@ case phase do
         "wait_stopped" => FinalEval.wait_decision(true, false, true, true) == :stopped,
         "wait_dead_elf_times_out" =>
           FinalEval.wait_decision(false, false, true, false) == :timeout,
-        "capacity_clear" => FinalEval.capacity_clear?([reading.("degraded", 21, 3)], "codex"),
-        "capacity_five_hour_reserve" =>
+        "capacity_clear" => FinalEval.capacity_clear?([reading.("degraded", 29, 59)], "codex"),
+        "capacity_primary_reserve" =>
           not FinalEval.capacity_clear?([reading.("degraded", 80, 3)], "codex"),
-        "capacity_weekly_reserve" =>
-          not FinalEval.capacity_clear?([reading.("degraded", 10, 90)], "codex"),
+        "capacity_secondary_reserve" =>
+          not FinalEval.capacity_clear?([reading.("degraded", 10, 80)], "codex"),
+        "capacity_one_window_only" =>
+          not FinalEval.capacity_clear?(
+            [
+              %{
+                "provider" => "codex",
+                "state" => "degraded",
+                "windows" => [hd(reading.("x", 1, 1)["windows"])]
+              }
+            ],
+            "codex"
+          ),
+        "capacity_window_unknown" =>
+          not FinalEval.capacity_clear?(
+            [
+              put_in(reading.("degraded", 1, 1), ["windows"], [
+                %{"kind" => "primary", "state" => "observed", "used_percent" => 1},
+                %{"kind" => "secondary", "state" => "unknown", "used_percent" => nil}
+              ])
+            ],
+            "codex"
+          ),
+        "capacity_other_provider_only" =>
+          not FinalEval.capacity_clear?(
+            [Map.put(reading.("degraded", 1, 1), "provider", "claude")],
+            "codex"
+          ),
         "capacity_refused" => not FinalEval.capacity_clear?([reading.("refused", 1, 1)], "codex"),
         "capacity_missing" => not FinalEval.capacity_clear?([], "codex"),
         "capacity_unknown_window" =>

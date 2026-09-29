@@ -139,3 +139,29 @@ functions are new, so a pre-fix run would fail on a missing function, not
 behaviourally: the selftest is DOCUMENTATION, not a regression lock. That the
 old wait returned `{:timeout, run}` with a live Elf, ending the node, is
 REPO-INSPECTION of `a01da97` (`do_wait/2`).
+
+### 2.7 Amendment before the first provider call (P4 window names)
+
+§§2.1–2.6 are left as committed at `b344a0b`. This amendment was committed
+**after** `setup` and **before** any provider call.
+
+- **What happened:** `setup` ran at `b344a0b` (clean) against the first fresh
+  state directory, and its ledger showed the Codex reading's windows named
+  `primary` (29.0 % used) and `secondary` (59.0 % used), not `five_hour` and
+  `weekly`. P4 as written would have blocked every Codex phase: a driver
+  defect, found before any spend.
+- **Correction:** P4 now requires a reading with at least two windows, **every
+  window observed and below 80 % used** (the stricter of the two default
+  reserve thresholds, applied to all windows), and no refused or exhausted
+  state. The reading carries no window duration, so it is not assumed which
+  window is five-hourly; applying 80 % to both is the conservative reading.
+  `selftest`: 37 of 37 checks pass (13 existing, 24 new), on a throwaway DB.
+- **State directory:** that first directory (setup only, no provider run) is
+  abandoned, not deleted. The sequence restarts on a second fresh,
+  release-migrated directory, so every live phase record carries the
+  amendment's commit (P1).
+- **Observation, not traced further:** `AdmissionEvaluation` looks for
+  `five_hour`/`weekly` windows (REPO-INSPECTION, `admission_evaluation.ex`),
+  while the Codex reading names `primary`/`secondary`. How automatic Codex
+  admission treats that was not traced; manual `/runs/new` admission does
+  not consult it. Reported, not investigated in this scope.
