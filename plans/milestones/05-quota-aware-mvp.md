@@ -810,3 +810,44 @@ written. Record: `plans/evidence/05-quota-aware-mvp/live-closeout-post85.md`
   and the human merges it.** Recommended first in iteration 6, not a
   condition: resolve the Codex commit restriction before any live Codex
   sender or handoff work.
+
+### Terminal-projection repair addendum — final prose closeout (2026-09-30 UTC)
+
+*This addendum clarifies the final decision's wording; everything above is
+left as written. No live capture was altered and no new live run was made.
+Record: `plans/evidence/05-quota-aware-mvp/terminal-projection-fix.md` and
+`live-closeout-post85.md` §§16–17.*
+
+- **Original live result, unchanged:** criteria L1–L7 PASS live (§14 of the
+  record); historical L8 FAIL as registered — the lease is terminal in the
+  trajectory while the stored lease row read `renewal_due` (run row
+  `running`). That measurement is not redefined after the fact.
+- **Scoped reading of the final statements:** "Contract blockers found:
+  none" (record §15.3) means no gate/dependency blocker beyond the recorded
+  L8 FAIL and the nonblocking follow-ups. Iteration-4 bullet 6 "Met live"
+  (record §15.1) covers the L1–L7 safe-stop behavior only — deadline pending
+  while tools run, no interrupt, natural completed outcome, one renewal
+  evaluation at the outcome, terminal checkpoint plus `run.completed`, no
+  suspend/wake/duplicate. Neither statement means L1–L8 all passed.
+- **Post-fix repair, hermetic only:** after committing terminal events the
+  Elf promptly projects its goal (`commit_terminal/2`, mirrored in
+  `crash_land/0`; repair code as committed at `b21e29f`, VERIFIED
+  byte-identical in the final tree — this closeout adds prose only). Three
+  regression locks fail on base `70af28e` for the stale-row reason and pass
+  with the fix. No post-fix live pass is claimed or implied.
+- **Gate on the final tree:** `mix precommit` → **4 doctests, 1509 tests,
+  0 failures, 1 skipped (6 excluded); Node 52/52; UI 7/7** (ExUnit seed
+  796367). One earlier full-gate run on this tree showed 1 failure in
+  `CodexAppServerContractTest` (cancel raced a dead session process); that
+  file passes in isolation (7 tests, 0 failures, seed 0) and is untouched by
+  this branch's diff — reported as intermittent, 1 of 2 full-gate runs, not
+  re-run until green.
+- **Limits carried:** the codex-cli 0.158.0/0.159.0 worktree commit
+  restriction (no sandbox change made, no proven safe repair); Acceptance 8
+  MEASURED with no product advantage shown, pending the human's ruling;
+  failed/crash stops, a real quota refusal, late handoff delivery and the
+  crash window unexercised live; no claim that every arbitrary
+  terminal/projector-error path heals (a failed projection stays stale but
+  logged; the `terminate/2` supervisor-crash marker path is out of scope).
+- **Iteration 6:** unlocked when this closeout PR passes independent review
+  and the human merges it (unchanged).

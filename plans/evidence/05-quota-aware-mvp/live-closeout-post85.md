@@ -682,3 +682,36 @@ stand as committed at `70af28e`; no live capture in them was altered.*
 - **Not claimed:** no post-fix live pass. No new live remeasurement was run
   for this repair, and none is implied. Acceptance 8 remains MEASURED with
   no product advantage shown (§9).
+
+## 17. Final prose closeout — reading §15 as registered (2026-09-30 UTC)
+
+*This section clarifies the final statements; §§1–16 stand as written. No
+live capture was altered and no new live run was made.*
+
+- **"Contract blockers found: none" (§15.3) means:** every gate item 1–9 and
+  every iteration-4 bullet is met at the evidence level stated in
+  §15.1–§15.2, with the exceptions recorded in the same section — the
+  historical L8 FAIL as registered and the nonblocking follow-ups. It does
+  not mean L1–L8 all passed live: L8 failed as registered (§14.2) and stays
+  failed.
+- **Bullet 6 "Met live" (§15.1) is scoped to L1–L7:** the
+  deadline-at-a-tool-START safe-stop behavior — pending while tools run, no
+  interrupt, natural completed outcome, one renewal evaluation at the
+  outcome, terminal checkpoint plus `run.completed`, no suspend/wake or
+  duplicate — is what §14 measured live. The lease/run row projection lag
+  (failed L8) is a separate read-model follow-up, repaired hermetically
+  after the fact (§16), not verified live.
+- **Post-fix position:** the repair (`terminal-projection-fix.md`) is
+  validated hermetically by 3 regression locks that fail on base `70af28e`
+  for the stale-row reason and pass with the fix. No post-fix live pass is
+  claimed or implied.
+- **Limits unchanged:** the codex-cli worktree commit restriction (§§4,
+  13.1, 14.4; no sandbox change made, no proven safe repair); Acceptance 8
+  MEASURED with no product advantage shown (§9); failed/crash stops, a real
+  quota refusal, late handoff delivery and the crash window unexercised
+  live.
+- **No heal-everything claim:** the repair projects after committed
+  terminals on the Elf's normal and crash-land paths; a failed projection
+  stays stale but logged, and the `terminate/2` supervisor-crash marker path
+  is out of scope (`terminal-projection-fix.md` §5). Nothing here claims
+  every arbitrary terminal or projector-error path heals.
