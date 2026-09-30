@@ -72,10 +72,15 @@ VERIFIED: `timeout 180 mix test test/shoestring/elves/
  test/shoestring_web/live/run_new_entry_test.exs
  test/shoestring_web/live/run_new_manual_lease_test.exs --seed 0 < /dev/null`
 (first three path arguments on one command line) reported **189 tests,
-5 failures**. Four failures came from retiring resting `renewed` leases;
-these are already inactive and their existing renewal assertions were kept.
-The final settlement is limited to active/granted leases on completed runs;
-renewal states retain their own boundary outcome.
+5 failures**. Four failures came from retiring resting `renewed` leases.
+At that intermediate revision their exact renewal-status assertions were
+kept, and settlement was temporarily limited to active/granted on completion.
+This intermediate choice was superseded at
+`ca8670ac26911ed6173b0ed8921d1a0740f82c19`: final completed-run settlement
+includes granted, active, renewal_due and renewed allowances. The affected
+exact terminal assertions now require checkpoint_required while retaining
+their canonical renewal/spend/checkpoint evidence. The measured red result
+above is unchanged.
 
 VERIFIED: The next `timeout 180 mix test
  test/shoestring/elves/elf_lease_loop_test.exs
@@ -111,10 +116,13 @@ VERIFIED: The intermediate `timeout 300 mix precommit < /dev/null` at seed
 `timeout 120 mix test --failed --seed 507654 < /dev/null` identified both
 failures: **2 tests, 2 failures** (terminal UI plus the Observatory renewal
 twin's expected renewal boundary state). This was failure diagnosis, not
-rerun-until-green. The settlement was narrowed to active/granted only;
+rerun-until-green. The settlement was temporarily narrowed to active/granted;
 `timeout 60 mix test test/shoestring/cobbler/observatory_snapshot_twins_test.exs:283
 --seed 507654 < /dev/null` then passed: **1 test, 0 failures (9 excluded)**.
-There is not yet a final green full gate.
+There was not yet a green full gate at that intermediate revision. The later
+completed-continuation regression demonstrated renewal_due retention, so
+the shipped settlement includes renewal_due/renewed too; the final exact
+terminal assertions were updated accordingly (see the later proof ledger).
 
 VERIFIED: The child-node harness now actually calls
 `Application.stop(:shoestring)` and `Application.ensure_all_started(:shoestring)`
@@ -352,10 +360,11 @@ database and worktree state live inside the bounded child VM's unique local
 state directory; fixtures are retained rather than deleted. Test-created
 clock/fixture helpers are supervised outside the restarted application.
 
-VERIFIED: Relevant existing terminal lease assertions were changed to exact
+VERIFIED: Final completed allowances include granted/active/renewal_due/renewed.
+Relevant existing terminal lease assertions were changed to exact
 checkpoint_required, preserving their spend, renewal and checkpoint assertions.
 No skips, sleeps, retries, Process.alive? assertions, forced lifecycle rows or
-widened outcome assertions were added. The only source scope extension is the
+widened outcome assertions were added. The initial delivery's source scope extension was the
 explicitly authorized presentation file and narrowly related tests; the exact
 evidence .gitignore allowlist is authorized. Plan validation, DAG/planner/schema
 work and iteration-5/live follow-ups remain deferred.
@@ -376,7 +385,8 @@ VERIFIED: The final source was measured once by the full gate, after the
 domain-guard correction and its 17/0 focused check. Earlier red gates in
 this ledger used different implementation states. No intermittent N-of-M
 failure was established, and no gate was rerun without a relevant change.
-Only evidence/publication metadata changes followed the green gate.
+Only evidence/publication metadata changes followed that green gate before
+the review-fix round recorded below.
 
 ## Final publication
 
@@ -395,3 +405,162 @@ VERIFIED: `git log a68744e2c6506dc646bb050a20a88964822c59c7..HEAD
 --format=full < /dev/null` was inspected for attribution trailers; none were
 present. Evidence-only publication recording is committed and pushed after
 the source/test gate. No merge or ready-for-review operation was performed.
+
+## Review-fix round at reviewed head b304aac
+
+VERIFIED: The review-fix brief identified reviewed head
+`b304aac793aa75f5d07671a9ccedbd53ed2afd38`, preserved the original hermetic
+task and PR #87, and explicitly authorized a narrow dispatch-configuration
+scope extension. This round edits only `config/runtime.exs` within that new
+extension; the earlier presentation scope extension remains authorized.
+No config/dev/config/test global execution enablement, planner, DAG or schema
+changes are included. Prior red gate outputs are preserved in this ledger.
+
+REPO-INSPECTION: Removing direct LiveView execution exposed a supported dev
+configuration gap. The dev runtime selected no effect, while DispatchWorker's
+default UnconfiguredEffect returned dispatch_effect_not_configured.
+Production already selected ElfEffect. The fix moves that existing setting
+into a dev/prod-only runtime guard; unconfigured/test behavior stays fail-closed.
+
+VERIFIED: `RuntimeDispatchEntryTest` starts bounded child VMs for dev and
+prod separately, loads and merges the actual runtime file, and restarts the
+actual Shoestring application against each child's retained state directory.
+It does not inject an effect under test. Inherited test settings keep provider
+monitors, the HTTP server and automatic queues/plugins disabled. It submits
+a real Fake LiveView run and drains only its durable dispatch queue through
+Oban's normal worker, then monitors the owned Elf and checks its OS group.
+This verifies configured delivery, not real providers or automatic queue
+polling. A separate test asserts normal test runtime configures no effect.
+
+REPO-INSPECTION: The insertion-conflict branch previously suffixed a settled
+row even when the ordinary lookup branch replayed the same producer decline.
+The fix mirrors the same reason/run/command comparison in unique-conflict
+recovery; explicit operator rechecks retain their suffix semantics.
+
+VERIFIED: `WakeupConflictReplayTest` creates and settles a real producer wake
+through LiveView, Fake quota failure and WakeupWorker's normal manual refusal.
+Its supervised repository wrapper models a race loser with a stale first
+negative lookup. The insert goes to the real Repo and fails on the real
+SQLite unique index; the test asserts this branch was reached before asserting
+replay. It checks one wake/job/run/dispatch and no probe. The operator twin
+reaches the same real conflict but creates the permitted new suffix/job.
+No lifecycle rows are manually mutated to settle fixtures. This deterministically
+tests a conflict window, not concurrent scheduler stress.
+
+VERIFIED: Tracing the operator-envelope note demonstrated another lost direct
+entry option: durable ElfEffect did not reconstruct the persisted max_events
+stream ceiling. At the reviewed head a real UI submission with a 10-event
+ceiling completed 11 scripted lifecycle events plus a result. The minimal fix
+restores that existing option from the durable extension (valid positive
+integers); requests without it and server overrides are unchanged. The test
+now asserts failed/log_overflow, no completion and a reaped group. This
+adjacent demonstrated fix stays within the original authorized harness scope.
+
+| Correction | Pre-fix source SHA | Behavioral proof |
+| --- | --- | --- |
+| Dev runtime selects durable execution | `b304aac793aa75f5d07671a9ccedbd53ed2afd38` | Dev dispatch effect_failed, expected effect_completed; prod twin passed |
+| Unique-conflict producer replay | Same reviewed SHA | Real unique conflict reached; replay created :r1 wake/job, expected original wake/job nil; operator suffix twin passed |
+| Persisted whole-run event ceiling | Same reviewed SHA | 10-event ceiling completed over-limit stream, expected failed/log_overflow |
+
+VERIFIED: The combined pre-fix command was
+`timeout 180 mix test test/shoestring_web/live/runtime_dispatch_entry_test.exs
+test/shoestring_web/live/wakeup_conflict_replay_test.exs
+test/shoestring_web/live/run_new_worker_delivery_test.exs --seed 0 < /dev/null`.
+It reported **9 tests, 3 failures** at unchanged reviewed source in the main
+worktree and again in the owned proof worktree at that SHA. Neither failed
+on missing APIs, modules or signatures. Proof fixtures are retained in owned
+ref refs/iter6/review-fix-proofs at
+`dbe8fdc67f7e1632949deff3bd83516286e6252b`; no destructive cleanup was used.
+
+VERIFIED: The historical settlement paragraphs now explicitly distinguish
+temporary active/granted-only settlement from the shipped completed guard
+including granted/active/renewal_due/renewed. Exact terminal assertions became
+checkpoint_required, retaining renewal/spend/checkpoint evidence. Earlier red
+counts were not changed or described as green.
+
+## Nonblocking review-note disposition
+
+REPO-INSPECTION: Provider admission's 10-response/25-tool defaults are budgets
+for a renewable lease epoch, capped by the operator envelope; they are not
+whole-run totals. LeaseBounds accounts completed responses/tools; the run
+ceiling counts normalized harness events. Only fresh admitted renewal
+replenishes an epoch without relaxing the whole-run ceiling. This distinction
+is documented next to the policy. Numerical epoch policy is unchanged.
+The provider test pins the 10/25 proposal and separate persisted 1000-event
+envelope; these assertions document existing behavior, not a pre-fix failure.
+
+REPO-INSPECTION: Terminal settlement remains best-effort. Returned projection
+or settlement errors log run/dispatch context, but rescue/catch lacks equal
+detail; there is no durable success marker specifically for this helper.
+It does not launch, suspend or schedule a replacement Elf on failure.
+Write/projection failure can leave a stale lease view or partial retirement;
+observability/atomicity hardening is a follow-up, not a demonstrated source
+correction in this round.
+UNVERIFIED: I did not inject terminal-settlement storage failures or verify
+crash atomicity between retirement events. Existing restart, deadline and
+renewal tests prove the successful boundary; their earlier limitations remain.
+
+## Review-round measured commands
+
+VERIFIED: Commands were foreground, bounded and stdin closed. Before source
+fixes, `timeout 180 mix test
+test/shoestring_web/live/runtime_dispatch_entry_test.exs
+test/shoestring_web/live/wakeup_conflict_replay_test.exs --seed 0 < /dev/null`
+first reported **5 tests, 3 failures**: two harness diagnostics (scheduled jobs
+not drained; runtime endpoint config replaced rather than merged) and the real
+producer conflict failure. After fixing only the harness merge/drain setup,
+it reported **5 tests, 2 failures**: dev effect_failed and producer duplicate;
+prod and operator twins passed. The diagnostics are not runtime proofs.
+Adding the event-ceiling assertion yielded the **9/3** proof above.
+
+VERIFIED: After source fixes, `timeout 180 mix test
+test/shoestring_web/live/runtime_dispatch_entry_test.exs
+test/shoestring_web/live/wakeup_conflict_replay_test.exs
+test/shoestring_web/live/run_new_worker_delivery_test.exs
+test/shoestring_web/live/provider_submission_test.exs --seed 0 < /dev/null`
+passed **10 tests, 0 failures**.
+
+VERIFIED: The broader command was
+`timeout 240 mix test test/shoestring_web/live/runtime_dispatch_entry_test.exs
+test/shoestring_web/live/wakeup_conflict_replay_test.exs
+test/shoestring_web/live/hermetic_lifecycle_test.exs
+test/shoestring_web/live/hermetic_deadline_completion_test.exs
+test/shoestring_web/live/hermetic_failure_refusal_test.exs
+test/shoestring_web/live/provider_submission_test.exs
+test/shoestring_web/live/run_new_worker_delivery_test.exs
+test/shoestring_web/live/cobbler_quota_presentation_test.exs
+test/shoestring/cobbler/wakeup_manual_scope_test.exs
+test/shoestring/cobbler/wakeup_idempotency_test.exs
+test/shoestring/cobbler/wakeup_production_test.exs
+test/shoestring/cobbler/wakeup_reconcile_test.exs
+test/shoestring/cobbler/wakeup_continuation_test.exs
+test/shoestring/elves/elf_lease_loop_test.exs
+test/shoestring/elves/elf_lease_reloop_test.exs
+test/shoestring/cobbler/observatory_snapshot_twins_test.exs --seed 0 < /dev/null`.
+It passed **90 tests, 0 failures**, **50.1 seconds**, including the original
+composed restart and natural-deadline tests.
+
+VERIFIED: `timeout 60 mix format` with explicit changed source/test paths and
+`< /dev/null` exited 0; `git diff --check` passed. `timeout 60 mix help precommit
+< /dev/null` again reported the format/compile/test/two Node gate alias.
+Review source/tests are committed at
+`310e2e8f3be809661f6742d12ec69cc31940185a`; its message has no attribution trailer.
+
+VERIFIED: On that source/test commit, after all review source changes, the
+foreground command `timeout 300 mix precommit < /dev/null >
+.shoestring/iter6-review-precommit.log 2>&1` exited **0**:
+**4 doctests, 1528 tests, 0 failures, 1 skipped (6 excluded)**;
+seed **114591**, **150.3 seconds**. Capacity Node gate: **52 tests, 52 pass,
+0 fail**. UI Node gate: **7 tests, 7 pass, 0 fail**. Formatting and compile
+with warnings as errors passed within the same alias. No new skip or live
+exclusion was introduced. The review implementation was measured by one
+full gate; no intermittent failure was established. Pre-fix failures were
+reproduced deliberately in both owned worktrees, not rerun until green.
+Only evidence and PR metadata changes follow this green review gate.
+
+UNVERIFIED: Independent different-vendor re-review of these fixes is pending.
+PR #87 remains draft. The full OTP application restart (not BEAM/machine),
+delayed-delivery deadline twin, deterministic modeled conflict window and
+manual queue drain boundaries are explicit above; no live provider or
+network execution, concurrent stress, automatic polling, or retirement crash
+atomicity was verified in this round. I did not verify these.
