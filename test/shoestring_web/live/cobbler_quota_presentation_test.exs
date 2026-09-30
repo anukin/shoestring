@@ -31,6 +31,13 @@ defmodule ShoestringWeb.CobblerQuotaPresentationTest do
     assert GoalLifecycle.transition(:queued, :dispatch_started) == {:ok, :working}
   end
 
+  test "fresh admitted renewals keep useful work and checkpointing in their current state" do
+    assert GoalLifecycle.transition(:working, {:admission_decision, :admit}) == {:ok, :working}
+
+    assert GoalLifecycle.transition(:checkpointing, {:admission_decision, :admit}) ==
+             {:ok, :checkpointing}
+  end
+
   test "ordinary failures remain terminal and unknown run events remain unknown" do
     assert CobblerPresentation.derive_goal_state(
              working_timeline() ++ events([{"run.failed", %{"error_category" => "unknown"}}], 10)

@@ -1267,12 +1267,12 @@ defmodule Shoestring.Elves.Elf do
   # A successfully completed run retires its active grant. The checkpoint and
   # terminal have already committed; settle the lease through its ordinary
   # writer, without a suspension, wake, or replacement dispatch. Renewal
-  # states and declined leases already rest outside the active state and
-  # retain their recorded boundary outcome.
+  # allowances are retired as well: completed work cannot consume another
+  # epoch. Declined leases retain their recorded boundary outcome.
   defp settle_terminal_lease(%{terminal: %{class: :completed}} = state) do
     case active_lease_for(state) do
       {:ok, %{id: grant_id, status: status}}
-      when status in ["granted", "active"] ->
+      when status in ["granted", "active", "renewal_due", "renewed"] ->
         opts = [repo: state.repo, now: Clock.now(state.clock)]
 
         with {:ok, %{state: :revoked}} <-

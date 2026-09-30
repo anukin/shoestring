@@ -140,9 +140,16 @@ defmodule ShoestringWeb.HermeticLifecycleTest do
         {:ok, capacity(20.0, "00000000-0000-4000-8000-f00000000613")}
       end)
 
+      completion =
+        Shoestring.Harness.Fake.Scenario.normal_completion(now: HermeticLifecycleClock.now())
+
+      completion = %{
+        completion
+        | capacity: capacity(20.0, "00000000-0000-4000-8000-f00000000614")
+      }
+
       Application.put_env(:shoestring, :elf_dispatch_opts,
-        scenario:
-          Shoestring.Harness.Fake.Scenario.normal_completion(now: HermeticLifecycleClock.now()),
+        scenario: completion,
         clock: HermeticLifecycleClock
       )
 
@@ -150,6 +157,22 @@ defmodule ShoestringWeb.HermeticLifecycleTest do
       assert_receive {:capacity_observed, :wakeup, %{provider_id: "fake", scope: "subscription"}}
       assert Repo.get!(RunRecord, run.id) == run
       assert Repo.get!(Shoestring.Cobbler.WakeupRecord, wake.id).status == "woken"
+
+      assert {:ok, %{outcome: :replayed, wakeup: replayed, job: nil}} =
+               Shoestring.Cobbler.Wakeups.schedule(run.goal_id,
+                 run_id: run.id,
+                 command_id: wake.command_id,
+                 wake_at: wake.wake_at,
+                 reason: wake.reason,
+                 clock: HermeticLifecycleClock
+               )
+
+      assert replayed.id == wake.id
+
+      assert Repo.aggregate(
+               from(w in Shoestring.Cobbler.WakeupRecord, where: w.goal_id == ^run.goal_id),
+               :count
+             ) == 1
 
       continued =
         Repo.one!(from r in RunRecord, where: r.goal_id == ^run.goal_id and r.id != ^run.id)
@@ -188,6 +211,7 @@ defmodule ShoestringWeb.HermeticLifecycleTest do
       assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^run.goal_id), :count) == 2
 
       {:ok, goal_view, _} = live(build_conn(), "/cobbler/goals/#{run.goal_id}")
+
       assert has_element?(goal_view, "#cobbler-goal-status[data-status='completed']")
       refute has_element?(goal_view, "#cobbler-lease-status[data-status='active']")
     end

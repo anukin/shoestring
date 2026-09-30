@@ -118,7 +118,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
 
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
     record = Repo.get_by!(ExecutionLeaseRecord, run_id: run_id)
-    assert record.status == "renewed"
+    assert record.status == "checkpoint_required"
 
     assert record.admitted_snapshot_id ==
              GoalLocalObservation.snapshot_id("lease-renewal", goal.id, record.id, fresh_id)
@@ -322,7 +322,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     assert sequence_before?(ordered, {"lease.renewed", nil}, {:harness, "evt-done"})
 
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
-    assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status == "renewed"
+    assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status == "checkpoint_required"
   end
 
   test "deadline path marks due then renews against the fresh snapshot", %{
@@ -392,7 +392,7 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
 
     record = Repo.get_by!(ExecutionLeaseRecord, run_id: run_id)
-    assert record.status == "renewed"
+    assert record.status == "checkpoint_required"
 
     assert record.admitted_snapshot_id ==
              GoalLocalObservation.snapshot_id("lease-renewal", goal.id, record.id, fresh_id)
