@@ -60,7 +60,7 @@ defmodule Shoestring.Cobbler.GoalLocalObservation do
 
   # Flow names are extension namespaces, so they follow
   # `Shoestring.Harness.Contract`'s namespace alphabet (`[a-z0-9.-]`).
-  @flows ~w(handoff lease-renewal wakeup)
+  @flows ~w(handoff lease-renewal wakeup submission)
 
   @typedoc "The Cobbler flow re-recording the observation."
   @type flow :: String.t()

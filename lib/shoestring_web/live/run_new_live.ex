@@ -280,9 +280,7 @@ defmodule ShoestringWeb.RunNewLive do
   # run without a persisted execution lease. `run_id:`/`dispatch_id:`
   # keep the run row on the identity the UI navigates to.
   defp gated_start_run(socket, goal, candidate, bounds, request, identity, run_id) do
-    with {:ok, snapshot} <- record_manual_observation(goal, identity),
-         {:ok, admission} <-
-           append_manual_admission(goal, candidate, bounds, snapshot.snapshot_id),
+    with {:ok, admission} <- initial_admission(goal, candidate, bounds, request, identity),
          {:ok, gated} <-
            Cobbler.claim_and_gate(goal.id, claim_attrs(candidate, admission, run_id),
              grant_lease: [
@@ -408,12 +406,91 @@ defmodule ShoestringWeb.RunNewLive do
       "type" => "task.claim",
       "command_id" => "manual-claim-#{run_id}",
       "payload" => %{
-        "intent" => @claim_intent,
-        "scope" => @claim_scope,
+        "intent" => admission.payload["requested_capability"],
+        "scope" => admission.payload["scope"],
         "candidate" => candidate,
         "admission_event_id" => admission.id
       }
     }
+  end
+
+  # Deployments may configure provider-scoped submission observation through
+  # the same scoped callback contract as WakeupWorker. The default remains
+  # operator-declared manual admission and never consults provider capacity.
+  defp initial_admission(goal, candidate, bounds, request, identity) do
+    case Application.get_env(:shoestring, :run_submission_observe) do
+      observe when is_function(observe, 1) ->
+        provider_admission(goal, candidate, bounds, request, observe)
+
+      nil ->
+        with {:ok, snapshot} <- record_manual_observation(goal, identity) do
+          append_manual_admission(goal, candidate, bounds, snapshot.snapshot_id)
+        end
+
+      _invalid ->
+        {:error, :invalid_submission_observer}
+    end
+  end
+
+  defp provider_admission(goal, candidate, bounds, request, observe) do
+    clock = Application.get_env(:shoestring, :dispatch_clock, Shoestring.Harness.SystemClock)
+    scope = Application.get_env(:shoestring, :run_submission_scope, "subscription")
+
+    candidate =
+      Map.merge(candidate, %{
+        "scope" => scope,
+        "support_tier" => "proactive",
+        "compatibility_state" => "compatible"
+      })
+
+    policy = %{
+      Cobbler.default_policy()
+      | response_budget: min(bounds.max_events, 10),
+        tool_budget: min(bounds.max_events, 25),
+        deadline_seconds: bounds.lease_seconds
+    }
+
+    with {:ok, observed} <- observe.(%{provider_id: candidate["provider_id"], scope: scope}),
+         now <- Shoestring.Harness.Clock.now(clock),
+         {:ok, snapshot} <-
+           Shoestring.Cobbler.GoalLocalObservation.localize(
+             observed,
+             "submission",
+             goal.id,
+             request.dispatch_id
+           ),
+         {:ok, _event} <-
+           Trajectory.append(goal.id, %{
+             "type" => "capacity.snapshot_observed",
+             "schema_version" => 2,
+             "actor" => "cobbler",
+             "occurred_at" => now,
+             "idempotency_key" => "submission-snapshot:#{snapshot.snapshot_id}",
+             "payload" => EventPayload.capacity_snapshot(snapshot, nil)
+           }),
+         {:ok, _position} <- Projector.project(goal.id),
+         {:ok, decision} <-
+           Cobbler.evaluate_admission(
+             %{
+               requested_capability: "supervised_execution",
+               scope: scope,
+               goal_id: goal.id,
+               task_id: request.task_id,
+               run_id: request.dispatch_id
+             },
+             candidate,
+             snapshot,
+             policy,
+             now: now
+           ) do
+      Trajectory.append(goal.id, %{
+        "type" => "admission.decided",
+        "schema_version" => 1,
+        "actor" => "cobbler",
+        "occurred_at" => now,
+        "payload" => Shoestring.Cobbler.AdmissionDecision.to_payload(decision)
+      })
+    end
   end
 
   # Operator-declared capacity observation: manual execution consults no

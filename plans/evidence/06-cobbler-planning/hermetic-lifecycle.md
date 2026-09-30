@@ -171,7 +171,61 @@ This is a measured RED gate, not completion. This repeat followed a source
 change narrowing lease settlement after the earlier full-gate failure; it
 was not rerun-until-green. No intermittent N-of-M claim has been established.
 
-UNVERIFIED: The draft remains incomplete. The presentation scope-extension
-question and manual-to-provider recovery design clarification are pending;
-neither silence nor elapsed time is authorization. No excluded source file
-has been changed.
+UNVERIFIED: The draft remains incomplete. No composed quota recovery or final
+green gate has yet been established.
+
+## Authorized continuation and worker/admission corrections
+
+VERIFIED: The continuation brief explicitly authorized
+`lib/shoestring_web/live/cobbler_presentation.ex` and narrowly related tests
+for the demonstrated terminal UI failure, overriding the original exclusion.
+It clarified that recovery must use provider-scoped admission with Fake
+execution and scripted local observations; manual wakes stay refused.
+
+| Correction | Pre-fix source commit | Command | Behavioral assertion |
+| --- | --- | --- | --- |
+| LiveView defers execution to durable worker | `bec3b75326fe6a2be1ef2245b5df260a92f4e827` | `timeout 60 mix test test/shoestring_web/live/run_new_worker_delivery_test.exs --seed 0 < /dev/null` | 1 test, 1 failure: an Elf was already registered before worker delivery, expected nil |
+| Worker reconstructs persisted Fake scenario | `763c290aafc112d07d276c8d343fc16e0588a5d4` | `timeout 60 mix test test/shoestring_web/live/run_new_worker_delivery_test.exs:33 --seed 0 < /dev/null` | 1 test, 1 failure (1 excluded): submitted success projected failed, expected completed |
+| Presentation accepts ordinary durable run intent | `ceb1629` | `timeout 120 mix test test/shoestring_web/live/hermetic_lifecycle_test.exs --seed 0 < /dev/null` | 1 test, 1 failure: real terminal goal UI did not render completed after worker delivery and whole application restart |
+| Configured provider submission observation | `9536654e03b8e36ba4d7ff6745d815900a45d9e3` | `timeout 60 mix test test/shoestring_web/live/provider_submission_test.exs --seed 0 < /dev/null` | 1 test, 1 failure: admission scope account:manual, expected subscription |
+
+VERIFIED: The worker/entry focused command `timeout 90 mix test
+test/shoestring_web/live/run_new_worker_delivery_test.exs
+test/shoestring/harness/dispatch/elf_effect_test.exs
+test/shoestring_web/live/run_new_entry_test.exs --seed 0 < /dev/null` first
+reported 13 tests, 1 failure: the quiet Fake run's projection remains
+requested until the normal producer projects it. The test now checks the
+canonical run.running event and successful dispatch effect, rather than
+assuming an incremental run projection. After that test correction the
+command reported **13 tests, 0 failures**. The worker regression also
+replays delivery and asserts one Elf and one run.running event.
+
+VERIFIED: After the presentation mapping correction, the composed scaffold
+focused command reported **1 test, 0 failures**. This was still a normal
+success/restart scaffold, not the required quota-recovery journey.
+
+VERIFIED: Provider/entry focused command `timeout 90 mix test
+test/shoestring_web/live/provider_submission_test.exs
+test/shoestring_web/live/run_new_worker_delivery_test.exs
+test/shoestring_web/live/run_new_entry_test.exs
+test/shoestring_web/live/run_new_manual_lease_test.exs --seed 0 < /dev/null`
+reported **10 tests, 0 failures** after three development failures of
+10 tests, 1 failure each: the observation timestamp postdated its event,
+the test read the lease projection before worker delivery, and the test
+mistakenly read a nonexistent direct scope field instead of the documented
+lease extension. None of these diagnostic failures is a regression proof.
+
+VERIFIED: Earlier worker-test construction diagnostics reported 1 test,
+1 failure twice (incorrect requested/starting expectation, then a terminated
+Elf barrier) and 2 tests, 2 failures once (launch-failure notification not
+emitted and a terminated Elf barrier). The behavioral worker-scenario proof
+above instead waits for the owned Elf monitor and asserts the honest durable
+failed/completed status; no missing API or signature is involved.
+
+REPO-INSPECTION: Provider submission observation is an opt-in scoped callback
+in server configuration. Without it, the existing operator-declared manual
+path remains. With it, the product entry records a goal-local observation,
+evaluates normal admission, and claims using the durable decision's intent
+and scope. The submission flow adds its own deterministic observation
+namespace; other flow identities are unchanged. No test appends events or
+calls a projector to force this journey forward.
