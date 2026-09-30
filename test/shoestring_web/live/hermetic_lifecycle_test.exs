@@ -33,6 +33,8 @@ defmodule ShoestringWeb.HermeticLifecycleTest do
         Application.put_env(:shoestring, key, true)
       end
 
+      Application.put_env(:shoestring, :dispatch_effect, Shoestring.Harness.Dispatch.ElfEffect)
+
       restart_application!()
       :ok
     end
@@ -50,6 +52,10 @@ defmodule ShoestringWeb.HermeticLifecycleTest do
           }
         })
         |> render_submit()
+
+      dispatch = Repo.get_by!(Shoestring.Harness.DispatchRecord, run_id: run_id)
+      job = Repo.one!(from j in Oban.Job, where: j.args["dispatch_id"] == ^dispatch.dispatch_id)
+      assert :ok = Shoestring.Harness.DispatchWorker.perform(job)
 
       await_owned_elf(run_id)
       run = Repo.get!(RunRecord, run_id)

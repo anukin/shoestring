@@ -73,13 +73,28 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
 
   # -- Private helpers --
 
-  defp elf_opts(%RunRecord{provider_id: provider_id}) do
+  defp elf_opts(%RunRecord{provider_id: provider_id, extensions: extensions}) do
     case provider_defaults(provider_id) do
       {:ok, defaults} ->
+        defaults =
+          if provider_id == "shoestring.harness.fake" do
+            Keyword.put(defaults, :scenario, fake_scenario(extensions))
+          else
+            defaults
+          end
+
         {:ok, Keyword.merge(defaults, Application.get_env(:shoestring, :elf_dispatch_opts, []))}
 
       {:error, _reason} = error ->
         error
+    end
+  end
+
+  defp fake_scenario(extensions) do
+    case extensions["shoestring.fake:scenario"] do
+      "failure" -> Fake.Scenario.mid_run_crash()
+      "quiet_exit" -> %Fake.Scenario{name: :quiet_exit, events: []}
+      _ -> Fake.Scenario.normal_completion()
     end
   end
 

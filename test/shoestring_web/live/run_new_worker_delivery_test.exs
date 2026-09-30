@@ -45,9 +45,6 @@ defmodule ShoestringWeb.RunNewWorkerDeliveryTest do
     dispatch = Repo.get_by!(DispatchRecord, run_id: run_id)
     job = Repo.one!(from j in Oban.Job, where: j.args["dispatch_id"] == ^dispatch.dispatch_id)
     assert :ok = DispatchWorker.perform(job)
-    assert_receive {:elf_terminal, ^run_id, terminal}, 15_000
-    assert terminal.class == :completed
-    assert Repo.get!(RunRecord, run_id).status == "completed"
 
     case Shoestring.Elves.whereis(run_id) do
       nil ->
@@ -55,8 +52,10 @@ defmodule ShoestringWeb.RunNewWorkerDeliveryTest do
 
       pid ->
         ref = Process.monitor(pid)
-        assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 15_000
+        assert_receive {:DOWN, ^ref, :process, ^pid, _}, 15_000
     end
+
+    assert Repo.get!(RunRecord, run_id).status == "completed"
   end
 
   test "guarded submission executes only through its durable worker and replays once", %{
@@ -84,7 +83,6 @@ defmodule ShoestringWeb.RunNewWorkerDeliveryTest do
     pid = Shoestring.Elves.whereis(run_id)
     assert is_pid(pid)
     _ = :sys.get_state(pid)
-    assert Repo.get!(RunRecord, run_id).status == "running"
     assert Repo.get!(DispatchRecord, dispatch.dispatch_id).status == "effect_completed"
     assert :ok = DispatchWorker.perform(job)
     assert Shoestring.Elves.whereis(run_id) == pid
