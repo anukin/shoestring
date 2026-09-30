@@ -1007,9 +1007,14 @@ defmodule ShoestringWeb.CobblerPresentation do
           {:working, :dispatch_started} -> {:ok, :working}
           {:checkpointing, :dispatch_started} -> {:ok, :checkpointing}
           {:checkpointing, :checkpoint_started} -> {:ok, :checkpointing}
+          {:sleeping, :checkpoint_started} -> {:ok, :sleeping}
           {:working, :checkpoint_done} -> {:ok, :working}
           {:working, :run_suspended} -> {:ok, :sleeping}
           {:checkpointing, :run_suspended} -> {:ok, :sleeping}
+          {:sleeping, :run_suspended} -> {:ok, :sleeping}
+          {:working, :quota_refused} -> {:ok, :sleeping}
+          {:checkpointing, :quota_refused} -> {:ok, :sleeping}
+          {:sleeping, :quota_refused} -> {:ok, :sleeping}
           _other -> :unknown
         end
     end
@@ -1042,6 +1047,9 @@ defmodule ShoestringWeb.CobblerPresentation do
 
       type == "run.completed" ->
         {:event, {:run_terminal, :completed}}
+
+      type == "run.failed" and payload_value(payload, "error_category") == "quota_refused" ->
+        {:event, :quota_refused}
 
       type == "run.failed" ->
         {:event, {:run_terminal, :failed}}
