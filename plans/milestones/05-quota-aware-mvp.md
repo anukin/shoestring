@@ -836,18 +836,25 @@ Record: `plans/evidence/05-quota-aware-mvp/terminal-projection-fix.md` and
   regression locks fail on base `70af28e` for the stale-row reason and pass
   with the fix. No post-fix live pass is claimed or implied.
 - **Gate on the final tree:** `mix precommit` → **4 doctests, 1509 tests,
-  0 failures, 1 skipped (6 excluded); Node 52/52; UI 7/7** (ExUnit seed
-  796367). One earlier full-gate run on this tree showed 1 failure in
-  `CodexAppServerContractTest` (cancel raced a dead session process); that
-  file passes in isolation (7 tests, 0 failures, seed 0) and is untouched by
-  this branch's diff — reported as intermittent, 1 of 2 full-gate runs, not
-  re-run until green.
+  0 failures, 1 skipped (6 excluded); Node 52/52; UI 7/7** (ExUnit seeds
+  796367 and 31501 green). Gate history, VERIFIED from the saved outputs:
+  three full runs on this tree (seeds 839803, 796367, 31501). Seed 839803
+  showed **1 failure** in `CodexAppServerContractTest` (cancel
+  `GenServer.call` raced a dead session process; Node 52/52 and UI 7/7 still
+  passed): that suite drives the adapter/session directly with no Elf, Repo,
+  or Harness.Projector in the path, so no direct causal path from this
+  diff was found — an indirect load-timing contribution is unestablished,
+  not ruled out. The file passes in isolation (7 tests, 0 failures, seed
+  0). Reported as intermittent, 1 of 3 full-gate runs, not re-run until
+  green.
 - **Limits carried:** the codex-cli 0.158.0/0.159.0 worktree commit
   restriction (no sandbox change made, no proven safe repair); Acceptance 8
   MEASURED with no product advantage shown, pending the human's ruling;
   failed/crash stops, a real quota refusal, late handoff delivery and the
   crash window unexercised live; no claim that every arbitrary
-  terminal/projector-error path heals (a failed projection stays stale but
-  logged; the `terminate/2` supervisor-crash marker path is out of scope).
+  terminal/projector-error path heals (three other terminal writers still do
+  not project and recovery never projects; a persisted projector failure
+  needs explicit rebuild — record §§16–17, `terminal-projection-fix.md`
+  §5).
 - **Iteration 6:** unlocked when this closeout PR passes independent review
   and the human merges it (unchanged).

@@ -710,8 +710,16 @@ live capture was altered and no new live run was made.*
   MEASURED with no product advantage shown (§9); failed/crash stops, a real
   quota refusal, late handoff delivery and the crash window unexercised
   live.
-- **No heal-everything claim:** the repair projects after committed
-  terminals on the Elf's normal and crash-land paths; a failed projection
-  stays stale but logged, and the `terminate/2` supervisor-crash marker path
-  is out of scope (`terminal-projection-fix.md` §5). Nothing here claims
-  every arbitrary terminal or projector-error path heals.
+- **No heal-everything claim:** the repair projects after the terminal
+  append attempt on the Elf's normal and crash-land paths only
+  (`terminal-projection-fix.md` §2). Three other terminal writers still do
+  not project, and recovery never projects (REPO-INSPECTION):
+  `Elf.terminate/2`'s crash marker (ordinary callback crashes — the Elf
+  traps no exits — not supervisor shutdown), `cancel_without_elf/3`'s
+  `run.cancelled`, and `append_reconciled_terminal/3` on every `reconcile/2`
+  orphan path. Any of these can leave rows stale; no healing consumer is
+  implied. A failed projection does not imply later healing either: a
+  rolled-back transaction may catch up on a later project, but once
+  `Projector.fail/4` persists the position stays failed until explicit
+  `rebuild/2`. Nothing here claims every arbitrary terminal or
+  projector-error path heals.

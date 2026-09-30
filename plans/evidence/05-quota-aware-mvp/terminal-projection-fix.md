@@ -25,7 +25,8 @@ Mechanism (REPO-INSPECTION of `70af28e`):
   no projection.
 - No other consumer projects the goal after the terminal (REPO-INSPECTION:
   the only in-Elf projection call was the once-per-Elf `load_lease/1`
-  backfill), so the UI read the stale row. The trajectory was already
+  backfill), so the UI read the stale row. The three non-commit terminal
+  writers (§5) likewise append without projecting. The trajectory was already
   authoritative and complete; only the read model lagged.
 
 ## 2. Fix (VERIFIED, committed here)
@@ -34,30 +35,40 @@ Mechanism (REPO-INSPECTION of `70af28e`):
 
 - `commit_terminal/2` calls `project_after_terminal/1` after
   `append_terminal_event/2` on the `{:terminal, state}` branch only — i.e.
-  after this Elf successfully committed terminal events, promptly projecting
-  the goal so the durable lease/run rows reflect the canonical terminal
-  state with no caller manually projecting.
-- `crash_land/0` mirrors it after its terminal append.
+  after the terminal append *attempt* (`_ = append_terminal_event(...)`,
+  `elf.ex:2385`; the result is discarded, so the projection also runs when
+  the append itself returned an error), promptly projecting the goal so the
+  durable lease/run rows reflect the canonical terminal state with no caller
+  manually projecting.
+- `crash_land/0` mirrors it after its terminal append attempt (same
+  `_ =`-discarded shape, `elf.ex:619-628`).
 - `project_after_terminal/1` (near 1240) reuses the existing `project_own_goal/1`
   (application-repo gate, already rescue/catch-closed) and is itself
-  rescue/catch-closed: projector errors are logged observably as
+  rescue/catch-closed: projector errors are passed to `Logger.warning` as
   `elf terminal projection failed` with `run_id`, `dispatch_id` and the
-  inspected reason (repo `Logger.warning` convention, as in the lease
-  projection and terminal checkpoint paths), then swallowed. A failed
-  projection never undoes the committed terminal events, never crashes the
-  Elf, and never appends anything — projection advances read-model rows
+  inspected reason (repo convention), then swallowed. Accuracy notes
+  (REPO-INSPECTION, not log-observed): the default formatter
+  (`config/config.exs:67-69`) prints only `request_id` metadata, so the
+  run/dispatch/reason fields do not appear in printed log lines unless a
+  collector captures metadata; and a projector *raise* logs twice — first
+  `elf lease projection failed` from `project_own_goal/1`, then
+  `elf terminal projection failed` with reason `:projection_raised`. That no
+  error path undoes terminal events, crashes the Elf, or appends anything is
+  REPO-INSPECTION of the rescue/catch-closed structure — no test exercises
+  those paths, so it is not VERIFIED: projection advances read-model rows
   only, so no duplicate dispatch or terminal event can result.
 
 Deliberately unchanged (REPO-INSPECTION of the diff):
 
 - Stop / renewal / admission behavior: untouched. The duplicate branches of
-  `commit_terminal/2` do not project (they committed nothing; a failed
-  projection stays visible in the log rather than being silently healed by
-  an observer). Resume, dispatch, wake, and explicit-cancellation paths are
-  byte-identical apart from the shared commit call.
+  `commit_terminal/2` (`elf.ex:2374-2380`) return before projecting (they
+  committed nothing). Follow-up, recorded not fixed: if the Elf process dies
+  between the terminal append and the final projection, the rows stay stale
+  with no automatic catch-up from this change. Resume, dispatch, wake, and
+  explicit-cancellation paths are byte-identical apart from the shared commit
+  call.
 - No timers, no interruption, no forced cancellation, no provider calls, no
-  new cleanup behavior. The `terminate/2` supervisor-crash marker path is
-  out of scope (see §5).
+  new cleanup behavior.
 
 ## 3. Regression (VERIFIED hermetic)
 
@@ -121,22 +132,68 @@ Focused suites, each `mix test ... --seed 0`, all hermetic:
 Full gate: `mix precommit` → **4 doctests, 1509 tests, 0 failures, 1 skipped,
 6 excluded; Node 52/52; UI 7/7** (baseline at `70af28e`: 4 doctests, 1506
 tests, 0 failures, 1 skipped, 6 excluded; Node 52/52; UI 7/7 — the +3 are
-the new regression tests). The gate log additionally shows the
-failure-observability contract working: scenarios with no projectable run
-row log `elf terminal projection failed` and continue green.
+the new regression tests).
+
+Gate history on this tree (VERIFIED from the saved outputs, same tree modulo
+prose): three full `mix precommit` runs — ExUnit seeds 839803, 796367,
+31501. Seeds 796367 and 31501: green as quoted above. Seed 839803: **4
+doctests, 1509 tests, 1 failure, 1 skipped (6 excluded); Node 52/52; UI
+7/7**. The single failure was `CodexAppServerContractTest` "normalized
+start, stream, completion, failure, and cancellation"
+(`test/shoestring/harness/codex_app_server_contract_test.exs:13`):
+`GenServer.call(pid, {:cancel, %{}}, 15000)` exited `no process` — the
+cancel raced a dead session process. That suite drives the adapter/session
+directly with no Elf, Repo, or Harness.Projector in the path, so no direct
+causal path from this diff was found; an indirect load-timing contribution
+is unestablished, not ruled out. The file passes in isolation (7 tests, 0
+failures, `--seed 0`). Reported as intermittent, 1 of 3 full-gate runs, not
+re-run until green.
+
+The gate log also shows `elf terminal projection failed` warnings in
+scenarios with no projectable run row (e.g. `run_not_found` vehicles).
+Those application-repo-gate skips are expected-skip noise, not proof of the
+failure-observability contract (REPO-INSPECTION: they exercise the skip
+branch, never a genuine projection failure).
 
 ## 5. Limits (UNVERIFIED unless noted)
 
 - No live remeasurement: the repair is validated hermetically only. A
   post-fix live pass is **not** claimed; the measured acceptance-8 negative
   result (`live-closeout-post85.md` §9) stands.
-- The `terminate/2` supervisor-crash marker (an append that fires while the
-  VM is shutting the process down) still does not project; recovery
-  (`Shoestring.Elves.reconcile/2`) remains its authority (REPO-INSPECTION).
-  No synthetic test pretends to prove an actual supervisor leak: the crash
-  twin proves the `crash_land/0` projection, nothing about supervision.
-- A projection that fails at the terminal leaves the rows stale until some
-  later projector run advances them; the failure is observable in the
-  `elf terminal projection failed` warning, not silent.
+- Three other terminal writers still do not project, and recovery never
+  projects (REPO-INSPECTION): (1) `Elf.terminate/2`'s `supervisor_crash()`
+  marker (`elf.ex:305-320`) — the Elf never traps exits
+  (`Process.flag(:trap_exit, ...)` appears only in `dispatch_effect.ex`, a
+  different process), so this fires on ordinary callback crashes after
+  launch, not on supervisor shutdown; (2) `cancel_without_elf/3` →
+  `append_cancelled/2` (`elves.ex:693-783`: `run.cancelling` plus
+  `run.cancelled` with no Elf running); (3) `append_reconciled_terminal/3`
+  (`elves.ex:916-930`) on every `reconcile/2` orphan path
+  (`reconcile_exited/2`, `reconcile_never_spawned/2`). `reconcile/2` itself
+  (`elves.ex:295-310`) calls no projector. Any of these can leave lease/run
+  rows stale; no healing consumer is implied. The fix covers
+  `commit_terminal/2` and `crash_land/0` only. No synthetic test pretends to
+  prove an actual supervisor leak: the crash twin proves the `crash_land/0`
+  projection, nothing about supervision.
+- A failed terminal projection does not imply later healing
+  (REPO-INSPECTION): a transaction that rolls back without persisting
+  `fail/4` leaves the projector position unchanged, so a later `project/2`
+  may catch up — but once `Projector.fail/4` persists (`projector.ex:549-560`,
+  `status: "failed"`), every later `project/2` returns the stored failure
+  (`projector.ex:111`) until an explicit `rebuild/2` (`projector.ex:42-47`).
+  There is no automatic recovery guarantee.
+- The `{:duplicate, state}` branches (in-memory terminal already set, or a
+  terminal already recorded durably) return before projecting, as do
+  redeliveries converging on them — and a crash of the Elf process between
+  the terminal append and the final projection leaves the rows stale.
+  Recorded as a follow-up, not fixed here.
+- Each terminal now costs one extra per-goal projection transaction; under
+  SQLite contention that projection can itself hit busy/locked errors (the
+  pre-existing projector-busy caveat stands), in which case the rows stay
+  stale per the paragraphs above.
+- The crash twin attaches its `Process.monitor/1` after an async start and
+  a Repo read (`elf_terminal_projection_test.exs:263-270`); if the Elf has
+  already exited, the monitor fires `:noproc` instead of `:normal` and the
+  test would fail. Unverified race risk, recorded without changing the test.
 - Fixture convention: no new fixtures; synthetic ids are generated at
   runtime (`Ecto.UUID.generate/0`), never committed.
