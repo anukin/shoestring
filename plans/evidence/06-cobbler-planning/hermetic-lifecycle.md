@@ -1,4 +1,9 @@
-# Hermetic lifecycle work ledger (in progress)
+# Hermetic lifecycle work ledger
+
+VERIFIED: The sections below preserve measured intermediate failures and
+scope decisions. Their unfinished-status statements describe those revisions;
+the continuation results at the end supersede them. No earlier red run is
+reported as green.
 
 ## Baseline
 
@@ -229,3 +234,164 @@ evaluates normal admission, and claims using the durable decision's intent
 and scope. The submission flow adds its own deterministic observation
 namespace; other flow identities are unchanged. No test appends events or
 calls a projector to force this journey forward.
+
+## Composed recovery and later behavioral proofs
+
+VERIFIED: The final child journey submits the real LiveView form, delivers
+the durable DispatchWorker job, and runs Shoestring.Harness.Fake with a
+scripted quota refusal. The Elf produces both its reactive checkpoint and
+its deterministic terminal checkpoint. The failed run remains failed, with
+`quota_refused/rate_limit_exceeded` evidence and its task/prompt acceptance
+contract. Both checkpoint structs, the run, retired lease, wake intent and
+disk worktree identity compare unchanged across the whole application stop
+and start described above.
+
+VERIFIED: After advancing the supervised test clock, WakeupWorker obtains
+a fresh scripted subscription reading, evaluates admission, and enqueues
+one continuation with the same goal, task, prompt and workspace. The new
+lease references a new observed snapshot and an admitted durable decision.
+The continuation receives the old terminal checkpoint's next action and
+checkpoint identity; the old failed attempt is not resumed or rewritten.
+
+VERIFIED: After completion and replaying both dispatch deliveries, the wake
+delivery, the original producer wake request, and all three reconcilers,
+the test asserts exactly **2 runs, 2 retired leases, 3 checkpoints, 3 delivery
+jobs, 2 effect_completed dispatches, 2 run.running events, 1 run.failed and
+1 run.completed**. The canonical timeline folds to completed and the
+actual goal LiveView renders completed with no active lease. No test appends
+events, mutates lifecycle rows or calls projection to advance this journey.
+
+| Correction | Pre-fix commit | Exact command (stdin closed) | Behavioral result |
+| --- | --- | --- | --- |
+| Authorized quota continuation, retaining failed attempt | `302d169d59e1c67c0b5f1848e45a5f32f3e41623` | `timeout 120 mix test test/shoestring_web/live/hermetic_lifecycle_test.exs --seed 0 < /dev/null` | 1 test, 1 failure: WakeupWorker returned unexpected_run_state failed, expected :ok, after restart assertions |
+| Deferred checkpoint/quota presentation and continuation progress | `f9449e78c04de7d1b83f1217881bd168f85e9625` | `timeout 60 mix test test/shoestring_web/live/cobbler_quota_presentation_test.exs --seed 0 < /dev/null` | 4 tests, 3 failures: deferred/continued states unknown and queued continuation progress rejected; ordinary failure/unknown twin passed |
+| Admit-only renewal keeps working/checkpointing state | `4fbf532babb60c7c2f4656719444f5a4535d7d5a` | Same pure presentation command | 5 tests, 1 failure: working + admit was rejected, expected working |
+| Retire completed renewal allowances | `4fbf532babb60c7c2f4656719444f5a4535d7d5a` | `timeout 120 mix test test/shoestring_web/live/hermetic_lifecycle_test.exs --seed 0 < /dev/null` | 1 test, 1 failure: completed continuation retained renewal_due, expected checkpoint_required |
+| Replay settled producer wake request; reject ordinary failed attempt before probing | `ca8670ac26911ed6173b0ed8921d1a0740f82c19` | `timeout 120 mix test test/shoestring_web/live/hermetic_failure_refusal_test.exs test/shoestring_web/live/hermetic_lifecycle_test.exs --seed 0 < /dev/null` in `$REGRESSION` | 3 tests, 2 failures: replay created :r1 wake/job; ordinary failed worker returned :ok instead of unexpected_run_state failed. Manual quota refusal twin passed |
+| Preserve queued domain dispatch guard while displaying authorized continuation | `ca8670ac26911ed6173b0ed8921d1a0740f82c19` | `timeout 60 mix test test/shoestring/cobbler/goal_lifecycle_test.exs --seed 0 < /dev/null` in `$REGRESSION` | 11 tests, 1 failure: queued dispatch was accepted instead of rejected |
+| Final direct-hatch scenario lock (same initial Scenario correction) | `a68744e2c6506dc646bb050a20a88964822c59c7` | `timeout 60 mix test test/shoestring_web/live/run_new_worker_delivery_test.exs:33 --seed 0 < /dev/null` in `$REGRESSION` | 1 test, 1 failure (2 excluded): attributed direct Fake success failed instead of completed |
+
+VERIFIED: The short pre-fix worker-scenario revision in the earlier table
+is `ceb1629f6e81fc9feb3f40272e42797ce5e8da85`. The proof-worktree checks
+above used committed pre-fix source with the same regression assertions,
+not removed APIs or changed signatures. Earlier proof fixtures were retained
+as commits `bd0918a4a3197df88047641fe0cf4a7e26c126b3` and
+`e20db42e75f4d0e6048b30d4d3826f52ce961569` in owned proof refs; the later
+wake proof fixtures are committed at
+`96509fb8522b06433f4ebdbe0af047257cae4ab2` under an owned proof ref.
+No destructive reset/clean or other checkout
+edit was performed.
+
+REPO-INSPECTION: Quota recovery is restricted to a failed canonical quota
+terminal, the same producer decline wake command, deterministic reactive
+checkpoint and retired lease for that run. It authorizes fresh execution
+through normal admission/dispatch; it does not add a failed-to-starting
+transition. Manual refusal executes before this failed-attempt guard.
+Settled producer requests replay their original wake; explicit operator
+recheck suffix behavior remains covered by existing wake tests.
+
+VERIFIED: The pure domain queued-dispatch guard is preserved. A continuation
+uses its existing durable claim, so its new admission yields queued without
+another claim-acquired event. The read-only presentation fold recognizes
+the ensuing run.starting evidence; the domain machine still rejects a bare
+queued dispatch. This narrowing followed the measured full-gate failure,
+not a widened test assertion.
+
+## Additional measured commands and diagnostics
+
+VERIFIED: All validation commands used foreground `timeout` and closed stdin.
+Local logs are ignored diagnostic output, not committed transcripts. The
+following table records the continuation's command/count history in addition
+to the earlier ledger. Repeated commands followed a source/test correction
+or an explicitly identified pre-fix comparison; none is rerun-until-green.
+
+| Command | Measured outcomes, in order |
+| --- | --- |
+| `timeout 120 mix test test/shoestring_web/live/hermetic_lifecycle_test.exs --seed 0 < /dev/null` during quota development | 1/1 (test wrongly demanded generic partial output in bounded checkpoint evidence); 1/1 (quota resume rejected); 1/1 (terminal UI after quota continuation); 1/1 (diagnostic renewal-admit timeline); 1/1 (completed renewal_due lease). Each denotes tests/failures |
+| `timeout 120 mix test test/shoestring_web/live/hermetic_lifecycle_test.exs test/shoestring_web/live/cobbler_quota_presentation_test.exs test/shoestring_web/live/cobbler_presentation_test.exs --seed 0 < /dev/null` | 20/1 before renewal case added; 21/0 after renewal and retirement fixes |
+| `timeout 60 mix test test/shoestring_web/live/cobbler_quota_presentation_test.exs --seed 0 < /dev/null` | 4/3 pre-fix; 4/0 after first mapping fix; 5/1 pre-renewal fix |
+| `timeout 180 mix test test/shoestring/elves/elf_lease_loop_test.exs test/shoestring/elves/elf_lease_reloop_test.exs test/shoestring/cobbler/observatory_snapshot_twins_test.exs --seed 0 < /dev/null` | 41/5: exact old terminal renewed assertions conflicted with completed retirement |
+| `timeout 180 mix test test/shoestring_web/live/hermetic_deadline_completion_test.exs test/shoestring_web/live/hermetic_lifecycle_test.exs test/shoestring/elves/elf_lease_loop_test.exs test/shoestring/elves/elf_lease_reloop_test.exs test/shoestring/cobbler/observatory_snapshot_twins_test.exs --seed 0 < /dev/null` | 43/0 after exact final statuses were updated; canonical renewal assertions retained |
+| `timeout 60 mix test test/shoestring_web/live/hermetic_failure_refusal_test.exs --seed 0 < /dev/null` | 1/1 before ordinary-failure guard; 2/0 after adding manual quota twin and guard |
+| `timeout 120 mix test test/shoestring_web/live/hermetic_lifecycle_test.exs test/shoestring_web/live/hermetic_failure_refusal_test.exs test/shoestring_web/live/hermetic_deadline_completion_test.exs --seed 0 < /dev/null` | 3/0 after wake replay/failure fixes |
+| `timeout 120 mix test test/shoestring_web/live/hermetic_lifecycle_test.exs --seed 0 < /dev/null` while strengthening final assertions | 1/1 (nonexistent direct admission field); 1/1 (snapshot link read at wrong payload level). These were test-development mistakes, not source proofs |
+| `timeout 120 mix test test/shoestring_web/live/hermetic_lifecycle_test.exs test/shoestring_web/live/hermetic_failure_refusal_test.exs --seed 0 < /dev/null` | 3/0 after correcting the assertion to observation.snapshot_id |
+| `timeout 180 mix test test/shoestring_web/live/hermetic_lifecycle_test.exs test/shoestring_web/live/hermetic_deadline_completion_test.exs test/shoestring_web/live/hermetic_failure_refusal_test.exs test/shoestring_web/live/provider_submission_test.exs test/shoestring_web/live/run_new_worker_delivery_test.exs test/shoestring_web/live/cobbler_quota_presentation_test.exs test/shoestring/cobbler/wakeup_manual_scope_test.exs test/shoestring/cobbler/wakeups_test.exs test/shoestring/cobbler/wakeup_worker_test.exs --seed 0 < /dev/null` | 16/1: direct-hatch test omitted fixture form values. The last two path arguments did not select files; this is not claimed as their coverage |
+| `timeout 180 mix test test/shoestring_web/live/hermetic_lifecycle_test.exs test/shoestring_web/live/hermetic_deadline_completion_test.exs test/shoestring_web/live/hermetic_failure_refusal_test.exs test/shoestring_web/live/provider_submission_test.exs test/shoestring_web/live/run_new_worker_delivery_test.exs test/shoestring_web/live/cobbler_quota_presentation_test.exs test/shoestring/cobbler/wakeup_manual_scope_test.exs test/shoestring/cobbler/wakeup_idempotency_test.exs test/shoestring/cobbler/wakeup_production_test.exs test/shoestring/cobbler/wakeup_reconcile_test.exs test/shoestring/cobbler/wakeup_continuation_test.exs --seed 0 < /dev/null` | 43/0 with real wake-test paths and complete form submission |
+| `timeout 120 mix test test/shoestring/cobbler/goal_lifecycle_test.exs test/shoestring_web/live/cobbler_quota_presentation_test.exs test/shoestring_web/live/hermetic_lifecycle_test.exs --seed 0 < /dev/null` | 17/0 after preserving domain guard and narrowing presentation |
+
+VERIFIED: Formatting used `timeout 60 mix format` with explicit changed
+Elixir source/test paths and `< /dev/null`; all formatting invocations exited
+0. `git diff --check` passed. `mix help precommit` was read again before
+the final gates and reported the same five-part alias.
+
+VERIFIED: The full continuation gate before the domain-guard narrowing,
+`timeout 300 mix precommit < /dev/null > .shoestring/iter6-final-precommit.log
+2>&1`, exited **2**, seed **765604**, **4 doctests, 1522 tests, 1 failure,
+1 skipped (6 excluded)**, 158.3 seconds. The failure was the existing
+queued-dispatch guard assertion. Node gates passed **52/52** and **7/7**.
+
+## Exact boundaries and deferred work
+
+VERIFIED: The deadline twin submits a real provider-scoped Fake run, advances
+the supervised clock past its declared deadline before worker delivery, and
+lets its scripted final response complete naturally. It asserts one completed
+run, one retired lease, one completed checkpoint, no failed/pausing/suspended
+events, no wake, no replacement dispatch, completed visible UI and a reaped
+owned process group. Existing running-renewal/deadline twins were also run.
+
+UNVERIFIED: This new deadline twin is delayed delivery beyond the deadline;
+it is not a real-time timer crossing during an outstanding provider response.
+No live provider behavior, whole-BEAM/machine restart, or independent
+different-vendor review was verified. The PR remains draft pending that review.
+
+REPO-INSPECTION: The completed goal projection here is the canonical timeline
+fold and its actual LiveView representation. The separate administrative
+Goal.status row is not repurposed or manually set to completed. The preserved
+database and worktree state live inside the bounded child VM's unique local
+state directory; fixtures are retained rather than deleted. Test-created
+clock/fixture helpers are supervised outside the restarted application.
+
+VERIFIED: Relevant existing terminal lease assertions were changed to exact
+checkpoint_required, preserving their spend, renewal and checkpoint assertions.
+No skips, sleeps, retries, Process.alive? assertions, forced lifecycle rows or
+widened outcome assertions were added. The only source scope extension is the
+explicitly authorized presentation file and narrowly related tests; the exact
+evidence .gitignore allowlist is authorized. Plan validation, DAG/planner/schema
+work and iteration-5/live follow-ups remain deferred.
+
+## Final gate
+
+VERIFIED: After the actual source corrections, on source/test commit
+`b61146a38ad9d3631480ad194e5235df22874d15`, the foreground command
+`timeout 300 mix precommit < /dev/null >
+.shoestring/iter6-final-precommit-after.log 2>&1` exited **0**:
+**4 doctests, 1522 tests, 0 failures, 1 skipped (6 excluded)**;
+ExUnit seed **489604**, elapsed **150.8 seconds**. Capacity Node gate:
+**52 tests, 52 pass, 0 fail**. UI Node gate: **7 tests, 7 pass, 0 fail**.
+Formatting and compilation with warnings as errors passed as part of that
+same alias. The existing skipped test and live exclusions were not changed.
+
+VERIFIED: The final source was measured once by the full gate, after the
+domain-guard correction and its 17/0 focused check. Earlier red gates in
+this ledger used different implementation states. No intermittent N-of-M
+failure was established, and no gate was rerun without a relevant change.
+Only evidence/publication metadata changes followed the green gate.
+
+## Final publication
+
+VERIFIED: `timeout 60 git push origin polly/iter6-hermetic-lifecycle
+< /dev/null` pushed all implementation commits through
+`b61146a38ad9d3631480ad194e5235df22874d15`. `timeout 30 gh pr edit 87
+--title 'Prove hermetic quota recovery across application restart'
+--body-file .shoestring/iter6-pr-body.md < /dev/null` updated the SAME
+[PR #87](https://github.com/anukin/shoestring/pull/87). The body file contains
+real newlines. `timeout 30 gh pr view 87 --json
+url,headRefOid,headRefName,isDraft,state,title,body < /dev/null` plus a JSON
+comparison verified exact body equality (15 lines), no literal backslash-n
+separators, OPEN/draft, the requested branch and pushed implementation SHA.
+
+VERIFIED: `git log a68744e2c6506dc646bb050a20a88964822c59c7..HEAD
+--format=full < /dev/null` was inspected for attribution trailers; none were
+present. Evidence-only publication recording is committed and pushed after
+the source/test gate. No merge or ready-for-review operation was performed.
