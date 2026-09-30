@@ -1485,7 +1485,9 @@ defmodule Shoestring.Elves.ElfLeaseLoopTest do
     # I3 terminal checkpoint: every terminal appends exactly one repo-evidence
     # checkpoint before the terminal event, even when the loop wrote none.
     assert terminal_checkpoint_count(goal.id, run_id) == 1
-    assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status == "active"
+    # The terminal still spends nothing and does not expire the budget. Its
+    # completed run retires the active grant beside the terminal checkpoint.
+    assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status == "checkpoint_required"
   end
 
   # -- Helpers --
