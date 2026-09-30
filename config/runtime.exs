@@ -50,6 +50,12 @@ if present_env.("PHX_SERVER") do
   config :shoestring, ShoestringWeb.Endpoint, server: true
 end
 
+if config_env() in [:dev, :prod] do
+  # Both supported UI environments deliver admitted runs through the durable
+  # worker. Test keeps explicit effect injection and the unconfigured default.
+  config :shoestring, :dispatch_effect, Shoestring.Harness.Dispatch.ElfEffect
+end
+
 if config_env() == :prod do
   # Production wake probe (loop-closure I4, P1): Oban `wakeup`-queue
   # deliveries re-observe capacity through the real Observatory ledger via
@@ -65,15 +71,6 @@ if config_env() == :prod do
   # admission decision is recorded. Same MFA shape and same fail-closed
   # default (`missing_observe_fun`) as the wake probe.
   config :shoestring, :handoff_observe, {Shoestring.Cobbler.WakeupObserve, :observe, []}
-
-  # Production dispatch-worker effect (loop-closure W2): Oban `dispatch`-queue
-  # deliveries (wakeup continuations, crash-recovery requeues) start the
-  # supervising Elf through `Shoestring.Harness.Dispatch.ElfEffect`, which
-  # rebuilds the RunRequest from the persisted dispatch/run rows and calls
-  # `Shoestring.Elves.start_elf/3`. Test keeps its explicit per-test
-  # `:dispatch_effect` injection; unconfigured environments keep the
-  # fail-closed `UnconfiguredEffect` default in `DispatchWorker`.
-  config :shoestring, :dispatch_effect, Shoestring.Harness.Dispatch.ElfEffect
 
   secret_key_base =
     present_env.("SECRET_KEY_BASE") ||

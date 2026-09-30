@@ -67,6 +67,9 @@ defmodule ShoestringWeb.ProviderSubmissionTest do
     assert admission.payload["result"] == "admit"
     assert admission.payload["candidate"]["support_tier"] == "proactive"
     assert admission.payload["requested_capability"] == "supervised_execution"
+    assert admission.payload["proposed_bounds"]["response_budget"] == 10
+    assert admission.payload["proposed_bounds"]["tool_budget"] == 25
+    assert run.extensions["shoestring.manual:max_events"] == 1000
     assert_receive {:submission_observed, %{provider_id: "fake", scope: "subscription"}}
     assert Shoestring.Elves.whereis(run_id) == nil
 

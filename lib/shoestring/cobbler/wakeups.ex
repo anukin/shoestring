@@ -210,10 +210,13 @@ defmodule Shoestring.Cobbler.Wakeups do
             %WakeupRecord{status: status} = existing when status in ["scheduled", "due"] ->
               {:ok, %{wakeup: existing, outcome: :replayed, job: nil}}
 
-            %WakeupRecord{} ->
-              suffixed = suffixed_key(repo, key)
-
-              insert_or_replay(repo, goal_id, suffixed, wake_at, status, now, opts)
+            %WakeupRecord{} = existing ->
+              if decline_request_replay?(existing, opts) do
+                {:ok, %{wakeup: existing, outcome: :replayed, job: nil}}
+              else
+                suffixed = suffixed_key(repo, key)
+                insert_or_replay(repo, goal_id, suffixed, wake_at, status, now, opts)
+              end
 
             nil ->
               {:error, changeset}

@@ -83,6 +83,18 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
             defaults
           end
 
+        # UI delivery is durable now; preserve the run-wide event ceiling
+        # that the direct entry previously passed to its Elf. Lease budgets
+        # are separate renewable epochs, not this stream-materialization cap.
+        defaults =
+          case extensions["shoestring.manual:max_events"] do
+            ceiling when is_integer(ceiling) and ceiling > 0 ->
+              Keyword.put(defaults, :max_events_per_run, ceiling)
+
+            _ ->
+              defaults
+          end
+
         {:ok, Keyword.merge(defaults, Application.get_env(:shoestring, :elf_dispatch_opts, []))}
 
       {:error, _reason} = error ->

@@ -30,6 +30,74 @@ defmodule ShoestringWeb.RunNewWorkerDeliveryTest do
     :ok
   end
 
+  test "the durable worker preserves the submitted whole-run event ceiling", %{conn: conn} do
+    alias Shoestring.Harness.Fake.Scenario
+
+    scenario = %Scenario{
+      name: :over_operator_ceiling,
+      events:
+        List.duplicate(Scenario.lifecycle_event(), 11) ++ [Scenario.result_event("completed")]
+    }
+
+    Application.put_env(:shoestring, :elf_dispatch_opts, scenario: scenario)
+    {:ok, view, _} = live(conn, "/runs/new")
+    view |> element("#btn-use-fixture") |> render_click()
+
+    {:error, {:live_redirect, %{to: "/runs/" <> run_id}}} =
+      view
+      |> form("#manual-run-form", %{
+        "run" => %{
+          "prompt" => "Honor the operator event ceiling",
+          "max_events" => "10",
+          "scenario" => "success"
+        }
+      })
+      |> render_submit()
+
+    try do
+      run = Repo.get!(RunRecord, run_id)
+      assert run.extensions["shoestring.manual:max_events"] == 10
+      dispatch = Repo.get_by!(DispatchRecord, run_id: run_id)
+      job = Repo.one!(from j in Oban.Job, where: j.args["dispatch_id"] == ^dispatch.dispatch_id)
+      assert :ok = DispatchWorker.perform(job)
+
+      case Shoestring.Elves.whereis(run_id) do
+        nil ->
+          :ok
+
+        pid ->
+          ref = Process.monitor(pid)
+          assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 15_000
+      end
+
+      assert Repo.get!(RunRecord, run_id).status == "failed"
+
+      failed =
+        Repo.one!(
+          from e in TrajectoryEvent, where: e.run_id == ^run_id and e.type == "run.failed"
+        )
+
+      assert failed.payload["error_code"] == "log_overflow"
+
+      assert Repo.aggregate(
+               from(e in TrajectoryEvent,
+                 where: e.run_id == ^run_id and e.type == "run.completed"
+               ),
+               :count
+             ) == 0
+
+      running =
+        Repo.one!(
+          from e in TrajectoryEvent, where: e.run_id == ^run_id and e.type == "run.running"
+        )
+
+      "pgid:" <> pgid = running.payload["process_id"]
+      assert Shoestring.Test.ElvesHelpers.group_members(String.to_integer(pgid)) == []
+    after
+      stop_owned_elf!(run_id)
+    end
+  end
+
   test "the attributed direct Fake hatch also completes its success scenario", %{conn: conn} do
     {:ok, view, _} = live(conn, "/runs/new")
     view |> element("#btn-use-fixture") |> render_click()

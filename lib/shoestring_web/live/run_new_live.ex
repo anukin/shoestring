@@ -443,6 +443,10 @@ defmodule ShoestringWeb.RunNewLive do
         "compatibility_state" => "compatible"
       })
 
+    # Provider admission uses conservative, renewable policy epochs (10
+    # responses / 25 tools by default), clipped to the operator's envelope.
+    # The persisted max_events ceiling bounds the entire normalized stream;
+    # fresh admitted renewals replenish epochs without relaxing that ceiling.
     policy = %{
       Cobbler.default_policy()
       | response_budget: min(bounds.max_events, 10),
