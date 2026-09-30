@@ -58,8 +58,8 @@ was requested; no excluded source file has been edited.
 
 UNVERIFIED: The full quota/refusal/checkpoint/application-restart/restored-wake/
 exactly-one-continuation/completion chain, naturally completed deadline twin,
-final gate, push, and PR have not yet been demonstrated. I did not verify
-these. The active goal is not complete.
+and green final gate have not yet been demonstrated. I did not verify these.
+The active goal is not complete. Publication status is recorded below.
 
 ## Lease twin runs and contract update
 
@@ -148,3 +148,30 @@ after harness changes. At `a68744e2c6506dc646bb050a20a88964822c59c7`,
 **1 test, 1 failure** reached the inactive-lease assertion: observed `active`.
 The commands were identical to the pre-fix table above. Neither proof failed
 on a missing API, module, signature, or running-event row.
+
+## Published draft and current gate
+
+VERIFIED: The branch was pushed. `timeout 30 gh pr create --draft --base main
+--head polly/iter6-hermetic-lifecycle --title 'Build iteration 6 hermetic
+lifecycle regression coverage' --body-file .shoestring/iter6-pr-body.md
+< /dev/null` opened [draft PR #87](https://github.com/anukin/shoestring/pull/87).
+`timeout 30 gh pr view 87 --json url,headRefOid,headRefName,isDraft,state
+< /dev/null` confirmed OPEN, draft, the requested branch, and source/test
+revision `16b0117e680fca7b33106ee4c4a6f743299eef64`. No merge was performed.
+`git log a68744e2c6506dc646bb050a20a88964822c59c7..HEAD --format=full
+< /dev/null` showed no attribution trailers in either implementation commit.
+
+VERIFIED: On that exact source/test revision, `timeout 300 mix precommit
+< /dev/null > .shoestring/iter6-current-precommit.log 2>&1` exited **2**:
+**4 doctests, 1510 tests, 1 failure, 1 skipped (6 excluded)**, seed **430572**,
+146.4 seconds. Node gates passed **52 tests, 52 pass, 0 fail** and
+**7 tests, 7 pass, 0 fail**. The single failure is the composed scaffold's
+terminal goal UI assertion; the renewal twin now passes in the full suite.
+This is a measured RED gate, not completion. This repeat followed a source
+change narrowing lease settlement after the earlier full-gate failure; it
+was not rerun-until-green. No intermittent N-of-M claim has been established.
+
+UNVERIFIED: The draft remains incomplete. The presentation scope-extension
+question and manual-to-provider recovery design clarification are pending;
+neither silence nor elapsed time is authorization. No excluded source file
+has been changed.
