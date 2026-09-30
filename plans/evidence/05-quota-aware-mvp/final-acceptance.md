@@ -689,3 +689,73 @@ the release-migrated database exercising findings 1, 2, and 4 live
 (settled replay with no new job, manual-scope wake settled once, a
 declined run told apart by its session status), per-phase code
 identity in the records, and a reviewer decision on Acceptance 8.
+
+## 9. Live closeout (2026-09-27 UTC, after #84 merged)
+
+§§1–8 are preserved as written. The single bounded live sequence that §8.4
+left pending ran at `1566acd` (merged `main`). Its full record is
+`live-closeout.md`. What it changes in §8.2's ledger:
+
+- **Finding 6**: every phase record carries `code.sha = 1566acd…`,
+  `dirty: false` (6 of 6). VERIFIED live.
+- **Finding 4**: the settled replay added **0** handoff jobs (1 → 1) and 0 runs
+  (2 → 2). VERIFIED live for the settled case. Late delivery and the crash
+  window were not exercised.
+- **Finding 3**: the terminal checkpoint named the one unfinished Codex
+  item. VERIFIED live.
+- **Finding 1**: **still LIVE-UNVERIFIED.** The lease-stop run never
+  declined, so no recheck wake was scheduled (0 wakeups, 0 decisions).
+- **Finding 2**: the declined case did not arise. The session diagnostic
+  was recorded (`none`) for an interrupted run whose terminal is Codex's own
+  `interrupted` result.
+- **New finding** (`live-closeout.md` §5, §7.1): at the 60 s manual-lease
+  deadline, the stop interrupted the Codex turn 2.5 s after a command START
+  with no completion recorded. The decline sequence (`lease.expired`,
+  suspend, wake) never ran, and the lease row stayed `active`. Mechanism not
+  established; not fixed.
+- The Acceptance-7 path ran live at the merged tip: owner-confirmed
+  handoff to a `claude-opus-5-5` receiver (from its `init` frame), and every
+  fixture check passed.
+
+Iteration 6 stays locked: finding 1 is unverified live, and the new
+lease-stop finding bears on the "safe harness boundaries" rule.
+
+## 10. Superseding criterion after #85 (pre-registered 2026-09-28)
+
+§§1–9 stand as written, including §2 (the 42fde95 pre-registration) and §8.4.
+This section changes one criterion going forward and says why.
+
+- **Superseded:** §8.4's "manual-scope wake settled once" as a live
+  requirement reached through a lease **deadline**. After #85
+  (`lease-safe-boundary.md`), a lease stop only pends until the turn's own
+  outcome, and a **completed** outcome keeps its terminal: no suspend, no
+  `lease_decline_recheck` wake, no continuation. The only live routes to that
+  wake left are an interrupted outcome or a quota halt, and neither may be
+  manufactured (no forced interrupt, no synthetic quota).
+- **Kept as evidence for that path:** the hermetic locks
+  `test/shoestring/cobbler/wakeup_manual_scope_test.exs` and
+  `test/shoestring/harness/live_missing_session_stream_test.exs` (7 tests,
+  0 failures at `a01da97`'s tree plus the cherry-picked evidence). Finding 1
+  therefore stays **LIVE-UNVERIFIED**, now with the reason that its live
+  trigger is unreachable by design for completed turns, not merely unexercised.
+- **Replacing it:** the post-#85 lease-stop criteria L1–L8 in
+  `live-closeout-post85.md` §2.2, fixed before that sequence's first provider
+  call.
+
+## 11. Result of the post-#85 closeout (2026-09-29 UTC)
+
+`live-closeout-post85.md` records it. The sequence stopped by its own
+pre-registered rule after `turn1`: codex-cli 0.158.0 could not commit in the
+worktree (its sandbox denies the worktree's git dir). So L1–L8 were **not
+measured**, and the terminal-only lease stop stays hermetic-only. §10's
+superseding criterion stands unchanged.
+
+## 12. Standalone lease stop after #85 (2026-09-29 UTC)
+
+Pre-registered in `live-closeout-post85.md` §13, and run once from `setup`'s
+committed fixture head. L1–L7 pass live: the deadline was marked while tools
+ran, no interrupt, every started item completed, one renewal evaluation at
+the outcome, `run.completed` with its checkpoint, no suspend or wake, no
+duplicate. L8 fails as registered: the trajectory records the lease expired,
+but the stored row lags at `renewal_due` (post85 §14.3). §10's superseding
+criterion stands.

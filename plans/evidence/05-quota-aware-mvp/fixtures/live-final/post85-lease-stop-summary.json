@@ -1,0 +1,809 @@
+{
+ "phases": [
+  {
+   "at": "2026-09-29T04:34:02.355057Z",
+   "baseline_test": "?   \texample.com/tictactoe/legacy/scoreboard\t[no test files]\n",
+   "baseline_test_exit": 0,
+   "baseline_vet": "# example.com/tictactoe/legacy/scoreboard\nlegacy/scoreboard/scoreboard.go:24:9: Total passes lock by value: example.com/tictactoe/legacy/scoreboard.Board contains sync.Mutex\n",
+   "baseline_vet_exit": 1,
+   "code": {
+    "dirty": false,
+    "sha": "17dd1bdae65ec8a85562adb26ac628296a469d46",
+    "status_lines": [],
+    "tree": "399ec02f4f594d244645af9ab66a0f80c9506646"
+   },
+   "codex_capacity_clear": true,
+   "files": [
+    "TASK.md",
+    "docs/HISTORY.md",
+    "go.mod",
+    "legacy/scoreboard/scoreboard.go"
+   ],
+   "head": "ed060957751b1fedd91310cee063c84a201a9ba6",
+   "ledger": [
+    {
+     "observed_at": null,
+     "provider": "claude",
+     "scope": "subscription",
+     "state": "unknown",
+     "tier": "conservative_partial",
+     "windows": []
+    },
+    {
+     "observed_at": "2026-09-29T04:33:51.976707Z",
+     "provider": "codex",
+     "scope": "subscription",
+     "state": "degraded",
+     "tier": "proactive",
+     "windows": [
+      {
+       "kind": "primary",
+       "state": "observed",
+       "used_percent": 35.0
+      },
+      {
+       "kind": "secondary",
+       "state": "observed",
+       "used_percent": 60.0
+      }
+     ]
+    }
+   ],
+   "phase": "setup",
+   "remotes": ""
+  },
+  {
+   "at": "2026-09-29T04:37:28.585986Z",
+   "base_revision": "ed060957751b1fedd91310cee063c84a201a9ba6",
+   "code": {
+    "dirty": false,
+    "sha": "17dd1bdae65ec8a85562adb26ac628296a469d46",
+    "status_lines": [],
+    "tree": "399ec02f4f594d244645af9ab66a0f80c9506646"
+   },
+   "goal_id": "55555555-0000-4000-9000-000000000010",
+   "lease": {
+    "checkpoint_cadence": 4000,
+    "deadline": "2026-09-29T04:39:32.244042Z",
+    "response_budget": 4000,
+    "response_reserve": 0,
+    "status": "active",
+    "tool_budget": 4000,
+    "tool_reserve": 0
+   },
+   "ledger_before": [
+    {
+     "observed_at": null,
+     "provider": "claude",
+     "scope": "subscription",
+     "state": "unknown",
+     "tier": "conservative_partial",
+     "windows": []
+    },
+    {
+     "observed_at": "2026-09-29T04:33:51.976707Z",
+     "provider": "codex",
+     "scope": "subscription",
+     "state": "degraded",
+     "tier": "proactive",
+     "windows": [
+      {
+       "kind": "primary",
+       "state": "observed",
+       "used_percent": 35.0
+      },
+      {
+       "kind": "secondary",
+       "state": "observed",
+       "used_percent": 60.0
+      }
+     ]
+    }
+   ],
+   "lifecycle_types": [
+    "capacity.snapshot_observed",
+    "admission.decided",
+    "cobbler.command.accepted",
+    "cobbler.claim.acquired",
+    "run.requested",
+    "lease.proposed",
+    "lease.granted",
+    "lease.active",
+    "dispatch.requested",
+    "run.starting",
+    "run.running",
+    "checkpoint.created",
+    "run.completed"
+   ],
+   "normalized_event_rows": 371,
+   "normalized_events": 371,
+   "observation_window_s": 2700,
+   "phase": "turn1",
+   "process_after": {
+    "elf_registered": false,
+    "group_alive": false,
+    "group_member_count": 0,
+    "pgid_recorded": true
+   },
+   "projector": {
+    "last_sequence": 12,
+    "status": "ok"
+   },
+   "provider_id": "codex_app_server_stdio",
+   "run_id": "55555555-0000-4000-9000-000000000002",
+   "run_row_status": "running",
+   "terminal": {
+    "payload": {
+     "run_id": "55555555-0000-4000-9000-000000000002"
+    },
+    "type": "run.completed"
+   },
+   "wait": "ok",
+   "worktree": {
+    "dirty": true,
+    "head": "ed060957751b1fedd91310cee063c84a201a9ba6",
+    "status": "?? game/\n"
+   }
+  },
+  {
+   "at": "2026-09-29T04:39:51.216129Z",
+   "code": {
+    "dirty": false,
+    "sha": "17dd1bdae65ec8a85562adb26ac628296a469d46",
+    "status_lines": [],
+    "tree": "399ec02f4f594d244645af9ab66a0f80c9506646"
+   },
+   "invariants": {
+    "at_most_one_starting_per_run": true,
+    "at_most_one_terminal_per_run": true,
+    "every_stop_has_checkpoint_before_it": true,
+    "one_dispatch_row_per_started_run": true
+   },
+   "jobs": [
+    {
+     "count": 1,
+     "queue": "dispatch",
+     "state": "completed"
+    }
+   ],
+   "phase": "audit",
+   "replay": null,
+   "runs": [
+    {
+     "checkpoint_before_stop": true,
+     "checkpoints": 1,
+     "dispatch_rows": [
+      {
+       "outcome_code": null,
+       "status": "effect_completed"
+      }
+     ],
+     "provider_id": "codex_app_server_stdio",
+     "run_id": "55555555-0000-4000-9000-000000000002",
+     "running": 1,
+     "starting": 1,
+     "suspended": false,
+     "terminal": "run.completed",
+     "terminals": 1
+    }
+   ]
+  },
+  {
+   "at": "2026-09-29T20:00:13.666922Z",
+   "base": "ed060957751b1fedd91310cee063c84a201a9ba6",
+   "base_from": "setup",
+   "boot_at": "2026-09-29T19:49:19.508401Z",
+   "code": {
+    "dirty": false,
+    "sha": "f3a8557832b33ebb674896d369362e8eea7d9d24",
+    "status_lines": [],
+    "tree": "0395dbf53b0aa777a081f259c3d9be9df715612b"
+   },
+   "codex_cli": "codex-cli 0.159.0",
+   "continuation": null,
+   "facts": {
+    "checkpoints": [
+     742
+    ],
+    "dispatch_rows": 1,
+    "driver_cancel_calls": 0,
+    "items_not_completed": {},
+    "lease_events": [
+     {
+      "at": "2026-09-29T19:49:30.973730Z",
+      "sequence": 6,
+      "type": "lease.proposed"
+     },
+     {
+      "at": "2026-09-29T19:49:30.974663Z",
+      "sequence": 7,
+      "type": "lease.granted"
+     },
+     {
+      "at": "2026-09-29T19:49:30.975007Z",
+      "sequence": 8,
+      "type": "lease.active"
+     },
+     {
+      "at": "2026-09-29T19:51:13.867535Z",
+      "sequence": 172,
+      "type": "lease.renewal_due"
+     },
+     {
+      "at": "2026-09-29T19:57:41.369605Z",
+      "sequence": 740,
+      "type": "lease.expired"
+     },
+     {
+      "at": "2026-09-29T19:57:41.369605Z",
+      "sequence": 741,
+      "type": "lease.checkpoint_required"
+     }
+    ],
+    "lease_status": "renewal_due",
+    "outcome": {
+     "ordinal": 725,
+     "sequence": 737,
+     "status": "completed"
+    },
+    "pausing": 0,
+    "renewal_decisions": [
+     {
+      "at": "2026-09-29T19:57:41.369605Z",
+      "reason_code": "snapshot_provider_mismatch",
+      "result": "reject",
+      "sequence": 739
+     }
+    ],
+    "renewal_due": [
+     172
+    ],
+    "renewal_snapshots": 1,
+    "run_id": "55555555-0000-4000-9000-000000000006",
+    "runs_in_goal": 1,
+    "starting": 1,
+    "suspended": 0,
+    "terminals": [
+     {
+      "sequence": 743,
+      "type": "run.completed"
+     }
+    ],
+    "tool_events": [
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000011",
+      "kind": "command",
+      "ordinal": 42,
+      "sequence": 53,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000011",
+      "kind": "command",
+      "ordinal": 43,
+      "sequence": 54,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000012",
+      "kind": "command",
+      "ordinal": 44,
+      "sequence": 55,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000012",
+      "kind": "command",
+      "ordinal": 45,
+      "sequence": 56,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000013",
+      "kind": "command",
+      "ordinal": 48,
+      "sequence": 59,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000013",
+      "kind": "command",
+      "ordinal": 49,
+      "sequence": 60,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000014",
+      "kind": "command",
+      "ordinal": 50,
+      "sequence": 61,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000014",
+      "kind": "command",
+      "ordinal": 51,
+      "sequence": 62,
+      "status": "failed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000015",
+      "kind": "command",
+      "ordinal": 156,
+      "sequence": 167,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000015",
+      "kind": "command",
+      "ordinal": 159,
+      "sequence": 170,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000016",
+      "kind": "tool",
+      "ordinal": 160,
+      "sequence": 171,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000016",
+      "kind": "tool",
+      "ordinal": 161,
+      "sequence": 173,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000017",
+      "kind": "tool",
+      "ordinal": 164,
+      "sequence": 176,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000017",
+      "kind": "tool",
+      "ordinal": 165,
+      "sequence": 177,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000018",
+      "kind": "command",
+      "ordinal": 166,
+      "sequence": 178,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000018",
+      "kind": "command",
+      "ordinal": 169,
+      "sequence": 181,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000019",
+      "kind": "tool",
+      "ordinal": 170,
+      "sequence": 182,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000019",
+      "kind": "tool",
+      "ordinal": 171,
+      "sequence": 183,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000020",
+      "kind": "command",
+      "ordinal": 172,
+      "sequence": 184,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000020",
+      "kind": "command",
+      "ordinal": 173,
+      "sequence": 185,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000021",
+      "kind": "tool",
+      "ordinal": 230,
+      "sequence": 242,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000021",
+      "kind": "tool",
+      "ordinal": 231,
+      "sequence": 243,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000022",
+      "kind": "command",
+      "ordinal": 232,
+      "sequence": 244,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000022",
+      "kind": "command",
+      "ordinal": 233,
+      "sequence": 245,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000023",
+      "kind": "tool",
+      "ordinal": 236,
+      "sequence": 248,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000023",
+      "kind": "tool",
+      "ordinal": 237,
+      "sequence": 249,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000024",
+      "kind": "command",
+      "ordinal": 238,
+      "sequence": 250,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000024",
+      "kind": "command",
+      "ordinal": 239,
+      "sequence": 251,
+      "status": "failed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000025",
+      "kind": "tool",
+      "ordinal": 297,
+      "sequence": 309,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000025",
+      "kind": "tool",
+      "ordinal": 298,
+      "sequence": 310,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000026",
+      "kind": "command",
+      "ordinal": 299,
+      "sequence": 311,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000026",
+      "kind": "command",
+      "ordinal": 300,
+      "sequence": 312,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000027",
+      "kind": "command",
+      "ordinal": 303,
+      "sequence": 315,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000027",
+      "kind": "command",
+      "ordinal": 304,
+      "sequence": 316,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000028",
+      "kind": "command",
+      "ordinal": 305,
+      "sequence": 317,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000029",
+      "kind": "command",
+      "ordinal": 306,
+      "sequence": 318,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000030",
+      "kind": "command",
+      "ordinal": 307,
+      "sequence": 319,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000029",
+      "kind": "command",
+      "ordinal": 308,
+      "sequence": 320,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000028",
+      "kind": "command",
+      "ordinal": 309,
+      "sequence": 321,
+      "status": "failed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000030",
+      "kind": "command",
+      "ordinal": 312,
+      "sequence": 324,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000031",
+      "kind": "command",
+      "ordinal": 313,
+      "sequence": 325,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000031",
+      "kind": "command",
+      "ordinal": 314,
+      "sequence": 326,
+      "status": "completed"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000032",
+      "kind": "command",
+      "ordinal": 428,
+      "sequence": 440,
+      "status": "inProgress"
+     },
+     {
+      "item_id": "exec-55555555-0000-4000-9000-000000000032",
+      "kind": "command",
+      "ordinal": 429,
+      "sequence": 441,
+      "status": "completed"
+     }
+    ],
+    "tool_items_started": 22,
+    "wake_decisions": [],
+    "wakeup_jobs": [],
+    "wakeup_rows": 0
+   },
+   "goal_id": "55555555-0000-4000-9000-000000000033",
+   "items_not_completed": {},
+   "lease": {
+    "checkpoint_cadence": 4000,
+    "deadline": "2026-09-29T19:50:30.947811Z",
+    "response_budget": 4000,
+    "response_reserve": 0,
+    "status": "renewal_due",
+    "tool_budget": 4000,
+    "tool_reserve": 0
+   },
+   "lease_events": [
+    {
+     "at": "2026-09-29T19:49:30.973730Z",
+     "sequence": 6,
+     "type": "lease.proposed"
+    },
+    {
+     "at": "2026-09-29T19:49:30.974663Z",
+     "sequence": 7,
+     "type": "lease.granted"
+    },
+    {
+     "at": "2026-09-29T19:49:30.975007Z",
+     "sequence": 8,
+     "type": "lease.active"
+    },
+    {
+     "at": "2026-09-29T19:51:13.867535Z",
+     "sequence": 172,
+     "type": "lease.renewal_due"
+    },
+    {
+     "at": "2026-09-29T19:57:41.369605Z",
+     "sequence": 740,
+     "type": "lease.expired"
+    },
+    {
+     "at": "2026-09-29T19:57:41.369605Z",
+     "sequence": 741,
+     "type": "lease.checkpoint_required"
+    }
+   ],
+   "ledger_before": [
+    {
+     "observed_at": null,
+     "provider": "claude",
+     "scope": "subscription",
+     "state": "unknown",
+     "tier": "conservative_partial",
+     "windows": []
+    },
+    {
+     "observed_at": "2026-09-29T19:49:21.184706Z",
+     "provider": "codex",
+     "scope": "subscription",
+     "state": "degraded",
+     "tier": "proactive",
+     "windows": [
+      {
+       "kind": "primary",
+       "state": "observed",
+       "used_percent": 7.0
+      },
+      {
+       "kind": "secondary",
+       "state": "observed",
+       "used_percent": 62.0
+      }
+     ]
+    }
+   ],
+   "lifecycle": [
+    {
+     "at": "2026-09-29T19:49:30.988640Z",
+     "sequence": 10,
+     "type": "run.starting"
+    },
+    {
+     "at": "2026-09-29T19:49:31.159973Z",
+     "sequence": 11,
+     "type": "run.running"
+    },
+    {
+     "at": "2026-09-29T19:57:41.729193Z",
+     "sequence": 742,
+     "type": "checkpoint.created"
+    },
+    {
+     "at": "2026-09-29T19:57:41.732084Z",
+     "sequence": 743,
+     "type": "run.completed"
+    }
+   ],
+   "lifecycle_types": [
+    "capacity.snapshot_observed",
+    "admission.decided",
+    "cobbler.command.accepted",
+    "cobbler.claim.acquired",
+    "run.requested",
+    "lease.proposed",
+    "lease.granted",
+    "lease.active",
+    "dispatch.requested",
+    "run.starting",
+    "run.running",
+    "lease.renewal_due",
+    "capacity.snapshot_observed",
+    "admission.decided",
+    "lease.expired",
+    "lease.checkpoint_required",
+    "checkpoint.created",
+    "run.completed"
+   ],
+   "normalized_event_rows": 725,
+   "normalized_events": 725,
+   "observation_window_s": 2700,
+   "phase": "lease_stop",
+   "process_after": {
+    "elf_registered": false,
+    "group_alive": false,
+    "group_member_count": 0,
+    "pgid_recorded": true
+   },
+   "run_id": "55555555-0000-4000-9000-000000000006",
+   "runs_in_goal": [
+    {
+     "id": "55555555-0000-4000-9000-000000000006",
+     "provider_id": "codex_app_server_stdio"
+    }
+   ],
+   "session_at_end": {
+    "session": "none"
+   },
+   "suspended_sequence": null,
+   "terminal": {
+    "payload": {
+     "run_id": "55555555-0000-4000-9000-000000000006"
+    },
+    "type": "run.completed"
+   },
+   "verdict": {
+    "all": false,
+    "l1_due_marked_while_tools_run": true,
+    "l2_no_interrupt_no_driver_cancel": true,
+    "l3_started_tools_all_completed": true,
+    "l4_exactly_one_outcome_evaluation": true,
+    "l5_completed_with_terminal_checkpoint": true,
+    "l6_no_suspend_or_wake": true,
+    "l7_no_duplicate_dispatch": true,
+    "l8_lease_row_not_live": false
+   },
+   "wait": "ok",
+   "wake_decisions": [],
+   "wakeups": [],
+   "worktree": {
+    "dirty": true,
+    "head": "ed060957751b1fedd91310cee063c84a201a9ba6",
+    "status": "?? DESIGN.md\n?? engine/\n"
+   }
+  },
+  {
+   "at": "2026-09-29T20:01:24.651957Z",
+   "code": {
+    "dirty": false,
+    "sha": "f3a8557832b33ebb674896d369362e8eea7d9d24",
+    "status_lines": [],
+    "tree": "0395dbf53b0aa777a081f259c3d9be9df715612b"
+   },
+   "invariants": {
+    "at_most_one_starting_per_run": true,
+    "at_most_one_terminal_per_run": true,
+    "every_stop_has_checkpoint_before_it": true,
+    "one_dispatch_row_per_started_run": true
+   },
+   "jobs": [
+    {
+     "count": 2,
+     "queue": "dispatch",
+     "state": "completed"
+    }
+   ],
+   "phase": "audit",
+   "replay": null,
+   "runs": [
+    {
+     "checkpoint_before_stop": true,
+     "checkpoints": 1,
+     "dispatch_rows": [
+      {
+       "outcome_code": null,
+       "status": "effect_completed"
+      }
+     ],
+     "provider_id": "codex_app_server_stdio",
+     "run_id": "55555555-0000-4000-9000-000000000002",
+     "running": 1,
+     "starting": 1,
+     "suspended": false,
+     "terminal": "run.completed",
+     "terminals": 1
+    },
+    {
+     "checkpoint_before_stop": true,
+     "checkpoints": 1,
+     "dispatch_rows": [
+      {
+       "outcome_code": null,
+       "status": "effect_completed"
+      }
+     ],
+     "provider_id": "codex_app_server_stdio",
+     "run_id": "55555555-0000-4000-9000-000000000006",
+     "running": 1,
+     "starting": 1,
+     "suspended": false,
+     "terminal": "run.completed",
+     "terminals": 1
+    }
+   ]
+  }
+ ]
+}

@@ -668,3 +668,193 @@ left exactly as written. This branch is unmerged pending independent review.*
   tests, 0 failures, 1 skipped (6 excluded); Node 52/52; UI 7/7.
 - **Iteration 6 stays locked** until review and merge. Open findings are in
   §6 of the record.
+
+### Completion-record addendum — live closeout on merged main (2026-09-27 UTC)
+
+Record: `plans/evidence/05-quota-aware-mvp/live-closeout.md`. One authorized,
+bounded sequence (`setup → turn1 → turn2 → handoff → lease_stop → audit`) ran
+at `1566acd`, on a fresh state DB built with `Shoestring.Release.migrate()`.
+It used 3 Codex runs and 1 Claude run, with no retries and no comparison arms.
+
+- **Code identity:** 6 of 6 phase records carry `1566acd`, clean.
+- **Cross-provider handoff on the production path:** completed. Owner-confirmed
+  admission, job attempt 1, receiver `claude-opus-5-5` (from its `init`
+  frame). Every M1 fixture check passed, C1 0 violations, R1 honoured.
+- **Replay:** the settled-transfer replay added 0 jobs and 0 runs (compared
+  explicitly).
+- **Checkpoint on stop:** the lease-stopped run's checkpoint names its
+  unfinished item.
+- **Lease stop: not met.** At the manual-lease deadline the turn was
+  interrupted 2.5 s after a command START with no completion recorded. The
+  decline, suspend and recheck wake never happened, and the lease row stayed
+  `active`. The manual-scope wake fix is therefore still unverified live.
+  Mechanism not established; not fixed on this branch.
+- **Acceptance 8:** not re-run. The pre-registered failure, the post-hoc
+  2 of 2 passes with no consistent advantage, and the missing scripted quota
+  refusal all stand.
+- **Iteration 6 stays locked.**
+
+### Completion-record addendum — post-#85 closeout (2026-09-29 UTC)
+
+*Branch `polly/iter5-final-closeout-post85`, base `a01da97` (#85 merged). The
+full record is `plans/evidence/05-quota-aware-mvp/live-closeout-post85.md`;
+its §1–§2 were pre-registered at `b344a0b` and amended before any provider call
+at `17dd1bd`. Earlier bullets and addenda are left exactly as written. The
+header's `Status: proposed` is original milestone text and is not edited; the
+status below supersedes it.*
+
+- **Final status (2026-09-29):** implementation complete and hermetically
+  green. Of the nine gate items, eight are met at the evidence levels below,
+  and **Acceptance 8 is measured with no product advantage shown, pending the
+  human's ruling**. The hard dependency has **one open item**: iteration-4
+  bullet 6 (lease stopping at safe boundaries) is not verified live since #85.
+  **Completed on:** not yet. The conditions are under "Iteration 6" below.
+- **#85 supersedes the lease-stop design recorded above.** A lease safe stop
+  now only pends until the provider's own turn outcome. A completed turn keeps
+  its terminal (no suspend, no wake, no continuation); only an interrupted
+  turn or a quota halt declines. The 2026-09-25 "met after two fixes" and
+  2026-09-27 "not met" lease-stop bullets are history of the previous design.
+  The 2026-09-27 interrupt at a command START is fixed **hermetically** by #85
+  (`lease-safe-boundary.md`). It was **not** re-verified live (below). The
+  deadline-driven manual-scope wake is superseded as a live requirement
+  (`final-acceptance.md` §10); its hermetic locks remain.
+- **Live this round: 1 of 3 authorized Codex runs, then a stop by the
+  pre-registered rule.** `turn1` completed at `17dd1bd` (clean; group dead,
+  Elf deregistered) but could not commit. codex-cli 0.158.0's
+  `workspace-write` sandbox denies writes to a git worktree's own git dir
+  (VERIFIED with no-model sandbox probes; at 0.157.1 the same turns
+  committed). **New finding, not fixed:** at the installed CLI a Codex Elf
+  cannot commit in a Shoestring worktree. `turn2` and `lease_stop` were not
+  run, and no retry was made. Source checkout VERIFIED unchanged.
+- **Gate 1–9** (evidence levels in the record §11):
+
+  | # | Status |
+  |---|---|
+  | 1 reserves | Met — hermetic; no live automatic refusal exercised |
+  | 2 unknown/stale policy | Met — hermetic + live (owner-confirmed Claude `unknown`) |
+  | 3 checkpoint on every stop | Met with limits — live for completed, cancelled, lease-suspended, interrupted; failed/crash hermetic |
+  | 4 no inference in fallback | Met — hermetic / repo-inspection |
+  | 5 idempotent wakes/dispatches | Met with limits — dispatch and settled replay live; manual-scope wake, late delivery, crash window hermetic |
+  | 6 resume + fake handoff | Met — hermetic |
+  | 7 real cross-provider handoff | Met — live at `22c1e72`, `32a3fe6`, `1566acd`; at-risk at codex-cli 0.158.0 (sender cannot commit) |
+  | 8 semantic eval / handoff tax | **Measured, no advantage shown; the pre-registered projection arm failed, the post-hoc repair showed no consistent advantage, and the scripted quota refusal was never reproduced. An independent reviewer judged it meets the contract; no human ruling is recorded** |
+  | 9 explainable decisions | Met for the decisions inspected |
+
+- **Iteration-4 dependency** (record §10): bullets 1–5 and 7 met on committed
+  evidence; bullet 6 open live.
+- **Carried, nonblocking, unchanged:** #85's follow-ups N1–N7, the
+  `run_live_test.exs` Elf leak and the trajectory-writer leak, unprojected
+  run rows, and the other items in the record's §12.
+- **Gate:** the historical independent gate at `0344989` (4 doctests, 1506
+  tests, 0 failures, 1 skipped; Node 52/52; UI 7/7) is as reported by the
+  orchestrator. It is not recorded elsewhere in the repository and was not
+  re-run here. This branch's own gate is reported with its commit.
+- **Iteration 6: unlocks only when ALL of these hold.**
+  1. This closeout PR passes independent review and is **merged by the
+     human**.
+  2. The human rules on Acceptance 8.
+  3. Iteration-4 bullet 6 is closed, either by one live `lease_stop` under a
+     new brief (it needs no commit, so it is not blocked by the Codex
+     finding) or by a human ruling that #85's hermetic locks suffice.
+
+  Recommended but not ruled blocking here: resolve the codex-cli 0.158.0
+  commit block before any further live Codex sender or handoff work.
+
+### Completion-record addendum — final decision (2026-09-29 UTC, after the standalone lease stop)
+
+*This addendum supersedes the previous addendum's "Final status", its Acceptance
+8 row, and its iteration-6 conditions 2 and 3. Everything above is left as
+written. Record: `plans/evidence/05-quota-aware-mvp/live-closeout-post85.md`
+§§13–15.*
+
+- **Final status: acceptance met on evidence; no contract blocker found.**
+  Every gate item 1–9 and every iteration-4 bullet is met at the evidence
+  level stated in the record's §15. The milestone takes effect when this PR
+  passes independent review and is **merged by the human**.
+  **Completed on:** 2026-09-29 (evidence), subject to that merge.
+- **Iteration-4 bullet 6 (lease stopping at safe boundaries): met live after
+  #85.** It was pre-registered at `f3a8557` as a standalone `lease_stop` from
+  `setup`'s committed head, because the original sequence had stopped after
+  `turn1` on the Codex commit restriction. One Codex run: the 60 s deadline
+  passed at a tool START, and `lease.renewal_due` was marked 27.5 ms later.
+  That item completed. The turn continued 6.5 min (16 more items, 11 of them
+  commands, all ending by themselves) to its own `completed` outcome. The outcome evaluated
+  renewal once (`reject`, `snapshot_provider_mismatch`) and recorded
+  `lease.expired`, then the terminal checkpoint and `run.completed`. There
+  was no interrupt, driver cancel, suspension, wake or duplicate. The Elf was
+  deregistered and its process group dead. Source checkout unchanged.
+  Criteria L1–L7 pass.
+- **L8 failed as registered.** The lease is terminal in the trajectory, but
+  the stored lease row still reads `renewal_due`: the goal's projector
+  stopped before the decision and markers, and nothing projects after the
+  terminal. This is a read-model follow-up (the twin of "run rows not
+  projected after start"), not an unsafe stop, because the trajectory is
+  authoritative. It is recorded, not redefined.
+- **Acceptance 8: met as a measurement; no product advantage shown.** The
+  gate requires the eval to show receiver behaviour and handoff tax. The
+  live three-arm, two-cycle measurement does that; the independent audit
+  concluded the measurement requirement is met, and beating the other arms is
+  not required. The failed pre-registered projection arm, the post-hoc repair
+  and the unreproduced scripted quota refusal remain as limits.
+- **Live budget this closeout:** 2 of 3 authorized Codex runs (`turn1`,
+  `lease_stop`); the third is unspent. 0 Claude, 0 retries.
+- **Follow-ups (nonblocking):** the lease/run row projection lag on terminal
+  paths. The codex-cli 0.158.0/0.159.0 commit restriction in worktrees, with
+  no proven safe repair and no sandbox change made. #85's N1–N7. The
+  `run_live_test.exs` and trajectory-writer test leaks. Providers acting on
+  the operator's global instructions. The projector raising on busy.
+  Redacted ids and the old `.pyc` in `main`'s history. Failed/crash stops, a
+  real quota refusal, late handoff delivery and the crash window, none
+  exercised live.
+- **Iteration 6: unlocked when this closeout PR passes independent review
+  and the human merges it.** Recommended first in iteration 6, not a
+  condition: resolve the Codex commit restriction before any live Codex
+  sender or handoff work.
+
+### Terminal-projection repair addendum — final prose closeout (2026-09-30 UTC)
+
+*This addendum clarifies the final decision's wording; everything above is
+left as written. No live capture was altered and no new live run was made.
+Record: `plans/evidence/05-quota-aware-mvp/terminal-projection-fix.md` and
+`live-closeout-post85.md` §§16–17.*
+
+- **Original live result, unchanged:** criteria L1–L7 PASS live (§14 of the
+  record); historical L8 FAIL as registered — the lease is terminal in the
+  trajectory while the stored lease row read `renewal_due` (run row
+  `running`). That measurement is not redefined after the fact.
+- **Scoped reading of the final statements:** "Contract blockers found:
+  none" (record §15.3) means no gate/dependency blocker beyond the recorded
+  L8 FAIL and the nonblocking follow-ups. Iteration-4 bullet 6 "Met live"
+  (record §15.1) covers the L1–L7 safe-stop behavior only — deadline pending
+  while tools run, no interrupt, natural completed outcome, one renewal
+  evaluation at the outcome, terminal checkpoint plus `run.completed`, no
+  suspend/wake/duplicate. Neither statement means L1–L8 all passed.
+- **Post-fix repair, hermetic only:** after committing terminal events the
+  Elf promptly projects its goal (`commit_terminal/2`, mirrored in
+  `crash_land/0`; repair code as committed at `b21e29f`, VERIFIED
+  byte-identical in the final tree — this closeout adds prose only). Three
+  regression locks fail on base `70af28e` for the stale-row reason and pass
+  with the fix. No post-fix live pass is claimed or implied.
+- **Gate on the final tree:** `mix precommit` → **4 doctests, 1509 tests,
+  0 failures, 1 skipped (6 excluded); Node 52/52; UI 7/7** (ExUnit seeds
+  796367 and 31501 green). Gate history, VERIFIED from the saved outputs:
+  three full runs on this tree (seeds 839803, 796367, 31501). Seed 839803
+  showed **1 failure** in `CodexAppServerContractTest` (cancel
+  `GenServer.call` raced a dead session process; Node 52/52 and UI 7/7 still
+  passed): that suite drives the adapter/session directly with no Elf, Repo,
+  or Harness.Projector in the path, so no direct causal path from this
+  diff was found — an indirect load-timing contribution is unestablished,
+  not ruled out. The file passes in isolation (7 tests, 0 failures, seed
+  0). Reported as intermittent, 1 of 3 full-gate runs, not re-run until
+  green.
+- **Limits carried:** the codex-cli 0.158.0/0.159.0 worktree commit
+  restriction (no sandbox change made, no proven safe repair); Acceptance 8
+  MEASURED with no product advantage shown, pending the human's ruling;
+  failed/crash stops, a real quota refusal, late handoff delivery and the
+  crash window unexercised live; no claim that every arbitrary
+  terminal/projector-error path heals (three other terminal writers still do
+  not project and recovery never projects; a persisted projector failure
+  needs explicit rebuild — record §§16–17, `terminal-projection-fix.md`
+  §5).
+- **Iteration 6:** unlocked when this closeout PR passes independent review
+  and the human merges it (unchanged).

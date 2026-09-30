@@ -1,0 +1,625 @@
+{
+ "phases": [
+  {
+   "at": "2026-09-27T03:40:26.146753Z",
+   "baseline_test": "?   \texample.com/tictactoe/legacy/scoreboard\t[no test files]\n",
+   "baseline_test_exit": 0,
+   "baseline_vet": "# example.com/tictactoe/legacy/scoreboard\nlegacy/scoreboard/scoreboard.go:24:9: Total passes lock by value: example.com/tictactoe/legacy/scoreboard.Board contains sync.Mutex\n",
+   "baseline_vet_exit": 1,
+   "code": {
+    "dirty": false,
+    "sha": "1566acdaa1e24e3128c94b797e7b61c8a7a79716",
+    "status_lines": []
+   },
+   "files": [
+    "TASK.md",
+    "docs/HISTORY.md",
+    "go.mod",
+    "legacy/scoreboard/scoreboard.go"
+   ],
+   "head": "7abe9159267e5aba326de9c5049a58641f3c84af",
+   "phase": "setup",
+   "remotes": ""
+  },
+  {
+   "at": "2026-09-27T03:43:08.341052Z",
+   "base_revision": "7abe9159267e5aba326de9c5049a58641f3c84af",
+   "code": {
+    "dirty": false,
+    "sha": "1566acdaa1e24e3128c94b797e7b61c8a7a79716",
+    "status_lines": []
+   },
+   "goal_id": "55555555-0000-4000-9000-000000000017",
+   "lease": null,
+   "lifecycle_types": [
+    "capacity.snapshot_observed",
+    "admission.decided",
+    "cobbler.command.accepted",
+    "cobbler.claim.acquired",
+    "run.requested",
+    "lease.proposed",
+    "lease.granted",
+    "lease.active",
+    "dispatch.requested",
+    "run.starting",
+    "run.running",
+    "checkpoint.created",
+    "run.completed"
+   ],
+   "normalized_event_rows": 369,
+   "normalized_events": 369,
+   "phase": "turn1",
+   "projector": {
+    "last_sequence": 1,
+    "status": "ok"
+   },
+   "provider_id": "codex_app_server_stdio",
+   "run_id": "55555555-0000-4000-9000-000000000002",
+   "run_row_status": "requested",
+   "terminal": {
+    "payload": {
+     "run_id": "55555555-0000-4000-9000-000000000002"
+    },
+    "type": "run.completed"
+   },
+   "wait": "ok",
+   "worktree": {
+    "dirty": false,
+    "head": "47e3b26465520adf8c3017dad25a2ca575dc420d",
+    "status": ""
+   }
+  },
+  {
+   "at": "2026-09-27T03:45:03.327778Z",
+   "base_revision": "47e3b26465520adf8c3017dad25a2ca575dc420d",
+   "code": {
+    "dirty": false,
+    "sha": "1566acdaa1e24e3128c94b797e7b61c8a7a79716",
+    "status_lines": []
+   },
+   "goal_id": "55555555-0000-4000-9000-000000000018",
+   "lease": {
+    "checkpoint_cadence": 4000,
+    "deadline": "2026-09-27T03:48:35.195268Z",
+    "response_budget": 4000,
+    "response_reserve": 0,
+    "status": "active",
+    "tool_budget": 4000,
+    "tool_reserve": 0
+   },
+   "lifecycle_types": [
+    "capacity.snapshot_observed",
+    "admission.decided",
+    "cobbler.command.accepted",
+    "cobbler.claim.acquired",
+    "run.requested",
+    "lease.proposed",
+    "lease.granted",
+    "lease.active",
+    "dispatch.requested",
+    "run.starting",
+    "run.running",
+    "dispatch.effect_deferred",
+    "checkpoint.created",
+    "run.completed"
+   ],
+   "normalized_event_rows": 344,
+   "normalized_events": 344,
+   "phase": "turn2",
+   "projector": {
+    "last_sequence": 12,
+    "status": "ok"
+   },
+   "provider_id": "codex_app_server_stdio",
+   "run_id": "55555555-0000-4000-9000-000000000006",
+   "run_row_status": "running",
+   "terminal": {
+    "payload": {
+     "run_id": "55555555-0000-4000-9000-000000000006"
+    },
+    "type": "run.completed"
+   },
+   "wait": "ok",
+   "worktree": {
+    "dirty": false,
+    "head": "d23fdaa732cdcffd11731986c32e6da59e309109",
+    "status": ""
+   }
+  },
+  {
+   "at": "2026-09-27T03:46:18.611377Z",
+   "attempt": 1,
+   "checkpoint_id": "55555555-0000-4000-9000-000000000008",
+   "checkpoint_projected_after_request": true,
+   "checkpoint_projected_before_request": false,
+   "code": {
+    "dirty": false,
+    "sha": "1566acdaa1e24e3128c94b797e7b61c8a7a79716",
+    "status_lines": []
+   },
+   "command_id": "live-handoff-55555555-0000-4000-9000-000000000006",
+   "command_result": {
+    "checkpoint_id": "55555555-0000-4000-9000-000000000008",
+    "confirmation": {
+     "confirmed_by": "owner:55555555-0000-4000-9000-000000000019",
+     "intent": "supervised_execution",
+     "target_provider_id": "claude",
+     "target_scope": "subscription"
+    },
+    "decision_refs": [
+     "55555555-0000-4000-9000-000000000020"
+    ],
+    "kind": "handoff_requested",
+    "lease_policy": {
+     "checkpoint_cadence": 150,
+     "deadline_seconds": 2700,
+     "reserves": {
+      "response": 1,
+      "tool": 1
+     },
+     "response_budget": 150,
+     "tool_budget": 300
+    },
+    "reason": "continue the Go Tic-Tac-Toe CLI on the other provider",
+    "requested_by": "operator",
+    "run_id": "55555555-0000-4000-9000-000000000006",
+    "scope": "subscription",
+    "to_adapter_id": "claude_headless_stream_json",
+    "to_provider_id": "claude"
+   },
+   "command_status": "resolved",
+   "decision_refs": [
+    "55555555-0000-4000-9000-000000000020"
+   ],
+   "goal_id": "55555555-0000-4000-9000-000000000018",
+   "initial_state": {
+    "dirty": false,
+    "head": "d23fdaa732cdcffd11731986c32e6da59e309109",
+    "status": ""
+   },
+   "job": {
+    "attempt": 1,
+    "errors": [],
+    "max_attempts": 5,
+    "state": "completed"
+   },
+   "lease_policy_requested": {
+    "checkpoint_cadence": 150,
+    "deadline_seconds": 2700,
+    "reserves": {
+     "response": 1,
+     "tool": 1
+    },
+    "response_budget": 150,
+    "tool_budget": 300
+   },
+   "ledger": [
+    {
+     "provider": "claude",
+     "scope": "subscription",
+     "state": "unknown",
+     "tier": "conservative_partial"
+    },
+    {
+     "provider": "codex",
+     "scope": "subscription",
+     "state": "degraded",
+     "tier": "proactive"
+    }
+   ],
+   "lifecycle_types": [
+    "capacity.snapshot_observed",
+    "admission.decided",
+    "cobbler.command.accepted",
+    "cobbler.claim.acquired",
+    "run.requested",
+    "lease.proposed",
+    "lease.granted",
+    "lease.active",
+    "dispatch.requested",
+    "run.starting",
+    "run.running",
+    "dispatch.effect_deferred",
+    "checkpoint.created",
+    "run.completed",
+    "cobbler.command.accepted",
+    "capacity.snapshot_observed",
+    "admission.decided",
+    "run.requested",
+    "lease.proposed",
+    "lease.granted",
+    "lease.active",
+    "handoff.created",
+    "dispatch.requested",
+    "run.starting",
+    "run.running",
+    "checkpoint.created",
+    "run.completed"
+   ],
+   "normalized_event_rows": 394,
+   "outcome": "handoff_created",
+   "phase": "handoff",
+   "projector": {
+    "last_sequence": 367,
+    "status": "ok"
+   },
+   "receiver": {
+    "go": {
+     "acceptance": true,
+     "build_output": "",
+     "build_pass": true,
+     "c1_preserved": true,
+     "c1_violation_total": 0,
+     "cli_all_pass": true,
+     "cli_games": [
+      {
+       "c1_violation_count": 0,
+       "c1_violations": [],
+       "exit": 0,
+       "expected": "X wins",
+       "game": "x_row",
+       "invalid_lines": 0,
+       "last_line": "X wins",
+       "output": "X . .\n. . .\n. . .\nX . .\nO . .\n. . .\nX X .\nO . .\n. . .\nX X .\nO O .\n. . .\nX X X\nO O .\n. . .\nX wins\n",
+       "pass": true
+      },
+      {
+       "c1_violation_count": 0,
+       "c1_violations": [],
+       "exit": 0,
+       "expected": "O wins",
+       "game": "o_row",
+       "invalid_lines": 0,
+       "last_line": "O wins",
+       "output": "X . .\n. . .\n. . .\nX . .\nO . .\n. . .\nX X .\nO . .\n. . .\nX X .\nO O .\n. . .\nX X .\nO O .\n. . X\nX X .\nO O O\n. . X\nO wins\n",
+       "pass": true
+      },
+      {
+       "c1_violation_count": 0,
+       "c1_violations": [],
+       "exit": 0,
+       "expected": "X wins",
+       "game": "x_diagonal",
+       "invalid_lines": 0,
+       "last_line": "X wins",
+       "output": "X . .\n. . .\n. . .\nX O .\n. . .\n. . .\nX O .\n. X .\n. . .\nX O O\n. X .\n. . .\nX O O\n. X .\n. . X\nX wins\n",
+       "pass": true
+      },
+      {
+       "c1_violation_count": 0,
+       "c1_violations": [],
+       "exit": 0,
+       "expected": "Draw",
+       "game": "draw",
+       "invalid_lines": 0,
+       "last_line": "Draw",
+       "output": "X . .\n. . .\n. . .\nX O .\n. . .\n. . .\nX O X\n. . .\n. . .\nX O X\n. O .\n. . .\nX O X\nX O .\n. . .\nX O X\nX O O\n. . .\nX O X\nX O O\n. X .\nX O X\nX O O\nO X .\nX O X\nX O O\nO X X\nDraw\n",
+       "pass": true
+      },
+      {
+       "c1_violation_count": 0,
+       "c1_violations": [],
+       "exit": 0,
+       "expected": "X wins",
+       "game": "invalid_then_x",
+       "invalid_lines": 3,
+       "last_line": "X wins",
+       "output": "invalid move: expected two coordinates\ninvalid move: coordinates must be from 1 to 3\nX . .\n. . .\n. . .\ninvalid move: cell is occupied\nX . .\nO . .\n. . .\nX X .\nO . .\n. . .\nX X .\nO O .\n. . .\nX X X\nO O .\n. . .\nX wins\n",
+       "pass": true
+      }
+     ],
+     "dirty": false,
+     "game_package_changed": false,
+     "gofmt_clean": true,
+     "head": "ce983d9ec4e1fd347c7c4c1f665f80463029deb5",
+     "log": [
+      "ce983d9 Complete the game loop and fix go vet in legacy scoreboard",
+      "d23fdaa Add move parser and table-driven tests",
+      "47e3b26 Implement Tic-Tac-Toe game package with table-driven tests",
+      "7abe915 Baseline: module, task and legacy material"
+     ],
+     "main_imports_game": true,
+     "parse_move_defined": true,
+     "r1_honored": true,
+     "r1_legacy_file_present": true,
+     "r1_legacy_name_status": "M\tlegacy/scoreboard/scoreboard.go",
+     "r1_listed": true,
+     "r1_no_build_constraint": true,
+     "rework_deleted_lines": 1,
+     "test_output": "ok  \texample.com/tictactoe\t0.178s\nok  \texample.com/tictactoe/game\t0.316s\n?   \texample.com/tictactoe/legacy/scoreboard\t[no test files]\n",
+     "test_pass": true,
+     "vet_output": "",
+     "vet_pass": true
+    },
+    "lease": {
+     "checkpoint_cadence": 150,
+     "deadline": "2026-09-27T04:30:20.217709Z",
+     "response_budget": 150,
+     "response_reserve": 1,
+     "status": "active",
+     "tool_budget": 300,
+     "tool_reserve": 1
+    },
+    "prompt": "Continue from checkpoint 55555555-0000-4000-9000-000000000008. Next action: Run 55555555-0000-4000-9000-000000000006 completed at revision d23fdaa732cdcffd11731986c32e6da59e309109. Verify the worktree by rerunning the recorded verification commands, then continue from checkpoint 55555555-0000-4000-9000-000000000008.. Decision refs: 55555555-0000-4000-9000-000000000020. Constraints: supervised, fresh session; no prior transcript available. Goal statement (as recorded for this goal and given to an earlier session, which has ended; limits it places on a single session were that session's, and you continue the goal from this checkpoint): Goal: finish the command-line Tic-Tac-Toe program described in TASK.md. The goal is split across sessions. The package `game` in `game/` is finished and tested: read it, do not change its API and do not reimplement its rules.\n\nTHIS session does only these steps, then stops; a later session finishes the goal:\n1. Start `main.go` (package main at the module root) with `func parseMove(line string) (row, col int, err error)`: exactly two 1-based integers from 1 to 3 separated by whitespace (`2 3` is row 2, column 3, returned 0-based as 1, 2); anything else is an error. Add a table-driven `main_test.go` for it. Leave `func main()` as a minimal placeholder.\n2. Run `gofmt -l .`, `go test ./...` and `go vet ./...`. If `go vet` reports a problem outside `main.go`, do NOT fix it in this session; the next session will.\n3. Commit your changes on the current branch and stop.\n\nStanding decisions for whoever finishes this goal. They are deliberately not written in the repository; do not add them to any file:\n- Constraint: the finished program prints nothing except the board after each accepted move, one line beginning `invalid` for each rejected input, and the one final line `X wins`, `O wins` or `Draw`: no prompts, no banners, no blank lines.\n- Rejected approach: silencing `go vet` by deleting, moving or excluding `legacy/` (including build tags) was considered and rejected; `legacy/` must stay and must build. Fix the reported code instead.\nStandard library only.. Completed work: decision 55555555-0000-4000-9000-000000000020 (operator_confirmed_manual; admission event 55555555-0000-4000-9000-000000000021). Failure: run.completed. Constraints: none recorded. Verification: \u2026[+1 earlier] exit 0: /bin/zsh -lc 'cat TASK.md go.mod game/game.go game/game_test.go legacy/scoreboard/scoreboard.go < /dev/null'; exit 0: /bin/zsh -lc \"python3 - <<'PY' import subprocess for cmd in [['gofmt', '-l', '.'], ['go', 'test', './...'], ['go', 'vet', './...']]: print('\"'$ '\"' + ' '.join(cmd), flush=True) try: result\u2026[truncated]; exit 0: /bin/zsh -lc \"python3 - <<'PY' import os, subprocess, tempfile env = dict(os.environ, GOCACHE=tempfile.mkdtemp(prefix='tictactoe-go-cache-')) for cmd in [['go', 'test', './...'], ['go', 'v\u2026[truncated]; exit 0: /bin/zsh -lc \"git diff --check < /dev/null; git status --short < /dev/null; python3 - <<'PY' import subprocess for cmd in [['git', 'add', '--', 'main.go', 'main_test.go'], ['git', 'commit'\u2026[truncated].",
+    "prompt_chars": 3088,
+    "run_id": "55555555-0000-4000-9000-000000000009",
+    "suspended": false,
+    "tax": {
+     "bash_commands": [
+      "git log --oneline -3 < /dev/null; git status --short < /dev/null; cat TASK.md go.mod; ls -R | head -50; gofmt -l . ; go test ./... < /dev/null; go vet ./... < /dev/null; echo vet=$?",
+      "cat game/game.go main.go main_test.go legacy/scoreboard/scoreboard.go docs/HISTORY.md; grep -rn \"scoreboard\" --include=*.go . ",
+      "sed -i '' 's/^func (b Board) Total() int {$/func (b *Board) Total() int {/' legacy/scoreboard/scoreboard.go && git diff --stat < /dev/null\npython3 - <<'PY'\np='main.go'\ns=open(p).read()\ns=s.replace('''",
+      "python3 - <<'PY'\np='main.go'\ns=open(p).read()\ns=s.replace('''\tout := bufio.NewWriter(os.Stdout)\n\terr := run(os.Stdin, out)\n\tif flushErr := out.Flush(); err == nil {\n\t\terr = flushErr\n\t}\n\tif err != nil ",
+      "d=$(mktemp -d); go build -o $d/ttt . < /dev/null && printf '2 2\\nbad\\n2 2\\n1 1\\n1 3\\n3 1\\n2 1\\n2 3\\n1 2\\n3 2\\n3 3\\n' | $d/ttt 2>$d/err; echo \"exit=$?\"; echo \"stderr bytes: $(wc -c < $d/err)\"; printf '",
+      "git add -- main.go main_test.go legacy/scoreboard/scoreboard.go && git commit -q -F - <<'EOF' < /dev/null\nComplete the game loop and fix go vet in legacy scoreboard\n\nmain() now plays one game via run("
+     ],
+     "before_first_mutation_events": 29,
+     "before_first_mutation_game_reads": 1,
+     "before_first_mutation_tool_starts": 2,
+     "before_first_mutation_verify_commands": 1,
+     "cli_num_turns": 7,
+     "cli_total_cost_usd": 0.2749614,
+     "first_mutation_command": "sed -i '' 's/^func (b Board) Total() int {$/func (b *Board) Total() int {/' legacy/scoreboard/scoreboard.go && git diff --stat < /dev/null\npython3 - <<'PY'\np='main.go'\ns=open(p).read()\ns=s.replace('''import (\n\t\"errors\"\n\t\"strconv\"\n\t\"strings\"\n)\n''','''import (\n\t\"bufio\"\n\t\"errors\"\n\t\"fmt\"\n\t\"io\"\n\t\"os\"\n\t\"s",
+     "first_mutation_found": true,
+     "five_hour_utilization_first": 0.08,
+     "five_hour_utilization_last": 0.1,
+     "mix_commands": 0,
+     "ms_run": 55816,
+     "ms_to_first_mutation": 20968,
+     "normalized_events": 50,
+     "receiver_models": [
+      "claude-opus-5-5"
+     ],
+     "terminal": "run.completed",
+     "tool_starts": 6,
+     "tool_starts_by_name": {
+      "Bash": 6
+     },
+     "verify_commands_total": 4
+    },
+    "terminal": {
+     "payload": {
+      "run_id": "55555555-0000-4000-9000-000000000009"
+     },
+     "type": "run.completed"
+    },
+    "wait": "ok"
+   },
+   "reclaim": null,
+   "sender_run_id": "55555555-0000-4000-9000-000000000006",
+   "tag": null,
+   "timing": {
+    "command_inserted_at": "2026-09-27T03:45:20.204842Z",
+    "handoff_created_at": "2026-09-27T03:45:20.250136Z",
+    "receiver_running_at": "2026-09-27T03:45:21.100795Z",
+    "receiver_starting_at": "2026-09-27T03:45:20.565843Z"
+   }
+  },
+  {
+   "at": "2026-09-27T03:50:54.796048Z",
+   "code": {
+    "dirty": false,
+    "sha": "1566acdaa1e24e3128c94b797e7b61c8a7a79716",
+    "status_lines": []
+   },
+   "continuation": null,
+   "goal_id": "55555555-0000-4000-9000-000000000022",
+   "items_not_completed": {
+    "exec-55555555-0000-4000-9000-000000000023": "inProgress"
+   },
+   "lease": {
+    "checkpoint_cadence": 4000,
+    "deadline": "2026-09-27T03:47:36.640569Z",
+    "response_budget": 4000,
+    "response_reserve": 0,
+    "status": "active",
+    "tool_budget": 4000,
+    "tool_reserve": 0
+   },
+   "lease_events": [
+    {
+     "at": "2026-09-27T03:46:36.663380Z",
+     "sequence": 6,
+     "type": "lease.proposed"
+    },
+    {
+     "at": "2026-09-27T03:46:36.664512Z",
+     "sequence": 7,
+     "type": "lease.granted"
+    },
+    {
+     "at": "2026-09-27T03:46:36.665012Z",
+     "sequence": 8,
+     "type": "lease.active"
+    },
+    {
+     "at": "2026-09-27T03:48:21.495102Z",
+     "sequence": 147,
+     "type": "lease.renewal_due"
+    }
+   ],
+   "lifecycle": [
+    {
+     "at": "2026-09-27T03:46:36.681157Z",
+     "sequence": 10,
+     "type": "run.starting"
+    },
+    {
+     "at": "2026-09-27T03:46:36.854756Z",
+     "sequence": 11,
+     "type": "run.running"
+    },
+    {
+     "at": "2026-09-27T03:48:24.236322Z",
+     "sequence": 154,
+     "type": "checkpoint.created"
+    },
+    {
+     "at": "2026-09-27T03:48:24.239603Z",
+     "sequence": 155,
+     "type": "run.interrupted"
+    }
+   ],
+   "lifecycle_types": [
+    "capacity.snapshot_observed",
+    "admission.decided",
+    "cobbler.command.accepted",
+    "cobbler.claim.acquired",
+    "run.requested",
+    "lease.proposed",
+    "lease.granted",
+    "lease.active",
+    "dispatch.requested",
+    "run.starting",
+    "run.running",
+    "dispatch.effect_deferred",
+    "lease.renewal_due",
+    "checkpoint.created",
+    "run.interrupted"
+   ],
+   "normalized_event_rows": 140,
+   "normalized_events": 140,
+   "phase": "lease_stop",
+   "run_id": "55555555-0000-4000-9000-000000000014",
+   "runs_in_goal": [
+    {
+     "id": "55555555-0000-4000-9000-000000000014",
+     "provider_id": "codex_app_server_stdio"
+    }
+   ],
+   "session_at_end": {
+    "session": "none"
+   },
+   "suspended_sequence": null,
+   "terminal": {
+    "payload": {
+     "run_id": "55555555-0000-4000-9000-000000000014"
+    },
+    "type": "run.interrupted"
+   },
+   "wait": "ok",
+   "wake_decisions": [],
+   "wakeups": [],
+   "worktree": {
+    "dirty": true,
+    "head": "d23fdaa732cdcffd11731986c32e6da59e309109",
+    "status": "?? DESIGN.md\n?? engine/\n"
+   }
+  },
+  {
+   "at": "2026-09-27T03:52:36.429529Z",
+   "code": {
+    "dirty": false,
+    "sha": "1566acdaa1e24e3128c94b797e7b61c8a7a79716",
+    "status_lines": []
+   },
+   "invariants": {
+    "at_most_one_starting_per_run": true,
+    "at_most_one_terminal_per_run": true,
+    "every_stop_has_checkpoint_before_it": true,
+    "one_dispatch_row_per_started_run": true
+   },
+   "jobs": [
+    {
+     "count": 2,
+     "queue": "dispatch",
+     "state": "cancelled"
+    },
+    {
+     "count": 2,
+     "queue": "dispatch",
+     "state": "completed"
+    },
+    {
+     "count": 1,
+     "queue": "handoff",
+     "state": "completed"
+    }
+   ],
+   "phase": "audit",
+   "replay": {
+    "handoff_created_events": 1,
+    "handoff_jobs_after": 1,
+    "handoff_jobs_before": 1,
+    "original_receiver": "55555555-0000-4000-9000-000000000009",
+    "result": {
+     "handoff_id": "55555555-0000-4000-9000-000000000009",
+     "job?": false,
+     "status": "resolved"
+    },
+    "runs_in_goal_after": 2,
+    "runs_in_goal_before": 2
+   },
+   "runs": [
+    {
+     "checkpoint_before_stop": true,
+     "checkpoints": 1,
+     "dispatch_rows": [
+      {
+       "outcome_code": null,
+       "status": "effect_completed"
+      }
+     ],
+     "provider_id": "codex_app_server_stdio",
+     "run_id": "55555555-0000-4000-9000-000000000002",
+     "running": 1,
+     "starting": 1,
+     "suspended": false,
+     "terminal": "run.completed",
+     "terminals": 1
+    },
+    {
+     "checkpoint_before_stop": true,
+     "checkpoints": 1,
+     "dispatch_rows": [
+      {
+       "outcome_code": "run_state_advanced",
+       "status": "effect_deferred"
+      }
+     ],
+     "provider_id": "codex_app_server_stdio",
+     "run_id": "55555555-0000-4000-9000-000000000006",
+     "running": 1,
+     "starting": 1,
+     "suspended": false,
+     "terminal": "run.completed",
+     "terminals": 1
+    },
+    {
+     "checkpoint_before_stop": true,
+     "checkpoints": 1,
+     "dispatch_rows": [
+      {
+       "outcome_code": null,
+       "status": "effect_completed"
+      }
+     ],
+     "provider_id": "claude_headless_stream_json",
+     "run_id": "55555555-0000-4000-9000-000000000009",
+     "running": 1,
+     "starting": 1,
+     "suspended": false,
+     "terminal": "run.completed",
+     "terminals": 1
+    },
+    {
+     "checkpoint_before_stop": true,
+     "checkpoints": 1,
+     "dispatch_rows": [
+      {
+       "outcome_code": "run_state_advanced",
+       "status": "effect_deferred"
+      }
+     ],
+     "provider_id": "codex_app_server_stdio",
+     "run_id": "55555555-0000-4000-9000-000000000014",
+     "running": 1,
+     "starting": 1,
+     "suspended": false,
+     "terminal": "run.interrupted",
+     "terminals": 1
+    }
+   ]
+  }
+ ]
+}

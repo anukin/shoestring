@@ -65,6 +65,7 @@ defmodule FinalEval do
     cwd = File.cwd!()
     env = [{"GIT_OPTIONAL_LOCKS", "0"}]
     {head, head_exit} = System.cmd("git", ["rev-parse", "HEAD"], cd: cwd, env: env)
+    {tree, tree_exit} = System.cmd("git", ["rev-parse", "HEAD^{tree}"], cd: cwd, env: env)
 
     {status, status_exit} =
       System.cmd("git", ["status", "--porcelain=v1", "--untracked-files=normal"],
@@ -74,6 +75,7 @@ defmodule FinalEval do
 
     %{
       "sha" => if(head_exit == 0, do: String.trim(head), else: nil),
+      "tree" => if(tree_exit == 0, do: String.trim(tree), else: nil),
       "dirty" => if(status_exit == 0, do: status != "", else: nil),
       "status_lines" =>
         if(status_exit == 0, do: String.split(status, "\n", trim: true), else: nil)
@@ -226,23 +228,176 @@ defmodule FinalEval do
 
   def suspended?(goal_id, run_id), do: run_events(goal_id, run_id, ["run.suspended"]) != []
 
-  def wait_stop(run_id, bound_s) do
+  def wait_stop(run_id, bound_s, label \\ "wait") do
     deadline = System.monotonic_time(:second) + bound_s
-    do_wait(run_id, deadline)
+    do_wait(run_id, deadline, label, false)
   end
 
   # A stop is read from the COMMITTED trajectory (a terminal or a
   # `run.suspended` for this run) plus the Elf having exited.
-  defp do_wait(run_id, deadline) do
+  #
+  # The bound is an OBSERVATION window, never a stop. Returning while the Elf
+  # is alive would end this script, and with it the node that supervises the
+  # Elf, which kills useful work on elapsed time (locked iteration-4
+  # decision). So on expiry with a live Elf the window's end is recorded once
+  # as a block and the wait continues until the Elf exits by itself. Only a
+  # run whose Elf is already gone returns `:timeout`: there is nothing left
+  # to kill.
+  defp do_wait(run_id, deadline, label, expired?) do
     run = Repo.get!(RunRecord, run_id)
     stopped? = terminal_event(run.goal_id, run_id) != nil or suspended?(run.goal_id, run_id)
     elf_alive? = Shoestring.Elves.whereis(run_id) != nil
 
-    cond do
-      stopped? and not elf_alive? -> {:ok, run}
-      System.monotonic_time(:second) > deadline -> {:timeout, run}
-      true -> Process.sleep(2_000) && do_wait(run_id, deadline)
+    case wait_decision(stopped?, elf_alive?, System.monotonic_time(:second) > deadline, expired?) do
+      :stopped ->
+        {if(expired?, do: :ok_after_observation_expiry, else: :ok), run}
+
+      :timeout ->
+        {:timeout, run}
+
+      :expire_and_hold ->
+        observation_expired(label, run, stopped?)
+        Process.sleep(2_000) && do_wait(run_id, deadline, label, true)
+
+      :poll ->
+        Process.sleep(2_000) && do_wait(run_id, deadline, label, expired?)
     end
+  end
+
+  # The wait's decision on one poll, as a pure function (checked by
+  # `selftest`): a live Elf is never abandoned, whatever the clock says.
+  def wait_decision(stopped?, elf_alive?, past_deadline?, expired?) do
+    cond do
+      stopped? and not elf_alive? -> :stopped
+      not past_deadline? -> :poll
+      not elf_alive? -> :timeout
+      expired? -> :poll
+      true -> :expire_and_hold
+    end
+  end
+
+  defp observation_expired(label, run, stopped?) do
+    record(label <> ":observation_expired", %{
+      "run_id" => run.id,
+      "goal_id" => run.goal_id,
+      "stopped" => stopped?,
+      "elf_alive" => true,
+      "note" =>
+        "observation window ended with the Elf alive; nothing cancelled, the node " <>
+          "stays up until the Elf exits by itself"
+    })
+  end
+
+  # Before a phase ends (and the node with it), no Elf may still be running:
+  # a product-dispatched run this phase did not wait on (a continuation, a
+  # receiver) would otherwise be killed by the node's shutdown. Holds without
+  # a bound and records what it held for. Nothing is cancelled.
+  def hold_for_live_elves(phase) do
+    live =
+      Registry.select(Shoestring.Elves.Registry, [{{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
+      |> Enum.filter(fn {_run_id, pid} -> Process.alive?(pid) end)
+
+    if live != [] do
+      record(phase <> ":held_for_live_elves", %{"run_ids" => Enum.map(live, &elem(&1, 0))})
+
+      Enum.each(live, fn {_run_id, pid} ->
+        ref = Process.monitor(pid)
+
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+        end
+      end)
+
+      hold_for_live_elves(phase)
+    end
+
+    :ok
+  end
+
+  # The Observatory ledger as recorded before a spend: every provider/scope's
+  # latest honest reading (state, tier, windows). Read-only.
+  def ledger do
+    Enum.map(
+      Shoestring.Harness.Observatory.latest_observations(),
+      &%{
+        "provider" => &1.source.provider_id,
+        "scope" => &1.scope,
+        "state" => to_string(&1.capacity_state),
+        "tier" => to_string(&1.support_tier),
+        "observed_at" => &1.observed_at,
+        "windows" =>
+          Enum.map(&1.windows || [], fn w ->
+            %{
+              "kind" => to_string(w[:kind]),
+              "state" => to_string(w[:state]),
+              "used_percent" => w[:used_percent]
+            }
+          end)
+      }
+    )
+  end
+
+  # Pre-spend capacity check (`live-closeout-post85.md` §2.4 P4, as amended
+  # in §2.7): a phase spends only when the ledger holds a reading for the
+  # provider with at least two windows, every one observed and below 80 %
+  # used — the stricter of the product's default reserve thresholds, applied
+  # to every window because the Codex reading names its windows
+  # `primary`/`secondary` and carries no duration to map them onto
+  # `five_hour`/`weekly`. A refused or exhausted state, a missing reading or
+  # any unknown window blocks the phase before submit. Pure; checked by
+  # `selftest`.
+  def capacity_clear?(ledger, provider), do: capacity_clear?(ledger, provider, nil)
+
+  # With `since`, the clearing reading must also have been observed at or
+  # after it (the standalone `lease_stop`, §13: read by this boot).
+  def capacity_clear?(ledger, provider, since) do
+    below = fn w ->
+      w["state"] == "observed" and is_number(w["used_percent"]) and w["used_percent"] < 80
+    end
+
+    fresh = fn r ->
+      since == nil or
+        (match?(%DateTime{}, r["observed_at"]) and
+           DateTime.compare(r["observed_at"], since) != :lt)
+    end
+
+    ledger
+    |> Enum.filter(&(&1["provider"] == provider))
+    |> Enum.any?(fn r ->
+      r["state"] not in ["refused", "exhausted"] and length(r["windows"]) >= 2 and
+        Enum.all?(r["windows"], below) and fresh.(r)
+    end)
+  end
+
+  # When this node's VM started (wall clock minus VM uptime).
+  def boot_at do
+    {uptime_ms, _} = :erlang.statistics(:wall_clock)
+    DateTime.add(DateTime.utc_now(), -uptime_ms, :millisecond)
+  end
+
+  # The `lease_stop` base commit named by `from`, from the recorded phase
+  # results: `"setup"` is the fixture's committed baseline head, `"turn2"`
+  # turn 2's committed worktree head. Anything else, or a phase with no
+  # record, is nil (the phase then blocks before submit). Pure; checked by
+  # `selftest`.
+  def lease_stop_base(results, from) do
+    latest = Enum.find(Enum.reverse(results), &(&1["phase"] == from))
+
+    case {from, latest} do
+      {"setup", %{"head" => head}} when is_binary(head) -> head
+      {"turn2", %{"worktree" => %{"head" => head}}} when is_binary(head) -> head
+      _other -> nil
+    end
+  end
+
+  # Installed CLI version, recorded as evidence (no model call).
+  def cli_version(exe) do
+    case System.cmd(exe, ["--version"], stderr_to_stdout: true) do
+      {out, 0} -> String.trim(out)
+      {out, code} -> "exit #{code}: " <> String.slice(String.trim(out), 0, 200)
+    end
+  rescue
+    error -> "error: " <> Exception.message(error)
   end
 
   def wait_run_created(goal_id, run_id, bound_s) do
@@ -604,6 +759,187 @@ defmodule FinalEval do
     do: String.replace_prefix(process_id, "pgid:", "")
 
   def pgid_of(_), do: nil
+
+  # Process lifecycle after a stop: the Elf deregistered, and the owned group
+  # (the pgid recorded at `run.running`) is gone. Read-only probes.
+  def process_after(goal_id, run_id) do
+    pgid = pgid_of(running_process_id(goal_id, run_id))
+
+    %{
+      "elf_registered" => Shoestring.Elves.whereis(run_id) != nil,
+      "pgid_recorded" => pgid != nil,
+      "group_alive" => group_alive?(pgid),
+      "group_member_count" => if(pgid, do: length(group_members(pgid)), else: nil)
+    }
+  end
+
+  # Facts for the post-#85 lease-stop criteria, read from the committed
+  # trajectory and rows only (`live-closeout-post85.md` §2). Every sequence
+  # is the goal-local trajectory sequence.
+  def lease_stop_facts(goal_id, run_id, driver_cancel_calls) do
+    events =
+      Repo.all(
+        from e in TrajectoryEvent,
+          where: e.goal_id == ^goal_id,
+          order_by: e.sequence,
+          select: %{
+            type: e.type,
+            sequence: e.sequence,
+            at: e.occurred_at,
+            key: e.idempotency_key,
+            payload: e.payload
+          }
+      )
+
+    of_type = fn type -> Enum.filter(events, &(&1.type == type)) end
+
+    normalized =
+      events
+      |> Enum.filter(&(&1.type == "harness.event_recorded" and &1.payload["run_id"] == run_id))
+
+    outcome = Enum.find(normalized, &(&1.payload["kind"] == "result"))
+
+    tool_events =
+      normalized
+      |> Enum.filter(&(&1.payload["kind"] in ["command", "file_change", "tool"]))
+      |> Enum.map(fn e ->
+        ext = e.payload["extensions"] || %{}
+
+        %{
+          "sequence" => e.sequence,
+          "ordinal" => e.payload["ordinal"],
+          "kind" => e.payload["kind"],
+          "item_id" => ext["codex-app-server:item_id"],
+          "status" => ext["codex-app-server:status"]
+        }
+      end)
+
+    item_state =
+      Enum.reduce(tool_events, %{}, fn t, acc ->
+        if is_binary(t["item_id"]), do: Map.put(acc, t["item_id"], t["status"]), else: acc
+      end)
+
+    run_scoped = fn type ->
+      type |> of_type.() |> Enum.filter(&(&1.payload["run_id"] == run_id))
+    end
+
+    terminals = Enum.flat_map(@terminals, run_scoped)
+    checkpoints = run_scoped.("checkpoint.created")
+
+    decisions =
+      "admission.decided"
+      |> of_type.()
+      |> Enum.filter(&String.starts_with?(&1.key || "", "lease-renewal-decision:"))
+      |> Enum.map(
+        &%{
+          "sequence" => &1.sequence,
+          "at" => &1.at,
+          "result" => &1.payload["result"],
+          "reason_code" => &1.payload["reason_code"]
+        }
+      )
+
+    wakeup_jobs =
+      Repo.all(
+        from j in Oban.Job,
+          where: j.queue == "wakeup",
+          select: %{state: j.state, args: j.args}
+      )
+      |> Enum.filter(&(&1.args["goal_id"] in [goal_id, nil]))
+
+    lease = lease_row(run_id)
+
+    %{
+      "run_id" => run_id,
+      "outcome" =>
+        outcome &&
+          %{
+            "sequence" => outcome.sequence,
+            "ordinal" => outcome.payload["ordinal"],
+            "status" => get_in(outcome.payload, ["result", "status"])
+          },
+      "renewal_due" => "lease.renewal_due" |> of_type.() |> Enum.map(& &1.sequence),
+      "lease_events" =>
+        events
+        |> Enum.filter(&String.starts_with?(&1.type, "lease."))
+        |> Enum.map(&%{"type" => &1.type, "sequence" => &1.sequence, "at" => &1.at}),
+      "renewal_decisions" => decisions,
+      "renewal_snapshots" =>
+        events
+        |> Enum.count(
+          &(&1.type == "capacity.snapshot_observed" and
+              String.starts_with?(&1.key || "", "lease-renewal-snapshot:"))
+        ),
+      "tool_events" => tool_events,
+      "tool_items_started" => map_size(item_state),
+      "items_not_completed" =>
+        item_state
+        |> Enum.reject(fn {_id, st} -> st in ["completed", "failed", "declined"] end)
+        |> Map.new(),
+      "terminals" => Enum.map(terminals, &%{"type" => &1.type, "sequence" => &1.sequence}),
+      "checkpoints" => Enum.map(checkpoints, & &1.sequence),
+      "starting" => length(run_scoped.("run.starting")),
+      "pausing" => length(run_scoped.("run.pausing")),
+      "suspended" => length(run_scoped.("run.suspended")),
+      "wakeup_rows" =>
+        Repo.aggregate(
+          from(w in Shoestring.Cobbler.WakeupRecord, where: w.goal_id == ^goal_id),
+          :count
+        ),
+      "wakeup_jobs" => Enum.map(wakeup_jobs, & &1.state),
+      "wake_decisions" => wake_decisions(goal_id),
+      "runs_in_goal" =>
+        Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^goal_id), :count),
+      "dispatch_rows" =>
+        Repo.aggregate(
+          from(d in Shoestring.Harness.DispatchRecord, where: d.run_id == ^run_id),
+          :count
+        ),
+      "driver_cancel_calls" => driver_cancel_calls,
+      "lease_status" => lease && lease.status
+    }
+  end
+
+  # The pre-registered post-#85 lease-stop criteria over `lease_stop_facts/3`
+  # (`live-closeout-post85.md` §2.2). Pure; checked by `selftest`. Each
+  # criterion is reported separately; `all` is their conjunction.
+  def lease_stop_verdict(f) do
+    outcome = f["outcome"]
+    outcome_seq = outcome && outcome["sequence"]
+    due_seq = List.first(f["renewal_due"] || [])
+    terminal = List.first(f["terminals"] || [])
+
+    criteria = %{
+      "l1_due_marked_while_tools_run" =>
+        is_integer(due_seq) and is_integer(outcome_seq) and due_seq < outcome_seq and
+          Enum.any?(
+            f["tool_events"],
+            &(&1["sequence"] > due_seq and &1["sequence"] < outcome_seq)
+          ),
+      "l2_no_interrupt_no_driver_cancel" =>
+        outcome != nil and outcome["status"] != "interrupted" and
+          Enum.all?(f["terminals"], &(&1["type"] != "run.interrupted")) and
+          f["driver_cancel_calls"] == 0,
+      "l3_started_tools_all_completed" =>
+        f["tool_items_started"] > 0 and f["items_not_completed"] == %{},
+      "l4_exactly_one_outcome_evaluation" =>
+        match?([_], f["renewal_decisions"]) and is_integer(outcome_seq) and
+          hd(f["renewal_decisions"])["sequence"] > outcome_seq,
+      "l5_completed_with_terminal_checkpoint" =>
+        match?([%{"type" => "run.completed"}], f["terminals"]) and
+          Enum.any?(f["checkpoints"], &(&1 < terminal["sequence"])),
+      "l6_no_suspend_or_wake" =>
+        f["pausing"] == 0 and f["suspended"] == 0 and f["wakeup_rows"] == 0 and
+          f["wakeup_jobs"] == [] and f["wake_decisions"] == [],
+      "l7_no_duplicate_dispatch" =>
+        f["runs_in_goal"] == 1 and f["dispatch_rows"] == 1 and f["starting"] == 1 and
+          length(f["terminals"]) == 1,
+      "l8_lease_row_not_live" =>
+        f["lease_status"] not in [nil, "proposed", "granted", "active", "renewal_due"]
+    }
+
+    Map.put(criteria, "all", Enum.all?(Map.values(criteria)))
+  end
 end
 
 :logger.update_formatter_config(:default, %{metadata: :all})
@@ -750,6 +1086,10 @@ handoff_lease_policy = %{
 # ingest) finish before submitting. Changes no product behaviour.
 Process.sleep(String.to_integer(System.get_env("LIVE_SETTLE_S", "10")) * 1000)
 
+# Observation window for a turn or the lease-stop run (default 45 min). Its end
+# is recorded as a block; it never stops the run (see `FinalEval.do_wait/4`).
+observe_s = String.to_integer(System.get_env("LIVE_OBSERVE_S", "2700"))
+
 case phase do
   "selftest" ->
     # Measure functions on synthetic input; no provider, no product call.
@@ -773,6 +1113,193 @@ case phase do
       "not_read" => not FinalEval.mutation?("Bash", "cat game/game.go; git status --short"),
       "not_echo" => not FinalEval.mutation?("Bash", "echo \"== vet\"; go vet ./...")
     }
+
+    # Post-#85 additions (live-closeout-post85.md §2): the wait never abandons
+    # a live Elf, the pre-spend capacity check, and the lease-stop verdict
+    # over synthetic facts — one passing shape and one failing shape per
+    # criterion, including the 1566acd interrupted shape.
+    # The window names the live Codex reading uses (setup record, §2.7).
+    reading = fn state, primary, secondary ->
+      %{
+        "provider" => "codex",
+        "state" => state,
+        "windows" => [
+          %{"kind" => "primary", "state" => "observed", "used_percent" => primary},
+          %{"kind" => "secondary", "state" => "observed", "used_percent" => secondary}
+        ]
+      }
+    end
+
+    pass = %{
+      "outcome" => %{"sequence" => 200, "ordinal" => 150, "status" => "completed"},
+      "renewal_due" => [120],
+      "tool_events" => [
+        %{"sequence" => 110, "item_id" => "a", "status" => "inProgress"},
+        %{"sequence" => 130, "item_id" => "a", "status" => "completed"}
+      ],
+      "tool_items_started" => 1,
+      "items_not_completed" => %{},
+      "renewal_decisions" => [%{"sequence" => 202, "result" => "refused"}],
+      "terminals" => [%{"type" => "run.completed", "sequence" => 210}],
+      "checkpoints" => [205],
+      "starting" => 1,
+      "pausing" => 0,
+      "suspended" => 0,
+      "wakeup_rows" => 0,
+      "wakeup_jobs" => [],
+      "wake_decisions" => [],
+      "runs_in_goal" => 1,
+      "dispatch_rows" => 1,
+      "driver_cancel_calls" => 0,
+      "lease_status" => "expired"
+    }
+
+    old_interrupted =
+      Map.merge(pass, %{
+        "outcome" => %{"sequence" => 153, "ordinal" => 140, "status" => "interrupted"},
+        "renewal_due" => [147],
+        "tool_events" => [%{"sequence" => 146, "item_id" => "b", "status" => "inProgress"}],
+        "items_not_completed" => %{"b" => "inProgress"},
+        "renewal_decisions" => [],
+        "terminals" => [%{"type" => "run.interrupted", "sequence" => 155}],
+        "checkpoints" => [154],
+        "lease_status" => "active"
+      })
+
+    v = &FinalEval.lease_stop_verdict/1
+    off = fn facts, key -> not v.(facts)[key] and not v.(facts)["all"] end
+
+    checks =
+      Map.merge(checks, %{
+        "wait_live_elf_never_times_out" =>
+          FinalEval.wait_decision(false, true, true, false) == :expire_and_hold and
+            FinalEval.wait_decision(false, true, true, true) == :poll and
+            FinalEval.wait_decision(true, true, true, true) == :poll,
+        "wait_stopped" => FinalEval.wait_decision(true, false, true, true) == :stopped,
+        "wait_dead_elf_times_out" =>
+          FinalEval.wait_decision(false, false, true, false) == :timeout,
+        "capacity_clear" => FinalEval.capacity_clear?([reading.("degraded", 29, 59)], "codex"),
+        "capacity_primary_reserve" =>
+          not FinalEval.capacity_clear?([reading.("degraded", 80, 3)], "codex"),
+        "capacity_secondary_reserve" =>
+          not FinalEval.capacity_clear?([reading.("degraded", 10, 80)], "codex"),
+        "capacity_one_window_only" =>
+          not FinalEval.capacity_clear?(
+            [
+              %{
+                "provider" => "codex",
+                "state" => "degraded",
+                "windows" => [hd(reading.("x", 1, 1)["windows"])]
+              }
+            ],
+            "codex"
+          ),
+        "capacity_window_unknown" =>
+          not FinalEval.capacity_clear?(
+            [
+              put_in(reading.("degraded", 1, 1), ["windows"], [
+                %{"kind" => "primary", "state" => "observed", "used_percent" => 1},
+                %{"kind" => "secondary", "state" => "unknown", "used_percent" => nil}
+              ])
+            ],
+            "codex"
+          ),
+        "capacity_other_provider_only" =>
+          not FinalEval.capacity_clear?(
+            [Map.put(reading.("degraded", 1, 1), "provider", "claude")],
+            "codex"
+          ),
+        "capacity_refused" => not FinalEval.capacity_clear?([reading.("refused", 1, 1)], "codex"),
+        "capacity_fresh_since_boot" =>
+          FinalEval.capacity_clear?(
+            [Map.put(reading.("degraded", 1, 1), "observed_at", ~U[2026-09-29 10:00:05Z])],
+            "codex",
+            ~U[2026-09-29 10:00:00Z]
+          ),
+        "capacity_stale_before_boot" =>
+          not FinalEval.capacity_clear?(
+            [Map.put(reading.("degraded", 1, 1), "observed_at", ~U[2026-09-29 09:59:59Z])],
+            "codex",
+            ~U[2026-09-29 10:00:00Z]
+          ),
+        "capacity_no_observed_at" =>
+          not FinalEval.capacity_clear?(
+            [reading.("degraded", 1, 1)],
+            "codex",
+            ~U[2026-09-29 10:00:00Z]
+          ),
+        "base_setup" =>
+          FinalEval.lease_stop_base(
+            [
+              %{"phase" => "setup", "head" => "aaa"},
+              %{"phase" => "turn2", "worktree" => %{"head" => "bbb"}}
+            ],
+            "setup"
+          ) == "aaa",
+        "base_turn2" =>
+          FinalEval.lease_stop_base(
+            [
+              %{"phase" => "setup", "head" => "aaa"},
+              %{"phase" => "turn2", "worktree" => %{"head" => "bbb"}}
+            ],
+            "turn2"
+          ) == "bbb",
+        "base_latest_setup_wins" =>
+          FinalEval.lease_stop_base(
+            [%{"phase" => "setup", "head" => "old"}, %{"phase" => "setup", "head" => "new"}],
+            "setup"
+          ) == "new",
+        "base_missing_turn2" =>
+          FinalEval.lease_stop_base([%{"phase" => "setup", "head" => "aaa"}], "turn2") == nil,
+        "base_unknown_phase" =>
+          FinalEval.lease_stop_base(
+            [%{"phase" => "turn1", "worktree" => %{"head" => "c"}}],
+            "turn1"
+          ) ==
+            nil,
+        "capacity_missing" => not FinalEval.capacity_clear?([], "codex"),
+        "capacity_unknown_window" =>
+          not FinalEval.capacity_clear?(
+            [%{"provider" => "codex", "state" => "unknown", "windows" => []}],
+            "codex"
+          ),
+        "lease_pass" => v.(pass)["all"],
+        "lease_old_interrupted_fails" =>
+          Enum.all?(
+            [
+              "l2_no_interrupt_no_driver_cancel",
+              "l3_started_tools_all_completed",
+              "l4_exactly_one_outcome_evaluation",
+              "l5_completed_with_terminal_checkpoint",
+              "l8_lease_row_not_live"
+            ],
+            &off.(old_interrupted, &1)
+          ),
+        "lease_due_after_outcome" =>
+          off.(Map.put(pass, "renewal_due", [201]), "l1_due_marked_while_tools_run"),
+        "lease_no_tool_after_due" =>
+          off.(Map.put(pass, "renewal_due", [131]), "l1_due_marked_while_tools_run"),
+        "lease_driver_cancel" =>
+          off.(Map.put(pass, "driver_cancel_calls", 1), "l2_no_interrupt_no_driver_cancel"),
+        "lease_two_evaluations" =>
+          off.(
+            Map.put(pass, "renewal_decisions", [%{"sequence" => 150}, %{"sequence" => 202}]),
+            "l4_exactly_one_outcome_evaluation"
+          ),
+        "lease_mid_turn_evaluation" =>
+          off.(
+            Map.put(pass, "renewal_decisions", [%{"sequence" => 150}]),
+            "l4_exactly_one_outcome_evaluation"
+          ),
+        "lease_suspended" => off.(Map.put(pass, "suspended", 1), "l6_no_suspend_or_wake"),
+        "lease_wake_job" =>
+          off.(Map.put(pass, "wakeup_jobs", ["available"]), "l6_no_suspend_or_wake"),
+        "lease_second_run" => off.(Map.put(pass, "runs_in_goal", 2), "l7_no_duplicate_dispatch"),
+        "lease_row_renewal_due" =>
+          off.(Map.put(pass, "lease_status", "renewal_due"), "l8_lease_row_not_live"),
+        "lease_row_active" =>
+          off.(Map.put(pass, "lease_status", "active"), "l8_lease_row_not_live")
+      })
 
     FinalEval.record("selftest", %{
       "checks" => checks,
@@ -811,6 +1338,8 @@ case phase do
     {test, test_code} = FinalEval.run_bounded("go", ["test", "./..."], dir, 120)
 
     FinalEval.record("setup", %{
+      "ledger" => FinalEval.ledger(),
+      "codex_capacity_clear" => FinalEval.capacity_clear?(FinalEval.ledger(), "codex"),
       "head" => String.trim(git.(["rev-parse", "HEAD"])),
       "files" => String.split(String.trim(git.(["ls-files"])), "\n"),
       "remotes" => String.trim(git.(["remote"])),
@@ -838,12 +1367,22 @@ case phase do
         "turn2" -> {turn2_prompt, FinalEval.result_for("turn1")["worktree"]["head"]}
       end
 
+    ledger = FinalEval.ledger()
+
+    unless FinalEval.capacity_clear?(ledger, "codex") do
+      FinalEval.record(turn <> ":capacity_block", %{"ledger" => ledger})
+      raise "capacity not clear for codex; #{turn} not submitted"
+    end
+
     {:ok, run_id} = FinalEval.submit_turn("codex", String.trim(prompt), base)
     FinalEval.say("#{turn}_run", run_id)
-    {status, run} = FinalEval.wait_stop(run_id, 900)
+    {status, run} = FinalEval.wait_stop(run_id, observe_s, turn)
 
     FinalEval.record(turn, %{
       "wait" => status,
+      "observation_window_s" => observe_s,
+      "ledger_before" => ledger,
+      "process_after" => FinalEval.process_after(run.goal_id, run.id),
       "base_revision" => base,
       "run_id" => run.id,
       "goal_id" => run.goal_id,
@@ -860,6 +1399,8 @@ case phase do
     # turn 2's goal keeps its claim: the handoff dispatches under it.
     if turn == "turn1",
       do: FinalEval.say("release", FinalEval.release_claim(run.goal_id, turn) |> elem(0))
+
+    FinalEval.hold_for_live_elves(turn)
 
   "handoff" ->
     sender = FinalEval.result_for("turn2")
@@ -1152,7 +1693,43 @@ case phase do
     # decline wake is observed, not driven. If the product dispatches a
     # continuation, it is recorded and then explicitly cancelled once it has
     # run, to bound spend: an operator act, recorded as such.
-    base = FinalEval.result_for("turn2")["worktree"]["head"]
+    #
+    # After #85 a lease stop only pends at the session and resolves at the
+    # turn's own outcome: the expected shape is a completed turn whose outcome
+    # evaluates renewal once, is refused, and keeps its terminal — no
+    # suspension and no wake (`live-closeout-post85.md` §2.2). The pre-#85
+    # decline expectations above stay as the historical design.
+    #
+    # Base: turn 2's committed head by default (the original sequence), or an
+    # explicitly named earlier phase (`LIVE_LEASE_STOP_BASE_FROM=setup`, the
+    # standalone run of `live-closeout-post85.md` §13), optionally pinned to an
+    # exact SHA (`LIVE_LEASE_STOP_BASE_EXPECT`). A missing or mismatched base
+    # blocks before submit.
+    base_from = System.get_env("LIVE_LEASE_STOP_BASE_FROM", "turn2")
+    base = FinalEval.lease_stop_base(FinalEval.latest_results(), base_from)
+    expected_base = System.get_env("LIVE_LEASE_STOP_BASE_EXPECT")
+
+    if base == nil or (expected_base not in [nil, ""] and base != expected_base) do
+      FinalEval.record("lease_stop:base_block", %{
+        "base_from" => base_from,
+        "base" => base,
+        "expected" => expected_base
+      })
+
+      raise "lease_stop base not resolved or not the expected commit; not submitted"
+    end
+
+    # Capacity must be read by THIS boot (the monitor's non-inference
+    # rate-limit read), not carried over from an earlier node.
+    boot_at = FinalEval.boot_at()
+    ledger = FinalEval.ledger()
+
+    unless FinalEval.capacity_clear?(ledger, "codex", boot_at) do
+      FinalEval.record("lease_stop:capacity_block", %{"ledger" => ledger, "boot_at" => boot_at})
+      raise "capacity not clear (or not freshly observed) for codex; lease_stop not submitted"
+    end
+
+    codex_cli = FinalEval.cli_version("codex")
 
     {:ok, run_id} =
       FinalEval.submit_turn("codex", String.trim(lease_stop_prompt), base,
@@ -1162,8 +1739,9 @@ case phase do
       )
 
     FinalEval.say("lease_stop_run", run_id)
-    {status, run} = FinalEval.wait_stop(run_id, 900)
+    {status, run} = FinalEval.wait_stop(run_id, observe_s, "lease_stop")
     goal_id = run.goal_id
+    process_after = FinalEval.process_after(goal_id, run_id)
 
     lifecycle =
       FinalEval.run_events(
@@ -1263,8 +1841,21 @@ case phase do
           }
       end
 
+    # The driver issues no cancel on the lease-stop run itself; its only
+    # cancel is the pre-registered one on a product-dispatched continuation.
+    facts = FinalEval.lease_stop_facts(goal_id, run_id, 0)
+
     FinalEval.record("lease_stop", %{
       "wait" => status,
+      "observation_window_s" => observe_s,
+      "base_from" => base_from,
+      "base" => base,
+      "boot_at" => boot_at,
+      "codex_cli" => codex_cli,
+      "ledger_before" => ledger,
+      "process_after" => process_after,
+      "facts" => facts,
+      "verdict" => FinalEval.lease_stop_verdict(facts),
       "run_id" => run_id,
       "goal_id" => goal_id,
       "lease" => FinalEval.lease_row(run_id),
@@ -1287,6 +1878,7 @@ case phase do
     })
 
     FinalEval.say("release_lease_stop", FinalEval.release_claim(goal_id, "lease-stop") |> elem(0))
+    FinalEval.hold_for_live_elves("lease_stop")
 
   "cancel" ->
     base = FinalEval.result_for("turn2")["worktree"]["head"]
