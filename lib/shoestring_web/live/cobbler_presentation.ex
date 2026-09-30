@@ -1031,6 +1031,9 @@ defmodule ShoestringWeb.CobblerPresentation do
       type == "cobbler.claim.released" ->
         {:event, {:command_outcome, :released}}
 
+      type == "run.requested" ->
+        :skip
+
       type in ["run.starting", "run.running"] ->
         {:event, :dispatch_started}
 
