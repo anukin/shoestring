@@ -28,7 +28,19 @@ defmodule ShoestringWeb.CobblerQuotaPresentationTest do
   end
 
   test "a queued goal can report dispatch under its existing authorized claim" do
-    assert GoalLifecycle.transition(:queued, :dispatch_started) == {:ok, :working}
+    assert CobblerPresentation.derive_goal_state(
+             quota_timeline() ++
+               events(
+                 [
+                   {"admission.decided", %{"result" => "admit"}},
+                   {"run.starting", %{}}
+                 ],
+                 20
+               )
+           ) == :working
+
+    assert {:error, {:invalid_transition, :queued, :dispatch_started}} =
+             GoalLifecycle.transition(:queued, :dispatch_started)
   end
 
   test "fresh admitted renewals keep useful work and checkpointing in their current state" do

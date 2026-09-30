@@ -195,7 +195,6 @@ defmodule Shoestring.Cobbler.GoalLifecycle do
 
   # Dispatch gate reports.
   def transition(:dispatching, :dispatch_started), do: {:ok, :working}
-  def transition(:queued, :dispatch_started), do: {:ok, :working}
   # Gated on the disabled execution path: the goal waits in :dispatching
   # instead of bypassing the gate.
   def transition(:dispatching, :dispatch_blocked), do: {:ok, :dispatching}

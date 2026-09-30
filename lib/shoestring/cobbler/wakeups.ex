@@ -163,13 +163,24 @@ defmodule Shoestring.Cobbler.Wakeups do
       %WakeupRecord{status: status} = existing when status in ["scheduled", "due"] ->
         {:ok, %{wakeup: existing, outcome: :replayed, job: nil}}
 
-      %WakeupRecord{} ->
-        suffixed = suffixed_key(repo, key)
-        insert_or_replay(repo, goal_id, suffixed, wake_at, status, now, opts, attempts - 1)
+      %WakeupRecord{} = existing ->
+        if decline_request_replay?(existing, opts) do
+          {:ok, %{wakeup: existing, outcome: :replayed, job: nil}}
+        else
+          suffixed = suffixed_key(repo, key)
+          insert_or_replay(repo, goal_id, suffixed, wake_at, status, now, opts, attempts - 1)
+        end
 
       nil ->
         insert_wakeup(repo, goal_id, key, wake_at, status, now, opts)
     end
+  end
+
+  defp decline_request_replay?(existing, opts) do
+    existing.reason == "lease_decline_recheck" and
+      Keyword.get(opts, :reason) == existing.reason and
+      Keyword.get(opts, :run_id) == existing.run_id and
+      Keyword.get(opts, :command_id) == existing.command_id
   end
 
   defp insert_wakeup(repo, goal_id, key, wake_at, status, now, opts) do
@@ -561,6 +572,7 @@ defmodule Shoestring.Cobbler.Wakeups do
          {:ok, lease} <- latest_lease(repo, run),
          {:ok, {request, candidate}} <- admission_context(repo, wakeup, goal, run, opts),
          :ok <- refuse_manual_scope(repo, wakeup, goal, run, request, candidate, now, opts),
+         :ok <- eligible_failed_attempt(repo, goal, run, wakeup),
          {:ok, observed} <- observe(opts, candidate),
          {:ok, snapshot} <- GoalLocalObservation.localize(observed, "wakeup", goal.id, wakeup.id),
          {:ok, _snapshot_event} <- persist_snapshot(wakeup, goal, run, snapshot, now, opts),
@@ -1207,6 +1219,19 @@ defmodule Shoestring.Cobbler.Wakeups do
 
   defp resume_run(_repo, _goal, %RunRecord{status: status}, _wakeup, _now, _opts),
     do: {:error, {:unexpected_run_state, status}}
+
+  # Reject ordinary failed attempts before recording an admission that could
+  # misleadingly reopen their goal projection. Manual refusal remains the
+  # first gate, and authorized quota recovery still re-observes normally.
+  defp eligible_failed_attempt(repo, goal, %RunRecord{status: "failed"} = run, wakeup) do
+    if quota_continuation?(repo, goal.id, run, wakeup) do
+      :ok
+    else
+      {:error, {:unexpected_run_state, "failed"}}
+    end
+  end
+
+  defp eligible_failed_attempt(_repo, _goal, _run, _wakeup), do: :ok
 
   defp quota_continuation?(repo, goal_id, run, wakeup) do
     terminal =

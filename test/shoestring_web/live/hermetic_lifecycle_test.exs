@@ -191,6 +191,23 @@ defmodule ShoestringWeb.HermeticLifecycleTest do
           from j in Oban.Job, where: j.args["dispatch_id"] == ^continuation_dispatch.dispatch_id
         )
 
+      fresh_lease = Repo.get_by!(ExecutionLeaseRecord, run_id: continued.id)
+      refute fresh_lease.id == lease.id
+      assert fresh_lease.status == "active"
+      refute fresh_lease.admitted_snapshot_id == lease.admitted_snapshot_id
+
+      fresh_admission =
+        Repo.get!(
+          Shoestring.Trajectory.TrajectoryEvent,
+          fresh_lease.extensions["cobbler.lease:admission_event_id"]
+        )
+
+      assert fresh_admission.payload["result"] == "admit"
+      assert fresh_admission.payload["scope"] == "subscription"
+
+      assert fresh_admission.payload["observation"]["snapshot_id"] ==
+               fresh_lease.admitted_snapshot_id
+
       assert :ok = Shoestring.Harness.DispatchWorker.perform(continuation_job)
       await_owned_elf(continued.id)
       assert_group_reaped!(continued.id)
@@ -207,8 +224,62 @@ defmodule ShoestringWeb.HermeticLifecycleTest do
 
       assert :ok = Shoestring.Cobbler.WakeupWorker.perform(wake_job)
       assert :ok = Shoestring.Harness.DispatchWorker.perform(continuation_job)
+      assert :ok = Shoestring.Harness.DispatchWorker.perform(job)
+
+      for process <- @recovery_processes do
+        assert {:ok, %{failures: []}} = process.reconcile_now()
+      end
+
       refute_receive {:capacity_observed, :wakeup, _}
       assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^run.goal_id), :count) == 2
+
+      assert Repo.aggregate(
+               from(l in ExecutionLeaseRecord, where: l.goal_id == ^run.goal_id),
+               :count
+             ) == 2
+
+      assert Repo.aggregate(
+               from(l in ExecutionLeaseRecord,
+                 where: l.goal_id == ^run.goal_id and l.status != "checkpoint_required"
+               ),
+               :count
+             ) == 0
+
+      assert Repo.aggregate(
+               from(c in CheckpointRecord, where: c.goal_id == ^run.goal_id),
+               :count
+             ) == 3
+
+      assert Repo.aggregate(
+               from(d in Shoestring.Harness.DispatchRecord,
+                 where: d.goal_id == ^run.goal_id and d.status == "effect_completed"
+               ),
+               :count
+             ) == 2
+
+      assert Repo.aggregate(
+               from(j in Oban.Job,
+                 where:
+                   j.args["dispatch_id"] in ^[
+                     dispatch.dispatch_id,
+                     continuation_dispatch.dispatch_id
+                   ] or
+                     j.args["wakeup_id"] == ^wake.id
+               ),
+               :count
+             ) == 3
+
+      timeline =
+        Repo.all(
+          from e in Shoestring.Trajectory.TrajectoryEvent,
+            where: e.goal_id == ^run.goal_id,
+            order_by: e.sequence
+        )
+
+      assert Enum.count(timeline, &(&1.type == "run.running")) == 2
+      assert Enum.count(timeline, &(&1.type == "run.failed")) == 1
+      assert Enum.count(timeline, &(&1.type == "run.completed")) == 1
+      assert ShoestringWeb.CobblerPresentation.derive_goal_state(timeline) == :completed
 
       {:ok, goal_view, _} = live(build_conn(), "/cobbler/goals/#{run.goal_id}")
 

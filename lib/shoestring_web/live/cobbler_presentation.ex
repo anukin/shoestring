@@ -1004,6 +1004,10 @@ defmodule ShoestringWeb.CobblerPresentation do
 
       {:error, _reason} ->
         case {state, event} do
+          # A continuation reuses its durable claim. Its new admission puts
+          # this read-only fold in queued without another claim-acquired event;
+          # run.starting is evidence that the normal dispatch gate allowed it.
+          {:queued, :dispatch_started} -> {:ok, :working}
           {:working, :dispatch_started} -> {:ok, :working}
           {:checkpointing, :dispatch_started} -> {:ok, :checkpointing}
           {:checkpointing, :checkpoint_started} -> {:ok, :checkpointing}

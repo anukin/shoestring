@@ -30,6 +30,46 @@ defmodule ShoestringWeb.RunNewWorkerDeliveryTest do
     :ok
   end
 
+  test "the attributed direct Fake hatch also completes its success scenario", %{conn: conn} do
+    {:ok, view, _} = live(conn, "/runs/new")
+    view |> element("#btn-use-fixture") |> render_click()
+
+    {:error, {:live_redirect, %{to: "/runs/" <> run_id}}} =
+      view
+      |> form("#manual-run-form", %{
+        "run" => %{
+          "prompt" => "Direct Fake success",
+          "scenario" => "success",
+          "expert_bypass" => "true",
+          "confirmed_by" => "iter6-hermetic-operator"
+        }
+      })
+      |> render_submit()
+
+    try do
+      case Shoestring.Elves.whereis(run_id) do
+        nil ->
+          :ok
+
+        pid ->
+          ref = Process.monitor(pid)
+          assert_receive {:DOWN, ^ref, :process, ^pid, _}, 15_000
+      end
+
+      assert Repo.get!(RunRecord, run_id).status == "completed"
+
+      running =
+        Repo.one!(
+          from e in TrajectoryEvent, where: e.run_id == ^run_id and e.type == "run.running"
+        )
+
+      "pgid:" <> pgid = running.payload["process_id"]
+      assert Shoestring.Test.ElvesHelpers.group_members(String.to_integer(pgid)) == []
+    after
+      stop_owned_elf!(run_id)
+    end
+  end
+
   test "the worker reconstructs the submitted Fake success scenario", %{conn: conn} do
     {:ok, view, _} = live(conn, "/runs/new")
     view |> element("#btn-use-fixture") |> render_click()
