@@ -650,3 +650,35 @@ procedural: this PR's independent review, and a merge by the human.
   back clean on all three files. The model's final answer quoted an absolute
   worktree path, and `ls -la` output carried the login name. Both are
   substituted same-length, as `$WORKSPACE`/`$REDACTED_PATH` and padding.
+
+---
+
+*Everything below was written after the terminal-projection repair. §§1–15
+stand as committed at `70af28e`; no live capture in them was altered.*
+
+## 16. Terminal-projection repair (hermetic; L8 FAIL unchanged)
+
+- **L8 stays FAIL as registered** (§14.2): the trajectory ends the lease
+  `lease.expired` → `lease.checkpoint_required` while the stored lease row
+  read `renewal_due` (and the run row `running`). That measurement is not
+  redefined after the fact.
+- **Repair (VERIFIED hermetic, `terminal-projection-fix.md`):** after
+  successfully committing terminal events, the Elf now promptly projects its
+  own goal — in `commit_terminal/2` and, mirrored, in `crash_land/0` — so
+  the durable lease/run rows reflect the canonical terminal state without a
+  caller manually projecting. Projector errors are logged observably (`elf
+  terminal projection failed` with run/dispatch identity) and never undo the
+  committed terminal, crash the Elf, or duplicate events.
+- **Hermetic post-fix validation:** the new `elf_terminal_projection_test.exs`
+  reproduces the live shape (grant → `renewal_due` → mid-flow projection →
+  refusal on the completed outcome → checkpoint + `run.completed`) with no
+  post-terminal test projection, and asserts the lease row
+  `checkpoint_required` (no live status), the run row `completed`, the exact
+  canonical sequence/counts, checkpoint before completion, and no
+  suspension/wake/redispatch — plus interrupted-decline and crash-land
+  twins. All three fail on base `70af28e` for the stale-row reason and pass
+  with the fix. The carried "run rows not projected after start" finding
+  (§12) is repaired on the terminal path by the same change.
+- **Not claimed:** no post-fix live pass. No new live remeasurement was run
+  for this repair, and none is implied. Acceptance 8 remains MEASURED with
+  no product advantage shown (§9).

@@ -625,6 +625,8 @@ defmodule Shoestring.Elves.Elf do
         _kind, _reason -> :ok
       end
 
+    _ = project_after_terminal(state)
+
     {:stop, :normal, %{state | terminal: terminal}}
   end
 
@@ -1226,6 +1228,34 @@ defmodule Shoestring.Elves.Elf do
   # on any other repo (tests with a raising or scratch repo) reads rows it
   # cannot have projected, so it keeps its previous behaviour.
   defp project_own_goal(_state), do: {:error, :not_the_application_repo}
+
+  # Best-effort idempotent final projection after a committed terminal
+  # (L8 terminal-projection closeout): the canonical trajectory events are
+  # already durable when this runs, so advancing the goal's `harness`
+  # projector only catches the lease/run read-model rows up — it never
+  # appends, never re-dispatches, and never changes the terminal outcome.
+  # A projector failure is logged observably with run/dispatch identity and
+  # swallowed: it must not undo the committed terminal, crash the Elf, or
+  # duplicate any event. Never raises.
+  defp project_after_terminal(state) do
+    case project_own_goal(state) do
+      {:ok, _position} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("elf terminal projection failed",
+          run_id: state.run_id,
+          dispatch_id: state.dispatch_id,
+          reason: inspect(reason)
+        )
+
+        :ok
+    end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
 
   # The item.completed boundary, derived — not redefined — from the T2 rule:
   # this normalized event spent responses or tools. Mid-turn spend runs the
@@ -2353,6 +2383,7 @@ defmodule Shoestring.Elves.Elf do
         _ = persist_log_artifact(state)
         _ = maybe_terminal_checkpoint(state, terminal)
         _ = append_terminal_event(state, terminal)
+        _ = project_after_terminal(state)
         state = %{state | terminal: terminal}
         notify_terminal(state)
         {:terminal, state}
