@@ -674,10 +674,12 @@ defmodule ShoestringWeb.RunNewLive do
     end
   end
 
-  defp parse_scenario("success"), do: :success
-  defp parse_scenario("failure"), do: :failure
-  defp parse_scenario("quiet_exit"), do: :quiet_exit
-  defp parse_scenario(_), do: :success
+  defp parse_scenario("failure"), do: Shoestring.Harness.Fake.Scenario.mid_run_crash()
+
+  defp parse_scenario("quiet_exit"),
+    do: %Shoestring.Harness.Fake.Scenario{name: :quiet_exit, events: []}
+
+  defp parse_scenario(_), do: Shoestring.Harness.Fake.Scenario.normal_completion()
 
   defp parse_bounded_integer(val, default, min, max) do
     val
