@@ -140,8 +140,8 @@ defmodule ShoestringWeb.RunNewLive do
   # Manual runs are Cobbler commands, not direct database mutation (WP A):
   # the normal path records an operator-confirmed admission decision, submits
   # a `task.claim` command (exclusive global claim), enqueues gated dispatch
-  # (`require_cobbler_command: true`), and only then starts the supervising
-  # Elf for the already-persisted intent. Without a live owned claim nothing
+  # (`require_cobbler_command: true`), and leaves execution to DispatchWorker.
+  # Without a live owned claim nothing
   # starts: the claim-held panel is surfaced instead.
   #
   # The expert/test escape hatch (`expert_bypass` + `confirmed_by`) keeps the
@@ -202,6 +202,17 @@ defmodule ShoestringWeb.RunNewLive do
     }
 
     extensions =
+      if provider in ["codex", "claude"] do
+        extensions
+      else
+        Map.put(
+          extensions,
+          "shoestring.fake:scenario",
+          scenario_selection(run_params["scenario"])
+        )
+      end
+
+    extensions =
       if expert_bypass?(run_params) do
         Map.merge(extensions, %{
           "shoestring.manual:expert_bypass" => true,
@@ -259,7 +270,7 @@ defmodule ShoestringWeb.RunNewLive do
     if expert_bypass?(run_params) do
       hatch_start_run(run_params, socket, goal, candidate, bounds, request, identity, elf_opts)
     else
-      gated_start_run(socket, goal, candidate, bounds, request, identity, elf_opts, run_id)
+      gated_start_run(socket, goal, candidate, bounds, request, identity, run_id)
     end
   end
 
@@ -268,7 +279,7 @@ defmodule ShoestringWeb.RunNewLive do
   # persistence, and durable delivery: ordinary manual execution cannot
   # run without a persisted execution lease. `run_id:`/`dispatch_id:`
   # keep the run row on the identity the UI navigates to.
-  defp gated_start_run(socket, goal, candidate, bounds, request, identity, elf_opts, run_id) do
+  defp gated_start_run(socket, goal, candidate, bounds, request, identity, run_id) do
     with {:ok, snapshot} <- record_manual_observation(goal, identity),
          {:ok, admission} <-
            append_manual_admission(goal, candidate, bounds, snapshot.snapshot_id),
@@ -289,7 +300,7 @@ defmodule ShoestringWeb.RunNewLive do
       case gated do
         %{disposition: :leased, run: run, dispatch: dispatch}
         when not is_nil(run) and not is_nil(dispatch) ->
-          gated_start_elf(socket, request, dispatch, elf_opts)
+          {:noreply, push_navigate(socket, to: ~p"/runs/#{request.dispatch_id}")}
 
         %{disposition: :leased} ->
           # Identical replay: run + delivery already exist from the first
@@ -329,30 +340,6 @@ defmodule ShoestringWeb.RunNewLive do
         {:noreply,
          socket
          |> put_flash(:error, "Cobbler admission failed. This run was not started.")
-         |> assign(:form, to_form(socket.assigns.form.params, as: :run))}
-    end
-  end
-
-  # Starts the supervising Elf for granted+dispatched intent, then navigates
-  # to the run page. Delivery + Elf start stay separate steps so a start
-  # failure is reported honestly instead of recorded as success.
-  defp gated_start_elf(socket, request, dispatch, elf_opts) do
-    case Elves.start_elf(request, dispatch, elf_opts) do
-      {:ok, _pid} ->
-        {:noreply, push_navigate(socket, to: ~p"/runs/#{request.dispatch_id}")}
-
-      {:ok, :already_running, _pid} ->
-        {:noreply, push_navigate(socket, to: ~p"/runs/#{request.dispatch_id}")}
-
-      {:error, reason} ->
-        Logger.warning("Failed to start Elf for gated run: #{inspect(reason)}")
-
-        {:noreply,
-         socket
-         |> put_flash(
-           :error,
-           "Dispatch was recorded but the Elf failed to start. Check server logs."
-         )
          |> assign(:form, to_form(socket.assigns.form.params, as: :run))}
     end
   end
@@ -673,6 +660,9 @@ defmodule ShoestringWeb.RunNewLive do
         end
     end
   end
+
+  defp scenario_selection(name) when name in ["failure", "quiet_exit"], do: name
+  defp scenario_selection(_), do: "success"
 
   defp parse_scenario("failure"), do: Shoestring.Harness.Fake.Scenario.mid_run_crash()
 
