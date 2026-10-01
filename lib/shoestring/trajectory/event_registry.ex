@@ -20,6 +20,38 @@ defmodule Shoestring.Trajectory.EventRegistry do
   alias Shoestring.Trajectory.EventEnvelope
 
   @payload_schemas %{
+    "cobbler.plan.goal_defined" => %{
+      1 => %{
+        required: [:request_id, :request_digest, :request],
+        optional: [],
+        uuid_fields: [],
+        types: %{request: :map}
+      }
+    },
+    "cobbler.plan.revision_proposed" => %{
+      1 => %{
+        required: [:request_id, :request_digest, :request],
+        optional: [],
+        uuid_fields: [],
+        types: %{request: :map}
+      }
+    },
+    "cobbler.plan.revision_approved" => %{
+      1 => %{
+        required: [:request_id, :request_digest, :request],
+        optional: [],
+        uuid_fields: [],
+        types: %{request: :map}
+      }
+    },
+    "cobbler.plan.revision_rejected" => %{
+      1 => %{
+        required: [:request_id, :request_digest, :request],
+        optional: [],
+        uuid_fields: [],
+        types: %{request: :map}
+      }
+    },
     "goal.created" => %{
       1 => %{
         required: [:title],
@@ -551,10 +583,30 @@ defmodule Shoestring.Trajectory.EventRegistry do
           | {:error, {:unknown_event_version, term(), term()}}
   def validate_payload(type, version, payload, opts \\ []) do
     case schema_for(type, version) do
-      {:ok, schema} -> validate_payload_schema(type, version, schema, payload, opts)
-      error -> error
+      {:ok, schema} ->
+        with :ok <- validate_plan_payload(type, payload) do
+          validate_payload_schema(type, version, schema, payload, opts)
+        end
+
+      error ->
+        error
     end
   end
+
+  defp validate_plan_payload("cobbler.plan." <> _ = type, payload) do
+    case Shoestring.Cobbler.PlanContract.event(type, payload) do
+      :ok ->
+        :ok
+
+      {:error, errors} ->
+        changeset =
+          change({%{}, %{}}) |> add_error(:base, "invalid plan contract", errors: errors)
+
+        {:error, {:invalid_payload, type, 1, changeset}}
+    end
+  end
+
+  defp validate_plan_payload(_type, _payload), do: :ok
 
   defp schema_for(type, version) do
     case Map.fetch(@payload_schemas, type) do
@@ -694,6 +746,11 @@ defmodule Shoestring.Trajectory.EventRegistry do
         payload
     end
   end
+
+  # PlanContract already bounds the deeper plan schema and scans every string.
+  # The older normalized harness scanner's depth-4 limit cannot represent it.
+  defp validate_payload_safety(changeset, "cobbler.plan." <> _, _schema, _payload),
+    do: changeset
 
   defp validate_payload_safety(changeset, type, schema, payload) do
     if normalized_harness_event?(type) do

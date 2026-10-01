@@ -261,4 +261,34 @@ defmodule Shoestring.Cobbler do
   def lease_bounds(lease) do
     LeaseBounds.new(lease)
   end
+
+  defdelegate create_plan_goal(owner_id, goal_id, request_id, contract, opts \\ []),
+    to: Shoestring.Cobbler.Plans,
+    as: :create_goal
+
+  defdelegate propose_plan(owner_id, goal_id, request_id, base_revision, content, opts \\ []),
+    to: Shoestring.Cobbler.Plans,
+    as: :propose
+
+  defdelegate approve_plan(owner_id, goal_id, request_id, revision_id, digest, opts \\ []),
+    to: Shoestring.Cobbler.Plans,
+    as: :approve
+
+  defdelegate reject_plan(owner_id, goal_id, request_id, revision_id, digest, reason, opts \\ []),
+    to: Shoestring.Cobbler.Plans,
+    as: :reject
+
+  defdelegate read_plan(owner_id, goal_id, opts \\ []), to: Shoestring.Cobbler.Plans, as: :read
+
+  defdelegate plan_revision(owner_id, goal_id, revision_id, opts \\ []),
+    to: Shoestring.Cobbler.Plans,
+    as: :revision
+
+  defdelegate active_plan_authority(owner_id, goal_id, opts \\ []),
+    to: Shoestring.Cobbler.Plans,
+    as: :active_authority
+
+  defdelegate rebuild_plans(owner_id, goal_id, opts \\ []),
+    to: Shoestring.Cobbler.Plans,
+    as: :rebuild
 end
