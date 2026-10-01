@@ -152,6 +152,37 @@ present and empty, so "no constraints" has exactly one representation.
   plan was ever approved must still contain every task id that approved
   lineage introduced.
 
+## Idempotency rests on the index, not on the transaction mode
+
+Both `propose/3` and `approve/3`/`reject/3` read to detect a replay and then
+write. `mode: :immediate` closes that window by taking SQLite's write lock
+at BEGIN — but only when it is in effect. Inside an enclosing transaction
+(the ExUnit SQL sandbox, or any caller that wraps this store in its own
+transaction) Exqlite issues a SAVEPOINT and takes no write lock, so the
+window is open.
+
+The unique indexes are always in effect, so they are what idempotency rests
+on. A writer that loses `(goal_id, decision_id)` or `(goal_id, proposal_id)`
+**converges on the winner's row** and reports `:replayed`, because a request
+that lost a race has not been refused — it has already succeeded. Digest
+and decision agreement remain the guard: different content under the same
+id, or a different decision kind, is still a conflict. A *different*
+decision id for an already decided revision is still refused, because that
+revision is spoken for.
+
+## Storage failures are structured, never exceptions
+
+Two deliberately distinct classes, and the list is closed:
+
+| Outcome | Meaning | What the caller should do |
+| --- | --- | --- |
+| `{:error, {:database_busy, message}}` | the write lock was refused or the connection was unavailable; nothing was written | retry the same id; it converges |
+| `{:error, {:database_conflict, detail}}` | the write met storage constraints this code did not anticipate; the transaction rolled back whole | **re-read** first — durable state may have moved |
+
+A programming error (`ArgumentError`, `FunctionClauseError`, a bad query)
+still crashes loudly rather than being dressed up as a transient storage
+problem.
+
 ## Events are the authority
 
 | Event | Carries |

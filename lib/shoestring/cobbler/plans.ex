@@ -43,11 +43,23 @@ defmodule Shoestring.Cobbler.Plans do
     decisions, and the active authority purely from canonical
     `cobbler.plan.*` events and reports divergence from stored rows without
     mutating anything.
-  - **Contention is a structured outcome.** If SQLite refuses the write
-    lock, the whole transaction rolled back and the caller gets
-    `{:error, {:database_busy, message}}` rather than an exception. The
-    same `proposal_id` or `decision_id` may simply be retried; idempotency
-    makes the retry converge.
+  - **Contention is a structured outcome, never an exception.** If the write
+    lock is refused the caller gets `{:error, {:database_busy, message}}`;
+    if the storage layer rejects the write for a reason this code did not
+    anticipate it gets `{:error, {:database_conflict, detail}}`. Either way
+    the transaction rolled back whole. A `:database_busy` request may be
+    retried as-is and will converge; a `:database_conflict` caller should
+    re-read first, because durable state may have moved.
+  - **Idempotency rests on the index, not on the transaction mode.** This
+    holds on both sides: a proposal that loses `(goal_id, proposal_id)` and
+    a decision that loses `(goal_id, decision_id)` each converge on the
+    winner's row.
+    `mode: :immediate` closes the read-then-write window only when it is
+    actually in effect, and inside an enclosing transaction Exqlite issues
+    a SAVEPOINT instead. A decision that loses the `(goal_id, decision_id)`
+    unique index therefore converges on the winner's row — which is the
+    replay the request always meant — rather than reporting a failure for
+    a request that in fact succeeded.
   - **Proposals are inert.** Nothing in this module spawns a process,
     enqueues a job, grants a lease, observes capacity, or dispatches. A
     proposed plan sits there until a human decides on it, and an approved
@@ -145,9 +157,33 @@ defmodule Shoestring.Cobbler.Plans do
       |> run_transaction(fn ->
         propose_transaction(repo, goal_id, proposal_id, authored_by, parent, contract, now(opts))
       end)
+      |> resolve_proposal_replay(repo, goal_id, proposal_id, contract)
       |> publish_result(opts)
     end
   end
+
+  # A proposal that lost its replay race rolled its whole transaction back,
+  # so there is nothing to undo and nothing was written twice. Whatever the
+  # transaction said on the way down — a lost unique index, but equally a
+  # lineage or retention check that only fired because the stale read made
+  # this look like a NEW revision — the durable truth is now visible: this
+  # proposal id already carries exactly this content.
+  #
+  # Identical content under an identical proposal id IS the same request,
+  # so the honest answer is the replay it always meant. The digest equality
+  # is the whole guard: different content under the same id keeps its
+  # original refusal, and a proposal id that does not exist keeps its own.
+  defp resolve_proposal_replay({:error, _reason} = result, repo, goal_id, proposal_id, contract) do
+    case existing_revision_by_proposal(repo, goal_id, proposal_id) do
+      %PlanRevisionRecord{digest: digest} = existing when digest == contract.digest ->
+        {:ok, %{revision: existing, outcome: :replayed, events: []}}
+
+      _other ->
+        result
+    end
+  end
+
+  defp resolve_proposal_replay(result, _repo, _goal_id, _proposal_id, _contract), do: result
 
   defp propose_transaction(repo, goal_id, proposal_id, authored_by, parent, contract, now) do
     case existing_revision_by_proposal(repo, goal_id, proposal_id) do
@@ -187,8 +223,11 @@ defmodule Shoestring.Cobbler.Plans do
       )
       |> repo.insert()
       |> case do
-        {:ok, row} -> row
-        {:error, changeset} -> repo.rollback({:plan_revision_insert_failed, changeset})
+        {:ok, row} ->
+          row
+
+        {:error, changeset} ->
+          repo.rollback(revision_insert_refusal(repo, goal_id, proposal_id, contract, changeset))
       end
 
     events =
@@ -329,19 +368,140 @@ defmodule Shoestring.Cobbler.Plans do
     end
   end
 
+  # The decision row is inserted BEFORE any mutation, because it is the
+  # idempotency token: if this writer lost the race, nothing it did needs
+  # undoing and it can simply converge on the winner's row.
+  #
+  # The preceding `existing_decision/3` lookup is a read, and a read
+  # followed by a write is a window. `mode: :immediate` closes that window
+  # by taking SQLite's write lock at BEGIN — but only when it is actually
+  # in effect. Inside an enclosing transaction (the ExUnit SQL sandbox, and
+  # any caller that wraps this store in its own transaction) Exqlite issues
+  # a SAVEPOINT instead and no write lock is taken, so the window is wide
+  # open. Idempotency must therefore rest on the unique index, which is
+  # always in effect, and not on the transaction mode, which is not.
   defp record_decision(repo, goal_id, decision, now) do
-    revision = load_decidable_revision(repo, goal_id, decision)
+    case load_decidable_revision(repo, goal_id, decision) do
+      {:proposed, revision} ->
+        case insert_decision(repo, goal_id, revision, decision, now) do
+          {:ok, decision_row} ->
+            complete_decision(repo, goal_id, revision, decision_row, decision, now)
+
+          # Another writer recorded this exact decision id first.
+          :lost_idempotency_race ->
+            converge_or_refuse(repo, goal_id, decision, {:decision_vanished, decision})
+        end
+
+      # The revision already carries a decision. Reaching here at all means
+      # the replay lookup missed it, so the real question is WHOSE decision
+      # it is: ours — in which case this request already succeeded and must
+      # converge on its own recorded result — or someone else's, in which
+      # case the revision is spoken for and the refusal stands.
+      {:already_decided, revision} ->
+        converge_or_refuse(repo, goal_id, decision, {:not_pending, revision})
+    end
+  end
+
+  # The one place that answers "is this request a replay?" once the cheap
+  # lookup has already missed. It re-reads inside the same transaction and
+  # defers to `replay_decision/4`, so a decision id that disagrees on kind,
+  # revision, or digest is still a conflict and is never laundered into a
+  # successful replay.
+  defp converge_or_refuse(repo, goal_id, decision, fallback) do
+    case existing_decision(repo, goal_id, decision.decision_id) do
+      %PlanDecisionRecord{} = existing ->
+        replay_decision(repo, goal_id, existing, decision)
+
+      nil ->
+        repo.rollback(refusal(fallback))
+    end
+  end
+
+  defp refusal({:not_pending, revision}) do
+    {:plan_revision_not_pending,
+     %{"revision_number" => revision.revision_number, "status" => revision.status}}
+  end
+
+  defp refusal({:decision_vanished, decision}) do
+    {:plan_decision_vanished, %{"decision_id" => decision.decision_id}}
+  end
+
+  # The twin of the decision race, on the proposal side. `propose/3` reads
+  # `(goal_id, proposal_id)` to detect a replay and reads `max(revision_number)`
+  # to allocate the next number; both are reads followed by a write, and
+  # both windows are open whenever `mode: :immediate` is not in effect.
+  # The unique indexes catch the loser either way, and the refusal it gets
+  # must say which race it lost rather than leaking a changeset.
+  defp revision_insert_refusal(repo, goal_id, proposal_id, contract, changeset) do
+    cond do
+      constraint_violated?(changeset, "cobbler_plan_revisions_goal_id_proposal_id_index") ->
+        proposal_refusal(repo, goal_id, proposal_id, contract)
+
+      # Another revision took this number first. Nothing is wrong with the
+      # plan; the caller may re-send the SAME proposal id and it will take
+      # the next free number and converge.
+      constraint_violated?(changeset, "cobbler_plan_revisions_goal_id_revision_number_index") ->
+        {:plan_revision_number_taken, %{"proposal_id" => proposal_id}}
+
+      true ->
+        {:plan_revision_insert_failed, changeset}
+    end
+  end
+
+  # Names the conflict for the losing writer. The identical-content case
+  # needs no name here: `resolve_proposal_replay/5` sees it after the
+  # rollback and reports the replay.
+  defp proposal_refusal(repo, goal_id, proposal_id, contract) do
+    case existing_revision_by_proposal(repo, goal_id, proposal_id) do
+      %PlanRevisionRecord{digest: digest} = existing when digest != contract.digest ->
+        {:plan_proposal_conflict,
+         %{
+           "proposal_id" => proposal_id,
+           "existing_digest" => existing.digest,
+           "incoming_digest" => contract.digest
+         }}
+
+      _other ->
+        {:plan_proposal_race_lost, %{"proposal_id" => proposal_id}}
+    end
+  end
+
+  defp insert_decision(repo, goal_id, revision, decision, now) do
+    goal_id
+    |> PlanDecisionRecord.insert_changeset(revision, decision, now)
+    |> repo.insert()
+    |> case do
+      {:ok, row} ->
+        {:ok, row}
+
+      {:error, changeset} ->
+        cond do
+          constraint_violated?(changeset, "cobbler_plan_decisions_goal_id_decision_id_index") ->
+            :lost_idempotency_race
+
+          # A DIFFERENT decision id already decided this revision. That is
+          # not a replay and must not converge: the revision is spoken for.
+          constraint_violated?(changeset, "cobbler_plan_decisions_plan_revision_id_index") ->
+            repo.rollback(
+              {:plan_revision_not_pending,
+               %{"revision_number" => revision.revision_number, "status" => "decided"}}
+            )
+
+          true ->
+            repo.rollback({:plan_decision_insert_failed, changeset})
+        end
+    end
+  end
+
+  defp constraint_violated?(changeset, index_name) do
+    Enum.any?(changeset.errors, fn {_field, {_message, opts}} ->
+      Keyword.get(opts, :constraint) == :unique and
+        Keyword.get(opts, :constraint_name) == index_name
+    end)
+  end
+
+  defp complete_decision(repo, goal_id, revision, decision_row, decision, now) do
     superseded = supersede_for(repo, goal_id, decision, revision, now)
-
-    decision_row =
-      goal_id
-      |> PlanDecisionRecord.insert_changeset(revision, decision, now)
-      |> repo.insert()
-      |> case do
-        {:ok, row} -> row
-        {:error, changeset} -> repo.rollback({:plan_decision_insert_failed, changeset})
-      end
-
     next_status = if decision.kind == "approve", do: "approved", else: "rejected"
 
     decided_revision =
@@ -380,13 +540,13 @@ defmodule Shoestring.Cobbler.Plans do
         )
 
       %PlanRevisionRecord{digest: digest} = revision when digest == decision.digest ->
+        # Classify rather than refuse. "Already decided" is only a refusal
+        # once we know the decider is someone else, and that answer lives
+        # in the decisions table, not here.
         if revision.status == "proposed" do
-          revision
+          {:proposed, revision}
         else
-          repo.rollback(
-            {:plan_revision_not_pending,
-             %{"revision_number" => revision.revision_number, "status" => revision.status}}
-          )
+          {:already_decided, revision}
         end
 
       %PlanRevisionRecord{} = revision ->
@@ -1070,18 +1230,33 @@ defmodule Shoestring.Cobbler.Plans do
     last + 1
   end
 
-  # `mode: :immediate` takes SQLite's write lock at BEGIN, where the
-  # connection's `busy_timeout` applies. Under heavy contention that lock
-  # can still be refused, and Exqlite raises rather than returning. Every
-  # error leaving this module is a structured tuple, so the raise is
-  # converted here instead of escaping as an exception. The whole
-  # transaction rolled back, so a caller may safely retry the same
-  # `proposal_id` or `decision_id`: idempotency makes the retry converge.
+  # Every error leaving this module is a structured tuple. The storage layer
+  # does not cooperate with that on its own: under contention Exqlite and
+  # Ecto RAISE rather than return, so a caller would get a crash where the
+  # contract promises a refusal it can branch on. Those raises are converted
+  # here, in two deliberately distinct classes:
+  #
+  #   * `:database_busy` — the write lock was refused or the connection was
+  #     unavailable. Nothing was written. A plain retry of the same
+  #     `proposal_id` or `decision_id` is safe and converges.
+  #   * `:database_conflict` — the write met the storage layer's own
+  #     constraints in a way this code did not anticipate. The transaction
+  #     rolled back whole, but the caller should RE-READ before deciding
+  #     what to do, because durable state may have moved underneath it.
+  #
+  # The list is closed on purpose. A programming error (ArgumentError,
+  # FunctionClauseError, a bad query) must still crash loudly instead of
+  # being dressed up as a transient storage problem.
   defp run_transaction(repo, fun) do
     repo.transaction(fun, mode: :immediate)
   rescue
     error in [Exqlite.Error, DBConnection.ConnectionError] ->
       {:error, {:database_busy, Exception.message(error)}}
+
+    error in [Ecto.StaleEntryError, Ecto.ConstraintError, Ecto.MultiplePrimaryKeyError] ->
+      {:error,
+       {:database_conflict,
+        %{"kind" => inspect(error.__struct__), "message" => Exception.message(error)}}}
   end
 
   defp publish_result({:ok, %{events: events} = result}, opts) do

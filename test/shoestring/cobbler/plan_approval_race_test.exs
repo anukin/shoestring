@@ -67,7 +67,7 @@ defmodule Shoestring.Cobbler.PlanApprovalRaceTest do
         max_concurrency: 2,
         timeout: :infinity
       )
-      |> Enum.map(fn {:ok, result} -> result end)
+      |> Enum.map(&unwrap/1)
 
     recorded = Enum.count(results, &match?({:ok, %{outcome: :recorded}}, &1))
 
@@ -106,7 +106,7 @@ defmodule Shoestring.Cobbler.PlanApprovalRaceTest do
         max_concurrency: 2,
         timeout: :infinity
       )
-      |> Enum.map(fn {:ok, result} -> result end)
+      |> Enum.map(&unwrap/1)
 
     assert length(results) == 2
 
@@ -154,7 +154,47 @@ defmodule Shoestring.Cobbler.PlanApprovalRaceTest do
     end
   end
 
-  defp busy?(results), do: Enum.any?(results, &match?({:error, {:database_busy, _message}}, &1))
+  defp busy?(results), do: Enum.any?(results, &storage_failure?/1)
+
+  # `Task.async_stream` reports a raised exception as `{:exit, reason}`. It
+  # must fail this test by NAME, not by blowing up an unrelated pattern
+  # match, because "the API raised" is precisely one of the things these
+  # tests exist to catch.
+  defp unwrap({:ok, result}), do: result
+  defp unwrap({:exit, reason}), do: {:raised, reason}
+
+  defp allowed_identical_outcome?({:ok, %{outcome: outcome}})
+       when outcome in [:recorded, :replayed],
+       do: true
+
+  defp allowed_identical_outcome?(result), do: storage_failure?(result)
+
+  # The two storage-forced outcomes. Both rolled the whole transaction
+  # back, so neither can have double-authorized. `:database_conflict` is
+  # NOT a widening of what this test tolerates: before the fix the same
+  # condition escaped as a raw exception, which this test now also refuses
+  # by name via `unwrap/1`.
+  defp storage_failure?({:error, {:database_busy, _message}}), do: true
+  defp storage_failure?({:error, {:database_conflict, _detail}}), do: true
+  defp storage_failure?(_result), do: false
+
+  # A failing assertion must name WHICH outcome was unexpected. Inspecting
+  # the raw results prints whole revision structs and the pretty-printer
+  # truncates the interesting element away, so collapse each result to a
+  # compact tag. No fixture content and no identifiers are printed.
+  defp summarize(results) do
+    results
+    |> Enum.map(fn
+      {:ok, %{outcome: outcome}} -> "ok:#{outcome}"
+      {:ok, other} -> "ok:#{inspect(Map.keys(other))}"
+      {:error, reason} when is_tuple(reason) -> "error:#{inspect(elem(reason, 0))}"
+      {:error, reason} -> "error:#{inspect(reason)}"
+      {:raised, reason} -> "RAISED:#{inspect(reason, limit: 2, printable_limit: 120)}"
+      other -> "other:#{inspect(other, limit: 3, printable_limit: 120)}"
+    end)
+    |> Enum.sort()
+    |> Enum.join(", ")
+  end
 
   test "the same approval replayed concurrently records one decision and one event", %{
     repo: repo
@@ -169,18 +209,15 @@ defmodule Shoestring.Cobbler.PlanApprovalRaceTest do
         max_concurrency: 4,
         timeout: :infinity
       )
-      |> Enum.map(fn {:ok, result} -> result end)
+      |> Enum.map(&unwrap/1)
 
-    # Under contention a writer may be refused the SQLite write lock. That
-    # is a structured, rolled-back outcome, never an exception and never a
-    # partial write — so the only outcomes allowed here are "recorded",
-    # "replayed", and "busy".
-    assert Enum.all?(results, fn
-             {:ok, %{outcome: outcome}} when outcome in [:recorded, :replayed] -> true
-             {:error, {:database_busy, _message}} -> true
-             _other -> false
-           end),
-           "unexpected concurrent approval outcomes: #{inspect(results)}"
+    # An identical re-approval always MEANS the same thing, so it either
+    # succeeds (recorded, or replayed onto the winner's row) or it fails in
+    # a way the storage layer forced and that rolled back whole. It never
+    # raises, and it never reports a plan-level refusal: a request that
+    # merely lost a race has not been refused, it has already succeeded.
+    assert Enum.all?(results, &allowed_identical_outcome?/1),
+           "unexpected concurrent approval outcomes: #{summarize(results)}"
 
     # Whatever the interleaving, the decision is recorded exactly once.
     assert Enum.count(results, &match?({:ok, %{outcome: :recorded}}, &1)) == 1

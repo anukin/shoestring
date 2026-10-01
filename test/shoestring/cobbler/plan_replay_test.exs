@@ -10,7 +10,7 @@ defmodule Shoestring.Cobbler.PlanReplayTest do
   """
   use Shoestring.DataCase, async: false
 
-  alias Shoestring.Cobbler.{PlanContract, PlanRevisionRecord, Plans}
+  alias Shoestring.Cobbler.{PlanContract, PlanDecisionRecord, PlanRevisionRecord, Plans}
   alias Shoestring.Repo
   alias Shoestring.Trajectory
   alias Shoestring.Trajectory.{Projector, TrajectoryEvent}
@@ -146,6 +146,85 @@ defmodule Shoestring.Cobbler.PlanReplayTest do
 
       plan_events = Enum.filter(events, &(&1.type in Plans.event_types()))
       assert length(plan_events) == 6
+    end
+
+    test "reconstructs the whole state after the derived rows are destroyed" do
+      %{goal: goal, first: first, second: second, third: third} = seeded_goal()
+
+      # Destroy the derived projections entirely. Revisions cascade to
+      # decisions, so after this the ONLY surviving record of what was
+      # planned, approved, superseded, and rejected is the canonical event
+      # log. This is the real test of "events are the authority": a
+      # comparison against surviving rows would prove nothing here, because
+      # there are no surviving rows to compare against.
+      Repo.delete_all(from(revision in PlanRevisionRecord, where: revision.goal_id == ^goal.id))
+
+      assert Repo.aggregate(
+               from(r in PlanRevisionRecord, where: r.goal_id == ^goal.id),
+               :count,
+               :id
+             ) == 0
+
+      assert Repo.aggregate(
+               from(d in PlanDecisionRecord, where: d.goal_id == ^goal.id),
+               :count,
+               :id
+             ) == 0
+
+      assert Plans.authority(goal.id) == nil
+
+      assert {:ok, rebuilt} = Plans.rebuild(goal.id)
+
+      # Every revision comes back, with its lineage, status, author, and
+      # task ordering.
+      assert Enum.map(rebuilt.revisions, & &1["revision_number"]) == [1, 2, 3]
+      assert Enum.map(rebuilt.revisions, & &1["status"]) == ["superseded", "approved", "rejected"]
+
+      assert Enum.map(rebuilt.revisions, & &1["parent_revision_number"]) == [nil, 1, 2]
+
+      assert Enum.all?(rebuilt.revisions, &(&1["authored_by"] == "human:planner"))
+
+      # Every decision comes back, bound to the digest it was taken against.
+      assert Enum.map(rebuilt.decisions, &{&1["revision_number"], &1["kind"]}) ==
+               [{1, "approve"}, {2, "approve"}, {3, "reject"}]
+
+      assert Enum.map(rebuilt.decisions, & &1["digest"]) ==
+               [first.digest, second.digest, third.digest]
+
+      rejected = Enum.find(rebuilt.decisions, &(&1["kind"] == "reject"))
+      assert rejected["reason"] == "The dependency order does not match the repository."
+
+      # The active authority comes back, and its digest is RECOMPUTED from
+      # the reconstructed content rather than copied from the event.
+      assert rebuilt.authority["revision_number"] == 2
+      assert rebuilt.authority["digest"] == second.digest
+      assert rebuilt.authority["digest"] == PlanContract.digest(rebuilt.authority["content"])
+      assert rebuilt.authority["content"] == second.content
+      assert rebuilt.authority["ordered_task_ids"] == ["survey", "widen", "narrow", "verify"]
+
+      # Content comes back for the non-authoritative revisions too, so the
+      # superseded and rejected plans are not lost with their rows.
+      assert Enum.at(rebuilt.revisions, 0)["content"] == first.content
+      assert Enum.at(rebuilt.revisions, 2)["content"] == third.content
+
+      # And the loss is reported, not silently papered over.
+      refute rebuilt.consistent?
+      assert Enum.any?(rebuilt.divergences, &(&1 =~ "stored but absent" or &1 =~ "not stored"))
+    end
+
+    test "reconstruction survives destroying the derived rows AND rebuilding projections" do
+      %{goal: goal, second: second} = seeded_goal()
+
+      Repo.delete_all(from(revision in PlanRevisionRecord, where: revision.goal_id == ^goal.id))
+      assert {:ok, _position} = Projector.rebuild(goal.id)
+
+      assert {:ok, rebuilt} = Plans.rebuild(goal.id)
+
+      assert rebuilt.authority["revision_number"] == 2
+      assert rebuilt.authority["digest"] == second.digest
+      assert rebuilt.authority["content"] == second.content
+      assert length(rebuilt.revisions) == 3
+      assert length(rebuilt.decisions) == 3
     end
 
     test "a goal with no plan events rebuilds to an empty, authority-free state" do

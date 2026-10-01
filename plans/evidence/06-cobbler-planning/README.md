@@ -20,3 +20,6 @@ schema without runtime integration; UNVERIFIED means not verified.
   durable plan revision / approval / rejection foundation and its event
   replay. No executor, no model planner, no amendment orchestration, no
   approval UI.
+- `plan-foundation-race-fix.md` — the independently reproduced red gate on
+  PR #89 at `f265da6`, its root cause in the plan store's read-then-write
+  idempotency windows and its structured-error contract, and the fix.
