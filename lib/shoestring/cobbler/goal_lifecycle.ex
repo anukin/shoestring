@@ -175,6 +175,8 @@ defmodule Shoestring.Cobbler.GoalLifecycle do
   def transition(:queued, {:admission_decision, :defer_until}), do: {:ok, :sleeping}
   def transition(:working, {:admission_decision, :defer_until}), do: {:ok, :sleeping}
   def transition(:checkpointing, {:admission_decision, :defer_until}), do: {:ok, :sleeping}
+  def transition(:working, {:admission_decision, :admit}), do: {:ok, :working}
+  def transition(:checkpointing, {:admission_decision, :admit}), do: {:ok, :checkpointing}
 
   # Command outcomes.
   def transition(:queued, {:command_outcome, :claimed}), do: {:ok, :dispatching}

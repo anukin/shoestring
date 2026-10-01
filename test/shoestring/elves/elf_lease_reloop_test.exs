@@ -161,7 +161,7 @@ defmodule Shoestring.Elves.ElfLeaseReloopTest do
     assert sequence_before?(ordered, {"lease.renewed", nil}, {:harness, "evt-out-4"})
 
     assert {:ok, _} = Projector.project(goal.id, clock: FixedClock)
-    assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status == "renewed"
+    assert Repo.get_by!(ExecutionLeaseRecord, run_id: run_id).status == "checkpoint_required"
   end
 
   test "exhausted lease expires at the outcome and the run completes", %{

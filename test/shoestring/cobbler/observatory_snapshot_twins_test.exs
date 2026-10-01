@@ -343,7 +343,7 @@ defmodule Shoestring.Cobbler.ObservatorySnapshotTwinsTest do
       assert_projector_healthy(goal.id)
 
       assert Repo.get!(RunRecord, run_id).status == "completed"
-      assert Repo.get!(ExecutionLeaseRecord, grant_id).status in ["renewed", "renewal_due"]
+      assert Repo.get!(ExecutionLeaseRecord, grant_id).status == "checkpoint_required"
 
       # The run's canonical terminal checkpoint is a row — the thing
       # `run.handoff` validation needs (`handoff_checkpoint_not_found` live).

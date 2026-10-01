@@ -56,6 +56,10 @@ plans/evidence/*
 !/plans/evidence/04-single-elf/**
 !/plans/evidence/05-quota-aware-mvp/
 !/plans/evidence/05-quota-aware-mvp/**
+!/plans/evidence/06-cobbler-planning/
+plans/evidence/06-cobbler-planning/*
+!/plans/evidence/06-cobbler-planning/README.md
+!/plans/evidence/06-cobbler-planning/hermetic-lifecycle.md
 
 # Editor, language-server, and OS metadata
 /.elixir_ls/

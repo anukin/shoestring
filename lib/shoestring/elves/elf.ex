@@ -1232,13 +1232,20 @@ defmodule Shoestring.Elves.Elf do
   # Best-effort idempotent final projection after a committed terminal
   # (L8 terminal-projection closeout): the canonical trajectory events are
   # already durable when this runs, so advancing the goal's `harness`
-  # projector only catches the lease/run read-model rows up — it never
-  # appends, never re-dispatches, and never changes the terminal outcome.
+  # projector catches the lease/run read-model rows up. Successful terminals
+  # also retire their active lease through the ordinary lease writer below;
+  # this never re-dispatches or changes the terminal outcome.
   # A projector failure is logged observably with run/dispatch identity and
   # swallowed: it must not undo the committed terminal, crash the Elf, or
   # duplicate any event. Never raises.
   defp project_after_terminal(state) do
-    case project_own_goal(state) do
+    result =
+      with {:ok, _position} <- project_own_goal(state),
+           :ok <- settle_terminal_lease(state) do
+        project_own_goal(state)
+      end
+
+    case result do
       {:ok, _position} ->
         :ok
 
@@ -1256,6 +1263,36 @@ defmodule Shoestring.Elves.Elf do
   catch
     _kind, _reason -> :ok
   end
+
+  # A successfully completed run retires its active grant. The checkpoint and
+  # terminal have already committed; settle the lease through its ordinary
+  # writer, without a suspension, wake, or replacement dispatch. Renewal
+  # allowances are retired as well: completed work cannot consume another
+  # epoch. Declined leases retain their recorded boundary outcome.
+  defp settle_terminal_lease(%{terminal: %{class: :completed}} = state) do
+    case active_lease_for(state) do
+      {:ok, %{id: grant_id, status: status}}
+      when status in ["granted", "active", "renewal_due", "renewed"] ->
+        opts = [repo: state.repo, now: Clock.now(state.clock)]
+
+        with {:ok, %{state: :revoked}} <-
+               Shoestring.Cobbler.Leases.transition(state.goal_id, grant_id, :revoke, opts),
+             {:ok, %{state: :checkpoint_required}} <-
+               Shoestring.Cobbler.Leases.transition(
+                 state.goal_id,
+                 grant_id,
+                 :require_checkpoint,
+                 Keyword.put(opts, :from, :revoked)
+               ) do
+          :ok
+        end
+
+      _other ->
+        :ok
+    end
+  end
+
+  defp settle_terminal_lease(_state), do: :ok
 
   # The item.completed boundary, derived — not redefined — from the T2 rule:
   # this normalized event spent responses or tools. Mid-turn spend runs the
@@ -2383,8 +2420,8 @@ defmodule Shoestring.Elves.Elf do
         _ = persist_log_artifact(state)
         _ = maybe_terminal_checkpoint(state, terminal)
         _ = append_terminal_event(state, terminal)
-        _ = project_after_terminal(state)
         state = %{state | terminal: terminal}
+        _ = project_after_terminal(state)
         notify_terminal(state)
         {:terminal, state}
     end

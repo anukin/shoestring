@@ -1004,12 +1004,21 @@ defmodule ShoestringWeb.CobblerPresentation do
 
       {:error, _reason} ->
         case {state, event} do
+          # A continuation reuses its durable claim. Its new admission puts
+          # this read-only fold in queued without another claim-acquired event;
+          # run.starting is evidence that the normal dispatch gate allowed it.
+          {:queued, :dispatch_started} -> {:ok, :working}
           {:working, :dispatch_started} -> {:ok, :working}
           {:checkpointing, :dispatch_started} -> {:ok, :checkpointing}
           {:checkpointing, :checkpoint_started} -> {:ok, :checkpointing}
+          {:sleeping, :checkpoint_started} -> {:ok, :sleeping}
           {:working, :checkpoint_done} -> {:ok, :working}
           {:working, :run_suspended} -> {:ok, :sleeping}
           {:checkpointing, :run_suspended} -> {:ok, :sleeping}
+          {:sleeping, :run_suspended} -> {:ok, :sleeping}
+          {:working, :quota_refused} -> {:ok, :sleeping}
+          {:checkpointing, :quota_refused} -> {:ok, :sleeping}
+          {:sleeping, :quota_refused} -> {:ok, :sleeping}
           _other -> :unknown
         end
     end
@@ -1031,6 +1040,9 @@ defmodule ShoestringWeb.CobblerPresentation do
       type == "cobbler.claim.released" ->
         {:event, {:command_outcome, :released}}
 
+      type == "run.requested" ->
+        :skip
+
       type in ["run.starting", "run.running"] ->
         {:event, :dispatch_started}
 
@@ -1039,6 +1051,9 @@ defmodule ShoestringWeb.CobblerPresentation do
 
       type == "run.completed" ->
         {:event, {:run_terminal, :completed}}
+
+      type == "run.failed" and payload_value(payload, "error_category") == "quota_refused" ->
+        {:event, :quota_refused}
 
       type == "run.failed" ->
         {:event, {:run_terminal, :failed}}
