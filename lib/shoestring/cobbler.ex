@@ -36,7 +36,9 @@ defmodule Shoestring.Cobbler do
     LeaseBounds,
     LeaseGrant,
     LeaseRenewal,
-    Leases
+    Leases,
+    PlanContract,
+    Plans
   }
 
   alias Shoestring.Harness.CapacitySnapshot
@@ -261,4 +263,75 @@ defmodule Shoestring.Cobbler do
   def lease_bounds(lease) do
     LeaseBounds.new(lease)
   end
+
+  # ----------------------------------------------------------------------------
+  # Plan contracts, revisions, and approval
+  # ----------------------------------------------------------------------------
+
+  @doc """
+  Validates untrusted plan attributes into a strict, digested plan contract.
+
+  See `Shoestring.Cobbler.PlanContract.new/1`.
+  """
+  @spec build_plan(term()) :: {:ok, PlanContract.t()} | {:error, PlanContract.error()}
+  def build_plan(attrs), do: PlanContract.new(attrs)
+
+  @doc """
+  Records a new immutable plan revision for a goal.
+
+  See `Shoestring.Cobbler.Plans.propose/3`.
+  """
+  @spec propose_plan(Ecto.UUID.t(), map(), keyword()) ::
+          {:ok, Plans.propose_result()} | {:error, term()}
+  def propose_plan(goal_id, attrs, opts \\ []), do: Plans.propose(goal_id, attrs, opts)
+
+  @doc """
+  Approves one exact plan revision at one exact content digest.
+
+  See `Shoestring.Cobbler.Plans.approve/3`.
+  """
+  @spec approve_plan(Ecto.UUID.t(), map(), keyword()) ::
+          {:ok, Plans.decision_result()} | {:error, term()}
+  def approve_plan(goal_id, attrs, opts \\ []), do: Plans.approve(goal_id, attrs, opts)
+
+  @doc """
+  Rejects one exact plan revision with a bounded recorded reason.
+
+  See `Shoestring.Cobbler.Plans.reject/3`.
+  """
+  @spec reject_plan(Ecto.UUID.t(), map(), keyword()) ::
+          {:ok, Plans.decision_result()} | {:error, term()}
+  def reject_plan(goal_id, attrs, opts \\ []), do: Plans.reject(goal_id, attrs, opts)
+
+  @doc "Returns one plan revision row for a goal, or nil."
+  @spec plan_revision(Ecto.UUID.t(), pos_integer(), keyword()) ::
+          Shoestring.Cobbler.PlanRevisionRecord.t() | nil
+  def plan_revision(goal_id, revision_number, opts \\ []),
+    do: Plans.get_revision(goal_id, revision_number, opts)
+
+  @doc "Lists every plan revision for a goal in revision order."
+  @spec list_plan_revisions(Ecto.UUID.t(), keyword()) ::
+          [Shoestring.Cobbler.PlanRevisionRecord.t()]
+  def list_plan_revisions(goal_id, opts \\ []), do: Plans.list_revisions(goal_id, opts)
+
+  @doc "Lists every recorded plan decision for a goal."
+  @spec list_plan_decisions(Ecto.UUID.t(), keyword()) ::
+          [Shoestring.Cobbler.PlanDecisionRecord.t()]
+  def list_plan_decisions(goal_id, opts \\ []), do: Plans.list_decisions(goal_id, opts)
+
+  @doc """
+  The one plan revision currently holding authority for a goal, or nil.
+
+  See `Shoestring.Cobbler.Plans.authority/2`.
+  """
+  @spec plan_authority(Ecto.UUID.t(), keyword()) :: map() | nil
+  def plan_authority(goal_id, opts \\ []), do: Plans.authority(goal_id, opts)
+
+  @doc """
+  Recomputes plan revisions, decisions, and authority purely from events.
+
+  See `Shoestring.Cobbler.Plans.rebuild/2`.
+  """
+  @spec rebuild_plans(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def rebuild_plans(goal_id, opts \\ []), do: Plans.rebuild(goal_id, opts)
 end

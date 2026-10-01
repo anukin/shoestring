@@ -452,6 +452,83 @@ defmodule Shoestring.Trajectory.EventRegistry do
         uuid_fields: [:claim_id],
         types: %{extensions: :map}
       }
+    },
+    # Plan revisions and decisions are canonical durable facts: the event,
+    # not a row and never a process, is what establishes which revision
+    # holds authority. The revision event carries the plan as its CANONICAL
+    # JSON rendering rather than as a nested object, so what replay reads
+    # back is byte-identical to what the digest was taken over; a nested
+    # object would be re-serialized by the JSON column and could not make
+    # that promise. `validate_plan/4` below re-validates that rendering
+    # through the full plan contract on every write and every replay.
+    "cobbler.plan.revision.created" => %{
+      1 => %{
+        required: [
+          :plan_revision_id,
+          :proposal_id,
+          :revision_number,
+          :plan_version,
+          :plan_digest,
+          :plan_content,
+          :authored_by,
+          :author_kind,
+          :task_count,
+          :ordered_task_ids
+        ],
+        optional: [:parent_revision_number, :extensions],
+        uuid_fields: [:plan_revision_id],
+        types: %{
+          revision_number: :integer,
+          parent_revision_number: :integer,
+          plan_version: :integer,
+          task_count: :integer,
+          ordered_task_ids: {:array, :string},
+          extensions: :map
+        }
+      }
+    },
+    "cobbler.plan.approved" => %{
+      1 => %{
+        required: [
+          :plan_revision_id,
+          :revision_number,
+          :decision_id,
+          :plan_digest,
+          :decided_by,
+          :decided_at
+        ],
+        # An approval that displaces an earlier one names it here, so
+        # supersession is derivable from the approval itself and never
+        # depends on a second event arriving.
+        optional: [:superseded_revision_id, :superseded_revision_number, :note, :extensions],
+        uuid_fields: [:plan_revision_id, :superseded_revision_id],
+        types: %{
+          revision_number: :integer,
+          superseded_revision_number: :integer,
+          decided_at: :utc_datetime,
+          extensions: :map
+        }
+      }
+    },
+    "cobbler.plan.rejected" => %{
+      1 => %{
+        required: [
+          :plan_revision_id,
+          :revision_number,
+          :decision_id,
+          :plan_digest,
+          :decided_by,
+          :decided_at,
+          :reason
+        ],
+        optional: [:extensions],
+        uuid_fields: [:plan_revision_id],
+        types: %{
+          revision_number: :integer,
+          decided_at: :utc_datetime,
+          extensions: :map
+        }
+      }
     }
   }
 
@@ -591,7 +668,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
       with :ok <- validate_capacity_snapshot(type, version, validated, opts),
            :ok <- validate_admission_decision(type, version, validated, opts),
-           :ok <- validate_handoff(type, version, validated, opts) do
+           :ok <- validate_handoff(type, version, validated, opts),
+           :ok <- validate_plan(type, version, validated, opts) do
         {:ok, validated}
       else
         {:error, changeset} -> {:error, {:invalid_payload, type, version, changeset}}
@@ -739,6 +817,52 @@ defmodule Shoestring.Trajectory.EventRegistry do
   end
 
   defp validate_capacity_snapshot(_type, _version, _payload, _opts), do: :ok
+
+  # A plan revision event must carry a plan that still validates TODAY, whose
+  # digest is the digest of its own content, and whose ordered task ids are
+  # the deterministic order that content produces. Checking all three here
+  # means replay cannot resurrect a plan that could not be proposed now, and
+  # cannot reconstruct an authority whose digest never matched its content.
+  defp validate_plan("cobbler.plan.revision.created", 1, payload, _opts) do
+    with {:ok, contract} <- plan_contract(payload),
+         :ok <- plan_matches(contract, payload) do
+      :ok
+    end
+  end
+
+  defp validate_plan(_type, _version, _payload, _opts), do: :ok
+
+  defp plan_contract(payload) do
+    case Shoestring.Cobbler.PlanContract.from_canonical_json(Map.get(payload, "plan_content")) do
+      {:ok, contract} ->
+        {:ok, contract}
+
+      {:error, reason} ->
+        Contract.invalid(:plan_content, "must be a valid plan contract (#{inspect(reason)})")
+    end
+  end
+
+  defp plan_matches(contract, payload) do
+    cond do
+      Map.get(payload, "plan_digest") != contract.digest ->
+        Contract.invalid(:plan_digest, "must be the digest of plan_content")
+
+      Map.get(payload, "plan_version") != contract.version ->
+        Contract.invalid(:plan_version, "must match the plan contract version")
+
+      Map.get(payload, "ordered_task_ids") != contract.ordered_task_ids ->
+        Contract.invalid(:ordered_task_ids, "must be the deterministic order of plan_content")
+
+      Map.get(payload, "task_count") != length(contract.content["tasks"]) ->
+        Contract.invalid(:task_count, "must match the number of tasks in plan_content")
+
+      Map.get(payload, "author_kind") != "human" ->
+        Contract.invalid(:author_kind, "must be human in this slice")
+
+      true ->
+        :ok
+    end
+  end
 
   defp validate_admission_decision("admission.decided", 1, payload, opts) do
     case Shoestring.Cobbler.AdmissionDecision.from_payload(payload, opts) do

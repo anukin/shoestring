@@ -60,6 +60,8 @@ plans/evidence/*
 plans/evidence/06-cobbler-planning/*
 !/plans/evidence/06-cobbler-planning/README.md
 !/plans/evidence/06-cobbler-planning/hermetic-lifecycle.md
+!/plans/evidence/06-cobbler-planning/plan-foundation.md
+!/plans/evidence/06-cobbler-planning/plan-foundation-race-fix.md
 
 # Editor, language-server, and OS metadata
 /.elixir_ls/
