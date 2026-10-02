@@ -546,7 +546,8 @@ defmodule Shoestring.Cobbler.Planner do
            snapshot,
            policy,
            now: context.now,
-           decision_id: decision_id
+           decision_id: decision_id,
+           occupancy: planner_occupancy(repo, context)
          ) do
       {:ok, %AdmissionDecision{result: :admit} = decision} ->
         consume_admission(repo, request, context, decision)
@@ -1227,6 +1228,29 @@ defmodule Shoestring.Cobbler.Planner do
   end
 
   defp planner_policy(context), do: context.config.policy
+
+  # Shared planner-inference reservation from authoritative durable state:
+  # any other in-progress planner request (any goal) occupies the shared
+  # account scope until it settles, so concurrent requests cannot invoke
+  # from the same headroom. Terminal rows release; explicit human
+  # cancellation releases a stuck row. The requesting row itself is
+  # excluded, so a bounded repair re-admits. Occupancy is an unbypassable
+  # hard stop downstream: confirmation cannot override it, and a blocked
+  # request settles to the manual path with zero invocations.
+  defp planner_occupancy(repo, context) do
+    scope = context.config.candidate.scope
+
+    occupied? =
+      repo.exists?(
+        from request in PlannerRequestRecord,
+          where:
+            request.status == "in_progress" and
+              (request.goal_id != ^context.goal_id or
+                 request.request_id != ^context.request_id)
+      )
+
+    if occupied?, do: %{scope => true}, else: false
+  end
 
   # Adapter configuration is validated before anything is claimed,
   # admitted, or invoked: an unconfigured planner is a structured refusal

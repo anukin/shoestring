@@ -626,4 +626,82 @@ defmodule Shoestring.Cobbler.PlannerTest do
       end
     end
   end
+
+  describe "shared reservation" do
+    test "another in-flight request occupies the shared scope with zero invocation", %{
+      goal: goal,
+      log: log
+    } do
+      occupant = PlannerHelpers.create_goal!()
+
+      PlannerRequestRecord.claim_changeset(
+        occupant.id,
+        %{
+          request_id: "plan-request-occupant",
+          requested_by: "human:planner",
+          planner_identity: "fixture-planner",
+          planner_version: "1",
+          planner_model: "fixture-1",
+          input_digest: String.duplicate("b", 64),
+          goal_statement: "An unrelated in-flight goal.",
+          base_revision: PlanFixtures.base_revision(),
+          proposal_id: "plan-request-occupant"
+        },
+        PlannerHelpers.now()
+      )
+      |> Shoestring.Repo.insert!()
+
+      assert {:error, {:planner_quota_blocked, detail}} =
+               Cobbler.request_plan(goal.id, PlannerHelpers.request_attrs(), admitted(log))
+
+      # The occupant holds the shared scope: blocked before any invocation,
+      # with the blocking decision durable in the accounting.
+      assert detail["reason_code"] == "scope_occupied"
+      assert Shoestring.Test.PlannerCallLog.count(log) == 0
+      assert Cobbler.list_plan_revisions(goal.id) == []
+
+      [request] = Cobbler.list_planner_requests(goal.id)
+      assert request.status == "manual_required"
+      assert request.error_kind == "quota_blocked"
+      assert request.attempts_used == 0
+      assert event_types(goal, ["admission.decided"]) == 1
+      assert event_types(goal, ["cobbler.planner.resolved"]) == 1
+    end
+
+    test "a settled occupant releases the shared scope", %{goal: goal, log: log} do
+      occupant = PlannerHelpers.create_goal!()
+
+      row =
+        PlannerRequestRecord.claim_changeset(
+          occupant.id,
+          %{
+            request_id: "plan-request-occupant",
+            requested_by: "human:planner",
+            planner_identity: "fixture-planner",
+            planner_version: "1",
+            planner_model: "fixture-1",
+            input_digest: String.duplicate("b", 64),
+            goal_statement: "An unrelated in-flight goal.",
+            base_revision: PlanFixtures.base_revision(),
+            proposal_id: "plan-request-occupant"
+          },
+          PlannerHelpers.now()
+        )
+        |> Shoestring.Repo.insert!()
+
+      # Explicit human cancellation settles the stuck row: the scope
+      # releases and planning proceeds with one invocation.
+      assert {:ok, %{outcome: :recorded}} =
+               Cobbler.cancel_plan_request(occupant.id, row.request_id, %{
+                 cancelled_by: "human:operator"
+               })
+
+      assert {:ok, %{request: request, outcome: :recorded}} =
+               Cobbler.request_plan(goal.id, PlannerHelpers.request_attrs(), admitted(log))
+
+      assert request.status == "proposed"
+      assert request.attempts_used == 1
+      assert Shoestring.Test.PlannerCallLog.count(log) == 1
+    end
+  end
 end

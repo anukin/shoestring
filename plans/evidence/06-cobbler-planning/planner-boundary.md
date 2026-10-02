@@ -163,19 +163,34 @@ REQUEST_CHANGES, static review only). Each finding was traced against the
 reviewed head; confirmed blockers were fixed with hermetic regressions
 proven to fail at 39159e6 for the intended behavioral reason.
 
-- **Finding 1 (aggregate quota across requests) — NOT confirmed as a
-  package-B blocker, no code change.** REPO-INSPECTION:
-  `AdmissionEvaluation.evaluate/5` takes occupancy only as explicit
-  caller-supplied evidence (`Keyword.get(opts, :occupancy, false)`), and
-  no durable cross-request quota balance exists anywhere in the merged
-  tree (no ledger table; reserves are policy thresholds, never
-  decrementing balances). The package-B contract requires admission and
-  accounting in *existing* quota units — satisfied by per-invocation
-  evaluation, one `admission.decided` event per evaluation, and the
-  durable two-attempt budget. A shared reservation ledger is new
-  cross-package infrastructure outside the allowed package-B scope
-  (recorded as deferred architecture input for the iterations that own
-  concurrency and forecasting).
+- **Finding 1 (aggregate quota across requests) — CONFIRMED on
+  re-brief, fixed with existing mechanisms only (no new infrastructure,
+  no new tables, no package-A changes).** `planner_occupancy/2` reads the
+  authoritative request rows — any other `in_progress` planner request
+  (any goal) occupies the shared account scope — and supplies it as the
+  existing admission evaluation's explicit `:occupancy` evidence, an
+  unbypassable hard stop (`scope_occupied`; confirmation cannot override
+  it; snapshot reserves still evaluated when free). The requesting row is
+  excluded so a bounded repair re-admits; terminal rows release; explicit
+  human cancellation releases a stuck row (fail-closed with operator
+  release). Blocked requests settle to the manual path with zero
+  invocations and balanced accounting (`admission.decided` + `resolved`
+  events, settled row, `attempts_used` 0). Prior round REPO-INSPECTION
+  stands for context: no durable cross-request quota balance exists in
+  the merged tree (reserves are policy thresholds, never decrementing
+  balances), which is why the reservation is derived from the request
+  rows rather than a new ledger.
+  Regressions (proven to fail at a9a08a7 for the intended reason): a
+  pre-seated occupant blocks one request with `scope_occupied` and zero
+  invocations (at a9a08a7 it admitted and invoked); two concurrent
+  distinct requests against a pre-seated occupant both settle blocked
+  with zero invocations and zero revisions (at a9a08a7 both invoked and
+  both proposed — over-admission demonstrated); an uncoordinated
+  distinct race keeps accounting balanced (calls == recorded ==
+  revisions, blocked attempts == 0); a cancelled occupant releases the
+  scope and the next request admits with one invocation. Existing repair
+  tests (no foreign occupant) guard the self-exclusion.
+
 - **Finding 2 (unconfigured planner admitted) — CONFIRMED, fixed.**
   `request_plan/3` now validates the adapter boundary
   (`check_adapter_config/2`, via the adapter's `configured/1` where one
@@ -304,7 +319,17 @@ ok:recorded`) — the fourth full-suite occurrence overall (2 baseline,
 2 branch), file-only runs of that test pass, and every one of the 69
 planner-boundary tests passed in this run. Per gate honesty the failure
 is reported as observed, not rerun past. 1729 − 1660 = **69 new tests**
-in total: the 62 above plus 7 review regressions (4 planner boundary,
+in total: the 62 above plus 7 review regressions (4 planner boundary, 2 safety wording/preservation, 1 choice-level refusal).
+
+TARGETED GATE for the shared-reservation change (no full-suite run this
+round: Codex is separately diagnosing PlanApprovalRaceTest): `mix
+compile --warnings-as-errors` clean; `mix format --check-formatted`
+clean; `mix test` over the five planner files plus the three admission
+files: **114 tests, 0 failures**. The three new shared-reservation tests
+were proven to fail at a9a08a7 for the intended behavioral reasons (see
+Finding 1 above); the pre-existing occupied-free repair tests guard the
+self-exclusion. Full `mix precommit` deferred until the independent race
+diagnosis lands.
 2 safety wording/preservation, 1 choice-level refusal). Two
 pre-existing test setups were corrected without weakening any assertion
 (`claim_changeset/3` arity; the rebuild test's blocked request now names

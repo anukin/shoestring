@@ -113,7 +113,14 @@ with zero accounting.
 
 Planner inference is admitted work, accounted in existing quota units:
 one `admission.decided` event per evaluation plus the durable two-attempt
-budget on the request row. Execution leases are deliberately not used —
+budget on the request row. Concurrent requests share one reservation:
+any other in-progress planner request occupies the shared account scope
+(supplied as explicit occupancy evidence to the existing admission
+evaluation, an unbypassable hard stop), so a second inference cannot
+invoke from the same headroom — it settles to the manual path with zero
+invocations. Terminal rows release the scope; explicit human cancellation
+releases a stuck row; the requesting row itself is excluded so a bounded
+repair re-admits. Execution leases are deliberately not used —
 leases bound Elf runs, and planning never runs an Elf. The admission gate
 plus the invocation budget is the reservation; the settled row plus the
 resolved event is the release. Cancellation settles the accounting; a

@@ -21,6 +21,8 @@ defmodule Shoestring.Cobbler.PlannerConcurrencyTest do
     {20_261_002_183_326, Shoestring.Repo.Migrations.CreateCobblerPlannerRequests}
   ]
 
+  @other_goal_id "00000000-0000-4000-8000-0000000001d0"
+  @occupant_goal_id "00000000-0000-4000-8000-0000000001e0"
   @goal_id "00000000-0000-4000-8000-0000000001c0"
   @iso_now "2026-09-07T14:00:00.000000Z"
 
@@ -95,6 +97,13 @@ defmodule Shoestring.Cobbler.PlannerConcurrencyTest do
 
   defp busy?(results), do: Enum.any?(results, &storage_failure?/1)
 
+  defp allowed_occupied_outcome?({:error, {:planner_quota_blocked, _detail}}), do: true
+  defp allowed_occupied_outcome?(result), do: storage_failure?(result)
+
+  defp allowed_distinct_outcome?({:ok, %{outcome: :recorded}}), do: true
+  defp allowed_distinct_outcome?({:error, {:planner_quota_blocked, _detail}}), do: true
+  defp allowed_distinct_outcome?(result), do: storage_failure?(result)
+
   # `Task.async_stream` reports a raised exception as `{:exit, reason}`. It
   # must fail this test by NAME, not by blowing up an unrelated pattern
   # match, because "the API raised" is precisely one of the things these
@@ -122,6 +131,108 @@ defmodule Shoestring.Cobbler.PlannerConcurrencyTest do
     end)
     |> Enum.sort()
     |> Enum.join(", ")
+  end
+
+  test "concurrent distinct requests against an occupant invoke zero times", %{
+    repo: repo,
+    log: log
+  } do
+    seed_goal!(repo, @occupant_goal_id)
+
+    occupant_attrs = %{
+      request_id: "plan-request-occupant",
+      requested_by: "human:planner",
+      planner_identity: "fixture-planner",
+      planner_version: "1",
+      planner_model: "fixture-1",
+      input_digest: String.duplicate("b", 64),
+      goal_statement: "An unrelated in-flight goal.",
+      base_revision: "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      proposal_id: "plan-request-occupant"
+    }
+
+    {:ok, _row} =
+      Shoestring.Cobbler.PlannerRequestRecord.claim_changeset(
+        @occupant_goal_id,
+        occupant_attrs,
+        ~U[2026-09-07 14:00:00.000000Z]
+      )
+      |> repo.insert()
+
+    seed_goal!(repo, @other_goal_id)
+    opts = PlannerHelpers.call_opts(log, PlannerHelpers.admitted_snapshot(), repo: repo)
+
+    calls = [
+      {@goal_id, PlannerHelpers.request_attrs(request_id: "plan-request-a")},
+      {@other_goal_id, PlannerHelpers.request_attrs(request_id: "plan-request-b")}
+    ]
+
+    results =
+      calls
+      |> Task.async_stream(
+        fn {goal_id, attrs} -> Cobbler.request_plan(goal_id, attrs, opts) end,
+        max_concurrency: 2,
+        timeout: :infinity
+      )
+      |> Enum.map(&unwrap/1)
+
+    # The occupant was committed before either task started, so every
+    # evaluation sees it: both requests settle blocked with zero
+    # invocations (storage contention aside, which rolls back whole).
+    # Either or both may still lose a write race, but nothing may invoke.
+    assert Enum.all?(results, &allowed_occupied_outcome?/1),
+           "unexpected concurrent planner outcomes: #{summarize(results)}"
+
+    assert Shoestring.Test.PlannerCallLog.count(log) == 0
+
+    assert Cobbler.list_plan_revisions(@goal_id, repo: repo) == []
+    assert Cobbler.list_plan_revisions(@other_goal_id, repo: repo) == []
+
+    unless busy?(results) do
+      assert Enum.count(results, &match?({:error, {:planner_quota_blocked, _}}, &1)) == 2
+
+      for {:error, {:planner_quota_blocked, detail}} <- results do
+        assert detail["reason_code"] == "scope_occupied"
+        assert detail["attempts_used"] == 0
+      end
+    end
+  end
+
+  test "an uncoordinated distinct race keeps accounting balanced", %{repo: repo, log: log} do
+    seed_goal!(repo, @other_goal_id)
+    opts = PlannerHelpers.call_opts(log, PlannerHelpers.admitted_snapshot(), repo: repo)
+
+    calls = [
+      {@goal_id, PlannerHelpers.request_attrs(request_id: "plan-request-a")},
+      {@other_goal_id, PlannerHelpers.request_attrs(request_id: "plan-request-b")}
+    ]
+
+    results =
+      calls
+      |> Task.async_stream(
+        fn {goal_id, attrs} -> Cobbler.request_plan(goal_id, attrs, opts) end,
+        max_concurrency: 2,
+        timeout: :infinity
+      )
+      |> Enum.map(&unwrap/1)
+
+    # Without a pre-seated occupant the tasks may serialize (both record)
+    # or overlap (at most one records): every interleaving must still
+    # balance — every recorded proposal paid exactly one invocation, every
+    # blocked request spent zero attempts, and nothing raised.
+    assert Enum.all?(results, &allowed_distinct_outcome?/1),
+           "unexpected concurrent planner outcomes: #{summarize(results)}"
+
+    unless busy?(results) do
+      recorded = Enum.count(results, &match?({:ok, %{outcome: :recorded}}, &1))
+
+      revisions =
+        length(Cobbler.list_plan_revisions(@goal_id, repo: repo)) +
+          length(Cobbler.list_plan_revisions(@other_goal_id, repo: repo))
+
+      assert Shoestring.Test.PlannerCallLog.count(log) == recorded
+      assert revisions == recorded
+    end
   end
 
   defp seed_goal!(repo, id) do
