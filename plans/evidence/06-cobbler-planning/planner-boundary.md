@@ -154,14 +154,36 @@ stashed (clean tree):
 $ mix test
 ```
 
-`4 doctests, 1660 tests, 1 failure, 1 skipped (6 excluded)`. The single
-failure is `PlanApprovalRaceTest` "the same approval replayed concurrently
-records one decision and one event" (`error::database_busy,
-error::database_busy, error::rollback, ok:recorded` under full-suite
-load); it passes in isolation (`3 tests, 0 failures`) and is a
-pre-existing package-A contention flake, untouched by this slice.
-Recorded as intermittent, 1 of 2 full-suite baseline runs (the earlier
-`mix precommit` baseline run showed the same single failure).
+Run twice on the clean tree: both runs `4 doctests, 1660 tests,
+1 failure, 1 skipped (6 excluded)`. The failure, identified in the
+second run, is `PlanApprovalRaceTest` "the same approval replayed
+concurrently records one decision and one event" with outcomes
+`error::database_busy, error::database_busy, error::rollback,
+ok:recorded` under full-suite load. That same file in isolation:
+
+```
+$ mix test test/shoestring/cobbler/plan_approval_race_test.exs
+```
+
+`3 tests, 0 failures` (1 of 1 file-only runs).
+
+REPO-INSPECTION — suspected pre-existing package-A contention flake
+(four concurrent writers on scratch SQLite under full-suite load),
+untouched by this slice. Root cause is UNVERIFIED: the
+`{:rollback, _}`-shaped error escape was not traced to a source line,
+and no package-A code was changed here. Stated exactly: failed in 2 of
+2 full-suite baseline runs, passes in 1 of 1 file-only runs.
+
+Update after the evidence-wording correction: a further full-suite run
+on this branch (`mix precommit`, exit 2 at the ExUnit phase) failed with
+the identical signature (`error::database_busy, error::database_busy,
+error::rollback, ok:recorded`; all 57 planner tests passed in that run).
+Full-suite totals are now 3 failures in 4 runs with one clean pass (the
+prior final gate: exit 0, 0 failures), all failures sharing the
+identical signature in the same package-A test. File-only runs of that
+test pass. The suspected-pre-existing characterization stands;
+confirmation would require tracing the `{:rollback, _}` escape, which
+is package-A work outside this slice.
 
 VERIFIED — final, run in `$WORKTREE` on this branch:
 
