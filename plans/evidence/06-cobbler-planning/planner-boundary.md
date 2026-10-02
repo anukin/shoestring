@@ -190,6 +190,20 @@ proven to fail at 39159e6 for the intended behavioral reason.
   revisions, blocked attempts == 0); a cancelled occupant releases the
   scope and the next request admits with one invocation. Existing repair
   tests (no foreign occupant) guard the self-exclusion.
+  Real-overlap determinism comes from a test-support barrier adapter
+  (`Shoestring.Test.BarrierPlanner`, selected via the existing `:adapter`
+  opt, zero production changes): the first invocation signals entry and
+  stays held by messages while a distinct request runs the public API.
+  The held test asserts the denial settles `scope_occupied` with zero
+  second invocations (an empty mailbox after the denial completes proves
+  this by causal ordering, not timing), monitors all three tasks to
+  normal DOWN, then releases explicitly, verifies terminal accounting on
+  both rows, and verifies a subsequent request invokes and proposes
+  again. A companion test proves a terminal transport failure releases
+  the scope. At a9a08a7 the overlap test fails because the denied request
+  invokes instead of settling blocked — both invocations park in the
+  barrier at once (observed as `:barrier_release_timeout`), which is the
+  over-admission itself.
 
 - **Finding 2 (unconfigured planner admitted) — CONFIRMED, fixed.**
   `request_plan/3` now validates the adapter boundary
@@ -325,7 +339,8 @@ TARGETED GATE for the shared-reservation change (no full-suite run this
 round: Codex is separately diagnosing PlanApprovalRaceTest): `mix
 compile --warnings-as-errors` clean; `mix format --check-formatted`
 clean; `mix test` over the five planner files plus the three admission
-files: **114 tests, 0 failures**. The three new shared-reservation tests
+files: **116 tests, 0 failures** (`mix compile --warnings-as-errors`
+and `mix format --check-formatted` also clean). The three new shared-reservation tests
 were proven to fail at a9a08a7 for the intended behavioral reasons (see
 Finding 1 above); the pre-existing occupied-free repair tests guard the
 self-exclusion. Full `mix precommit` deferred until the independent race

@@ -668,6 +668,29 @@ defmodule Shoestring.Cobbler.PlannerTest do
       assert event_types(goal, ["cobbler.planner.resolved"]) == 1
     end
 
+    test "a terminal failure releases the scope for the next request", %{
+      goal: goal,
+      log: log
+    } do
+      failed = admitted(log, fixture: %{errors: [{:transport, %{"reason" => "timeout"}}]})
+
+      assert {:error, {:planner_transport_error, _detail}} =
+               Cobbler.request_plan(goal.id, PlannerHelpers.request_attrs(), failed)
+
+      # The failed row is terminal, so it cannot occupy: the next request
+      # admits and invokes instead of blocking behind it.
+      assert {:ok, %{request: request, outcome: :recorded}} =
+               Cobbler.request_plan(
+                 goal.id,
+                 PlannerHelpers.request_attrs(request_id: "plan-request-2"),
+                 admitted(log)
+               )
+
+      assert request.status == "proposed"
+      assert request.attempts_used == 1
+      assert Shoestring.Test.PlannerCallLog.count(log) == 2
+    end
+
     test "a settled occupant releases the shared scope", %{goal: goal, log: log} do
       occupant = PlannerHelpers.create_goal!()
 

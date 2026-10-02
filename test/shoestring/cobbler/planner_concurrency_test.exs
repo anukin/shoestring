@@ -15,6 +15,8 @@ defmodule Shoestring.Cobbler.PlannerConcurrencyTest do
   alias Shoestring.Cobbler.PlannerRequestRecord
   alias Shoestring.Test.{MigrationRepo, PlannerCallLog, PlannerHelpers}
 
+  import Ecto.Query
+
   @migrations [
     {20_260_830_012_112, Shoestring.Repo.Migrations.CreateTrajectoryFoundation},
     {20_261_001_014_010, Shoestring.Repo.Migrations.AddCobblerPlanRevisions},
@@ -233,6 +235,97 @@ defmodule Shoestring.Cobbler.PlannerConcurrencyTest do
       assert Shoestring.Test.PlannerCallLog.count(log) == recorded
       assert revisions == recorded
     end
+  end
+
+  test "a held invocation blocks a distinct request with zero second invocation", %{
+    repo: repo,
+    log: log
+  } do
+    test_pid = self()
+
+    opts =
+      PlannerHelpers.call_opts(log, PlannerHelpers.admitted_snapshot(),
+        repo: repo,
+        adapter: Shoestring.Test.BarrierPlanner,
+        fixture: %{barrier: test_pid}
+      )
+
+    held_attrs = PlannerHelpers.request_attrs(request_id: "plan-request-held")
+    held = Task.async(fn -> Cobbler.request_plan(@goal_id, held_attrs, opts) end)
+    held_ref = Process.monitor(held.pid)
+
+    # The first invocation is inside the adapter now: admitted, attempt
+    # consumed, invocation open.
+    assert_receive {:entered, holder_pid}, 10_000
+
+    # While it is held, a distinct request through the public API must
+    # settle blocked without a second invocation. The denied task must
+    # complete on its own: any adapter entry would precede its completion,
+    # so an empty mailbox afterwards proves the denial caused zero
+    # invocations (causal ordering, not timing).
+    denied_attrs = PlannerHelpers.request_attrs(request_id: "plan-request-denied")
+
+    denied =
+      Task.async(fn -> Cobbler.request_plan(@goal_id, denied_attrs, opts) end)
+
+    denied_ref = Process.monitor(denied.pid)
+
+    denied_result =
+      case Task.yield(denied, 15_000) || Task.shutdown(denied) do
+        {:ok, result} -> result
+        nil -> flunk("denied request did not settle while the first invocation was held")
+      end
+
+    assert {:error, {:planner_quota_blocked, detail}} = denied_result
+    assert detail["reason_code"] == "scope_occupied"
+    assert detail["attempts_used"] == 0
+    assert_receive {:DOWN, ^denied_ref, :process, _, :normal}
+    refute_received {:entered, _}
+
+    denied_row = Cobbler.planner_request(@goal_id, "plan-request-denied", repo: repo)
+    assert denied_row.status == "manual_required"
+    assert denied_row.error_kind == "quota_blocked"
+    assert denied_row.attempts_used == 0
+
+    # Release explicitly: the held request settles proposed with exactly
+    # one invocation and one revision across the whole run.
+    send(holder_pid, :release)
+    assert {:ok, %{request: held_request, outcome: :recorded}} = Task.await(held, 15_000)
+    assert held_request.status == "proposed"
+    assert_receive {:DOWN, ^held_ref, :process, _, :normal}
+
+    assert Shoestring.Test.PlannerCallLog.count(log) == 1
+    assert length(Cobbler.list_plan_revisions(@goal_id, repo: repo)) == 1
+    assert event_count(repo, @goal_id, ["cobbler.planner.resolved"]) == 2
+
+    # The settled scope admits again: a subsequent request invokes and
+    # proposes a second revision.
+    next_attrs =
+      PlannerHelpers.request_attrs(request_id: "plan-request-next", parent_revision_number: 1)
+
+    nxt = Task.async(fn -> Cobbler.request_plan(@goal_id, next_attrs, opts) end)
+    nxt_ref = Process.monitor(nxt.pid)
+    assert_receive {:entered, next_holder}, 10_000
+    send(next_holder, :release)
+    assert {:ok, %{request: next_request, outcome: :recorded}} = Task.await(nxt, 15_000)
+    assert next_request.status == "proposed"
+    assert next_request.revision_number == 2
+    assert_receive {:DOWN, ^nxt_ref, :process, _, :normal}
+
+    assert Shoestring.Test.PlannerCallLog.count(log) == 2
+    assert length(Cobbler.list_plan_revisions(@goal_id, repo: repo)) == 2
+  end
+
+  defp event_count(repo, goal_id, types) do
+    import Ecto.Query
+
+    repo.aggregate(
+      from(event in Shoestring.Trajectory.TrajectoryEvent,
+        where: event.goal_id == ^goal_id and event.type in ^types
+      ),
+      :count,
+      :id
+    )
   end
 
   defp seed_goal!(repo, id) do
