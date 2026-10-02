@@ -222,6 +222,23 @@ defmodule Shoestring.Test.PlannerHelpers do
     })
   end
 
+  @doc "A well-formed plan answering a different goal and base revision."
+  @spec mismatched_goal_plan() :: map()
+  def mismatched_goal_plan do
+    valid_plan(%{
+      "goal" => %{
+        "statement" => "A completely different goal the requester never named.",
+        "repository" => %{"base_revision" => String.duplicate("1", 40)},
+        "constraints" => ["No new dependencies."],
+        "non_goals" => [],
+        "acceptance" => %{
+          "gates" => [%{"gate" => "mix_precommit"}],
+          "evidence" => ["The gate passes."]
+        }
+      }
+    })
+  end
+
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

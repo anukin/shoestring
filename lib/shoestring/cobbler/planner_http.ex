@@ -128,14 +128,22 @@ defmodule Shoestring.Cobbler.PlannerHttp do
   (`choices[0].message.content` holding a JSON object string or object).
   Anything else — wrong shape, invalid JSON, a JSON array or scalar — is an
   `invalid_response` error carrying only the failure class, never the raw
-  body. A model refusal (`refusal` or `finish_reason: content_filter`) is a
-  `refused` error.
+  body. A model refusal — a `refusal` on the message, or a `content_filter`
+  (or `refusal`) `finish_reason` on the message or on the choice itself,
+  which is where OpenAI-compatible endpoints put it — is a `refused`
+  error. Refusals are terminal upstream: never repaired, never retried.
   """
   @spec decode_response(map()) ::
           {:ok, map()} | {:error, {:invalid_response | :refused, map()}}
-  def decode_response(%{"choices" => [%{"message" => message} | _rest]}) do
+  def decode_response(%{"choices" => [%{} = choice | _rest]}) do
+    message =
+      case Map.get(choice, "message") do
+        message when is_map(message) -> message
+        _other -> %{}
+      end
+
     cond do
-      refusal?(message) ->
+      refusal?(message) or choice_refused?(choice) ->
         {:error, {:refused, %{"reason" => "model_refused"}}}
 
       is_map(message["content"]) ->
@@ -218,6 +226,14 @@ defmodule Shoestring.Cobbler.PlannerHttp do
     do: true
 
   defp refusal?(_message), do: false
+
+  # OpenAI-compatible endpoints report `finish_reason` on the choice, not
+  # on the message. A choice-level content filter (or refusal) with empty
+  # content is a terminal refusal, not a repairable schema failure.
+  defp choice_refused?(%{"finish_reason" => reason}) when reason in ["content_filter", "refusal"],
+    do: true
+
+  defp choice_refused?(_choice), do: false
 
   defp require_endpoint(%{endpoint: endpoint}) when is_binary(endpoint) and endpoint != "",
     do: :ok

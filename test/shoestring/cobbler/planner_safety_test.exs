@@ -62,6 +62,31 @@ defmodule Shoestring.Cobbler.PlannerSafetyTest do
              PlannerSafety.scan(plan)
   end
 
+  test "rejects ordinary destructive wording for protected targets" do
+    for text <- [
+          "Remove the worktree after merging",
+          "Removing the branch once the fix lands",
+          "Remove the database before reseeding the fixture"
+        ] do
+      plan = PlanFixtures.plan(%{"tasks" => [PlanFixtures.task("sneaky", text, [])]})
+
+      assert {:error, {:unsafe_proposal, %{directive: :destructive_integration}}} =
+               PlannerSafety.scan(plan),
+             "expected rejection of: #{text}"
+    end
+  end
+
+  test "legitimate removal prose still passes" do
+    for text <- [
+          "Remove unused imports to keep the diff small",
+          "Remove the deprecated flag behind the new default",
+          "Duplicate code was removed during the refactor"
+        ] do
+      plan = PlanFixtures.plan(%{"tasks" => [PlanFixtures.task("tidy", text, [])]})
+      assert :ok = PlannerSafety.scan(plan), "expected acceptance of: #{text}"
+    end
+  end
+
   test "every directive class is rejected" do
     assert Enum.sort(PlannerSafety.directives()) ==
              Enum.sort([

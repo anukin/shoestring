@@ -11,6 +11,7 @@ defmodule Shoestring.Cobbler.PlannerTest do
   use Shoestring.DataCase, async: false
 
   alias Shoestring.Cobbler
+  alias Shoestring.Cobbler.PlannerHttp
   alias Shoestring.Cobbler.PlannerRequestRecord
   alias Shoestring.Test.{CobblerHelpers, PlanFixtures, PlannerHelpers}
 
@@ -517,6 +518,112 @@ defmodule Shoestring.Cobbler.PlannerTest do
                )
 
       assert second.revision_number == 2
+    end
+  end
+
+  describe "review regressions" do
+    test "an unconfigured production planner is refused with zero accounting", %{
+      goal: goal,
+      log: log
+    } do
+      unconfigured = opts(log, PlannerHelpers.admitted_snapshot(), adapter: PlannerHttp)
+
+      assert {:error, :planner_not_configured} =
+               Cobbler.request_plan(goal.id, PlannerHelpers.request_attrs(), unconfigured)
+
+      # No claim, no admission, no invocation: configuration is checked
+      # before anything is admitted or consumed.
+      assert Cobbler.list_planner_requests(goal.id) == []
+      assert event_types(goal, ["admission.decided"]) == 0
+      assert event_types(goal, ["cobbler.planner.requested"]) == 0
+      assert event_types(goal, ["cobbler.planner.resolved"]) == 0
+      assert Cobbler.list_plan_revisions(goal.id) == []
+      assert Shoestring.Test.PlannerCallLog.count(log) == 0
+    end
+
+    test "the same content from a different initiator is a conflict, not a replay", %{
+      goal: goal,
+      log: log
+    } do
+      assert {:ok, %{outcome: :recorded}} =
+               Cobbler.request_plan(goal.id, PlannerHelpers.request_attrs(), admitted(log))
+
+      second_initiator = PlannerHelpers.request_attrs(requested_by: "human:second")
+
+      assert {:error, {:planner_request_conflict, detail}} =
+               Cobbler.request_plan(goal.id, second_initiator, admitted(log))
+
+      # The digest binds the initiator, so another human's identical bytes
+      # cannot replay the first attribution — and the conflict invokes
+      # nothing.
+      assert detail["request_id"] == "plan-request-1"
+      assert Shoestring.Test.PlannerCallLog.count(log) == 1
+      assert length(Cobbler.list_plan_revisions(goal.id)) == 1
+    end
+
+    test "a plan answering a different goal or base is rejected, never persisted", %{
+      goal: goal,
+      log: log
+    } do
+      fixture = %{
+        plans: [PlannerHelpers.mismatched_goal_plan(), PlannerHelpers.mismatched_goal_plan()]
+      }
+
+      assert {:error, {:planner_manual_required, detail}} =
+               Cobbler.request_plan(
+                 goal.id,
+                 PlannerHelpers.request_attrs(),
+                 admitted(log, fixture: fixture)
+               )
+
+      # Bounded like any contract failure: one repair, then the manual path.
+      assert detail["attempts_used"] == 2
+      assert detail["validation_errors"] != []
+      assert Shoestring.Test.PlannerCallLog.count(log) == 2
+
+      # Nothing answering another goal may persist or dispatch.
+      assert Cobbler.list_plan_revisions(goal.id) == []
+      assert Cobbler.plan_authority(goal.id) == nil
+    end
+
+    test "cancellation racing a valid proposal leaves no orphan revision", %{
+      goal: goal,
+      log: log
+    } do
+      canceller = fn event ->
+        if event.type == "cobbler.plan.revision.created" do
+          Cobbler.cancel_plan_request(goal.id, "plan-request-1", %{
+            cancelled_by: "human:operator"
+          })
+        else
+          :ok
+        end
+      end
+
+      result =
+        Cobbler.request_plan(
+          goal.id,
+          PlannerHelpers.request_attrs(),
+          admitted(log) |> Keyword.put(:publish_fun, canceller)
+        )
+
+      case result do
+        {:ok, %{request: request, revision: revision, outcome: :recorded}} ->
+          # The proposal committed atomically with its settlement before the
+          # cancellation could land: exactly one revision, fully settled.
+          assert request.status == "proposed"
+          assert revision.status == "proposed"
+          assert length(Cobbler.list_plan_revisions(goal.id)) == 1
+
+        {:error, {:planner_cancelled, _detail}} ->
+          # The cancellation won: no revision and no proposal event may be
+          # left behind for the cancelled request.
+          assert Cobbler.list_plan_revisions(goal.id) == []
+          assert event_types(goal, ["cobbler.plan.revision.created"]) == 0
+
+          [request] = Cobbler.list_planner_requests(goal.id)
+          assert request.status == "cancelled"
+      end
     end
   end
 end

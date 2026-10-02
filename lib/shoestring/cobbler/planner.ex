@@ -21,6 +21,9 @@ defmodule Shoestring.Cobbler.Planner do
      The `(goal_id, request_id)` unique index is the idempotency token: the
      same id with the same input digest replays the stored outcome with zero
      new invocations; the same id with a different digest is a conflict.
+     The digest binds the semantic request identity (initiator, proposal
+     id, parent, confirmation), so another initiator's identical bytes can
+     never replay someone else's attribution.
   3. **Admit every invocation.** Each of the at-most-two invocations is
      evaluated through `AdmissionEvaluation` against a planner candidate
      and an explicit capacity snapshot, and each evaluation persists an
@@ -36,12 +39,16 @@ defmodule Shoestring.Cobbler.Planner do
      reserve, lifecycle, dispatch, approval, destructive-integration,
      worktree-override, or command-bypass directives) and then the full
      `PlanContract` validation from package A, including planner-attribution
-     echo. Only a valid contract reaches `Plans.propose/3`, authored by the
-     human requester. Invalid output never creates a revision, and every
+     echo and goal/base-revision binding to the request inputs. Only a
+     valid contract reaches `Plans.propose/3`, authored by the human
+     requester. Invalid output never creates a revision, and every
      persisted proposal stays `proposed`: the planner cannot approve.
   6. **Settle.** Success, failure, repair exhaustion, quota blocking, and
      explicit cancellation each settle the row and append a
      `cobbler.planner.resolved` event with a closed outcome/reason pair.
+     Proposal persistence and request settlement commit atomically (one
+     transaction; events publish only after it commits), so cancellation
+     can never leave an orphan proposal behind for a cancelled request.
      Terminal rows never move; retry, replay, and restart converge on the
      stored outcome instead of duplicating invocations or resetting the
      attempt budget.
@@ -153,6 +160,7 @@ defmodule Shoestring.Cobbler.Planner do
          {:ok, parent} <- optional_revision_number(attrs, :parent_revision_number),
          {:ok, confirmation} <- confirmation(attrs, :confirmation),
          {:ok, config} <- resolve_config(opts),
+         :ok <- check_adapter_config(config, opts),
          {:ok, inputs} <- PlannerPrompt.normalize(planner_attrs(attrs, config)),
          {:ok, built} <- PlannerPrompt.build(inputs),
          :ok <- ensure_goal(repo, goal_id),
@@ -677,12 +685,10 @@ defmodule Shoestring.Cobbler.Planner do
     with :ok <- PlannerSafety.scan(raw),
          {:ok, contract} <- PlanContract.new(raw),
          :ok <- check_attribution(contract, context),
-         {:ok, %{revision: revision}} <- persist_revision(repo, request, context, contract) do
-      settle(repo, recheck_request(repo, request), context, :proposed, "valid_plan", %{
-        revision_number: revision.revision_number,
-        plan_digest: revision.digest,
-        admission_decision_ids: decision_ids
-      })
+         :ok <- check_output_binding(contract, context),
+         {:ok, _result} = recorded <-
+           propose_and_settle(repo, request, context, contract, decision_ids) do
+      recorded
     else
       {:error, {:unsafe_proposal, detail}} ->
         settle(repo, recheck_request(repo, request), context, :failed, "unsafe_proposal", %{
@@ -1222,6 +1228,34 @@ defmodule Shoestring.Cobbler.Planner do
 
   defp planner_policy(context), do: context.config.policy
 
+  # Adapter configuration is validated before anything is claimed,
+  # admitted, or invoked: an unconfigured planner is a structured refusal
+  # with zero accounting, never a transport failure after spending an
+  # attempt. Adapters without a `configured/1` boundary (like the
+  # fixture) are always usable.
+  defp check_adapter_config(%{adapter: adapter}, opts) do
+    adapter_opts =
+      Keyword.take(opts, [
+        :fixture,
+        :call_log,
+        :endpoint,
+        :model,
+        :api_key,
+        :api_key_env,
+        :timeout_ms,
+        :max_body
+      ])
+
+    if function_exported?(adapter, :configured, 1) do
+      case adapter.configured(adapter_opts) do
+        {:ok, _config} -> :ok
+        {:error, :planner_not_configured} -> {:error, :planner_not_configured}
+      end
+    else
+      :ok
+    end
+  end
+
   # ----------------------------------------------------------------------------
   # Events
   # ----------------------------------------------------------------------------
@@ -1290,7 +1324,67 @@ defmodule Shoestring.Cobbler.Planner do
   # Contract validation and persistence helpers
   # ----------------------------------------------------------------------------
 
-  defp persist_revision(_repo, _request, context, contract) do
+  # Proposal persistence and request settlement commit atomically: the
+  # revision row, the plan event, the settled request row, and the resolved
+  # event land in one immediate transaction, and every event publishes only
+  # after that commit. A cancellation that lands first forces the whole
+  # transaction back (no orphan revision, no proposal event); a
+  # cancellation that lands after finds a settled request and converges on
+  # it. Either way the two can never disagree.
+  defp propose_and_settle(repo, request, context, contract, decision_ids) do
+    result =
+      repo
+      |> run_transaction(fn ->
+        case propose_quiet(repo, context, contract) do
+          {:ok, %{revision: revision, events: propose_events}} ->
+            fields = %{
+              revision_number: revision.revision_number,
+              plan_digest: revision.digest,
+              admission_decision_ids: decision_ids
+            }
+
+            settled =
+              settle_transaction(
+                repo,
+                request,
+                context,
+                :proposed,
+                :proposed,
+                "valid_plan",
+                fields
+              )
+
+            %{settled | events: propose_events ++ settled.events}
+
+          {:error, reason} ->
+            repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:ok, %{events: events} = committed} ->
+        publish(events, context.opts)
+
+        {:ok,
+         %{
+           request: committed.request,
+           revision: committed.revision,
+           outcome: :recorded,
+           events: events
+         }}
+
+      {:error, {:planner_already_settled, %{"request_id" => _request_id}}} ->
+        replay_stored(repo, context, recheck_request(repo, request))
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Plans.propose with publication suppressed: its events join the outer
+  # transaction and publish with everything else only on commit, so a
+  # rolled-back proposal never broadcasts.
+  defp propose_quiet(repo, context, contract) do
     attrs =
       %{
         proposal_id: context.proposal_id,
@@ -1299,12 +1393,10 @@ defmodule Shoestring.Cobbler.Planner do
       }
       |> maybe_put_parent(context.parent)
 
-    case Plans.propose(
-           context.goal_id,
-           attrs,
-           Keyword.take(context.opts, [:repo]) ++ [now: context.now] ++ publish_opt(context.opts)
-         ) do
-      {:ok, %{revision: revision}} -> {:ok, %{revision: revision}}
+    propose_opts = [repo: repo, now: context.now, publish_fun: fn _event -> :ok end]
+
+    case Plans.propose(context.goal_id, attrs, propose_opts) do
+      {:ok, %{revision: revision, events: events}} -> {:ok, %{revision: revision, events: events}}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -1329,6 +1421,24 @@ defmodule Shoestring.Cobbler.Planner do
       {:error,
        {:invalid_plan_provenance,
         "planner block must echo #{context.config.planner_identity} version #{context.config.planner_version}"}}
+    end
+  end
+
+  # A validly shaped plan can still answer the wrong goal. The returned
+  # goal statement and base revision must echo the request inputs exactly;
+  # anything else is a contract failure routed to the single bounded
+  # repair, never persisted.
+  defp check_output_binding(contract, context) do
+    goal = contract.content["goal"] || %{}
+    repository = goal["repository"] || %{}
+
+    if goal["statement"] == context.inputs.goal_statement and
+         repository["base_revision"] == context.inputs.base_revision do
+      :ok
+    else
+      {:error,
+       {:plan_goal_mismatch,
+        "the plan answers a different goal or base revision than the request named"}}
     end
   end
 
@@ -1367,6 +1477,8 @@ defmodule Shoestring.Cobbler.Planner do
 
   defp summarize_contract_error({:invalid_plan_provenance, message}), do: [truncate(message)]
 
+  defp summarize_contract_error({:plan_goal_mismatch, message}), do: [truncate(message)]
+
   defp summarize_contract_error({:plan_proposal_conflict, _detail}),
     do: ["The proposal id is already taken by different content."]
 
@@ -1402,9 +1514,17 @@ defmodule Shoestring.Cobbler.Planner do
       "model" => config.model
     }
 
-    attrs
-    |> Map.new(fn {key, value} -> {to_string(key), value} end)
-    |> Map.take(shared)
+    stringified = Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
+
+    taken =
+      stringified
+      |> Map.take(shared)
+      |> Map.put("requested_by", stringified["requested_by"])
+      |> Map.put("proposal_id", stringified["proposal_id"] || stringified["request_id"])
+      |> Map.put("parent_revision_number", stringified["parent_revision_number"])
+      |> Map.put("confirmation", stringified["confirmation"])
+
+    taken
     |> Map.put("planner", planner)
     |> Map.new(fn {key, value} -> {String.to_atom(key), value} end)
   end
@@ -1630,13 +1750,6 @@ defmodule Shoestring.Cobbler.Planner do
   defp publish(events, opts) do
     publish_fun = Keyword.get(opts, :publish_fun, &default_publish/1)
     Enum.each(events, publish_fun)
-  end
-
-  defp publish_opt(opts) do
-    case Keyword.fetch(opts, :publish_fun) do
-      {:ok, fun} -> [publish_fun: fun]
-      :error -> []
-    end
   end
 
   defp default_publish(event) do

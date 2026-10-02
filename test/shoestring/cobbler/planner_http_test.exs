@@ -108,6 +108,17 @@ defmodule Shoestring.Cobbler.PlannerHttpTest do
       assert {:error, {:invalid_response, %{"reason" => "unexpected_shape"}}} =
                PlannerHttp.decode_response(%{"unexpected" => true})
     end
+
+    test "a choice-level content-filter refusal is terminal, never repaired" do
+      refused = %{
+        "choices" => [
+          %{"message" => %{"content" => nil}, "finish_reason" => "content_filter"}
+        ]
+      }
+
+      assert {:error, {:refused, %{"reason" => "model_refused"}}} =
+               PlannerHttp.decode_response(refused)
+    end
   end
 
   describe "identity/0" do

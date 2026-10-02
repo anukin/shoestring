@@ -41,6 +41,9 @@ UI is a view over this domain, not the place the domain lives.
    The `(goal_id, request_id)` unique index is the idempotency token: the
    same id with the same input digest replays the stored outcome with zero
    new invocations; the same id with a different digest is a conflict.
+   The digest binds the semantic request identity (initiator, proposal
+   id, parent, confirmation), so another initiator's identical bytes
+   conflict rather than replaying someone else's attribution.
    Fresh ids that would silently branch existing revision history are
    refused by the lineage check before any claim, admission, or
    invocation.
@@ -58,13 +61,17 @@ UI is a view over this domain, not the place the domain lives.
 5. **Validate before persisting.** Output passes `PlannerSafety` (no
    reserve, lifecycle, dispatch, approval, destructive-integration,
    worktree-override, or command-bypass directives) and then the full
-   `PlanContract` validation, including planner-attribution echo. Only a
-   valid contract reaches `Plans.propose/3`, authored by the human
+   `PlanContract` validation, including planner-attribution echo and
+   goal/base-revision binding to the request inputs. Only a valid
+   contract reaches `Plans.propose/3`, authored by the human
    requester. Invalid output never creates a revision, and every persisted
    proposal stays `proposed`: the planner cannot approve.
 6. **Settle.** Success, failure, repair exhaustion, quota blocking, and
    explicit cancellation each settle the row and append a
    `cobbler.planner.resolved` event with a closed outcome/reason pair.
+   Proposal persistence and request settlement commit atomically, and
+   events publish only after that commit, so cancellation can never
+   leave an orphan proposal behind.
    Terminal rows never move; retry, replay, restart, and concurrent
    duplicates converge on the stored outcome instead of duplicating
    invocations or resetting the attempt budget.
@@ -97,7 +104,10 @@ config :shoestring, :planner,
 ```
 
 The credential travels in the request header only. It is never logged,
-never persisted, and never echoed in an error.
+never persisted, and never echoed in an error. Adapter configuration is
+validated before anything is claimed, admitted, or invoked: an
+unconfigured planner is a structured `:planner_not_configured` refusal
+with zero accounting.
 
 ## Accounting path
 

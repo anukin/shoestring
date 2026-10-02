@@ -49,7 +49,8 @@ defmodule Shoestring.Cobbler.PlannerSafety do
     destructive_integration: [
       ~r/push\s+(?:--force|to\s+main)/i,
       ~r/merge\s+(?:to|into)\s+main/i,
-      ~r/delet(?:e|ing)\s+(?:the\s+)?(?:branch|worktree)/i,
+      ~r/delet(?:e|ing)\s+(?:the\s+)?(?:branch|worktree|database)/i,
+      ~r/remov(?:e|ing)\s+(?:the\s+)?(?:branch|worktree|database)/i,
       ~r/destroy\s+(?:the\s+)?(?:database|worktree|branch)/i,
       ~r/drop\s+table/i,
       ~r{rm\s+-rf?\s+[/~]},

@@ -16,8 +16,11 @@ defmodule Shoestring.Cobbler.PlannerPrompt do
   is never truncated to fit.
 
   `input_digest/1` is the SHA-256 of the canonical rendering of the
-  normalized inputs. It is the replay guard a request stores: the same
-  request id with the same digest is the same request.
+  normalized inputs, including the semantic request identity (who asked,
+  under which proposal id, against which parent, with which confirmation).
+  It is the replay guard a request stores: the same request id with the
+  same digest is the same request, while another initiator's identical
+  bytes are a conflict, never a replay of someone else's attribution.
   """
 
   alias Shoestring.Cobbler.PlanGate
@@ -43,7 +46,11 @@ defmodule Shoestring.Cobbler.PlannerPrompt do
           optional(:non_goals) => [String.t()],
           optional(:acceptance) => map(),
           optional(:context_refs) => [%{ref: String.t(), summary: String.t()}],
-          optional(:repair_errors) => [String.t()]
+          optional(:repair_errors) => [String.t()],
+          optional(:requested_by) => String.t() | nil,
+          optional(:proposal_id) => String.t() | nil,
+          optional(:parent_revision_number) => pos_integer() | nil,
+          optional(:confirmation) => map() | nil
         }
 
   @type prompt :: %{
@@ -82,7 +89,11 @@ defmodule Shoestring.Cobbler.PlannerPrompt do
          context_refs: context_refs,
          planner_identity: planner.identity,
          planner_version: planner.version,
-         planner_model: planner.model
+         planner_model: planner.model,
+         requested_by: identity_value(attrs, :requested_by),
+         proposal_id: identity_value(attrs, :proposal_id),
+         parent_revision_number: identity_value(attrs, :parent_revision_number),
+         confirmation: identity_value(attrs, :confirmation)
        }}
     end
   end
@@ -147,6 +158,7 @@ defmodule Shoestring.Cobbler.PlannerPrompt do
     canonical = %{
       "acceptance" => inputs.acceptance,
       "base_revision" => inputs.base_revision,
+      "confirmation" => inputs[:confirmation],
       "constraints" => Map.get(inputs, :constraints, []),
       "context_refs" =>
         inputs
@@ -154,10 +166,13 @@ defmodule Shoestring.Cobbler.PlannerPrompt do
         |> Enum.map(&%{"ref" => &1.ref, "summary" => &1.summary}),
       "goal_statement" => inputs.goal_statement,
       "non_goals" => Map.get(inputs, :non_goals, []),
+      "parent_revision_number" => inputs[:parent_revision_number],
       "planner_identity" => inputs.planner_identity,
       "planner_model" => inputs.planner_model,
       "planner_version" => inputs.planner_version,
-      "remote_ref" => inputs[:remote_ref]
+      "proposal_id" => inputs[:proposal_id],
+      "remote_ref" => inputs[:remote_ref],
+      "requested_by" => inputs[:requested_by]
     }
 
     canonical |> encode_canonical() |> sha256()
@@ -431,6 +446,19 @@ defmodule Shoestring.Cobbler.PlannerPrompt do
     do: {:error, {:invalid_planner_request, field, "is not bounded secret-free text"}}
 
   defp planner_error(other, _field), do: other
+
+  # Semantic request identity travels into the digest (never into the
+  # model-visible prompt, which `build/2` renders from explicit fields
+  # only). These bindings are validated upstream by the orchestrator;
+  # `normalize/1` carries them verbatim so the digest binds who asked,
+  # under which proposal id, against which parent, and with which
+  # confirmation.
+  defp identity_value(attrs, key) do
+    case Contract.fetch(attrs, key) do
+      {:ok, value} -> value
+      :error -> nil
+    end
+  end
 
   # ----------------------------------------------------------------------------
   # Prompt instructions

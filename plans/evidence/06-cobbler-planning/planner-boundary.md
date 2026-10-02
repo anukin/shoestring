@@ -156,6 +156,82 @@ changes were supplied as the ignored scratch file `.planner-partial.patch`
   test's blocked request now names its parent revision as the lineage
   rule (tested elsewhere in the same file) requires.
 
+## Independent review findings (head 39159e6)
+
+Review evidence: `.shoestring/review/39159e6-verdict.md` (Codex gpt-6-sol,
+REQUEST_CHANGES, static review only). Each finding was traced against the
+reviewed head; confirmed blockers were fixed with hermetic regressions
+proven to fail at 39159e6 for the intended behavioral reason.
+
+- **Finding 1 (aggregate quota across requests) — NOT confirmed as a
+  package-B blocker, no code change.** REPO-INSPECTION:
+  `AdmissionEvaluation.evaluate/5` takes occupancy only as explicit
+  caller-supplied evidence (`Keyword.get(opts, :occupancy, false)`), and
+  no durable cross-request quota balance exists anywhere in the merged
+  tree (no ledger table; reserves are policy thresholds, never
+  decrementing balances). The package-B contract requires admission and
+  accounting in *existing* quota units — satisfied by per-invocation
+  evaluation, one `admission.decided` event per evaluation, and the
+  durable two-attempt budget. A shared reservation ledger is new
+  cross-package infrastructure outside the allowed package-B scope
+  (recorded as deferred architecture input for the iterations that own
+  concurrency and forecasting).
+- **Finding 2 (unconfigured planner admitted) — CONFIRMED, fixed.**
+  `request_plan/3` now validates the adapter boundary
+  (`check_adapter_config/2`, via the adapter's `configured/1` where one
+  exists) before claim, admission, or invocation; an unconfigured
+  planner returns `:planner_not_configured` with zero rows, zero
+  admission events, and zero invocations. At 39159e6 the same call
+  settled a `failed`/`transport_error` row after spending an admission
+  and an attempt. Regression:
+  `planner_test.exs` "an unconfigured production planner is refused with
+  zero accounting".
+- **Finding 3 (cancel/proposal race) — CONFIRMED, fixed.** Proposal
+  persistence and request settlement now commit in one immediate
+  transaction (`propose_and_settle/5`); `Plans.propose/3` runs with
+  publication suppressed inside it and every event publishes only after
+  the outer commit. A cancellation that lands first rolls the whole
+  thing back (no orphan revision, no proposal event); one that lands
+  after converges on the settled request. No package-A code changed.
+  Regression: `planner_test.exs` "cancellation racing a valid proposal
+  leaves no orphan revision", deterministic via a cancelling
+  `publish_fun` — at 39159e6 it returns cancelled with an orphan
+  revision and proposal event; fixed, the proposal commits atomically
+  with its settlement.
+- **Finding 4 (digest omits semantic identity) — CONFIRMED, fixed.**
+  `PlannerPrompt.digest_inputs/1` now binds `requested_by`,
+  `proposal_id`, `parent_revision_number`, and `confirmation`
+  (model-visible rendering unchanged). Another initiator's identical
+  bytes are a conflict with zero invocations, never a replay of someone
+  else's attribution. Regression: `planner_test.exs` "the same content
+  from a different initiator is a conflict, not a replay" — at 39159e6
+  the second call replayed the first initiator's recorded proposal.
+- **Finding 5 (goal/base not bound) — CONFIRMED, fixed.** Validated
+  output now passes `check_output_binding/2`: the returned goal
+  statement and base revision must echo the request inputs exactly, else
+  a `plan_goal_mismatch` contract failure routed to the single bounded
+  repair. Invalid output still never persists. Regression:
+  `planner_test.exs` "a plan answering a different goal or base is
+  rejected, never persisted" — at 39159e6 the mismatched plan persisted
+  a revision; fixed, both attempts mismatch and the request settles on
+  the manual path with exactly two invocations.
+- **Finding 6 (destructive wording) — CONFIRMED, fixed.**
+  `PlannerSafety` gains `remov(e|ing) + branch|worktree|database` (and
+  `delete + database`) phrase patterns. Regression:
+  `planner_safety_test.exs` "rejects ordinary destructive wording for
+  protected targets" — at 39159e6 "Remove the worktree" scanned clean;
+  the companion preservation test ("Remove unused imports…") passes
+  before and after.
+- **Finding 7 (choice-level refusal) — CONFIRMED, fixed.**
+  `PlannerHttp.decode_response/1` now also reads `finish_reason` on the
+  choice (where OpenAI-compatible endpoints put it) and tolerates a
+  non-map message. A content-filter refusal with empty content is
+  `refused` (terminal upstream, never repaired), not
+  `invalid_response`. Regression: `planner_http_test.exs` "a
+  choice-level content-filter refusal is terminal, never repaired" — at
+  39159e6 it decoded as `invalid_response`/`missing_content`, which
+  would have triggered a repair.
+
 ## Gate
 
 VERIFIED — baseline, run in `$WORKTREE` at base `df62479` with the work
@@ -209,7 +285,27 @@ exit 0; ExUnit `4 doctests, 1722 tests, 0 failures, 1 skipped
 1722 − 1660 = **62 new tests**: 24 in `planner_test.exs`, 15 in
 `planner_http_test.exs` (10 pure plus 5 Req loopback transport), 1 in
 `planner_concurrency_test.exs`, and the remainder across
-`planner_prompt_test.exs`/`planner_safety_test.exs`. Two
+`planner_prompt_test.exs`/`planner_safety_test.exs`.
+
+VERIFIED — review-fix gate, run in `$WORKTREE` on this branch after the
+finding fixes:
+
+```
+$ mix precommit
+```
+
+exit 2; ExUnit `4 doctests, 1729 tests, 1 failure, 1 skipped
+(6 excluded)`; `gate_0a.node_test` `tests 52 / pass 52 / fail 0`;
+`ui.node_test` `tests 7 / pass 7 / fail 0`. The single failure is the
+same suspected pre-existing `PlanApprovalRaceTest` contention flake
+with the identical signature
+(`error::database_busy, error::database_busy, error::rollback,
+ok:recorded`) — the fourth full-suite occurrence overall (2 baseline,
+2 branch), file-only runs of that test pass, and every one of the 69
+planner-boundary tests passed in this run. Per gate honesty the failure
+is reported as observed, not rerun past. 1729 − 1660 = **69 new tests**
+in total: the 62 above plus 7 review regressions (4 planner boundary,
+2 safety wording/preservation, 1 choice-level refusal). Two
 pre-existing test setups were corrected without weakening any assertion
 (`claim_changeset/3` arity; the rebuild test's blocked request now names
 its parent revision as the lineage rule requires). No existing test was
