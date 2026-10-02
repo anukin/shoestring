@@ -38,6 +38,7 @@ defmodule Shoestring.Cobbler do
     LeaseRenewal,
     Leases,
     PlanContract,
+    Planner,
     Plans
   }
 
@@ -334,4 +335,51 @@ defmodule Shoestring.Cobbler do
   """
   @spec rebuild_plans(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def rebuild_plans(goal_id, opts \\ []), do: Plans.rebuild(goal_id, opts)
+
+  # ----------------------------------------------------------------------------
+  # Bounded planner boundary (iteration 6, package B)
+  # ----------------------------------------------------------------------------
+
+  @doc """
+  Requests a bounded plan proposal for a goal through the quota-aware
+  planner boundary.
+
+  Every invocation is admitted through `AdmissionEvaluation` first (one
+  `admission.decided` event per evaluation); at most two invocations happen
+  per request. Valid output persists an immutable, unapproved revision via
+  `propose_plan/3`; invalid output never persists and settles on the
+  user-edit/manual path. See `Shoestring.Cobbler.Planner.request_plan/3`.
+  """
+  @spec request_plan(Ecto.UUID.t(), map(), keyword()) :: Planner.request_result()
+  def request_plan(goal_id, attrs, opts \\ []), do: Planner.request_plan(goal_id, attrs, opts)
+
+  @doc """
+  Explicitly cancels an in-progress planner request.
+
+  See `Shoestring.Cobbler.Planner.cancel/4`.
+  """
+  @spec cancel_plan_request(Ecto.UUID.t(), String.t(), map(), keyword()) ::
+          Planner.request_result() | {:error, term()}
+  def cancel_plan_request(goal_id, request_id, attrs, opts \\ []),
+    do: Planner.cancel(goal_id, request_id, attrs, opts)
+
+  @doc "Returns one planner request row for a goal, or nil."
+  @spec planner_request(Ecto.UUID.t(), String.t(), keyword()) ::
+          Shoestring.Cobbler.PlannerRequestRecord.t() | nil
+  def planner_request(goal_id, request_id, opts \\ []),
+    do: Planner.get_request(goal_id, request_id, opts)
+
+  @doc "Lists every planner request for a goal in request order."
+  @spec list_planner_requests(Ecto.UUID.t(), keyword()) :: [
+          Shoestring.Cobbler.PlannerRequestRecord.t()
+        ]
+  def list_planner_requests(goal_id, opts \\ []), do: Planner.list_requests(goal_id, opts)
+
+  @doc """
+  Recomputes planner request states purely from canonical planner events.
+
+  See `Shoestring.Cobbler.Planner.rebuild/2`.
+  """
+  @spec rebuild_planner(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def rebuild_planner(goal_id, opts \\ []), do: Planner.rebuild(goal_id, opts)
 end

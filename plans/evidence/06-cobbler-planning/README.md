@@ -23,3 +23,6 @@ schema without runtime integration; UNVERIFIED means not verified.
 - `plan-foundation-race-fix.md` — the independently reproduced red gate on
   PR #89 at `f265da6`, its root cause in the plan store's read-then-write
   idempotency windows and its structured-error contract, and the fix.
+- `planner-boundary.md` — work package B (bounded, quota-aware planner
+  boundary): proposals only, integrated with package A and admission/lease
+  accounting. No approval UI, no executor, no amendment orchestration.

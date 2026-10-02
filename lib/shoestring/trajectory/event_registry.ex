@@ -529,6 +529,78 @@ defmodule Shoestring.Trajectory.EventRegistry do
           extensions: :map
         }
       }
+    },
+    # Bounded planner inference (iteration 6, package B). `requested` opens
+    # a request with the validated, bounded inputs the prompt was built
+    # from — references and summaries, never a transcript and never raw
+    # model output. `resolved` settles it with a closed outcome/reason pair
+    # and a bounded redacted summary. Model-visible inputs are recorded by
+    # reference/summary here; the validated plan itself persists only
+    # through the plan revision its success path created.
+    "cobbler.planner.requested" => %{
+      1 => %{
+        required: [
+          :request_id,
+          :requested_by,
+          :planner_identity,
+          :planner_version,
+          :planner_model,
+          :input_digest,
+          :goal_statement,
+          :base_revision,
+          :attempt_budget
+        ],
+        optional: [
+          :remote_ref,
+          :constraints,
+          :non_goals,
+          :acceptance_gates,
+          :acceptance_evidence,
+          :source_context_refs,
+          :parent_revision_number,
+          :proposal_id,
+          :extensions
+        ],
+        uuid_fields: [],
+        types: %{
+          attempt_budget: :integer,
+          parent_revision_number: :integer,
+          constraints: {:array, :string},
+          non_goals: {:array, :string},
+          acceptance_gates: {:array, :string},
+          acceptance_evidence: {:array, :string},
+          source_context_refs: {:array, :map},
+          extensions: :map
+        }
+      }
+    },
+    "cobbler.planner.resolved" => %{
+      1 => %{
+        required: [
+          :request_id,
+          :outcome,
+          :reason,
+          :attempts_used,
+          :decided_at
+        ],
+        optional: [
+          :proposal_id,
+          :revision_number,
+          :plan_digest,
+          :error_summary,
+          :admission_decision_ids,
+          :planner_identity,
+          :extensions
+        ],
+        uuid_fields: [],
+        types: %{
+          attempts_used: :integer,
+          revision_number: :integer,
+          decided_at: :utc_datetime,
+          admission_decision_ids: {:array, :string},
+          extensions: :map
+        }
+      }
     }
   }
 
@@ -669,6 +741,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
       with :ok <- validate_capacity_snapshot(type, version, validated, opts),
            :ok <- validate_admission_decision(type, version, validated, opts),
            :ok <- validate_handoff(type, version, validated, opts),
+           :ok <- validate_planner(type, version, validated, opts),
            :ok <- validate_plan(type, version, validated, opts) do
         {:ok, validated}
       else
@@ -861,6 +934,260 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
       true ->
         :ok
+    end
+  end
+
+  # A planner request opens with human attribution, a closed attempt
+  # budget, and bounded secret-free inputs; a resolution carries a closed
+  # outcome/reason pair with the settlement evidence that outcome requires.
+  # Like `validate_plan/4`, this re-checks at the write boundary what the
+  # domain already validated, so a stored planner fact always says which
+  # human asked, which planner answered, and why the request stopped.
+  defp validate_planner("cobbler.planner.requested", 1, payload, _opts) do
+    with {:ok, _requested_by} <- planner_human(payload, "requested_by"),
+         :ok <- planner_present_text(payload, "planner_identity", 200),
+         :ok <- planner_present_text(payload, "planner_version", 64),
+         :ok <- planner_present_text(payload, "planner_model", 200),
+         :ok <- planner_hex_digest(payload, "input_digest"),
+         :ok <- planner_goal_statement(payload),
+         :ok <- planner_base_revision(payload),
+         :ok <- planner_attempt_budget(payload),
+         :ok <- planner_no_home_paths(payload, "goal_statement"),
+         :ok <- planner_context_refs(payload) do
+      :ok
+    end
+  end
+
+  defp validate_planner("cobbler.planner.resolved", 1, payload, _opts) do
+    with {:ok, outcome} <- planner_outcome(payload),
+         {:ok, reason} <- planner_reason(payload),
+         :ok <- planner_outcome_reason_consistent(outcome, reason, payload),
+         :ok <- planner_attempts_used(payload),
+         :ok <- planner_no_home_paths(payload, "error_summary"),
+         :ok <- planner_admission_refs(payload) do
+      :ok
+    end
+  end
+
+  defp validate_planner(_type, _version, _payload, _opts), do: :ok
+
+  @planner_human_pattern ~r/\Ahuman:[A-Za-z0-9][A-Za-z0-9_.@:+-]{0,180}\z/
+  @planner_outcomes ~w(proposed manual_required failed cancelled)
+  @planner_reasons ~w(valid_plan quota_blocked confirmation_required repair_exhausted transport_error refused unsafe_proposal cancelled)
+
+  defp planner_human(payload, key) do
+    case Map.get(payload, key) do
+      value when is_binary(value) ->
+        if Regex.match?(@planner_human_pattern, value) do
+          {:ok, value}
+        else
+          Contract.invalid(String.to_atom(key), "must be a human identity")
+        end
+
+      _other ->
+        Contract.invalid(String.to_atom(key), "must be a human identity")
+    end
+  end
+
+  defp planner_present_text(payload, key, max) do
+    case Map.get(payload, key) do
+      value when is_binary(value) ->
+        if value != "" and String.length(value) <= max do
+          :ok
+        else
+          Contract.invalid(String.to_atom(key), "must be bounded text")
+        end
+
+      _other ->
+        Contract.invalid(String.to_atom(key), "must be a string")
+    end
+  end
+
+  defp planner_hex_digest(payload, key) do
+    case Map.get(payload, key) do
+      value when is_binary(value) ->
+        if Regex.match?(~r/\A[0-9a-f]{64}\z/, value) do
+          :ok
+        else
+          Contract.invalid(String.to_atom(key), "must be a sha256 hex digest")
+        end
+
+      _other ->
+        Contract.invalid(String.to_atom(key), "must be a sha256 hex digest")
+    end
+  end
+
+  defp planner_goal_statement(payload) do
+    case Map.get(payload, "goal_statement") do
+      value when is_binary(value) ->
+        if value != "" and String.length(value) <= 2_000 do
+          :ok
+        else
+          Contract.invalid(:goal_statement, "must be bounded text")
+        end
+
+      _other ->
+        Contract.invalid(:goal_statement, "must be a string")
+    end
+  end
+
+  defp planner_base_revision(payload) do
+    case Map.get(payload, "base_revision") do
+      value when is_binary(value) ->
+        if Regex.match?(~r/\A[0-9a-f]{7,40}\z/, value) do
+          :ok
+        else
+          Contract.invalid(:base_revision, "must be a resolved hexadecimal git revision")
+        end
+
+      _other ->
+        Contract.invalid(:base_revision, "must be a string")
+    end
+  end
+
+  defp planner_attempt_budget(payload) do
+    case Map.get(payload, "attempt_budget") do
+      2 -> :ok
+      _other -> Contract.invalid(:attempt_budget, "must equal 2")
+    end
+  end
+
+  defp planner_no_home_paths(payload, key) do
+    case Map.get(payload, key) do
+      nil ->
+        :ok
+
+      value when is_binary(value) ->
+        if String.contains?(value, "/Users/") or String.contains?(value, "/home/") do
+          Contract.invalid(String.to_atom(key), "must not contain absolute machine paths")
+        else
+          :ok
+        end
+
+      _other ->
+        :ok
+    end
+  end
+
+  defp planner_context_refs(payload) do
+    case Map.get(payload, "source_context_refs") do
+      nil ->
+        :ok
+
+      refs when is_list(refs) and length(refs) <= 16 ->
+        Enum.reduce_while(refs, :ok, fn entry, :ok ->
+          with %{"ref" => ref, "summary" => summary} when is_binary(ref) and is_binary(summary) <-
+                 entry,
+               true <- String.length(ref) <= 300 and String.length(summary) <= 500,
+               false <-
+                 String.contains?(ref, "/Users/") or String.contains?(ref, "/home/") or
+                   String.contains?(summary, "/Users/") or String.contains?(summary, "/home/") do
+            {:cont, :ok}
+          else
+            _other ->
+              {:halt,
+               Contract.invalid(:source_context_refs, "must be bounded path-free references")}
+          end
+        end)
+
+      _other ->
+        Contract.invalid(:source_context_refs, "must be a list of at most 16 references")
+    end
+  end
+
+  defp planner_outcome(payload) do
+    case Map.get(payload, "outcome") do
+      outcome when is_binary(outcome) ->
+        if outcome in @planner_outcomes do
+          {:ok, outcome}
+        else
+          Contract.invalid(:outcome, "must be one of #{Enum.join(@planner_outcomes, ", ")}")
+        end
+
+      _other ->
+        Contract.invalid(:outcome, "must be a string")
+    end
+  end
+
+  defp planner_reason(payload) do
+    case Map.get(payload, "reason") do
+      reason when is_binary(reason) ->
+        if reason in @planner_reasons do
+          {:ok, reason}
+        else
+          Contract.invalid(:reason, "must be one of #{Enum.join(@planner_reasons, ", ")}")
+        end
+
+      _other ->
+        Contract.invalid(:reason, "must be a string")
+    end
+  end
+
+  # The outcome/reason pair is a closed table, and each terminal kind
+  # carries the settlement evidence its readers need: a proposal names the
+  # revision and digest it created; every other stop names why in a bounded
+  # summary. A pair outside the table, or a settlement without its evidence,
+  # fails the write instead of persisting an ambiguous fact.
+  defp planner_outcome_reason_consistent(outcome, reason, payload) do
+    valid? =
+      case {outcome, reason} do
+        {"proposed", "valid_plan"} ->
+          is_integer(Map.get(payload, "revision_number")) and
+            planner_digest?(Map.get(payload, "plan_digest"))
+
+        {"manual_required", reason}
+        when reason in ["quota_blocked", "confirmation_required", "repair_exhausted"] ->
+          bounded_summary?(Map.get(payload, "error_summary"))
+
+        {"failed", reason} when reason in ["transport_error", "refused", "unsafe_proposal"] ->
+          bounded_summary?(Map.get(payload, "error_summary"))
+
+        {"cancelled", "cancelled"} ->
+          true
+
+        _other ->
+          false
+      end
+
+    if valid? do
+      :ok
+    else
+      Contract.invalid(:reason, "does not match the outcome and its settlement evidence")
+    end
+  end
+
+  defp planner_digest?(value) when is_binary(value),
+    do: Regex.match?(~r/\A[0-9a-f]{64}\z/, value)
+
+  defp planner_digest?(_value), do: false
+
+  defp bounded_summary?(value) when is_binary(value),
+    do: value != "" and String.length(value) <= 2_000
+
+  defp bounded_summary?(_value), do: false
+
+  defp planner_attempts_used(payload) do
+    case Map.get(payload, "attempts_used") do
+      used when is_integer(used) and used >= 0 and used <= 2 -> :ok
+      _other -> Contract.invalid(:attempts_used, "must be between 0 and 2")
+    end
+  end
+
+  defp planner_admission_refs(payload) do
+    case Map.get(payload, "admission_decision_ids") do
+      nil ->
+        :ok
+
+      ids when is_list(ids) and length(ids) <= 2 ->
+        Enum.reduce_while(ids, :ok, fn id, :ok ->
+          case Ecto.UUID.cast(id) do
+            {:ok, _uuid} -> {:cont, :ok}
+            :error -> {:halt, Contract.invalid(:admission_decision_ids, "must be UUIDs")}
+          end
+        end)
+
+      _other ->
+        Contract.invalid(:admission_decision_ids, "must be a list of at most 2 UUIDs")
     end
   end
 
