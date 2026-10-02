@@ -11,13 +11,10 @@ defmodule Shoestring.Cobbler.PlannerHttp do
 
   Transport discipline:
 
-  - HTTP runs through OTP's built-in `:httpc` at this boundary only. No new
-    HTTP library is added (no `Req` dependency) and there is no shelling out
-    to a provider CLI. The repository prefers `Req` where available; this
-    boundary documents the stdlib choice and its limits in the package
-    evidence instead of adding a dependency.
-  - Timeouts are bounded (`timeout`, default 60 seconds) and the response
-    body is capped (`max_body`, default 65 536 bytes — the plan
+  - HTTP runs through `Req`, the sanctioned client. No other HTTP library
+    and no shelling out to a provider CLI.
+  - Timeouts are bounded (`receive_timeout`, default 60 seconds) and the
+    response body is capped (`max_body`, default 65 536 bytes — the plan
     contract's own byte cap). Oversized output fails the attempt; it is
     never silently truncated into a plan.
   - The API key travels in the request header only. It is read from config
@@ -31,8 +28,9 @@ defmodule Shoestring.Cobbler.PlannerHttp do
   Nothing here touches the database, admission, or approval. Every
   invocation is admitted by the orchestrator first, and every output is
   validated through `PlanContract` plus `PlannerSafety` before anything is
-  persisted. No live call is needed — or made — to validate this boundary;
-  tests exercise `request_body/2` and `decode_response/1` purely.
+  persisted. No live provider call is needed — or made — to validate this
+  boundary; tests exercise the full `plan/2` path against a loopback stub
+  server plus `request_body/2` and `decode_response/1` purely.
   """
 
   @behaviour Shoestring.Cobbler.PlannerAdapter
@@ -158,31 +156,37 @@ defmodule Shoestring.Cobbler.PlannerHttp do
   # ----------------------------------------------------------------------------
 
   defp post(config, body) do
-    _ = Application.ensure_started(:inets)
-    payload = Jason.encode!(body)
-    url = String.to_charlist(config.endpoint)
+    _ = Application.ensure_all_started(:req)
 
-    headers = [
-      {~c"authorization", String.to_charlist("Bearer #{config.api_key}")},
-      {~c"accept", ~c"application/json"}
-    ]
+    config.endpoint
+    |> Req.post(
+      json: body,
+      headers: [{"authorization", "Bearer #{config.api_key}"}, {"accept", "application/json"}],
+      decode_body: false,
+      receive_timeout: config.timeout_ms,
+      retry: false
+    )
+    |> case do
+      {:ok, %Req.Response{status: status, body: raw}} when status in 200..299 ->
+        decode_http_body(raw, config)
 
-    request = {url, headers, ~c"application/json", payload}
-
-    case :httpc.request(:post, request, [{:timeout, config.timeout_ms}], [{:body_format, :binary}]) do
-      {:ok, {{_version, status, _phrase}, _resp_headers, resp_body}}
-      when status in 200..299 ->
-        decode_http_body(resp_body, config)
-
-      {:ok, {{_version, status, _phrase}, _resp_headers, _resp_body}} ->
+      {:ok, %Req.Response{status: status}} ->
         {:error, {:transport, %{"reason" => "http_status", "status" => status}}}
 
-      {:error, reason} ->
+      {:error, %Req.TransportError{reason: reason}} ->
         {:error,
          {:transport, %{"reason" => "transport", "detail" => reason |> inspect() |> truncate()}}}
+
+      {:error, exception} ->
+        {:error,
+         {:transport,
+          %{"reason" => "request_failed", "detail" => exception |> inspect() |> truncate()}}}
     end
   end
 
+  # The byte cap is enforced on the raw body before JSON decoding:
+  # oversized output fails the attempt and is never decoded, truncated,
+  # or persisted into a plan.
   defp decode_http_body(body, config)
        when is_binary(body) and byte_size(body) > config.max_body do
     {:error, {:transport, %{"reason" => "oversized_body"}}}

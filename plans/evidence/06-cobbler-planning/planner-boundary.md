@@ -119,10 +119,21 @@ changes were supplied as the ignored scratch file `.planner-partial.patch`
 (never committed) and were applied selectively with `git apply
 --exclude=mix.exs --exclude=mix.lock`:
 
-- The patch's `mix.exs`/`mix.lock` hunk adds a `Req` dependency. No new
-  dependency is authorized for this slice, so it was dropped; the
-  production transport uses OTP's built-in `:httpc` instead (see
-  Limitations). `mix.exs`/`mix.lock` are byte-identical to base.
+- The patch's `mix.exs`/`mix.lock` hunk adds a `Req` dependency. The
+  initial recovery scope forbade new dependencies, so the first submission
+  used OTP's built-in `:httpc` instead — which violated the standing rule
+  that HTTP must use `Req`. A dependency check then VERIFIED `Req` is
+  absent from this tree (`mix.exs` lists 15 deps without it, `mix.lock`
+  has zero matches, `deps/` has no Req/Finch/Mint, and
+  `Code.ensure_loaded?(Req)` is `false`). The follow-up brief explicitly
+  lifted the constraint for `:req` alone, so `{:req, "~> 0.5"}` was added
+  (resolved to 0.7.4 with only its required transitive deps: finch, mint,
+  nimble_options, nimble_pool — no unrelated dependencies) and the
+  production transport now runs entirely through `Req`. No `:httpc` use
+  remains. The hermetic `plan/2` path runs the real `Req` client against
+  a loopback stub (2xx decode, non-2xx transport error, invalid JSON,
+  oversized-body rejection, refused connection); a real endpoint is never
+  contacted.
 - The patch's `Planner.consume_admission/4` returned a double-wrapped
   `{:ok, {:ok, ...}}` against the `repo.transaction/2` convention; fixed
   to the bare tuple (20 of 24 planner-test failures traced to this one
@@ -177,7 +188,7 @@ and no package-A code was changed here. Stated exactly: failed in 2 of
 Update after the evidence-wording correction: a further full-suite run
 on this branch (`mix precommit`, exit 2 at the ExUnit phase) failed with
 the identical signature (`error::database_busy, error::database_busy,
-error::rollback, ok:recorded`; all 57 planner tests passed in that run).
+error::rollback, ok:recorded`; all planner tests passed in that run).
 Full-suite totals are now 3 failures in 4 runs with one clean pass (the
 prior final gate: exit 0, 0 failures), all failures sharing the
 identical signature in the same package-A test. File-only runs of that
@@ -191,29 +202,29 @@ VERIFIED — final, run in `$WORKTREE` on this branch:
 $ mix precommit
 ```
 
-exit 0; ExUnit `4 doctests, 1717 tests, 0 failures, 1 skipped
+exit 0; ExUnit `4 doctests, 1722 tests, 0 failures, 1 skipped
 (6 excluded)`; `gate_0a.node_test` `tests 52 / pass 52 / fail 0`;
 `ui.node_test` `tests 7 / pass 7 / fail 0`.
 
-1717 − 1660 = **57 new tests**: 24 in `planner_test.exs`, 10 in
-`planner_http_test.exs`, 1 in `planner_concurrency_test.exs`, and the
-remainder across `planner_prompt_test.exs`/`planner_safety_test.exs`. Two
+1722 − 1660 = **62 new tests**: 24 in `planner_test.exs`, 15 in
+`planner_http_test.exs` (10 pure plus 5 Req loopback transport), 1 in
+`planner_concurrency_test.exs`, and the remainder across
+`planner_prompt_test.exs`/`planner_safety_test.exs`. Two
 pre-existing test setups were corrected without weakening any assertion
 (`claim_changeset/3` arity; the rebuild test's blocked request now names
 its parent revision as the lineage rule requires). No existing test was
 deleted or skipped, and the baseline intermittent race failure did not
-recur in the final run. `mix.exs`/`mix.lock` are byte-identical to base
-(no new dependency).
+recur in the final run. `mix.exs` gains exactly one dependency
+(`{:req, "~> 0.5"}`); `mix.lock` gains exactly its five entries (req
+0.7.4 plus required transitive finch, mint, nimble_options,
+nimble_pool). Nothing else in the dependency set changed.
 
 ## Limitations
 
-- The production transport uses OTP's built-in `:httpc`, not `Req` (no
-  new dependency authorized; `Req` is not in the dependency set). The
-  repository prefers `Req` where available; the deviation is recorded
-  here and in `docs/planner-boundary.md`.
-- The live transport path is implemented but unvalidated against a real
+- The live transport path is implemented but UNVERIFIED against a real
   endpoint: validating it would spend provider quota, which this slice
-  forbids. Only pure functions are covered hermetically.
+  forbids. Only the wire to a real endpoint is untested; everything else
+  in the path runs hermetically against a loopback stub.
 - Repair carries bounded field-level summaries; deeply nested contract
   failures may need a human edit after the single repair.
 - Dispatch, approval UI, and amendment orchestration remain later

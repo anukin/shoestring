@@ -137,15 +137,12 @@ its settlement evidence, replayable after restart via `rebuild_planner/2`.
 
 ## Limitations
 
-- The production transport uses OTP's built-in `:httpc`, not `Req`: no
-  new dependency was authorized for this slice, and `Req` is not in the
-  dependency set. The repository prefers `Req` where available; this
-  boundary documents the stdlib choice rather than adding a dependency.
-- The live transport path is implemented but unvalidated against a real
-  endpoint — validating it would spend provider quota, which this slice
-  forbids. Its pure surface (`configured/1`, `request_body/2`,
-  `decode_response/1`) is covered hermetically; the wire path is covered
-  by construction (bounded timeout, capped body, secret-free errors).
+- The live transport path (`PlannerHttp.plan/2` over a real endpoint) is
+  implemented but UNVERIFIED against a real provider: validating it would
+  spend provider quota, which this slice forbids. Its full path is covered
+  hermetically against a loopback stub (2xx decode, non-2xx transport
+  error, invalid JSON, oversized-body rejection, refused connection); only
+  the wire to a real endpoint is untested.
 - Repair carries bounded field-level error summaries; deeply nested
   contract failures may need a human edit after the single repair.
 - Dispatch, approval UI, and amendment orchestration remain later
