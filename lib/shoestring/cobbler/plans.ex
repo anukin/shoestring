@@ -1247,8 +1247,21 @@ defmodule Shoestring.Cobbler.Plans do
   # The list is closed on purpose. A programming error (ArgumentError,
   # FunctionClauseError, a bad query) must still crash loudly instead of
   # being dressed up as a transient storage problem.
+  # A disconnected or aborted connection can conclude the transaction
+  # with a bare `{:error, :rollback}` carrying no domain reason. Normalize
+  # only that bare abort into the existing structured `database_busy`
+  # error (the whole transaction rolled back); every intentional domain
+  # rollback reason and every success passes through untouched.
   defp run_transaction(repo, fun) do
     repo.transaction(fun, mode: :immediate)
+    |> case do
+      {:error, :rollback} ->
+        {:error,
+         {:database_busy, "transaction aborted by the connection without a domain reason"}}
+
+      result ->
+        result
+    end
   rescue
     error in [Exqlite.Error, DBConnection.ConnectionError] ->
       {:error, {:database_busy, Exception.message(error)}}

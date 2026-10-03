@@ -261,6 +261,36 @@ proven to fail at 39159e6 for the intended behavioral reason.
   39159e6 it decoded as `invalid_response`/`missing_content`, which
   would have triggered a repair.
 
+## Baseline transaction-abort leak (diagnosis `.shoestring/review/approval-race-diagnosis.md`)
+
+The independent diagnosis traced the recurring race-test signature
+(`error::database_busy x2, error::rollback, ok:recorded`) to a bare
+`{:error, :rollback}` leaking from `repo.transaction/2` after a
+disconnect/abort at conclude — both `Plans.run_transaction/2` and the
+twin `Planner.run_transaction/2` rescued exceptions but passed the bare
+abort through, and the race repos' `busy_timeout: 15_000` equalled the
+pool checkout deadline so a stalled waiter could get the lock holder
+disconnected mid-transaction. Fixes, all inside the briefed narrow
+scope:
+
+- Both helpers normalize **only** the bare `{:error, :rollback}` into
+  the existing structured `{:error, {:database_busy, message}}`;
+  intentional domain rollback reasons and success pass through untouched.
+- Deterministic regression via `Shoestring.Test.AbortRepo` (test
+  support): statements execute genuinely, then the outermost conclude
+  reports the bare abort; nested savepoints delegate really, and
+  intentional domain rollbacks pass through. Proven to fail at 086bd3f
+  (`{:error, :rollback}` leaked from both `Plans.propose/3` and
+  `Cobbler.request_plan/3`); post-fix both return structured
+  `database_busy` with nothing persisted, zero invocations, and a
+  same-proposal conflict through the aborting repo still reports
+  `plan_proposal_conflict` (intentional reasons preserved).
+- Race `busy_timeout` aligned 15_000 → 2_000 (production value,
+  `config/config.exs`) in `plan_approval_race_test.exs` and
+  `planner_concurrency_test.exs`, with comments explaining the
+  below-pool-deadline requirement. No assertions widened, no
+  exactly-one-recorded relaxation, no sleeps/retries/skips.
+
 ## Gate
 
 VERIFIED — baseline, run in `$WORKTREE` at base `df62479` with the work
@@ -343,8 +373,24 @@ files: **116 tests, 0 failures** (`mix compile --warnings-as-errors`
 and `mix format --check-formatted` also clean). The three new shared-reservation tests
 were proven to fail at a9a08a7 for the intended behavioral reasons (see
 Finding 1 above); the pre-existing occupied-free repair tests guard the
-self-exclusion. Full `mix precommit` deferred until the independent race
-diagnosis lands.
+self-exclusion.
+
+VERIFIED — final full gate after the abort-leak fix (diagnosis complete,
+no other worker running):
+
+```
+$ mix precommit
+```
+
+exit 0; ExUnit `4 doctests, 1738 tests, 0 failures, 1 skipped
+(6 excluded)`; `gate_0a.node_test` `tests 52 / pass 52 / fail 0`;
+`ui.node_test` `tests 7 / pass 7 / fail 0`. The previously flaking
+`PlanApprovalRaceTest` file passes in the full suite with the
+normalization plus the below-pool-deadline `busy_timeout`; no reruns,
+no skips, no widened assertions anywhere. 1738 − 1660 = **78 new
+runtime tests**: 72 `test` blocks across the seven package-B files plus
+6 loop-generated cases (the safety directive table generates 7 tests
+from one block), plus the 3 abort regressions.
 2 safety wording/preservation, 1 choice-level refusal). Two
 pre-existing test setups were corrected without weakening any assertion
 (`claim_changeset/3` arity; the rebuild test's blocked request now names

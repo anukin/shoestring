@@ -39,10 +39,13 @@ defmodule Shoestring.Cobbler.PlanApprovalRaceTest do
        journal_mode: :wal,
        # Four concurrent writers contend harder than the two-writer claim
        # race does; the timeout bounds how long a writer waits for the
-       # immediate-transaction lock under full-suite load. It is a
-       # contention bound, never a correctness one: exclusivity is the
-       # index's job, not the timeout's.
-       busy_timeout: 15_000
+       # immediate-transaction lock under full-suite load. It matches the
+       # production busy_timeout (2_000, config/config.exs) and stays well
+       # below the pool checkout deadline: a stalled waiter must fail with
+       # a structured busy error while the lock holder still holds its
+       # lock, instead of the pool timing out and disconnecting the holder
+       # mid-transaction (which surfaces as a bare transaction abort).
+       busy_timeout: 2_000
      ]})
 
     assert is_list(Ecto.Migrator.run(MigrationRepo, @migrations, :up, all: true))
