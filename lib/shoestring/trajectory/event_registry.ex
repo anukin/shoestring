@@ -20,6 +20,48 @@ defmodule Shoestring.Trajectory.EventRegistry do
   alias Shoestring.Trajectory.EventEnvelope
 
   @payload_schemas %{
+    "cobbler.planner.requested" => %{
+      1 => %{
+        required: [:request_id, :request_key, :input_digest, :projection_json, :configuration],
+        optional: [],
+        uuid_fields: [:request_id],
+        types: %{configuration: :map}
+      }
+    },
+    "cobbler.planner.attempt.started" => %{
+      1 => %{
+        required: [
+          :request_id,
+          :attempt,
+          :admission_event_id,
+          :output_token_allowance,
+          :charged_output_tokens
+        ],
+        optional: [],
+        uuid_fields: [:request_id, :admission_event_id],
+        types: %{
+          attempt: :integer,
+          output_token_allowance: :integer,
+          charged_output_tokens: :integer
+        }
+      }
+    },
+    "cobbler.planner.blocked" => %{
+      1 => %{
+        required: [:request_id, :admission_event_id, :errors],
+        optional: [],
+        uuid_fields: [:request_id, :admission_event_id],
+        types: %{errors: :map}
+      }
+    },
+    "cobbler.planner.attempt.finished" => %{
+      1 => %{
+        required: [:request_id, :attempt, :state, :errors],
+        optional: [:output_tokens, :plan_content, :plan_digest],
+        uuid_fields: [:request_id],
+        types: %{attempt: :integer, errors: :map, output_tokens: :integer}
+      }
+    },
     "goal.created" => %{
       1 => %{
         required: [:title],
@@ -669,7 +711,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
       with :ok <- validate_capacity_snapshot(type, version, validated, opts),
            :ok <- validate_admission_decision(type, version, validated, opts),
            :ok <- validate_handoff(type, version, validated, opts),
-           :ok <- validate_plan(type, version, validated, opts) do
+           :ok <- validate_plan(type, version, validated, opts),
+           :ok <- Shoestring.Cobbler.Planner.Events.validate(type, validated) do
         {:ok, validated}
       else
         {:error, changeset} -> {:error, {:invalid_payload, type, version, changeset}}

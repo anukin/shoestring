@@ -1,8 +1,9 @@
 # The Cobbler plan contract
 
-**Status:** implemented for iteration 6, work package A plus the durable
-revision/approval foundation. Execution, model planning, amendment
-orchestration, and the approval UI are **not** in this slice.
+**Status:** package A and the durable revision/approval foundation are merged.
+Package B adds the separate [planner boundary](planner-boundary.md), which can
+produce a candidate but cannot author or approve a revision. Execution,
+amendment orchestration and the approval UI are pending on this branch.
 
 A plan is a goal acceptance contract plus a validated task DAG. It is a
 *proposal* until a human approves one exact revision at one exact content

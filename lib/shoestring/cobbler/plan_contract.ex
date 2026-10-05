@@ -125,6 +125,17 @@ defmodule Shoestring.Cobbler.PlanContract do
   @spec max_tasks() :: pos_integer()
   def max_tasks, do: @max_tasks
 
+  @doc "Validates a goal acceptance contract before asking a planner to decompose it."
+  def validate_goal(goal) do
+    with :ok <- bound_input(goal),
+         :ok <- scan_forbidden_keys(goal),
+         {:ok, normalized} <- normalize_goal({:ok, goal}),
+         {:ok, _encoded} <- bound_encoded(normalized) do
+      {:ok, normalized}
+    end
+    |> tag_error()
+  end
+
   @doc """
   Validates untrusted plan attributes into a contract.
 

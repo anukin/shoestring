@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `planner-boundary.md` — package B's bounded fixture/local-model inference,
+  quota admission, durable budget/replay, strict validation and single repair.
+
 - `hermetic-lifecycle.md` — the iteration-5 follow-up end-to-end lifecycle
   test. The bounded hermetic task does not reopen iteration-5 acceptance.
 - `plan-foundation.md` — work package A (goal and task contracts) plus the

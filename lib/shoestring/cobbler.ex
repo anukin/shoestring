@@ -334,4 +334,26 @@ defmodule Shoestring.Cobbler do
   """
   @spec rebuild_plans(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def rebuild_plans(goal_id, opts \\ []), do: Plans.rebuild(goal_id, opts)
+
+  @doc "Stores the bounded initial planning request; no inference until generate_plan/3."
+  def request_plan(goal_id, attrs, opts \\ []),
+    do: Shoestring.Cobbler.Planner.request(goal_id, attrs, opts)
+
+  @doc "Generates one candidate after durable quota admission and budget reservation."
+  def generate_plan(goal_id, request_key, opts \\ []),
+    do: Shoestring.Cobbler.Planner.generate(goal_id, request_key, opts)
+
+  @doc "Makes the single explicit repair attempt after invalid structured output."
+  def repair_plan(goal_id, request_key, opts \\ []),
+    do: Shoestring.Cobbler.Planner.repair(goal_id, request_key, opts)
+
+  @doc "Returns durable initial planning state, quota accounting and validation feedback."
+  def planning_status(goal_id), do: Shoestring.Cobbler.Planner.get(goal_id)
+
+  @doc "Rebuilds planning state from canonical events and reports cache consistency."
+  def rebuild_planning(goal_id), do: Shoestring.Cobbler.Planner.rebuild(goal_id)
+
+  @doc "Authors a proposed revision from an exact human-reviewed candidate digest."
+  def adopt_planned_revision(goal_id, request_key, attrs, opts \\ []),
+    do: Shoestring.Cobbler.Planner.adopt(goal_id, request_key, attrs, opts)
 end
