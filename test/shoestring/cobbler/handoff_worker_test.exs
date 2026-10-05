@@ -71,6 +71,7 @@ defmodule Shoestring.Cobbler.HandoffWorkerTest do
 
     Application.put_env(:shoestring, :elf_dispatch_opts,
       supervisor: sup,
+      notify: self(),
       scenario: Scenario.normal_completion(),
       command: ["sleep", "30"],
       runner_opts: [kill_grace_ms: 200, reap_timeout_ms: 2_000]
@@ -129,10 +130,10 @@ defmodule Shoestring.Cobbler.HandoffWorkerTest do
     assert [dispatch_job] = Repo.all(from j in Job, where: j.queue == "dispatch")
     assert :ok = perform_delivery(dispatch_job)
 
-    assert {:ok, _terminal} =
-             ElvesHelpers.wait_until(fn ->
-               ElvesHelpers.terminal_event(fixture.goal.id, receiver.id)
-             end)
+    # Wait for final projection without competing for the shared sandbox
+    # connection while the Elf and trajectory writer commit terminal state.
+    receiver_id = receiver.id
+    assert_receive {:elf_terminal, ^receiver_id, %{class: :completed}}, 10_000
 
     assert ElvesHelpers.terminal_event(fixture.goal.id, receiver.id).type == "run.completed"
 
@@ -160,10 +161,10 @@ defmodule Shoestring.Cobbler.HandoffWorkerTest do
     assert [dispatch_job] = Repo.all(from j in Job, where: j.queue == "dispatch")
     assert :ok = perform_delivery(dispatch_job)
 
-    assert {:ok, _} =
-             ElvesHelpers.wait_until(fn ->
-               ElvesHelpers.terminal_event(fixture.goal.id, receiver.id)
-             end)
+    # Wait for final projection without competing for the shared sandbox
+    # connection while the Elf and trajectory writer commit terminal state.
+    receiver_id = receiver.id
+    assert_receive {:elf_terminal, ^receiver_id, %{class: :completed}}, 10_000
 
     # The same delivery attempt runs again (at-least-once delivery is the
     # normal case, not an exotic one).
@@ -203,10 +204,10 @@ defmodule Shoestring.Cobbler.HandoffWorkerTest do
     assert [dispatch_job] = Repo.all(from j in Job, where: j.queue == "dispatch")
     assert :ok = perform_delivery(dispatch_job)
 
-    assert {:ok, _} =
-             ElvesHelpers.wait_until(fn ->
-               ElvesHelpers.terminal_event(fixture.goal.id, receiver.id)
-             end)
+    # Wait for final projection without competing for the shared sandbox
+    # connection while the Elf and trajectory writer commit terminal state.
+    receiver_id = receiver.id
+    assert_receive {:elf_terminal, ^receiver_id, %{class: :completed}}, 10_000
 
     assert 1 == ElvesHelpers.count_events(fixture.goal.id, receiver.id, ["run.running"])
     assert length(handoff_events(fixture.goal.id)) == 1
@@ -228,10 +229,10 @@ defmodule Shoestring.Cobbler.HandoffWorkerTest do
     assert [dispatch_job] = Repo.all(from j in Job, where: j.queue == "dispatch")
     assert :ok = perform_delivery(dispatch_job)
 
-    assert {:ok, _} =
-             ElvesHelpers.wait_until(fn ->
-               ElvesHelpers.terminal_event(fixture.goal.id, receiver.id)
-             end)
+    # Wait for final projection without competing for the shared sandbox
+    # connection while the Elf and trajectory writer commit terminal state.
+    receiver_id = receiver.id
+    assert_receive {:elf_terminal, ^receiver_id, %{class: :completed}}, 10_000
 
     # What the live node did: the delivery finished and the operator
     # released the goal's claim.
@@ -265,10 +266,10 @@ defmodule Shoestring.Cobbler.HandoffWorkerTest do
     assert [dispatch_job] = Repo.all(from j in Job, where: j.queue == "dispatch")
     assert :ok = perform_delivery(dispatch_job)
 
-    assert {:ok, _} =
-             ElvesHelpers.wait_until(fn ->
-               ElvesHelpers.terminal_event(fixture.goal.id, receiver.id)
-             end)
+    # Wait for final projection without competing for the shared sandbox
+    # connection while the Elf and trajectory writer commit terminal state.
+    receiver_id = receiver.id
+    assert_receive {:elf_terminal, ^receiver_id, %{class: :completed}}, 10_000
 
     {:ok, %{command: release}} = Commands.submit(fixture.goal.id, release_command())
     assert release.status == "resolved"

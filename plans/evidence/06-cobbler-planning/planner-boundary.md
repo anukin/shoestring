@@ -85,3 +85,31 @@ identifiers, credentials, absolute home paths or hidden model reasoning. Req
 was absent from the inspected dependency list despite the repository guideline;
 the prescribed HTTP library was added with five new lock entries and no existing
 dependency-version changes.
+
+## CI follow-up before merge
+
+VERIFIED: PR #91's original completed pull-request run
+[37359666256](https://github.com/anukin/shoestring/actions/runs/37359666256)
+reported `4 doctests, 1694 tests, 1 failure, 1 skipped (6 excluded)`. The
+failure was a sandbox connection checkout refusal in the handoff replay test,
+while its polling query competed with the trajectory writer. The original push
+run was cancelled during tests; it did not emit a completed test summary.
+
+REPO-INSPECTION: all five handoff completion waits now use the existing
+`elf_terminal` notification, sent after terminal projection, instead of querying
+the shared sandbox while writes are active. Their durable-state assertions and
+10-second timeout remain intact. This is test synchronization work, not a new
+production regression lock; I did not reproduce the checkout refusal locally.
+
+VERIFIED: the focused command
+`perl -e 'alarm 300; exec @ARGV' mix test test/shoestring/cobbler/handoff_worker_test.exs < /dev/null`
+reported `10 tests, 0 failures`.
+
+VERIFIED: after that synchronization change, the full command
+`perl -e 'alarm 600; exec @ARGV' mix precommit < /dev/null > /private/tmp/shoestring-iter6-handoff-precommit.log 2>&1`
+exited 0 with `4 doctests, 1694 tests, 0 failures, 1 skipped (6 excluded)`,
+Node gate `52 tests, 52 pass, 0 fail`, and Node UI `7 tests, 7 pass, 0 fail`.
+
+UNVERIFIED: the original CI checkout failure's exact load-dependent trigger.
+I did not reproduce it locally and do not claim the local result establishes
+CI success. No unchanged CI run was retried to obtain a green outcome.
