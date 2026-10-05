@@ -14,6 +14,7 @@ defmodule Shoestring.Application do
       [
         ShoestringWeb.Telemetry,
         Shoestring.Repo,
+        {Task.Supervisor, name: Shoestring.Cobbler.PlannerTasks},
         {Registry, keys: :unique, name: Shoestring.Trajectory.WriterRegistry},
         Shoestring.Trajectory.WriterSupervisor,
         {Phoenix.PubSub, name: Shoestring.PubSub},

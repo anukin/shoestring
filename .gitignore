@@ -48,6 +48,7 @@ plans/milestones/*
 !/plans/milestones/00a-capacity-feasibility.md
 !/plans/milestones/02-harness-contracts-fake.md
 !/plans/milestones/05-quota-aware-mvp.md
+!/plans/milestones/06-cobbler-planning.md
 !/plans/evidence/
 plans/evidence/*
 !/plans/evidence/00a-capacity-feasibility/
@@ -58,6 +59,7 @@ plans/evidence/*
 !/plans/evidence/05-quota-aware-mvp/**
 !/plans/evidence/06-cobbler-planning/
 plans/evidence/06-cobbler-planning/*
+!/plans/evidence/06-cobbler-planning/planner-boundary.md
 !/plans/evidence/06-cobbler-planning/README.md
 !/plans/evidence/06-cobbler-planning/hermetic-lifecycle.md
 !/plans/evidence/06-cobbler-planning/plan-foundation.md
