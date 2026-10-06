@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Shoestring UI concept: agent configurations and provider allowance visualizations.">
+<title>Shoestring — UI concepts</title>
+<style>
+:root { color-scheme:light dark; }
+body { margin:0; padding:24px; background:light-dark(#f0f2ee,#101412); color:light-dark(#202b27,#e7eeea); font:14px/1.5 system-ui,sans-serif; }
+.preview-shell { max-width:1120px; margin:0 auto; }
+.preview-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:16px; }
+.preview-toolbar p { margin:0; color:light-dark(#64716a,#a7b5ac); }
+.preview-controls { display:flex; align-items:center; gap:8px; margin-left:auto; }
+.preview-controls button { padding:7px 14px; border:1px solid light-dark(#d7dfd8,#39473d); border-radius:7px; font:inherit; color:inherit; background:light-dark(#fff,#1c201e); cursor:pointer; }
+.preview-controls button[aria-pressed="true"] { color:light-dark(#fff,#18251d); background:light-dark(#356549,#8cc6a0); border-color:transparent; }
+#ss-concepts button { cursor:pointer; }
+#ss-concepts :focus-visible,.preview-controls :focus-visible { outline:2px solid light-dark(#356549,#8cc6a0); outline-offset:3px; }
+@media(max-width:600px) { body { padding:12px; } .preview-controls { margin-left:0; } }
+</style>
+</head>
+<body>
+<div class="preview-shell">
+<div class="preview-toolbar">
+<p>Shoestring UI concepts · illustrative data</p>
+<div class="preview-controls" role="group" aria-label="Choose a layout">
+<span>Layout</span><button type="button" data-choose-layout="focus" aria-pressed="true">Focus</button><button type="button" data-choose-layout="console" aria-pressed="false">Console</button>
+</div>
+</div>
+<style>
+#ss-concepts { color-scheme: light dark; }
+#ss-concepts .ss-app { --ss-bg:light-dark(#fafaf8,#161918); --ss-surface:light-dark(#ffffff,#1c201e); --ss-ink:light-dark(#202b27,#e7eeea); --ss-soft:light-dark(#64716a,#a7b5ac); --ss-line:light-dark(#e3e8e3,#333d36); --ss-tint:light-dark(#edf3ee,#263b2e); --ss-accent:light-dark(#356549,#8cc6a0); --ss-track:light-dark(#e8eee9,#303a33); --ss-warning:light-dark(#886125,#e7bd78); background:var(--ss-bg); color:var(--ss-ink); font:14px/1.55 ui-sans-serif,system-ui,sans-serif; border:1px solid var(--ss-line); border-radius:14px; overflow:clip; min-height:790px; }
+#ss-concepts * { box-sizing:border-box; }
+#ss-concepts [hidden] { display:none !important; }
+#ss-concepts .ss-chrome { display:flex; align-items:center; gap:32px; padding:20px 28px; border-bottom:1px solid var(--ss-line); background:var(--ss-surface); }
+#ss-concepts .ss-brand { display:flex; align-items:center; gap:9px; font-weight:500; letter-spacing:-.3px; }
+#ss-concepts .ss-mark { display:grid; place-items:center; width:27px; height:27px; border-radius:8px; background:var(--ss-ink); color:var(--ss-bg); }
+#ss-concepts .ss-nav { display:flex; gap:6px; }
+#ss-concepts button { font:inherit; color:inherit; }
+#ss-concepts button.ss-link { background:transparent; border:0; border-radius:6px; padding:7px 12px; color:var(--ss-soft); }
+#ss-concepts button.ss-link[aria-current=page] { background:var(--ss-tint); color:var(--ss-ink); font-weight:500; }
+#ss-concepts .ss-demo { margin-left:auto; color:var(--ss-soft); font-size:12px; white-space:nowrap; }
+#ss-concepts .ss-body { padding:34px 36px 28px; }
+#ss-concepts h1 { margin:0; font-size:27px; line-height:1.25; font-weight:500; letter-spacing:-.6px; }
+#ss-concepts h2 { margin:0; font-size:17px; font-weight:500; letter-spacing:-.2px; }
+#ss-concepts h3 { margin:0; font-size:15px; font-weight:500; }
+#ss-concepts p { margin:7px 0 0; }
+#ss-concepts .ss-muted { color:var(--ss-soft); }
+#ss-concepts .ss-small { font-size:12px; }
+#ss-concepts .ss-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:28px; }
+#ss-concepts .ss-button { display:inline-flex; align-items:center; justify-content:center; gap:7px; background:var(--ss-surface); border:1px solid var(--ss-line); border-radius:7px; padding:8px 13px; white-space:nowrap; }
+#ss-concepts .ss-button.ss-primary { background:var(--ss-ink); color:var(--ss-bg); border-color:var(--ss-ink); }
+#ss-concepts .ss-row { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+#ss-concepts .ss-provider-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
+#ss-concepts .ss-provider { background:var(--ss-surface); border:1px solid var(--ss-line); border-radius:10px; padding:22px; }
+#ss-concepts .ss-provider-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:25px; }
+#ss-concepts .ss-status { display:inline-flex; align-items:center; gap:6px; color:var(--ss-soft); font-size:12px; }
+#ss-concepts .ss-dot { width:6px; height:6px; border-radius:50%; background:var(--ss-accent); }
+#ss-concepts .ss-window + .ss-window { margin-top:22px; }
+#ss-concepts .ss-meter { background:var(--ss-track); height:8px; border-radius:4px; overflow:hidden; margin:9px 0 6px; }
+#ss-concepts .ss-fill { background:var(--ss-accent); height:100%; border-radius:4px; }
+#ss-concepts .ss-num { font-variant-numeric:tabular-nums; }
+#ss-concepts .ss-warning { color:var(--ss-warning); }
+#ss-concepts .ss-footnote { margin-top:20px; }
+#ss-concepts .ss-section { margin-top:32px; }
+#ss-concepts .ss-chart { margin-top:18px; padding:22px 24px 16px; background:var(--ss-surface); border:1px solid var(--ss-line); border-radius:10px; }
+#ss-concepts .ss-bars { display:flex; gap:16px; align-items:stretch; margin-top:22px; }
+#ss-concepts .ss-day { flex:1; min-width:0; text-align:center; }
+#ss-concepts .ss-columns { display:flex; align-items:flex-end; justify-content:center; gap:5px; height:105px; border-bottom:1px solid var(--ss-line); }
+#ss-concepts .ss-column { width:16px; background:var(--ss-accent); border-radius:3px 3px 0 0; }
+#ss-concepts .ss-column.ss-codex { background:var(--ss-soft); opacity:.55; }
+#ss-concepts .ss-axis { display:flex; justify-content:space-between; gap:12px; margin-top:12px; }
+#ss-concepts .ss-legend { display:flex; gap:16px; align-items:center; flex-wrap:wrap; font-size:12px; color:var(--ss-soft); }
+#ss-concepts .ss-swatch { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:5px; background:var(--ss-accent); }
+#ss-concepts .ss-swatch.ss-codex { background:var(--ss-soft); opacity:.55; }
+#ss-concepts .ss-agent-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
+#ss-concepts .ss-agent { border:1px solid var(--ss-line); border-radius:10px; background:var(--ss-surface); padding:22px; }
+#ss-concepts .ss-avatar { display:grid; place-items:center; flex-shrink:0; width:38px; height:38px; border-radius:10px; background:var(--ss-tint); color:var(--ss-accent); font-size:18px; font-weight:500; }
+#ss-concepts .ss-agent-top { display:flex; gap:12px; align-items:center; }
+#ss-concepts .ss-purpose { min-height:47px; margin:18px 0 !important; }
+#ss-concepts .ss-config { display:grid; gap:9px; padding:16px 0; border-top:1px solid var(--ss-line); border-bottom:1px solid var(--ss-line); font-size:12px; }
+#ss-concepts .ss-actions { display:flex; align-items:center; justify-content:space-between; margin-top:18px; gap:10px; }
+#ss-concepts code { font:12px ui-monospace,SFMono-Regular,monospace; color:var(--ss-soft); background:transparent; overflow-wrap:anywhere; }
+#ss-concepts .ss-form { max-width:760px; }
+#ss-concepts .ss-fields { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+#ss-concepts .ss-field { display:grid; align-content:start; gap:7px; margin-bottom:20px; }
+#ss-concepts .ss-field label { font-weight:500; }
+#ss-concepts input,#ss-concepts textarea,#ss-concepts select { width:100%; min-width:0; padding:9px 11px; font:inherit; color:var(--ss-ink); background:var(--ss-surface); border:1px solid var(--ss-line); border-radius:7px; }
+#ss-concepts textarea { resize:vertical; min-height:106px; }
+#ss-concepts .ss-role { display:grid; grid-template-columns:110px 1fr 1fr; align-items:center; gap:14px; padding:15px 0; border-bottom:1px solid var(--ss-line); }
+#ss-concepts .ss-role label { display:block; font-size:12px; color:var(--ss-soft); margin-bottom:6px; }
+#ss-concepts .ss-role-note { font-size:12px; color:var(--ss-soft); margin-top:3px; }
+#ss-concepts .ss-form-actions { display:flex; justify-content:flex-end; gap:10px; padding-top:24px; }
+#ss-concepts .ss-connection { display:flex; align-items:center; gap:16px; padding:20px 0; border-bottom:1px solid var(--ss-line); }
+#ss-concepts .ss-connection .ss-button { margin-left:auto; }
+#ss-concepts .ss-toast { color:var(--ss-accent); font-size:12px; min-height:18px; margin-top:10px; }
+#ss-concepts .ss-layout-console { display:grid; grid-template-columns:176px minmax(0,1fr); }
+#ss-concepts .ss-layout-console .ss-chrome { display:flex; flex-direction:column; align-items:stretch; gap:30px; padding:25px 16px; border-bottom:0; border-right:1px solid var(--ss-line); }
+#ss-concepts .ss-layout-console .ss-nav { flex-direction:column; }
+#ss-concepts .ss-layout-console button.ss-link { text-align:left; display:flex; align-items:center; gap:9px; }
+#ss-concepts .ss-layout-console .ss-demo { margin:0; margin-top:auto; white-space:normal; }
+#ss-concepts .ss-layout-console .ss-body { padding:32px 28px; }
+#ss-concepts .ss-layout-console .ss-provider-grid { display:block; border-top:1px solid var(--ss-line); }
+#ss-concepts .ss-layout-console .ss-provider { border:0; border-bottom:1px solid var(--ss-line); border-radius:0; background:transparent; padding:22px 0; display:grid; grid-template-columns:130px 1fr 1fr; gap:24px; }
+#ss-concepts .ss-layout-console .ss-provider-head { display:block; margin:0; }
+#ss-concepts .ss-layout-console .ss-provider-head .ss-status { margin-top:7px; }
+#ss-concepts .ss-layout-console .ss-window + .ss-window { margin-top:0; }
+#ss-concepts .ss-layout-console .ss-agent-grid { display:block; }
+#ss-concepts .ss-layout-console .ss-agent { display:grid; grid-template-columns:1fr 1fr; gap:12px 26px; border:0; border-bottom:1px solid var(--ss-line); border-radius:0; background:transparent; padding:24px 0; }
+#ss-concepts .ss-layout-console .ss-purpose { margin:0 !important; min-height:0; }
+#ss-concepts .ss-layout-console .ss-config { border:0; padding:0; grid-column:2; grid-row:1 / 3; }
+#ss-concepts .ss-layout-console .ss-actions { grid-column:1 / -1; margin-top:4px; justify-content:flex-end; }
+#ss-concepts .ss-layout-console .ss-actions code { margin-right:auto; }
+@media(max-width:760px) { #ss-concepts .ss-chrome { gap:15px; padding:17px 20px; flex-wrap:wrap; } #ss-concepts .ss-body { padding:26px 22px; } #ss-concepts .ss-layout-console { grid-template-columns:1fr; } #ss-concepts .ss-layout-console .ss-chrome { flex-direction:row; flex-wrap:wrap; gap:16px; border-right:0; border-bottom:1px solid var(--ss-line); } #ss-concepts .ss-layout-console .ss-nav { flex-direction:row; } #ss-concepts .ss-layout-console .ss-demo { margin:0 0 0 auto; } #ss-concepts .ss-layout-console .ss-provider { grid-template-columns:1fr 1fr; } #ss-concepts .ss-layout-console .ss-provider-head { grid-column:1 / -1; display:flex; } }
+@media(max-width:540px) { #ss-concepts .ss-app { min-height:1060px; } #ss-concepts .ss-provider-grid,#ss-concepts .ss-agent-grid,#ss-concepts .ss-fields { grid-template-columns:1fr; } #ss-concepts .ss-heading { align-items:flex-start; flex-wrap:wrap; } #ss-concepts .ss-demo { font-size:11px; } #ss-concepts .ss-nav { width:100%; } #ss-concepts .ss-layout-console .ss-nav { order:3; } #ss-concepts .ss-layout-console .ss-provider,#ss-concepts .ss-layout-console .ss-agent { display:block; } #ss-concepts .ss-layout-console .ss-provider-head { margin-bottom:20px; } #ss-concepts .ss-layout-console .ss-window + .ss-window { margin-top:22px; } #ss-concepts .ss-layout-console .ss-config { padding:16px 0; } #ss-concepts .ss-layout-console .ss-purpose { margin-top:14px !important; } #ss-concepts .ss-role { grid-template-columns:1fr 1fr; } #ss-concepts .ss-role > div:first-child { grid-column:1 / -1; } #ss-concepts .ss-bars { gap:8px; } #ss-concepts .ss-chart { padding:20px 15px; } #ss-concepts .ss-column { width:11px; } #ss-concepts .ss-connection { flex-wrap:wrap; } #ss-concepts input,#ss-concepts textarea,#ss-concepts select { font-size:16px; } }
+@media(pointer:coarse) { #ss-concepts button,#ss-concepts select { min-height:44px; } }
+</style>
+<div id="ss-concepts" aria-label="Shoestring configuration interface concepts">
+  <section data-variant="Focus" aria-label="Focus layout">
+    <div class="ss-app" data-layout="focus" aria-label="Focus configuration dashboard"></div>
+  </section>
+  <section data-variant="Console" aria-label="Console layout" hidden>
+    <div class="ss-app ss-layout-console" data-layout="console" aria-label="Console configuration dashboard"></div>
+  </section>
+</div>
+<script>
+(() => {
+ const root = document.getElementById('ss-concepts');
+ const providers = ['Claude Code','Codex','Local'];
+ const models = {'Claude Code':['Sonnet','Opus'],'Codex':['Default coding model','Default reasoning model'],'Local':['Configured local model']};
+ const baseAgents = [
+  {name:'Builder',slug:'builder',purpose:'Plan, implement, and review changes to a codebase.',instructions:'Break the goal into clear steps. Delegate implementation, then request an independent review before finishing.',roles:[['Coordinator','Claude Code','Sonnet'],['Worker','Codex','Default coding model'],['Reviewer','Claude Code','Opus']]},
+  {name:'Thinker',slug:'thinker',purpose:'Explore ideas and compare perspectives before deciding.',instructions:'Explore the question from different perspectives. Ask the team to challenge assumptions and summarize points of agreement.',roles:[['Coordinator','Claude Code','Opus'],['Contributor','Codex','Default reasoning model']]}
+ ];
+ let saved = null;
+ try { saved = JSON.parse(localStorage.getItem('shoestring-ui-concept')); } catch {}
+ const prior = saved?.concepts;
+ const contexts = [];
+ const safe = v => String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const icon = name => name === 'waypoints' ? '<span aria-hidden="true">S</span>' : '';
+ const options = (values,selected) => values.map(v=>`<option${v===selected?' selected':''}>${safe(v)}</option>`).join('');
+ const clone = v => JSON.parse(JSON.stringify(v));
+ function persist() {
+  const concepts = contexts.map(c=>({layout:c.layout,page:c.page,agents:c.agents,defaultAgent:c.defaultAgent,refresh:c.refresh}));
+  try { localStorage.setItem('shoestring-ui-concept',JSON.stringify({concepts})); } catch {}
+ }
+ function windowBar(label,used,reset) {
+  return `<div class="ss-window"><div class="ss-row"><span>${label}</span><span class="ss-num">${used}% used</span></div><div class="ss-meter" role="progressbar" aria-label="${label} used" aria-valuenow="${used}" aria-valuemin="0" aria-valuemax="100"><div class="ss-fill" style="width:${used}%"></div></div><div class="ss-row ss-small ss-muted"><span>${100-used}% remaining</span><span>Resets ${reset}</span></div></div>`;
+ }
+ function usage(c) {
+  const days = ['Tue','Wed','Thu','Fri','Sat','Sun','Mon'];
+  const a=[46,62,31,84,26,49,38], b=[28,45,67,42,21,58,52];
+  return `<div class="ss-heading"><div><h1>Usage</h1><p class="ss-muted">Know what’s available before you start.</p></div><span class="ss-status">${icon('clock-3')} Updated 1 minute ago</span></div>
+  <div class="ss-provider-grid"><section class="ss-provider" aria-label="Claude Code account allowances"><div class="ss-provider-head"><div><h2>Claude Code</h2><span class="ss-small ss-muted">Personal account</span></div><span class="ss-status"><span class="ss-dot"></span>Available</span></div>${windowBar('5-hour allowance',38,'in 2h 15m')}${windowBar('Weekly allowance',72,'Thu, 09:00')}</section>
+  <section class="ss-provider" aria-label="Codex account allowances"><div class="ss-provider-head"><div><h2>Codex</h2><span class="ss-small ss-muted">Personal account</span></div><span class="ss-status"><span class="ss-dot"></span>Available</span></div>${windowBar('5-hour allowance',52,'in 3h 40m')}${windowBar('Weekly allowance',41,'Sat, 12:00')}</section></div>
+  <p class="ss-small ss-muted ss-footnote">Allowances are shared by agents using the same account.</p>
+  ${c.design.history?`<section class="ss-section"><div class="ss-row"><h2>Allowance history</h2><span class="ss-small ss-muted">Past 7 days</span></div><div class="ss-chart"><div class="ss-row"><span class="ss-small ss-muted">Peak 5-hour usage each day · %</span><span class="ss-small ss-muted">0–100%</span></div><div class="ss-bars" role="img" aria-label="Illustrative daily peak allowance usage for Claude Code and Codex over seven days">${days.map((day,i)=>`<div class="ss-day"><div class="ss-columns"><div class="ss-column" style="height:${a[i]}%" data-tooltip="${day} · Claude Code ${a[i]}%"></div><div class="ss-column ss-codex" style="height:${b[i]}%" data-tooltip="${day} · Codex ${b[i]}%"></div></div><p class="ss-small ss-muted">${day}</p></div>`).join('')}</div><div class="ss-axis"><div class="ss-legend"><span><span class="ss-swatch"></span>Claude Code</span><span><span class="ss-swatch ss-codex"></span>Codex</span></div></div></div></section>`:''}
+  <div class="ss-section ss-row"><div><h3>Local model</h3><p class="ss-small ss-muted">No provider allowance reported.</p></div><span class="ss-small ss-muted">Not measured</span></div>`;
+ }
+ function agents(c) {
+  return `<div class="ss-heading"><div><h1>Agents</h1><p class="ss-muted">Configure your team. Use it from the CLI.</p></div><button class="ss-button ss-primary cursor-interaction" data-action="create">${icon('plus')} Create agent</button></div><div class="ss-agent-grid">${c.agents.map((a,i)=>`<section class="ss-agent" aria-label="${safe(a.name)} configuration"><div class="ss-agent-top"><span class="ss-avatar">${safe(a.name.charAt(0))}</span><div><h2>${safe(a.name)}</h2><span class="ss-small ss-muted">Orchestrator · ${a.roles.length} roles</span></div></div><p class="ss-purpose ss-muted">${safe(a.purpose)}</p><div class="ss-config">${a.roles.map(r=>`<div class="ss-row"><span class="ss-muted">${safe(r[0])}</span><span>${safe(r[1])} · ${safe(r[2])}</span></div>`).join('')}</div><div class="ss-actions"><code>${safe(a.slug)}</code><div><button class="ss-link cursor-interaction" data-action="duplicate" data-index="${i}">Duplicate</button><button class="ss-button cursor-interaction" data-action="edit" data-index="${i}">Edit</button></div></div></section>`).join('')}</div>`;
+ }
+ function editor(c) {
+  const a=c.draft;
+  return `<form class="ss-form"><div class="ss-heading"><div><h1>${c.editIndex===null?'Create agent':'Edit '+safe(a.name)}</h1><p class="ss-muted">Define how this orchestrator works.</p></div><button type="button" class="ss-link cursor-interaction" data-action="cancel">${icon('arrow-left')} All agents</button></div><div class="ss-fields"><div class="ss-field"><label for="${c.layout}-name">Name</label><input id="${c.layout}-name" name="name" required maxlength="60" value="${safe(a.name)}" placeholder="e.g. Builder"></div><div class="ss-field"><label for="${c.layout}-slug">CLI name</label><input id="${c.layout}-slug" name="slug" required pattern="[a-z][a-z0-9\\-]*" maxlength="60" value="${safe(a.slug)}" placeholder="e.g. builder"><span class="ss-small ss-muted">Lowercase letters, numbers, and hyphens.</span></div></div><div class="ss-field"><label for="${c.layout}-purpose">Purpose</label><input id="${c.layout}-purpose" name="purpose" required maxlength="180" value="${safe(a.purpose)}" placeholder="What is this agent good at?"></div><div class="ss-field"><label for="${c.layout}-instructions">Instructions</label><textarea id="${c.layout}-instructions" name="instructions" required>${safe(a.instructions)}</textarea></div><h2>Team & models</h2><p class="ss-small ss-muted">Choose the provider and model for each role.</p>${a.roles.map((r,i)=>`<div class="ss-role"><div><h3>${safe(r[0])}</h3><div class="ss-role-note">${i===0?'Leads the team':r[0]==='Reviewer'?'Checks the work':'Supports the lead'}</div></div><div><label for="${c.layout}-provider-${i}">Provider</label><select id="${c.layout}-provider-${i}" name="provider-${i}" data-role-provider="${i}">${options(providers,r[1])}</select></div><div><label for="${c.layout}-model-${i}">Model</label><select id="${c.layout}-model-${i}" name="model-${i}" data-role-model="${i}">${options(models[r[1]],r[2])}</select></div></div>`).join('')}<div class="ss-toast" role="status">${safe(c.error||'')}</div><div class="ss-form-actions"><button type="button" class="ss-button cursor-interaction" data-action="cancel">Cancel</button><button type="button" data-action="save" class="ss-button ss-primary cursor-interaction">Save agent</button></div></form>`;
+ }
+ function settings(c) {
+  return `<div class="ss-heading"><div><h1>Settings</h1><p class="ss-muted">Provider connections and shared defaults.</p></div></div><section><h2>Providers</h2>${[['Claude Code','CLI connection','Connected'],['Codex','CLI connection','Connected'],['Local','Local endpoint','Configured']].map(([name,detail,status])=>`<div class="ss-connection"><span class="ss-avatar">${name.charAt(0)}</span><div><h3>${name}</h3><p class="ss-small ss-muted">${detail}</p></div><span class="ss-status"><span class="ss-dot"></span>${status}</span><button class="ss-button cursor-interaction" data-action="connection" data-provider="${name}">Configure</button></div>`).join('')}</section><section class="ss-section"><h2>Defaults</h2><div class="ss-fields" style="margin-top:18px"><div class="ss-field"><label for="${c.layout}-default">Default agent</label><select id="${c.layout}-default" data-default-agent>${options(c.agents.map(a=>a.name),c.defaultAgent)}</select></div><div class="ss-field"><label for="${c.layout}-refresh">Usage refresh</label><select id="${c.layout}-refresh" data-refresh>${options(['Every minute','Every 5 minutes','Manual'],c.refresh)}</select></div></div></section><div class="ss-toast" role="status">${safe(c.notice||'')}</div>`;
+ }
+ function connection(c) {
+  return `<form class="ss-form" data-connection-form><div class="ss-heading"><div><h1>${safe(c.connection)}</h1><p class="ss-muted">Provider settings</p></div><button type="button" class="ss-link cursor-interaction" data-action="back-settings">Back</button></div><div class="ss-field"><label for="${c.layout}-connection-label">Connection name</label><input id="${c.layout}-connection-label" name="label" value="${safe(c.connection==='Local'?'Local model':'Personal account')}" required></div>${c.connection==='Local'?`<div class="ss-field"><label for="${c.layout}-endpoint">Endpoint</label><input id="${c.layout}-endpoint" name="endpoint" value="http://localhost:11434" required type="url"></div>`:`<div class="ss-field"><label>Authentication</label><p class="ss-muted">Uses the account signed in through the provider CLI.</p></div>`}<div class="ss-form-actions"><button type="button" class="ss-button cursor-interaction" data-action="back-settings">Cancel</button><button type="button" data-action="save-connection" class="ss-button ss-primary cursor-interaction">Save connection</button></div></form>`;
+ }
+ function saveAgent(c) {
+  if(!c.app.querySelector('form').reportValidity())return;
+  const a=clone(c.draft);['name','slug','purpose','instructions'].forEach(k=>a[k]=a[k].trim());
+  if(c.agents.some((v,i)=>i!==c.editIndex&&v.slug===a.slug)){c.error='Choose a unique CLI name.';render(c);return;}
+  if(c.editIndex===null)c.agents.push(a);else c.agents[c.editIndex]=a;
+  c.page='agents';c.notice=a.name+' saved in this preview.';c.draft=null;render(c);persist();
+ }
+ function render(c) {
+  c.app.innerHTML=`<header class="ss-chrome"><div class="ss-brand"><span class="ss-mark">${icon('waypoints')}</span>shoestring</div><nav class="ss-nav" aria-label="Main navigation">${[['usage','Usage','chart-no-axes-column'],['agents','Agents','users'],['settings','Settings','sliders-horizontal']].map(([key,label,name])=>`<button class="ss-link cursor-interaction" data-page="${key}" ${c.page===key||key==='agents'&&c.page==='editor'||key==='settings'&&c.page==='connection'?'aria-current="page"':''}>${c.layout==='console'?icon(name):''}${label}</button>`).join('')}</nav><span class="ss-demo">Concept · demo data</span></header><main class="ss-body">${c.page==='usage'?usage(c):c.page==='agents'?agents(c):c.page==='editor'?editor(c):c.page==='connection'?connection(c):settings(c)}<div class="ss-toast" role="status">${c.page==='agents'?safe(c.notice||''):''}</div></main>`;
+
+ }
+ root.querySelectorAll('.ss-app').forEach(app=>{
+  const layout=app.dataset.layout;
+  const old=Array.isArray(prior)?prior.find(p=>p.layout===layout):null;
+  const valid=old&&Array.isArray(old.agents)&&old.agents.every(a=>typeof a.name==='string'&&Array.isArray(a.roles)&&a.roles.every(r=>models[r[1]]));
+  const c={app,layout,page:old&&['usage','agents','settings'].includes(old.page)?old.page:'usage',agents:valid?clone(old.agents):clone(baseAgents),editIndex:null,draft:null,notice:'',error:'',defaultAgent:old?.defaultAgent||'Builder',refresh:old?.refresh||'Every minute',design:{history:true}};
+  contexts.push(c);
+  render(c);
+  app.addEventListener('click',event=>{
+   const b=event.target.closest('button'); if(!b)return;
+   if(b.dataset.page){c.page=b.dataset.page;c.notice='';render(c);persist();return;}
+   const action=b.dataset.action,i=Number(b.dataset.index);
+   if(action==='save'){saveAgent(c);return;}
+   if(action==='save-connection'){if(!app.querySelector('form').reportValidity())return;c.page='settings';c.notice='Connection saved in this preview.';render(c);persist();return;}
+   if(action==='edit'||action==='duplicate'){c.editIndex=action==='edit'?i:null;c.draft=clone(c.agents[i]);if(action==='duplicate'){c.draft.name+=' copy';c.draft.slug+='-copy';}c.page='editor';c.error='';}
+   if(action==='create'){c.editIndex=null;c.draft={name:'',slug:'',purpose:'',instructions:'',roles:[['Coordinator','Claude Code','Sonnet'],['Worker','Codex','Default coding model'],['Reviewer','Claude Code','Opus']]};c.page='editor';c.error='';}
+   if(action==='cancel'){c.page='agents';c.draft=null;c.error='';}
+   if(action==='connection'){c.connection=b.dataset.provider;c.page='connection';}
+   if(action==='back-settings'){c.page='settings';}
+   if(action){render(c);persist();}
+  });
+  app.addEventListener('input',event=>{
+   const e=event.target;
+   if(c.page==='editor'&&['name','slug','purpose','instructions'].includes(e.name))c.draft[e.name]=e.value;
+  });
+  app.addEventListener('change',event=>{
+   const e=event.target;
+   if(e.hasAttribute('data-role-provider')){const i=Number(e.dataset.roleProvider);c.draft.roles[i][1]=e.value;c.draft.roles[i][2]=models[e.value][0];const select=app.querySelector(`[data-role-model="${i}"]`);select.innerHTML=options(models[e.value],models[e.value][0]);}
+   if(e.hasAttribute('data-role-model'))c.draft.roles[Number(e.dataset.roleModel)][2]=e.value;
+   if(e.hasAttribute('data-default-agent')){c.defaultAgent=e.value;c.notice='Default updated in this preview.';render(c);}
+   if(e.hasAttribute('data-refresh')){c.refresh=e.value;c.notice='Refresh preference updated in this preview.';render(c);}
+   persist();
+  });
+  app.addEventListener('submit',event=>{
+   event.preventDefault();
+   if(c.page==='connection'){c.page='settings';c.notice='Connection saved in this preview.';render(c);persist();return;}
+   if(c.page!=='editor')return;
+   const a=clone(c.draft);['name','slug','purpose','instructions'].forEach(k=>a[k]=a[k].trim());
+   if(c.agents.some((v,i)=>i!==c.editIndex&&v.slug===a.slug)){c.error='Choose a unique CLI name.';render(c);return;}
+   if(c.editIndex===null)c.agents.push(a);else c.agents[c.editIndex]=a;
+   c.page='agents';c.notice=a.name+' saved in this preview.';c.draft=null;render(c);persist();
+  });
+
+ });
+ const layoutButtons = document.querySelectorAll('[data-choose-layout]');
+ function chooseLayout(layout) {
+  root.querySelectorAll('[data-variant]').forEach(section=>{section.hidden=section.dataset.variant.toLowerCase()!==layout;});
+  layoutButtons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.chooseLayout===layout)));
+ }
+ layoutButtons.forEach(button=>button.addEventListener('click',()=>chooseLayout(button.dataset.chooseLayout)));
+ chooseLayout('focus');
+ root.addEventListener('pointerover',event=>{
+  const mark=event.target.closest('[data-tooltip]');
+  if(mark)mark.title=mark.dataset.tooltip;
+ });
+
+})();
+</script>
+
+</div>
+</body>
+</html>

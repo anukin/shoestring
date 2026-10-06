@@ -75,6 +75,14 @@ replaceable execution providers. The longer-term product vocabulary is:
 - **Trajectory**: the append-only durable record that survives restarts,
   provider changes, and model-conversation loss.
 
+## Planned product interface
+
+The agreed product direction puts work, execution, and approvals in the CLI.
+The web UI focuses on orchestrator configuration and provider usage limits.
+Implementation is pending; see the
+[configuration and usage UI milestone](plans/milestones/configuration-and-usage-ui.md)
+and its [standalone HTML mockup](plans/mockups/configuration-and-usage.html).
+
 ## Local development
 
 ### Requirements

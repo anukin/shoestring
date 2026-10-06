@@ -49,6 +49,10 @@ plans/milestones/*
 !/plans/milestones/02-harness-contracts-fake.md
 !/plans/milestones/05-quota-aware-mvp.md
 !/plans/milestones/06-cobbler-planning.md
+!/plans/milestones/configuration-and-usage-ui.md
+!/plans/mockups/
+/plans/mockups/*
+!/plans/mockups/configuration-and-usage.html
 !/plans/evidence/
 plans/evidence/*
 !/plans/evidence/00a-capacity-feasibility/
