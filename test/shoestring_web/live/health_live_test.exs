@@ -2,7 +2,7 @@ defmodule ShoestringWeb.HealthLiveTest do
   use ShoestringWeb.ConnCase, async: false
 
   test "renders local readiness without contacting vendors", %{conn: conn} do
-    {:ok, view, html} = live(conn, "/")
+    {:ok, view, html} = live(conn, "/status")
 
     assert has_element?(view, "#health-page")
     assert has_element?(view, "#health-status")
@@ -14,7 +14,7 @@ defmodule ShoestringWeb.HealthLiveTest do
   end
 
   test "refreshes the health status from the LiveView", %{conn: conn} do
-    {:ok, view, _html} = live(conn, "/")
+    {:ok, view, _html} = live(conn, "/status")
 
     assert view |> element("#health-refresh") |> render_click()
     assert has_element?(view, "#health-refresh")

@@ -32,21 +32,47 @@ defmodule ShoestringWeb.Layouts do
     doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
 
   slot :inner_block, required: true
+  attr :product_page, :string, default: nil
 
   def app(assigns) do
     ~H"""
-    <header class="border-b border-zinc-200 px-4 py-4 sm:px-6 lg:px-8">
-      <div class="mx-auto flex max-w-2xl items-center justify-between">
-        <a href={~p"/"} class="font-semibold tracking-tight text-zinc-950">Shoestring</a>
-        <span class="text-xs text-zinc-500">Local-first</span>
+    <%= if @product_page do %>
+      <div class="ss-product">
+        <header class="ss-header">
+          <.link navigate={~p"/usage"} class="ss-brand">Shoestring</.link>
+          <nav id="product-nav" aria-label="Main navigation">
+            <.link
+              :for={
+                {label, path} <- [
+                  {"Usage", "/usage"},
+                  {"Agents", "/agents"},
+                  {"Settings", "/settings"}
+                ]
+              }
+              id={"nav-#{String.downcase(label)}"}
+              navigate={path}
+              aria-current={if @product_page == String.downcase(label), do: "page"}
+            >
+              {label}
+            </.link>
+          </nav>
+        </header>
+        <main id="product-main" class="ss-main">{render_slot(@inner_block)}</main>
       </div>
-    </header>
+    <% else %>
+      <header class="border-b border-zinc-200 px-4 py-4 sm:px-6 lg:px-8">
+        <div class="mx-auto flex max-w-2xl items-center justify-between">
+          <a href={~p"/"} class="font-semibold tracking-tight text-zinc-950">Shoestring</a>
+          <span class="text-xs text-zinc-500">Local-first</span>
+        </div>
+      </header>
 
-    <main class="px-4 py-12 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-2xl">
-        {render_slot(@inner_block)}
-      </div>
-    </main>
+      <main class="px-4 py-12 sm:px-6 lg:px-8">
+        <div class="mx-auto max-w-2xl">
+          {render_slot(@inner_block)}
+        </div>
+      </main>
+    <% end %>
 
     <.flash_group flash={@flash} />
     """

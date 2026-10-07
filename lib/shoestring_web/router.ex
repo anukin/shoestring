@@ -17,7 +17,14 @@ defmodule ShoestringWeb.Router do
   scope "/", ShoestringWeb do
     pipe_through :browser
 
-    live "/", HealthLive, :index
+    live "/", UsageLive, :index
+    live "/usage", UsageLive, :index
+    live "/agents", AgentsLive, :index
+    live "/agents/new", AgentsLive, :new
+    live "/agents/:slug/edit", AgentsLive, :edit
+    live "/agents/:slug/duplicate", AgentsLive, :duplicate
+    live "/settings", AgentSettingsLive, :index
+    live "/status", HealthLive, :index
     live "/observatory", CapacityObservatoryLive, :index
     live "/cobbler", CobblerDashboardLive, :index
     live "/cobbler/goals/:goal_id", CobblerGoalLive, :show
