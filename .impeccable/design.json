@@ -1,0 +1,254 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-07T19:39:20.032149Z",
+  "title": "Design System: Shoestring",
+  "extensions": {
+    "colorMeta": {
+      "ink": {
+        "role": "primary",
+        "displayName": "Deep Green Ink",
+        "canonical": "#172821",
+        "tonalRamp": [
+          "oklch(15% 0.02640 166.60)",
+          "oklch(26% 0.02640 166.60)",
+          "oklch(38% 0.02640 166.60)",
+          "oklch(49% 0.02640 166.60)",
+          "oklch(61% 0.02640 166.60)",
+          "oklch(72% 0.02640 166.60)",
+          "oklch(84% 0.02640 166.60)",
+          "oklch(95% 0.02640 166.60)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Slate Sage",
+        "canonical": "#52635b",
+        "tonalRamp": [
+          "oklch(15% 0.02434 165.25)",
+          "oklch(26% 0.02434 165.25)",
+          "oklch(38% 0.02434 165.25)",
+          "oklch(49% 0.02434 165.25)",
+          "oklch(61% 0.02434 165.25)",
+          "oklch(72% 0.02434 165.25)",
+          "oklch(84% 0.02434 165.25)",
+          "oklch(95% 0.02434 165.25)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Forest Green",
+        "canonical": "#226448",
+        "tonalRamp": [
+          "oklch(15% 0.08144 162.02)",
+          "oklch(26% 0.08144 162.02)",
+          "oklch(38% 0.08144 162.02)",
+          "oklch(49% 0.08144 162.02)",
+          "oklch(61% 0.08144 162.02)",
+          "oklch(72% 0.08144 162.02)",
+          "oklch(84% 0.08144 162.02)",
+          "oklch(95% 0.08144 162.02)"
+        ]
+      },
+      "ground": {
+        "role": "neutral",
+        "displayName": "Sage Ground",
+        "canonical": "#f5f7f4",
+        "tonalRamp": [
+          "oklch(15% 0.00448 134.85)",
+          "oklch(26% 0.00448 134.85)",
+          "oklch(38% 0.00448 134.85)",
+          "oklch(49% 0.00448 134.85)",
+          "oklch(61% 0.00448 134.85)",
+          "oklch(72% 0.00448 134.85)",
+          "oklch(84% 0.00448 134.85)",
+          "oklch(95% 0.00448 134.85)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "White Paper",
+        "canonical": "#fff",
+        "tonalRamp": [
+          "oklch(15% 0.00000 0.00)",
+          "oklch(26% 0.00000 0.00)",
+          "oklch(38% 0.00000 0.00)",
+          "oklch(49% 0.00000 0.00)",
+          "oklch(61% 0.00000 0.00)",
+          "oklch(72% 0.00000 0.00)",
+          "oklch(84% 0.00000 0.00)",
+          "oklch(95% 0.00000 0.00)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Soft Green Rule",
+        "canonical": "#d9e1d9",
+        "tonalRamp": [
+          "oklch(15% 0.01376 145.46)",
+          "oklch(26% 0.01376 145.46)",
+          "oklch(38% 0.01376 145.46)",
+          "oklch(49% 0.01376 145.46)",
+          "oklch(61% 0.01376 145.46)",
+          "oklch(72% 0.01376 145.46)",
+          "oklch(84% 0.01376 145.46)",
+          "oklch(95% 0.01376 145.46)"
+        ]
+      },
+      "soft": {
+        "role": "neutral",
+        "displayName": "Pale Sage",
+        "canonical": "#eaf2e9",
+        "tonalRamp": [
+          "oklch(15% 0.01463 142.23)",
+          "oklch(26% 0.01463 142.23)",
+          "oklch(38% 0.01463 142.23)",
+          "oklch(49% 0.01463 142.23)",
+          "oklch(61% 0.01463 142.23)",
+          "oklch(72% 0.01463 142.23)",
+          "oklch(84% 0.01463 142.23)",
+          "oklch(95% 0.01463 142.23)"
+        ]
+      },
+      "error": {
+        "role": "status",
+        "displayName": "Rust Warning",
+        "canonical": "#943a29",
+        "tonalRamp": [
+          "oklch(15% 0.12533 32.62)",
+          "oklch(26% 0.12533 32.62)",
+          "oklch(38% 0.12533 32.62)",
+          "oklch(49% 0.12533 32.62)",
+          "oklch(61% 0.12533 32.62)",
+          "oklch(72% 0.12533 32.62)",
+          "oklch(84% 0.12533 32.62)",
+          "oklch(95% 0.12533 32.62)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Page headings."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Panel and section headings."
+      },
+      "subsection": {
+        "displayName": "Subsection",
+        "purpose": "Allowance-window headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Supporting prose and controls."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Visible field labels."
+      },
+      "small": {
+        "displayName": "Small",
+        "purpose": "Metadata and footnotes."
+      }
+    },
+    "breakpoints": [
+      {
+        "name": "stacked",
+        "value": "700px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Save or create configuration; dark at rest and green on hover.",
+      "html": "<button class=\"ds-primary\">Save agent</button>",
+      "css": ".ds-primary{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--ss-line,#d9e1d9);border-radius:7px;padding:9px 14px;min-height:44px;white-space:nowrap;text-decoration:none;cursor:pointer;font:15px/1.55 system-ui,sans-serif;font-weight:500;background:var(--ss-ink,#172821);color:var(--ss-paper,#fff);border-color:var(--ss-ink,#172821)}.ds-primary:hover{background:var(--ss-accent,#226448)}.ds-primary:focus-visible{outline:2px solid var(--ss-accent,#226448);outline-offset:3px;}.ds-primary:disabled{opacity:.55;cursor:default}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Refresh or adjust roles without the visual weight of saving.",
+      "html": "<button class=\"ds-secondary\">Refresh</button>",
+      "css": ".ds-secondary{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--ss-line,#d9e1d9);border-radius:7px;padding:9px 14px;min-height:44px;white-space:nowrap;text-decoration:none;cursor:pointer;font:15px/1.55 system-ui,sans-serif;font-weight:500;background:var(--ss-paper,#fff);color:var(--ss-ink,#172821)}.ds-secondary:hover{background:var(--ss-soft,#eaf2e9)}.ds-secondary:focus-visible{outline:2px solid var(--ss-accent,#226448);outline-offset:3px;}.ds-secondary:disabled{opacity:.55;cursor:default}"
+    },
+    {
+      "name": "Labeled Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Visible dark label and native text field; readonly fields use the page ground.",
+      "html": "<label class=\"ds-label\" for=\"ds-agent-name\">Name</label><input class=\"ds-input\" id=\"ds-agent-name\" value=\"Builder\" />",
+      "css": ".ds-label{display:block;color:var(--ss-ink,#172821);font:15px/1.55 system-ui,sans-serif;font-size:14px;font-weight:500;margin-bottom:6px}.ds-input{width:100%;min-width:0;min-height:44px;border:1px solid var(--ss-line,#d9e1d9);border-radius:7px;background:var(--ss-paper,#fff);padding:10px 12px;color:var(--ss-ink,#172821);font:15px/1.55 system-ui,sans-serif;caret-color:var(--ss-accent,#226448)}.ds-input::placeholder{color:var(--ss-muted,#52635b)}.ds-input:read-only{background:var(--ss-ground,#f5f7f4)}.ds-input:focus-visible{outline:2px solid var(--ss-accent,#226448);outline-offset:3px;}@media(max-width:700px){.ds-input{font-size:16px}}"
+    },
+    {
+      "name": "Product Navigation",
+      "kind": "nav",
+      "refersTo": "navigation-link",
+      "description": "Visible Usage, Agents, and Settings links with a pale selected state.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Main navigation\"><a class=\"ds-nav-link\" href=\"#usage\" aria-current=\"page\">Usage</a><a class=\"ds-nav-link\" href=\"#agents\">Agents</a><a class=\"ds-nav-link\" href=\"#settings\">Settings</a></nav>",
+      "css": ".ds-nav{display:flex;gap:8px;font:15px/1.55 system-ui,sans-serif;}.ds-nav-link{padding:8px 13px;text-decoration:none;color:var(--ss-muted,#52635b);border-radius:6px}.ds-nav-link:hover{background:var(--ss-soft,#eaf2e9)}.ds-nav-link[aria-current=page]{background:var(--ss-soft,#eaf2e9);color:var(--ss-ink,#172821);font-weight:600}.ds-nav-link:focus-visible{outline:2px solid var(--ss-accent,#226448);outline-offset:3px;}"
+    },
+    {
+      "name": "Configuration Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Flat white bordered container shared by agents and provider accounts.",
+      "html": "<article class=\"ds-panel\"><h2 class=\"ds-panel-title\">Builder</h2><p class=\"ds-panel-copy\">Named orchestrator for CLI use.</p></article>",
+      "css": ".ds-panel{min-width:0;padding:24px;border:1px solid var(--ss-line,#d9e1d9);border-radius:12px;background:var(--ss-paper,#fff);color:var(--ss-ink,#172821);font:15px/1.55 system-ui,sans-serif;}.ds-panel-title{margin:0;font-size:19px;line-height:1.4;font-weight:600;letter-spacing:-.015em}.ds-panel-copy{margin:8px 0 0;max-width:72ch;color:var(--ss-muted,#52635b)}@media(max-width:700px){.ds-panel{padding:20px}}"
+    },
+    {
+      "name": "Observed Allowance Meter",
+      "kind": "custom",
+      "refersTo": "meter",
+      "description": "Labeled saved observation with tabular figures and a compact green fill.",
+      "html": "<div class=\"ds-meter-row\"><h3 class=\"ds-meter-title\">Five-hour allowance</h3><span class=\"ds-meter-number\">25.0% used</span></div><div class=\"ds-meter\" role=\"progressbar\" aria-label=\"Five-hour allowance last reported used percentage\" aria-valuenow=\"25\" aria-valuemin=\"0\" aria-valuemax=\"100\"><span class=\"ds-meter-fill\"></span></div><p class=\"ds-meter-copy\">75.0% remaining at last reading</p>",
+      "css": ".ds-meter-row{display:flex;justify-content:space-between;align-items:baseline;gap:16px;color:var(--ss-ink,#172821);font:15px/1.55 system-ui,sans-serif;}.ds-meter-title{margin:0;font-size:14px;line-height:1.5;font-weight:600}.ds-meter-number{font-variant-numeric:tabular-nums;white-space:nowrap}.ds-meter{height:8px;margin:10px 0 6px;background:var(--ss-soft,#eaf2e9);border-radius:4px;overflow:hidden}.ds-meter-fill{display:block;height:100%;width:25%;background:var(--ss-accent,#226448)}.ds-meter-copy{margin:8px 0 0;color:var(--ss-muted,#52635b);font:15px/1.55 system-ui,sans-serif;font-size:13px}"
+    },
+    {
+      "name": "Unknown Reading",
+      "kind": "custom",
+      "refersTo": "unknown",
+      "description": "Dashed written state when a window has no usable observation.",
+      "html": "<div class=\"ds-unknown\">Unknown \u00b7 Not reported</div>",
+      "css": ".ds-unknown{margin-top:10px;padding:10px 12px;border:1px dashed var(--ss-line,#d9e1d9);border-radius:6px;color:var(--ss-muted,#52635b);font:15px/1.55 system-ui,sans-serif;font-size:13px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Workbench",
+    "overview": "PROVISIONAL: The metaphor and descriptive palette names are documentation language inferred from the accepted direction; they are not additional user commitments. The quiet workbench describes a calm, plain interface with green accents, readable system type, and modest visual density. Familiar controls and visible labels carry the interaction.\n\nREPO-INSPECTION: [PRODUCT.md](PRODUCT.md) establishes the minimal configuration and subscription allowance interface for CLI agent work. White panels and fields sit on a pale neutral ground, with fine rules and generous separation between groups. The visual system described here belongs to the Usage, Agents, and Settings product shell; legacy diagnostic views do not establish its tokens.\n\nVERIFIED: All eight desktop/mobile final captures in `.impeccable/review/` were opened during this documentation pass. They show the implemented palette, single-column mobile forms, explicit unknown/stale readings, and a mobile save toast below the navigation. REPO-INSPECTION: Source values come from [configuration.css](priv/static/assets/css/configuration.css), the product LiveViews, and the product layout. UNVERIFIED: This document does not certify repository readiness, backend acceptance, provider access, or complete accessibility conformance. The full gate belongs to integration; I did not verify it in this documentation pass.",
+    "keyCharacteristics": [
+      "REPO-INSPECTION: Quiet green accents on pale ground and white surfaces.",
+      "REPO-INSPECTION: Visible labels, compact bars, and restrained borders.",
+      "REPO-INSPECTION: System typography and tabular allowance figures.",
+      "REPO-INSPECTION: Responsive stacking without hidden primary navigation."
+    ],
+    "rules": [
+      {
+        "name": "The Explicit State Rule",
+        "body": "Pair status color with plain language. Unknown readings have their own dashed container; missing observations remain gaps rather than filled bars.",
+        "section": "colors"
+      },
+      {
+        "name": "The Quiet Surface Rule",
+        "body": "Preserve the flat resting treatment for product panels and controls; use the existing tonal and border changes to indicate state.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use the existing system font, quiet palette, and visible field labels.",
+      "Do retain the common accent outline for keyboard focus.",
+      "Do stack paired fields and panels at the existing mobile breakpoint.",
+      "Do pair allowance bars with values, units, and observation context.",
+      "Do preserve readable unknown, stale, and missing-data states."
+    ],
+    "donts": [
+      "Don't replace missing allowance data with an invented meter fill.",
+      "Don't use status color as the only explanation of a state.",
+      "Don't add external font or image dependencies to reproduce this system.",
+      "Don't treat provisional descriptive names as new brand commitments."
+    ]
+  }
+}

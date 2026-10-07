@@ -50,7 +50,9 @@ defmodule Mix.Tasks.Shoestring.Agents do
               ["show", name] ->
                 output(Shoestring.AgentProfiles.snapshot(name, revision))
             end
-          end, pool_size: 1)
+          end,
+          pool_size: 1
+        )
     after
       Application.put_env(:shoestring, Shoestring.Repo, previous)
     end

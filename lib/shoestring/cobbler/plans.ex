@@ -1240,7 +1240,9 @@ defmodule Shoestring.Cobbler.Plans do
   #     unavailable. Nothing was written. A plain retry of the same
   #     `proposal_id` or `decision_id` is safe and converges.
   #   * `:database_conflict` — the write met the storage layer's own
-  #     constraints in a way this code did not anticipate. The transaction
+  #     constraints or DBConnection returned its aborted-transaction sentinel.
+  #     That sentinel does not identify the cause, so it is not labelled busy.
+  #     The transaction
   #     rolled back whole, but the caller should RE-READ before deciding
   #     what to do, because durable state may have moved underneath it.
   #
@@ -1248,7 +1250,18 @@ defmodule Shoestring.Cobbler.Plans do
   # FunctionClauseError, a bad query) must still crash loudly instead of
   # being dressed up as a transient storage problem.
   defp run_transaction(repo, fun) do
-    repo.transaction(fun, mode: :immediate)
+    case repo.transaction(fun, mode: :immediate) do
+      {:error, :rollback} ->
+        {:error,
+         {:database_conflict,
+          %{
+            "kind" => "transaction_aborted",
+            "message" => "Transaction aborted; reread durable state before retrying."
+          }}}
+
+      result ->
+        result
+    end
   rescue
     error in [Exqlite.Error, DBConnection.ConnectionError] ->
       {:error, {:database_busy, Exception.message(error)}}

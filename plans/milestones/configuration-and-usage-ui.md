@@ -1,12 +1,13 @@
 # Product follow-up: agent configuration and usage UI
 
-**Status:** proposed; product direction and mockup accepted, implementation pending.
+**Status:** configuration and usage implementation complete; execution binding
+and CLI approval remain separate iteration-6 work. See the acceptance record below.
 
 **Decision recorded:** 2026-10-05.
 
 **Scheduling:** separate product follow-up; does not close iteration 6 or change
-the dependency ordering of its executor and amendment packages. Confirm its
-implementation slot after the CLI-facing contracts are established.
+the dependency ordering of its executor and amendment packages. Its
+implementation does not certify the CLI-facing execution contracts.
 
 ## Agreed boundary
 
@@ -30,10 +31,11 @@ required. It includes Usage, Agents, Settings, agent editing, and Focus/Console
 layout alternatives. Usage figures, connection states, and model choices are
 illustrative. Browser-local changes are preview state, not Shoestring settings.
 
-The user accepted this overall direction. No final choice between the two
-layouts, exact model catalog, or arbitrary-team editor was made; those remain
-implementation decisions. The mockup is not a shipped product or provider
-support claim.
+The user accepted this overall direction. REPO-INSPECTION: implementation uses
+Focus navigation, configured Claude Code/Codex model identifier catalogs, and a
+required coordinator with up to five optional team roles. Catalog membership is
+configuration validation; model entitlement was not verified. The mockup remains
+illustrative rather than a provider support claim.
 
 ## Required outcomes
 
@@ -70,15 +72,17 @@ support claim.
 
 ## Implementation checklist
 
-- [ ] Define persisted orchestrator configuration and revision semantics.
-- [ ] Establish CLI selection of named agents and CLI-facing approval flow.
-- [ ] Build Usage from existing normalized capacity observations.
-- [ ] Build Agents create/edit/duplicate and provider/model selection.
-- [ ] Build Settings for supported connections and defaults.
-- [ ] Add history visualization where stored observations support it.
-- [ ] Verify restart persistence and UI/CLI configuration consistency.
-- [ ] Verify shared quota, missing/stale observations, and narrow-screen/keyboard use.
-- [ ] Run `mix precommit` with hermetic fixtures and record exact counts.
+- [x] Define persisted orchestrator configuration and immutable revision semantics.
+- [x] Establish CLI lookup of named, default and historical agent snapshots.
+- [ ] Establish CLI-facing approval and bind snapshots to approved execution.
+- [x] Build Usage from existing normalized capacity observations.
+- [x] Build Agents create/edit/duplicate and provider/model selection.
+- [x] Build Settings for configured model identifiers and shared defaults.
+- [x] Add seven-day history from recorded observations, including missing-day gaps.
+- [x] Verify restart persistence and UI/CLI configuration consistency.
+- [x] Verify shared quota, missing/stale observations and narrow-screen rendering.
+- [ ] Complete keyboard and screen-reader acceptance coverage.
+- [x] Final full-gate verification after the transaction-abort fix (record below).
 
 ## Acceptance gate
 
@@ -91,4 +95,19 @@ support claim.
 4. The product UI stays within configuration and usage; work and approval remain
    available through the CLI with their existing safety contracts.
 
-**Completion record:** not implemented; no production acceptance evidence yet.
+VERIFIED: Firefox saved an agent revision in an isolated synthetic state store.
+A separate CLI process resolved its exact purpose, revision and digest; a server
+restart preserved the edit, and historical revision lookup retained the original.
+All eight desktop/mobile captures were inspected; the fresh review confirmed the
+label contrast and mobile toast fixes. Evidence and limits live in
+[configuration-and-usage.md](../evidence/06-cobbler-planning/configuration-and-usage.md).
+
+VERIFIED: `perl -e 'alarm 600; exec @ARGV' mix precommit < /dev/null` passed:
+4 doctests, 1724 tests, 0 failures, 1 skipped, 6 excluded (seed 269623);
+Node capacity 52/52 and UI 8/8 passed. The earlier intermittent red gate and
+its transaction-abort regression/fix are retained in the evidence record.
+
+UNVERIFIED: acceptance item 2 is not closed. Immutable profile lookup is available,
+but approved execution does not yet bind these snapshots. Live entitlement,
+provider inference and complete keyboard/screen-reader coverage were not verified.
+Settings does not test provider authentication; it states that boundary explicitly.

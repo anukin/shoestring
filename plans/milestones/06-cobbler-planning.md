@@ -4,7 +4,7 @@
 
 ## Implementation status
 
-VERIFIED (GitHub inspection, 2026-10-04): package A merged in
+VERIFIED (GitHub inspection, 2026-10-07): package A merged in
 [PR #89](https://github.com/anukin/shoestring/pull/89); the L1 hermetic lifecycle
 follow-up merged in [PR #87](https://github.com/anukin/shoestring/pull/87).
 [PR #90](https://github.com/anukin/shoestring/pull/90) remains a draft package D
@@ -12,7 +12,8 @@ implementation with successful CI and no submitted reviews at inspection.
 The older draft [PR #88](https://github.com/anukin/shoestring/pull/88) remains
 open; it does not add completed work beyond the merged foundation.
 
-REPO-INSPECTION: this package B change adds the deterministic fixture planner,
+VERIFIED (GitHub inspection, 2026-10-07): package B merged in
+[PR #91](https://github.com/anukin/shoestring/pull/91). REPO-INSPECTION: it adds the deterministic fixture planner,
 configured local model boundary, quota admission, durable attempts/accounting,
 strict structured validation, and one explicit repair. See
 `../../docs/planner-boundary.md` and the package evidence record. It does not
@@ -32,10 +33,12 @@ without changing its durable revision, validation, quota, or approval contracts.
 Package C remains pending as a CLI interface; this decision is not evidence of
 implementation or iteration completion.
 
-The accepted visual direction and pending implementation checklist are recorded
+The accepted visual direction and implementation/acceptance checklist are recorded
 in [the configuration and usage UI milestone](configuration-and-usage-ui.md),
 with a repository-owned HTML mockup. That follow-up is separate from the
-iteration-6 sequential execution acceptance gate.
+iteration-6 sequential execution acceptance gate. REPO-INSPECTION: Usage, Agents,
+Settings and immutable CLI profile lookup are implemented. CLI plan approval,
+approved-run profile binding and amendment/replan are not closed by that UI work.
 
 **Hard dependencies:** iteration 5 complete
 

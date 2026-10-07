@@ -75,13 +75,23 @@ replaceable execution providers. The longer-term product vocabulary is:
 - **Trajectory**: the append-only durable record that survives restarts,
   provider changes, and model-conversation loss.
 
-## Planned product interface
+## Product interface
 
 The agreed product direction puts work, execution, and approvals in the CLI.
-The web UI focuses on orchestrator configuration and provider usage limits.
-Implementation is pending; see the
+The web UI provides Usage, Agents and Settings: reported provider/account
+allowances, named orchestrators with configurable team roles, and shared defaults.
+Agent edits create immutable revisions. The CLI reads the same saved configuration:
+
+```sh
+mix shoestring.agents list
+mix shoestring.agents show builder
+mix shoestring.agents show builder --revision 1
+```
+
+Here `builder` is an example saved agent name. CLI approval, execution binding
+and amendment/replan remain iteration-6 work. See the
 [configuration and usage UI milestone](plans/milestones/configuration-and-usage-ui.md)
-and its [standalone HTML mockup](plans/mockups/configuration-and-usage.html).
+and [implementation evidence](plans/evidence/06-cobbler-planning/configuration-and-usage.md).
 
 ## Local development
 
@@ -116,7 +126,8 @@ Start the loopback development server:
 mix phx.server
 ```
 
-Open <http://127.0.0.1:4000> for the health screen. The machine-readable
+Open <http://localhost:4000> for Usage, Agents and Settings. The diagnostic
+health screen remains at <http://localhost:4000/status>. The machine-readable
 health endpoint is <http://127.0.0.1:4000/health>; it returns HTTP 503 when a
 required local component is unavailable.
 

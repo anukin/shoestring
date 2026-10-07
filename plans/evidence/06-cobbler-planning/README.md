@@ -14,6 +14,10 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `configuration-and-usage.md` — persisted orchestrators, immutable CLI snapshot
+  lookup, configuration/allowance UI, browser evidence, reconstructed regressions
+  and the final-gate transaction-abort correction. Execution binding remains open.
+
 - `planner-boundary.md` — package B's bounded fixture/local-model inference,
   quota admission, durable budget/replay, strict validation and single repair.
 
