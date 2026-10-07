@@ -42,10 +42,9 @@ defmodule Shoestring.Usage do
     # Render defense for legacy rows: sanitise a copy, never the stored evidence.
     display_record = %{
       record
-      | scope: Security.redact(record.scope),
-        reason: redact_nullable(record.reason),
-        windows:
-          Enum.map(record.windows, &%{&1 | unknown_reason: redact_nullable(&1.unknown_reason)})
+      | scope: decode_safe(record.scope),
+        reason: decode_safe(record.reason),
+        windows: Enum.map(record.windows, &%{&1 | unknown_reason: decode_safe(&1.unknown_reason)})
     }
 
     summary =
@@ -93,6 +92,16 @@ defmodule Shoestring.Usage do
 
   defp redact_nullable(nil), do: nil
   defp redact_nullable(value), do: Security.redact(value)
+
+  # Redacted assignment markers still trigger the strict stored-snapshot
+  # validator. Neutralise them only in the decoding copy, retaining the
+  # separately redacted display label and all canonical evidence.
+  defp decode_safe(nil), do: nil
+
+  defp decode_safe(value) do
+    redacted = Security.redact(value)
+    if Security.secret_value?(redacted), do: "Redacted diagnostic", else: redacted
+  end
 
   defp windows(reported) do
     Enum.map(Enum.uniq(["five_hour", "seven_day"] ++ Enum.map(reported, & &1.kind)), fn kind ->

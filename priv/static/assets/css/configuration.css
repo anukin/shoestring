@@ -1,5 +1,7 @@
 .ss-product { --ss-ink:#172821; --ss-muted:#52635b; --ss-accent:#226448; --ss-ground:#f5f7f4; --ss-paper:#fff; --ss-line:#d9e1d9; --ss-soft:#eaf2e9; --ss-error:#943a29; min-height:100vh; background:var(--ss-ground); color:var(--ss-ink); font:15px/1.55 system-ui,sans-serif; scrollbar-color:var(--ss-muted) var(--ss-ground); }
 body:has(.ss-product) { margin:0; background:#f5f7f4; }
+body:has(.ss-product) #flash-info .alert { background:#eaf2e9; color:#172821; border:1px solid #d9e1d9; }
+body:has(.ss-product) #flash-error .alert { background:#f5f7f4; color:#943a29; border:1px solid #943a29; }
 .ss-product * { box-sizing:border-box; }
 .ss-product ::selection { background:var(--ss-soft); color:var(--ss-ink); }
 .ss-product :focus-visible { outline:2px solid var(--ss-accent); outline-offset:3px; }

@@ -38,7 +38,13 @@ defmodule Shoestring.AgentProfiles do
   def update(agent, attrs),
     do: persist(change(agent, attrs) |> Ecto.Changeset.optimistic_lock(:revision), :update)
 
-  def change_settings(settings, attrs \\ %{}), do: Settings.changeset(settings, attrs)
+  def change_settings(settings, attrs \\ %{}) do
+    settings
+    |> Settings.changeset(attrs)
+    |> Ecto.Changeset.validate_change(:default_agent_id, fn field, id ->
+      if get(id), do: [], else: [{field, "choose an existing agent"}]
+    end)
+  end
 
   def save_settings(settings, attrs) do
     settings

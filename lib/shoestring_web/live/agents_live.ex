@@ -183,7 +183,14 @@ defmodule ShoestringWeb.AgentsLive do
             <p>Save a configuration for CLI use. Each edit creates a new revision.</p>
           </div>
         </div>
-        <.form for={@form} id="agent-form" class="ss-form" phx-change="validate" phx-submit="save">
+        <.form
+          for={@form}
+          id="agent-form"
+          method="post"
+          class="ss-form"
+          phx-change="validate"
+          phx-submit="save"
+        >
           <div :if={@form_errors != []} id="agent-errors" class="ss-error" role="alert">
             <p :for={{field, {message, _}} <- @form_errors}>{field}: {message}</p>
             <button

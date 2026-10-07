@@ -53,7 +53,7 @@ defmodule Shoestring.UsageTest do
       }
     })
 
-    cards = Usage.cards(now)
+    cards = Usage.cards(DateTime.utc_now())
     assert length(cards) == 3
     assert Enum.find(cards, &(&1.provider == "codex" and &1.scope == "synthetic-account")).stale?
     assert Enum.find(cards, &(&1.scope == "synthetic-other")).status == "Observed"
@@ -83,5 +83,20 @@ defmodule Shoestring.UsageTest do
     assert length(card.history) == 7
     assert Enum.at(card.history, 4).value == 40.0
     assert Enum.count(card.history, &is_nil(&1.value)) == 6
+  end
+
+  test "legacy credential markers render redacted while keeping allowance and stored evidence" do
+    capacity_fixture()
+    record = Repo.one!(Shoestring.Harness.CapacitySnapshotRecord)
+    scope = "synthetic-account token=synthetic-secret-value"
+    Repo.update_all(Shoestring.Harness.CapacitySnapshotRecord, set: [scope: scope])
+
+    card = Enum.find(Usage.cards(), &(&1.provider == "codex"))
+    assert card.scope == "synthetic-account token=[REDACTED]"
+    assert card.status == "Observed"
+    assert Enum.find(card.windows, &(&1.kind == "five_hour")).used_percent == 25.0
+    refute inspect(card) =~ "synthetic-secret-value"
+    unchanged = Repo.get!(Shoestring.Harness.CapacitySnapshotRecord, record.id)
+    assert unchanged.scope == scope
   end
 end

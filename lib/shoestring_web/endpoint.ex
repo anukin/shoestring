@@ -15,6 +15,18 @@ defmodule ShoestringWeb.Endpoint do
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
 
+  # Serve the browser clients from the locked OTP dependencies. Only these
+  # JavaScript assets are exposed; no provider or external CDN is involved.
+  plug Plug.Static,
+    at: "/assets/vendor/phoenix",
+    from: {:phoenix, "priv/static"},
+    only: ["phoenix.js"]
+
+  plug Plug.Static,
+    at: "/assets/vendor/live_view",
+    from: {:phoenix_live_view, "priv/static"},
+    only: ["phoenix_live_view.js"]
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),

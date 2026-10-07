@@ -50,7 +50,14 @@ defmodule ShoestringWeb.AgentSettingsLive do
           <p>Providers and defaults for saved agents.</p>
         </div>
       </div>
-      <.form for={@form} id="settings-form" class="ss-form" phx-change="validate" phx-submit="save">
+      <.form
+        for={@form}
+        id="settings-form"
+        method="post"
+        class="ss-form"
+        phx-change="validate"
+        phx-submit="save"
+      >
         <div :if={@form_errors != []} id="settings-errors" class="ss-error" role="alert">
           <p :for={{field, {message, _}} <- @form_errors}>{field}: {message}</p>
           <button id="reload-settings" type="button" class="ss-button" phx-click="reload-settings">

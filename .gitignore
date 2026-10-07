@@ -68,6 +68,10 @@ plans/evidence/06-cobbler-planning/*
 !/plans/evidence/06-cobbler-planning/hermetic-lifecycle.md
 !/plans/evidence/06-cobbler-planning/plan-foundation.md
 !/plans/evidence/06-cobbler-planning/plan-foundation-race-fix.md
+!/plans/evidence/06-cobbler-planning/configuration-and-usage.md
+
+# Native capture originals remain local; named review images are versioned.
+/.impeccable/review/Screenshot*.png
 
 # Editor, language-server, and OS metadata
 /.elixir_ls/

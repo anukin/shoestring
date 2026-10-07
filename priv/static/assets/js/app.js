@@ -149,6 +149,14 @@
     return;
   }
 
+  var csrf = document.querySelector("meta[name='csrf-token']");
+  if (root.Phoenix && root.LiveView && csrf) {
+    var liveSocket = new root.LiveView.LiveSocket("/live", root.Phoenix.Socket, {
+      params: { _csrf_token: csrf.getAttribute("content") }
+    });
+    liveSocket.connect();
+  }
+
   start(document, root);
 
   // Handle flash close
