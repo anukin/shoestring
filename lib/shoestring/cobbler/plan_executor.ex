@@ -36,6 +36,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     preserving its task/run/attempt for the existing wake lifecycle. Plan-level
     wake/handoff completion remains pending; this module does not yet bind a
     continuation run back to the active plan attempt.
+  - **Bounded amendments.** One new approved execution revision may replace an
+    inactive execution. Accepted task contracts/evidence and lifetime counters
+    carry forward; unresolved work cannot be replaced. Approval and activation
+    recheck late acceptance under the store write transaction.
   - **Safe supersession.** A newer approval stops further dispatch from
     the old revision. Work already dispatched is never cancelled because
     authority changed: its attempt result is still recorded at the safe
@@ -111,18 +115,14 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         "ordered_task_ids" => contract.ordered_task_ids
       }
 
-      outcome = execution_outcome(repo, goal_id, revision_number, digest)
-
-      append_executor_event(
-        repo,
+      Plans.record_execution_request(
         goal_id,
-        "cobbler.plan.execution.requested",
         payload,
         "plan-execution:#{revision_number}:#{digest}",
         opts
       )
       |> case do
-        {:ok, _event} ->
+        {:ok, %{outcome: outcome}} ->
           {:ok,
            %{
              execution: %{
@@ -390,7 +390,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
             ordered_task_ids: payload["ordered_task_ids"] || []
           }
 
-          if is_nil(acc.execution), do: %{acc | execution: execution}, else: acc
+          %{acc | execution: execution, completed: nil}
 
         %TrajectoryEvent{type: "cobbler.plan.task.dispatched", payload: payload}, acc ->
           %{acc | dispatched: acc.dispatched ++ [normalize_dispatch(payload)]}
@@ -402,7 +402,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
           %{acc | gate_failed: acc.gate_failed ++ [normalize_resolution(payload)]}
 
         %TrajectoryEvent{type: "cobbler.plan.execution.completed", payload: payload}, acc ->
-          if is_nil(acc.completed), do: %{acc | completed: payload}, else: acc
+          if acc.execution && payload["execution_id"] == acc.execution.execution_id,
+            do: %{acc | completed: payload},
+            else: acc
 
         _event, acc ->
           acc
@@ -456,9 +458,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     Enum.filter(projection.dispatched, &(&1.execution_id == execution.execution_id))
   end
 
-  defp accepted_task_ids(projection, execution) do
+  defp accepted_task_ids(projection, _execution) do
     projection.accepted
-    |> Enum.filter(&(&1.execution_id == execution.execution_id))
     |> Enum.map(& &1.plan_task_id)
     |> MapSet.new()
   end
@@ -493,29 +494,24 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     |> Enum.find(fn dispatch -> not dispatch_resolved?(projection, dispatch) end)
   end
 
-  defp attempt_counts(projection, execution) do
-    projection
-    |> dispatches_for(execution)
+  defp attempt_counts(projection, _execution) do
+    projection.dispatched
     |> Enum.group_by(& &1.plan_task_id, & &1.attempt)
     |> Map.new(fn {task_id, attempts} -> {task_id, length(attempts)} end)
   end
 
-  defp total_attempts(projection, execution) do
-    projection |> dispatches_for(execution) |> length()
-  end
+  defp total_attempts(projection, _execution), do: length(projection.dispatched)
 
   # Durations accumulate from bound gate evidence (accepted) and the
   # recorded attempt durations (gate failures). They only grow: nothing
   # here resets a counter on retry, wake, or restart.
-  defp total_gate_duration_ms(projection, execution) do
+  defp total_gate_duration_ms(projection, _execution) do
     accepted_ms =
       projection.accepted
-      |> Enum.filter(&(&1.execution_id == execution.execution_id))
       |> Enum.reduce(0, fn accepted, acc -> acc + (accepted.duration_ms || 0) end)
 
     failed_ms =
       projection.gate_failed
-      |> Enum.filter(&(&1.execution_id == execution.execution_id))
       |> Enum.reduce(0, fn failed, acc -> acc + (failed.duration_ms || 0) end)
 
     accepted_ms + failed_ms
@@ -717,7 +713,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          {:ok, admission} <- resolve_admission(repo, goal_id, %{}, opts),
          :ok <- refuse_bound_admission(repo, goal_id, admission),
          {:ok, opts} <-
-           prepare_workspace(goal_id, execution, projection, contract, task_id, attempt, opts),
+           prepare_workspace(goal_id, projection, contract, task_id, attempt, opts),
          :ok <- release_own_claim(repo, goal_id, task_id, attempt, opts),
          {:ok, command_attrs} <- claim_attrs(admission, task_id, attempt),
          {:ok, gated} <-
@@ -828,14 +824,14 @@ defmodule Shoestring.Cobbler.PlanExecutor do
      }}
   end
 
-  defp prepare_workspace(goal_id, execution, projection, contract, task_id, attempt, opts) do
+  defp prepare_workspace(goal_id, projection, contract, task_id, attempt, opts) do
     gate_opts = Keyword.get(opts, :gate_runner_opts, [])
 
     if is_function(Keyword.get(gate_opts, :runner), 3) do
       {:ok, opts}
     else
       run_id = deterministic_uuid("plan-run:#{goal_id}:#{task_id}:#{attempt}")
-      accepted = Enum.filter(projection.accepted, &(&1.execution_id == execution.execution_id))
+      accepted = projection.accepted
 
       base =
         case List.last(accepted) do
@@ -1175,7 +1171,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   # revision. A global gate failure completes nothing: dependents stay
   # recorded but the goal stays incomplete.
   defp complete_execution(repo, goal_id, projection, execution, _authority, contract, opts) do
-    accepted = Enum.filter(projection.accepted, &(&1.execution_id == execution.execution_id))
+    accepted = projection.accepted
 
     with {:ok, gate_opts} <-
            Shoestring.Cobbler.PlanWorkspace.global_gate_opts(repo, accepted, opts),
@@ -1469,7 +1465,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   # Executor event appends
   # ----------------------------------------------------------------------------
 
-  defp append_executor_event(_repo, goal_id, type, payload, idempotency_key, opts) do
+  defp append_executor_event(repo, goal_id, type, payload, idempotency_key, opts) do
     attrs = %{
       "type" => type,
       "schema_version" => @schema_version,
@@ -1479,25 +1475,24 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       "payload" => payload
     }
 
-    case Trajectory.append(goal_id, attrs, writer_opts: Keyword.get(opts, :writer_opts, [])) do
+    trusted =
+      case payload["run_id"] do
+        nil ->
+          []
+
+        run_id ->
+          case repo.get_by(RunRecord, id: run_id, goal_id: goal_id) do
+            %RunRecord{task_id: task_id} -> [run_id: run_id, task_id: task_id]
+            _ -> [run_id: run_id]
+          end
+      end
+
+    case Trajectory.append(goal_id, attrs,
+           trusted: trusted,
+           writer_opts: Keyword.get(opts, :writer_opts, [])
+         ) do
       {:ok, event} -> {:ok, event}
       {:error, reason} -> {:error, {:executor_append_failed, type, reason}}
-    end
-  end
-
-  # The idempotent writer converges duplicate requests on one row, so
-  # the outcome is decided by a pre-read: an existing request for the
-  # same revision and digest is the replay the call always meant.
-  defp execution_outcome(repo, goal_id, revision_number, digest) do
-    key = "plan-execution:#{revision_number}:#{digest}"
-
-    if repo.exists?(
-         from event in TrajectoryEvent,
-           where: event.goal_id == ^goal_id and event.idempotency_key == ^key
-       ) do
-      :replayed
-    else
-      :recorded
     end
   end
 

@@ -74,6 +74,7 @@ plans/evidence/06-cobbler-planning/*
 /.impeccable/review/Screenshot*.png
 !/plans/evidence/06-cobbler-planning/sequential-executor.md
 !/plans/evidence/06-cobbler-planning/executor-integration.md
+!/plans/evidence/06-cobbler-planning/amendment-core.md
 
 # Editor, language-server, and OS metadata
 /.elixir_ls/

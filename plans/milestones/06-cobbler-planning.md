@@ -21,8 +21,11 @@ strict structured validation, and one explicit repair. See
 `../../docs/planner-boundary.md` and the package evidence record. It does not
 close iteration 6. REPO-INSPECTION: package C's CLI approval interface is now
 implemented; its runtime evidence is in `../evidence/06-cobbler-planning/cli-approval.md`.
-Package E (amendment/replan) and
-package D's remaining CLI execution, saved-agent binding and quota wake/handoff
+REPO-INSPECTION: E's manual amendment core now preserves unchanged accepted
+contracts/evidence and lifetime attempts across one new approved execution revision.
+Model-assisted replan and explicit retirement remain pending. See
+`../evidence/06-cobbler-planning/amendment-core.md`.
+Package D's remaining CLI execution, saved-agent binding and quota wake/handoff
 integration remain pending. REPO-INSPECTION: PR #90 has been integrated with
 review fixes; the domain executor has a hermetic real-worker/worktree/gate restart
 proof. See `../evidence/06-cobbler-planning/executor-integration.md`. Remaining amendment contract decisions are
@@ -44,8 +47,9 @@ in [the configuration and usage UI milestone](configuration-and-usage-ui.md),
 with a repository-owned HTML mockup. That follow-up is separate from the
 iteration-6 sequential execution acceptance gate. REPO-INSPECTION: Usage, Agents,
 Settings and immutable CLI profile lookup are implemented. The separate package C
-CLI now supports plan approval. Approved-run profile binding and amendment/replan
-remain pending.
+CLI now supports plan approval. Approved-run profile binding, model-assisted
+replan and explicit retirement remain pending; the manual amendment core is
+recorded above.
 
 **Hard dependencies:** iteration 5 complete
 
@@ -93,9 +97,11 @@ The full configured output allowance is charged before each call; failed calls
 and new request IDs never replenish it. Unknown local-model capacity requires
 single-decision confirmation and remains labeled `reactive_only`.
 
-UNVERIFIED / undecided for package E: approval-gated retirement of an approved
-task identity, the amendment budget shared with initial planning, and rules for
-carrying accepted evidence into materially changed task contracts. The merged
+REPO-INSPECTION: E's manual core permits one amendment activation; accepted task
+contracts and repository bindings must remain identical, and consumed counters
+never reset. Changed accepted work needs a new task identity while preserving
+the original. UNVERIFIED / undecided: explicit approval-gated retirement and
+model-assisted amendment calls sharing the initial planning allowance. The merged
 foundation retains every approved task ID until an explicit retirement path
 exists. These decisions are not implicitly relaxed by the planner boundary.
 
@@ -131,8 +137,9 @@ self-dependencies, cycles, duplicate IDs, empty outcomes, and unbounded tasks.
 REPO-INSPECTION: implemented by `mix shoestring.plans`. See
 `../../docs/cli-plan-review.md` for review/export/edit, candidate adoption,
 revision/digest-bound decisions, request replay and stored planner quota display.
-New edits remain proposals; approval does not dispatch or cancel work. This
-package does not implement amendment preservation or approved-run profile binding.
+New edits remain proposals; approval does not dispatch or cancel work. Manual
+amendment preservation now lives in the domain store; activation and approved-run
+profile binding remain separate from this review interface.
 
 Allow the user, through the CLI, to:
 

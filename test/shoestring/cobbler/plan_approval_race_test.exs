@@ -37,12 +37,11 @@ defmodule Shoestring.Cobbler.PlanApprovalRaceTest do
        database: Path.join(state_dir, "plans.db"),
        pool_size: 8,
        journal_mode: :wal,
-       # Four concurrent writers contend harder than the two-writer claim
-       # race does; the timeout bounds how long a writer waits for the
-       # immediate-transaction lock under full-suite load. It is a
-       # contention bound, never a correctness one: exclusivity is the
-       # index's job, not the timeout's.
-       busy_timeout: 15_000
+       # Match production's lock-wait bound. Waiting for the full 15s query
+       # timeout can occupy dirty-I/O slots and prevent the lock owner from
+       # progressing before DBConnection aborts it. Keep the wait shorter;
+       # the exactly-one-decision assertions and four writers are unchanged.
+       busy_timeout: 2_000
      ]})
 
     assert is_list(Ecto.Migrator.run(MigrationRepo, @migrations, :up, all: true))

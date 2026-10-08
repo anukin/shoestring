@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `amendment-core.md` — exact accepted-contract preservation, bounded approved
+  activation, lifetime counters, regression and restart evidence.
+
 - `executor-integration.md` — PR #90 review, behavioral regressions, process-group
   gate bounds, durable dispatch/worktree binding and worker/restart proof.
 - `sequential-executor.md` — historical PR #90 author report; read its successor

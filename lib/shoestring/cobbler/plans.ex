@@ -210,6 +210,7 @@ defmodule Shoestring.Cobbler.Plans do
 
     :ok = check_parent(repo, goal_id, parent, revision_number)
     :ok = check_retained_task_identities(repo, goal_id, contract)
+    :ok = check_accepted_task_contracts(repo, goal_id, contract.content)
 
     revision =
       goal_id
@@ -258,8 +259,8 @@ defmodule Shoestring.Cobbler.Plans do
   end
 
   # Task identities that approved history introduced are stable facts. An
-  # edit may change a task's outcome, dependencies, gates, or checkpoint,
-  # but it may not make the identity disappear — otherwise completed work
+  # edit may change an unaccepted task's contract, but accepted contracts are
+  # preserved exactly. It may not make an approved identity disappear — otherwise completed work
   # would lose the id its evidence was recorded against. Retiring an
   # approved task is a real need and deliberately has no representation
   # here; see the module doc.
@@ -274,6 +275,124 @@ defmodule Shoestring.Cobbler.Plans do
       missing ->
         repo.rollback({:approved_task_identity_dropped, %{"missing" => missing}})
     end
+  end
+
+  defp check_accepted_task_contracts(repo, goal_id, content) do
+    incoming = Map.new(content["tasks"], &{&1["id"], &1})
+
+    accepted =
+      repo.all(
+        from e in TrajectoryEvent,
+          where: e.goal_id == ^goal_id and e.type == "cobbler.plan.task.accepted"
+      )
+
+    Enum.each(accepted, fn event ->
+      payload = event.payload
+      source = get_revision_row(repo, goal_id, payload["revision_number"])
+
+      if is_nil(source) or source.digest != payload["plan_digest"],
+        do: repo.rollback(:accepted_evidence_invalid)
+
+      contract =
+        case PlanContract.new(source.content) do
+          {:ok, value} -> value
+          _ -> repo.rollback(:accepted_evidence_invalid)
+        end
+
+      if contract.digest != source.digest, do: repo.rollback(:accepted_evidence_invalid)
+      original = Enum.find(contract.content["tasks"], &(&1["id"] == payload["plan_task_id"]))
+
+      if is_nil(original) or incoming[payload["plan_task_id"]] != original,
+        do: repo.rollback({:accepted_task_contract_changed, payload["plan_task_id"]})
+
+      if content["goal"]["repository"] != contract.content["goal"]["repository"],
+        do: repo.rollback(:accepted_repository_changed)
+    end)
+
+    :ok
+  end
+
+  defp execution_requests(repo, goal_id) do
+    repo.all(
+      from e in TrajectoryEvent,
+        where:
+          e.goal_id == ^goal_id and
+            e.type == "cobbler.plan.execution.requested",
+        order_by: [asc: e.sequence]
+    )
+  end
+
+  # A lease/run intent may commit before its executor dispatch event. Treat
+  # that crash window as unresolved work too, regardless of run terminal state:
+  # only canonical plan acceptance/failure resolves an attempt.
+  defp unresolved_bound_run?(repo, goal_id) do
+    resolved_run_ids =
+      repo.all(
+        from e in TrajectoryEvent,
+          where:
+            e.goal_id == ^goal_id and
+              e.type in ["cobbler.plan.task.accepted", "cobbler.plan.task.gate_failed"],
+          select: e.payload
+      )
+      |> MapSet.new(& &1["run_id"])
+
+    repo.all(from r in Shoestring.Harness.RunRecord, where: r.goal_id == ^goal_id)
+    |> Enum.any?(fn run ->
+      Map.has_key?(run.extensions || %{}, Shoestring.Cobbler.PlanBinding.key()) and
+        not MapSet.member?(resolved_run_ids, run.id)
+    end)
+  end
+
+  @doc false
+  def record_execution_request(goal_id, payload, key, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    repo
+    |> run_transaction(fn ->
+      authority = authority(goal_id, repo: repo)
+
+      if is_nil(authority) or authority.revision_number != payload["revision_number"] or
+           authority.digest != payload["plan_digest"],
+         do: repo.rollback(:plan_authority_changed)
+
+      :ok = check_accepted_task_contracts(repo, goal_id, authority.revision.content)
+      requests = execution_requests(repo, goal_id)
+
+      case Enum.find(requests, &(&1.idempotency_key == key)) do
+        %TrajectoryEvent{payload: ^payload} = event ->
+          %{event: event, events: [], outcome: :replayed}
+
+        %TrajectoryEvent{} ->
+          repo.rollback(:execution_request_conflict)
+
+        nil ->
+          {:ok, status} = Shoestring.Cobbler.PlanExecutor.status(goal_id, repo: repo)
+
+          if not is_nil(status[:active_task]) or unresolved_bound_run?(repo, goal_id),
+            do: repo.rollback(:active_plan_execution)
+
+          if length(requests) >= 2, do: repo.rollback(:amendment_execution_limit)
+
+          event =
+            hd(
+              append_events(
+                repo,
+                goal_id,
+                [
+                  %{
+                    "type" => "cobbler.plan.execution.requested",
+                    "payload" => payload,
+                    "idempotency_key" => key
+                  }
+                ],
+                now(opts)
+              )
+            )
+
+          %{event: event, events: [event], outcome: :recorded}
+      end
+    end)
+    |> publish_result(opts)
   end
 
   defp approved_lineage_task_ids(repo, goal_id) do
@@ -501,6 +620,19 @@ defmodule Shoestring.Cobbler.Plans do
   end
 
   defp complete_decision(repo, goal_id, revision, decision_row, decision, now) do
+    if decision.kind == "approve" do
+      :ok = check_accepted_task_contracts(repo, goal_id, revision.content)
+      requests = execution_requests(repo, goal_id)
+
+      if length(requests) >= 2 and
+           not Enum.any?(
+             requests,
+             &(&1.payload["revision_number"] == revision.revision_number)
+           ) do
+        repo.rollback(:amendment_execution_limit)
+      end
+    end
+
     superseded = supersede_for(repo, goal_id, decision, revision, now)
     next_status = if decision.kind == "approve", do: "approved", else: "rejected"
 
@@ -1041,7 +1173,7 @@ defmodule Shoestring.Cobbler.Plans do
       occurred_at: now,
       schema_version: @schema_version,
       payload: payload,
-      idempotency_key: nil
+      idempotency_key: input["idempotency_key"]
     }
     |> TrajectoryEvent.changeset(%{})
     |> repo.insert()

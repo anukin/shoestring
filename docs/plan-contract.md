@@ -5,8 +5,10 @@ Package B adds the separate [planner boundary](planner-boundary.md), which can
 produce a candidate but cannot author or approve a revision. REPO-INSPECTION:
 package C exposes human review/edit/approve/reject through the
 [CLI plan review interface](cli-plan-review.md). Package D now has an integrated domain executor and a hermetic worker/worktree/gate
-restart proof. CLI execution, saved-agent binding, quota continuation and package E
-remain pending; see the current integration evidence.
+restart proof. CLI execution, saved-agent binding and quota continuation
+remain pending; see the current integration evidence. E's manual amendment core
+now carries unchanged accepted evidence and lifetime counters into one new approved
+execution revision; model-assisted replan and explicit retirement remain open.
 
 A plan is a goal acceptance contract plus a validated task DAG. It is a
 *proposal* until a human approves one exact revision at one exact content
@@ -284,3 +286,35 @@ remain pending. One obligation follows:
   reduction has no representation yet. The amendment package must add an
   approval-gated retirement that records *why* an approved task identity is
   retired, rather than relaxing the retention rule.
+
+## Manual amendment core
+
+REPO-INSPECTION: proposing/editing through the existing CLI always creates a new
+revision. A task with accepted evidence keeps its full original contract, task ID
+and repository binding. Proposal, approval and activation each reject materially
+changed accepted contracts, covering late completion between those boundaries.
+Unaccepted tasks may change; a new exact-revision human approval is required.
+
+Activation is stored in an immediate SQLite transaction with live authority,
+accepted-evidence and unresolved-work checks. One initial activation plus one
+amendment activation is allowed per goal. A further approval that would replace
+that exhausted execution authority is refused. Identical activation requests replay
+without consuming this limit. Changing a request ID cannot renew it.
+
+The unresolved-work check includes durable plan-bound run intents before executor
+dispatch bookkeeping is recorded. New intent creation binds live authority in its
+own write transaction; supersession still permits recovery of an identical
+already-stored intent and does not interrupt existing work.
+
+Execution derives the latest activated revision while retaining accepted evidence
+from earlier revisions. Attempt counts, total attempts and gate-duration counters
+span the whole goal. New attempts keep their stable task ID and increment the
+prior ordinal, rather than colliding with or hiding an older run. Accepted work
+never executes again. New goal global acceptance is evaluated after remaining
+required tasks pass, using the cumulative workspace lineage.
+
+VERIFIED: hermetic tests cover these boundaries and an approved amendment survives
+application restart between real worker executions. Model inference for amendment,
+shared planner-call allocation for replan, explicit retirement and full elapsed
+run-duration enforcement remain pending. This core creates no new planner calls
+or quota allowance; the initial planner ledger and its ceilings remain intact.

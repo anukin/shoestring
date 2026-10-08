@@ -35,7 +35,7 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
       :ok
     end
 
-    test "real workers and named gates bind both tasks and global completion across restart" do
+    test "an approved amendment retains acceptance through real workers, gates and restart" do
       source = Path.join(Shoestring.State.root(), "fixture-repository")
       File.mkdir_p!(source)
       File.write!(Path.join(source, ".formatter.exs"), "[inputs: [\"*.ex\"]]\n")
@@ -102,8 +102,55 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
       assert first_worktree.path != source
       assert {:ok, before} = Cobbler.plan_execution_status(goal.id)
       assert before.accepted == ["alpha"]
+
+      amended =
+        Map.update!(plan, "tasks", fn tasks ->
+          Enum.map(tasks, fn task ->
+            if task["id"] == "beta",
+              do: Map.put(task, "outcome", "An amended remaining fixture task."),
+              else: task
+          end)
+        end)
+
+      plan_opts = [now: PlanExecutorHelpers.now(), publish_fun: fn _ -> :ok end]
+
+      assert {:ok, %{revision: amendment}} =
+               Cobbler.propose_plan(
+                 goal.id,
+                 PlanFixtures.propose_attrs(
+                   plan: amended,
+                   parent_revision_number: 1,
+                   proposal_id: "fixture-amendment"
+                 ),
+                 plan_opts
+               )
+
+      amended_attrs = %{
+        revision_number: amendment.revision_number,
+        digest: amendment.digest,
+        admission_event_id: admission.id
+      }
+
+      assert {:error, {:authority_mismatch, _}} =
+               Cobbler.request_plan_execution(goal.id, amended_attrs, opts)
+
+      assert {:ok, _} =
+               Cobbler.approve_plan(
+                 goal.id,
+                 PlanFixtures.approve_attrs(amendment.revision_number, amendment.digest,
+                   decision_id: "fixture-amendment-approval"
+                 ),
+                 plan_opts
+               )
+
+      assert {:ok, _} = Cobbler.request_plan_execution(goal.id, amended_attrs, opts)
+      assert {:ok, carried} = Cobbler.plan_execution_status(goal.id)
+      assert carried.execution.revision_number == 2
+      assert carried.accepted == before.accepted
+      assert carried.attempts == before.attempts
+      assert carried.total_gate_duration_ms == before.total_gate_duration_ms
       restart!()
-      assert {:ok, ^before} = Cobbler.plan_execution_status(goal.id)
+      assert {:ok, ^carried} = Cobbler.plan_execution_status(goal.id)
       assert {:ok, ^first_worktree} = Worktrees.get(first.run_id)
       next_admission = PlanExecutorHelpers.admit!(goal)
 
