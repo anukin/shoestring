@@ -88,8 +88,13 @@ mix shoestring.agents show builder
 mix shoestring.agents show builder --revision 1
 ```
 
-Here `builder` is an example saved agent name. CLI approval, execution binding
-and amendment/replan remain iteration-6 work. See the
+REPO-INSPECTION: plan review, immutable JSON edits and exact-revision decisions
+are available through `mix shoestring.plans`. It starts only the repository and
+does not dispatch work. See [the CLI plan review workflow](docs/cli-plan-review.md)
+for import/export, approval/rejection and stored planner quota display.
+
+Here `builder` is an example saved agent name. REPO-INSPECTION: executor
+integration, execution binding and amendment/replan remain iteration-6 work. See the
 [configuration and usage UI milestone](plans/milestones/configuration-and-usage-ui.md)
 and [implementation evidence](plans/evidence/06-cobbler-planning/configuration-and-usage.md).
 

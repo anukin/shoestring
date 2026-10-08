@@ -17,7 +17,9 @@ VERIFIED (GitHub inspection, 2026-10-07): package B merged in
 configured local model boundary, quota admission, durable attempts/accounting,
 strict structured validation, and one explicit repair. See
 `../../docs/planner-boundary.md` and the package evidence record. It does not
-close iteration 6. Package C (CLI approval interface), package E (amendment/replan), and
+close iteration 6. REPO-INSPECTION: package C's CLI approval interface is now
+implemented; its runtime evidence is in `../evidence/06-cobbler-planning/cli-approval.md`.
+Package E (amendment/replan) and
 package D's independent review, production wiring, worktree binding and
 integration proof remain pending. Remaining amendment contract decisions are
 recorded explicitly below.
@@ -30,15 +32,16 @@ is for agent/orchestrator configuration and provider usage-limit visualization;
 sessions, chat, CLI output, test output, and task execution are not product UI
 requirements. This supersedes package C's earlier web approval UI requirement
 without changing its durable revision, validation, quota, or approval contracts.
-Package C remains pending as a CLI interface; this decision is not evidence of
-implementation or iteration completion.
+REPO-INSPECTION: package C is implemented as `mix shoestring.plans`; this product
+decision and that interface do not close sequential execution or iteration 6.
 
 The accepted visual direction and implementation/acceptance checklist are recorded
 in [the configuration and usage UI milestone](configuration-and-usage-ui.md),
 with a repository-owned HTML mockup. That follow-up is separate from the
 iteration-6 sequential execution acceptance gate. REPO-INSPECTION: Usage, Agents,
-Settings and immutable CLI profile lookup are implemented. CLI plan approval,
-approved-run profile binding and amendment/replan are not closed by that UI work.
+Settings and immutable CLI profile lookup are implemented. The separate package C
+CLI now supports plan approval. Approved-run profile binding and amendment/replan
+remain pending.
 
 **Hard dependencies:** iteration 5 complete
 
@@ -120,6 +123,12 @@ self-dependencies, cycles, duplicate IDs, empty outcomes, and unbounded tasks.
 - Support a deterministic fixture planner for tests.
 
 ## Work package C: CLI approval interface
+
+REPO-INSPECTION: implemented by `mix shoestring.plans`. See
+`../../docs/cli-plan-review.md` for review/export/edit, candidate adoption,
+revision/digest-bound decisions, request replay and stored planner quota display.
+New edits remain proposals; approval does not dispatch or cancel work. This
+package does not implement amendment preservation or approved-run profile binding.
 
 Allow the user, through the CLI, to:
 

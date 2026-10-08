@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `cli-approval.md` — package C's repository-only plan inspection, validated
+  immutable JSON edits, exact-revision decisions and stored planner budget display.
+
 - `configuration-and-usage.md` — persisted orchestrators, immutable CLI snapshot
   lookup, configuration/allowance UI, browser evidence, reconstructed regressions
   and the final-gate transaction-abort correction. Execution binding remains open.

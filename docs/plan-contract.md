@@ -2,8 +2,10 @@
 
 **Status:** package A and the durable revision/approval foundation are merged.
 Package B adds the separate [planner boundary](planner-boundary.md), which can
-produce a candidate but cannot author or approve a revision. Execution,
-amendment orchestration and the approval UI are pending on this branch.
+produce a candidate but cannot author or approve a revision. REPO-INSPECTION:
+package C exposes human review/edit/approve/reject through the
+[CLI plan review interface](cli-plan-review.md). Execution and amendment
+orchestration remain pending on main.
 
 A plan is a goal acceptance contract plus a validated task DAG. It is a
 *proposal* until a human approves one exact revision at one exact content
@@ -20,8 +22,9 @@ spawns, enqueues, grants a lease, or observes capacity.
 | `Shoestring.Cobbler.Plans` | durable revisions, decisions, authority, rebuild |
 | `Shoestring.Cobbler` | the facade: `build_plan/1`, `propose_plan/3`, `approve_plan/3`, `reject_plan/3`, `plan_authority/2`, `rebuild_plans/2` |
 
-Every one of these is reachable without a LiveView. The eventual approval UI
-is a view over this domain, not the place the domain lives.
+Every one of these is reachable without a LiveView. REPO-INSPECTION:
+`mix shoestring.plans` exposes this domain through the CLI, following the
+accepted product direction that the web UI contains configuration and usage.
 
 ## Plan shape (version 1)
 

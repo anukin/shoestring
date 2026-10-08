@@ -20,42 +20,21 @@ defmodule Mix.Tasks.Shoestring.Agents do
       Mix.raise("Use list or show [NAME] [--revision positive-number]")
     end
 
-    Shoestring.State.ensure_writable_root!()
-    Shoestring.State.configure_repo!()
-    previous = Application.fetch_env!(:shoestring, Shoestring.Repo)
+    Shoestring.CLI.Repository.with_repo(fn _repo ->
+      case positional do
+        ["list"] ->
+          Enum.each(
+            Shoestring.AgentProfiles.list(),
+            &Mix.shell().info("#{&1.slug}\t#{&1.name}\trevision #{&1.revision}")
+          )
 
-    Application.put_env(
-      :shoestring,
-      Shoestring.Repo,
-      previous |> Keyword.put(:log, false) |> Keyword.put(:pool, DBConnection.ConnectionPool)
-    )
+        ["show"] ->
+          output(Shoestring.AgentProfiles.default_snapshot(revision))
 
-    try do
-      {:ok, _, _} =
-        Ecto.Migrator.with_repo(
-          Shoestring.Repo,
-          fn repo ->
-            Ecto.Migrator.run(repo, :up, all: true, log: false)
-
-            case positional do
-              ["list"] ->
-                Enum.each(
-                  Shoestring.AgentProfiles.list(),
-                  &Mix.shell().info("#{&1.slug}\t#{&1.name}\trevision #{&1.revision}")
-                )
-
-              ["show"] ->
-                output(Shoestring.AgentProfiles.default_snapshot(revision))
-
-              ["show", name] ->
-                output(Shoestring.AgentProfiles.snapshot(name, revision))
-            end
-          end,
-          pool_size: 1
-        )
-    after
-      Application.put_env(:shoestring, Shoestring.Repo, previous)
-    end
+        ["show", name] ->
+          output(Shoestring.AgentProfiles.snapshot(name, revision))
+      end
+    end)
   end
 
   defp output({:ok, snapshot}), do: Mix.shell().info(Jason.encode!(snapshot, pretty: true))
