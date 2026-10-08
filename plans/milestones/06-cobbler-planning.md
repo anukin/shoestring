@@ -7,8 +7,10 @@
 VERIFIED (GitHub inspection, 2026-10-07): package A merged in
 [PR #89](https://github.com/anukin/shoestring/pull/89); the L1 hermetic lifecycle
 follow-up merged in [PR #87](https://github.com/anukin/shoestring/pull/87).
-[PR #90](https://github.com/anukin/shoestring/pull/90) remains a draft package D
-implementation with successful CI and no submitted reviews at inspection.
+REPO-INSPECTION (2026-10-08): the head of
+[PR #90](https://github.com/anukin/shoestring/pull/90) is integrated on main with
+review fixes and a real-worker/worktree/gate restart proof. Package D remains
+open for the remaining bindings and CLI lifecycle described below.
 The older draft [PR #88](https://github.com/anukin/shoestring/pull/88) remains
 open; it does not add completed work beyond the merged foundation.
 
@@ -20,8 +22,10 @@ strict structured validation, and one explicit repair. See
 close iteration 6. REPO-INSPECTION: package C's CLI approval interface is now
 implemented; its runtime evidence is in `../evidence/06-cobbler-planning/cli-approval.md`.
 Package E (amendment/replan) and
-package D's independent review, production wiring, worktree binding and
-integration proof remain pending. Remaining amendment contract decisions are
+package D's remaining CLI execution, saved-agent binding and quota wake/handoff
+integration remain pending. REPO-INSPECTION: PR #90 has been integrated with
+review fixes; the domain executor has a hermetic real-worker/worktree/gate restart
+proof. See `../evidence/06-cobbler-planning/executor-integration.md`. Remaining amendment contract decisions are
 recorded explicitly below.
 
 ## Product interface decision (2026-10-05)

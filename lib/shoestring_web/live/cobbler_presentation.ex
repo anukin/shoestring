@@ -110,6 +110,29 @@ defmodule ShoestringWeb.CobblerPresentation do
   def derive_goal_state(_decisions, _commands), do: :unknown
 
   @doc """
+  Derives the presentational goal state with plan awareness.
+
+  This is the narrow iteration-6 override: an intermediate planned-task
+  run completing must not show the overall goal complete. When
+  `plan_status` is `:planned_incomplete` (an approved plan is executing
+  but not every required task is accepted and the global gates have not
+  passed), a run-terminal `:completed` or `:failed` fold holds at
+  `:working` instead. Every other status — including `:planned_complete`
+  and `:unplanned` — folds exactly as `derive_goal_state/1`, so ordinary
+  unplanned-goal behavior is preserved byte for byte.
+  """
+  @spec derive_goal_state_for_plan([term()], atom()) :: atom()
+  def derive_goal_state_for_plan(timeline, :planned_incomplete) do
+    case derive_goal_state(timeline) do
+      :completed -> :working
+      :failed -> :working
+      other -> other
+    end
+  end
+
+  def derive_goal_state_for_plan(timeline, _plan_status), do: derive_goal_state(timeline)
+
+  @doc """
   Visual presentation (label, dot, badge, icon) for a goal lifecycle state.
 
   Every lifecycle state has a distinct `data-status` tag; unrecognized

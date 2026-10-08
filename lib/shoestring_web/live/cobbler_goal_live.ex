@@ -223,7 +223,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
     commands = safe_list_commands(goal.id)
     handoffs = handoff_displays(events)
 
-    state = CobblerPresentation.derive_goal_state(events)
+    state = CobblerPresentation.derive_goal_state_for_plan(events, plan_status(goal.id))
     claim = safe_active_claim()
     lease = latest_lease(goal.id)
     checkpoint = latest_checkpoint(goal.id)
@@ -465,6 +465,25 @@ defmodule ShoestringWeb.CobblerGoalLive do
     Cobbler.active_claim()
   rescue
     _error -> nil
+  end
+
+  # Plan-aware presentation (iteration 6 narrow override): see
+  # `CobblerDashboardLive` — an executing plan holds an intermediate
+  # run terminal at `:working`.
+  defp plan_status(goal_id) do
+    case Cobbler.plan_authority(goal_id) do
+      nil ->
+        :unplanned
+
+      _authority ->
+        case Cobbler.plan_execution_status(goal_id) do
+          {:ok, %{planned?: true, completed?: true}} -> :planned_complete
+          {:ok, %{planned?: true}} -> :planned_incomplete
+          _other -> :unplanned
+        end
+    end
+  rescue
+    _error -> :unplanned
   end
 
   defp safe_rebuild(goal_id) do

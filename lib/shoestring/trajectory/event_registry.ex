@@ -571,8 +571,99 @@ defmodule Shoestring.Trajectory.EventRegistry do
           extensions: :map
         }
       }
+    },
+    "cobbler.plan.execution.requested" => %{
+      1 => %{
+        required: [:execution_id, :revision_number, :plan_digest, :ordered_task_ids],
+        optional: [:note],
+        uuid_fields: [:execution_id],
+        types: %{
+          revision_number: :integer,
+          ordered_task_ids: {:array, :string}
+        }
+      }
+    },
+    "cobbler.plan.task.dispatched" => %{
+      1 => %{
+        required: [
+          :execution_id,
+          :plan_task_id,
+          :trajectory_task_id,
+          :revision_number,
+          :plan_digest,
+          :run_id,
+          :attempt,
+          :command_id
+        ],
+        optional: [:grant_id],
+        uuid_fields: [:execution_id, :trajectory_task_id, :run_id, :grant_id],
+        types: %{
+          revision_number: :integer,
+          attempt: :integer
+        }
+      }
+    },
+    "cobbler.plan.task.accepted" => %{
+      1 => %{
+        required: [
+          :execution_id,
+          :plan_task_id,
+          :revision_number,
+          :plan_digest,
+          :run_id,
+          :attempt,
+          :gate,
+          :gate_argv,
+          :commit,
+          :evidence
+        ],
+        optional: [:worktree_ref],
+        uuid_fields: [:execution_id, :run_id],
+        types: %{
+          revision_number: :integer,
+          attempt: :integer,
+          gate_argv: {:array, :string},
+          evidence: :map
+        }
+      }
+    },
+    "cobbler.plan.task.gate_failed" => %{
+      1 => %{
+        required: [
+          :execution_id,
+          :plan_task_id,
+          :revision_number,
+          :plan_digest,
+          :run_id,
+          :attempt,
+          :gate,
+          :reason,
+          :retry_state
+        ],
+        optional: [:detail, :duration_ms],
+        uuid_fields: [:execution_id, :run_id],
+        types: %{
+          revision_number: :integer,
+          attempt: :integer,
+          duration_ms: :integer
+        }
+      }
+    },
+    "cobbler.plan.execution.completed" => %{
+      1 => %{
+        required: [:execution_id, :revision_number, :plan_digest, :commit],
+        optional: [:global_gate, :evidence],
+        uuid_fields: [:execution_id],
+        types: %{
+          revision_number: :integer,
+          evidence: :map
+        }
+      }
     }
   }
+
+  @human_identity_pattern ~r/\Ahuman:[A-Za-z0-9][A-Za-z0-9_.@:+-]{0,180}\z/
+  @plan_digest_pattern ~r/\A[0-9a-f]{64}\z/
 
   @doc "Lists the exact event type/version pairs supported by this registry."
   @spec registered_types() :: [{String.t(), pos_integer()}]
@@ -712,6 +803,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
            :ok <- validate_admission_decision(type, version, validated, opts),
            :ok <- validate_handoff(type, version, validated, opts),
            :ok <- validate_plan(type, version, validated, opts),
+           :ok <- validate_plan_decision(type, version, validated, opts),
+           :ok <- validate_plan_execution(type, version, validated, opts),
            :ok <- Shoestring.Cobbler.Planner.Events.validate(type, validated) do
         {:ok, validated}
       else
@@ -902,8 +995,186 @@ defmodule Shoestring.Trajectory.EventRegistry do
       Map.get(payload, "author_kind") != "human" ->
         Contract.invalid(:author_kind, "must be human in this slice")
 
+      not human_identity?(Map.get(payload, "authored_by")) ->
+        Contract.invalid(:authored_by, "must be a human: identity in this slice")
+
       true ->
         :ok
+    end
+  end
+
+  defp human_identity?(value) when is_binary(value),
+    do: Regex.match?(@human_identity_pattern, value)
+
+  defp human_identity?(_value), do: false
+
+  # Only a human decides on a plan revision. The Plans API refuses a
+  # non-`human:` decider, so an event carrying one could never have been
+  # written through it; refusing here keeps replay from laundering a forged
+  # or backfilled decision into authority.
+  defp validate_plan_decision(type, 1, payload, _opts)
+       when type in ["cobbler.plan.approved", "cobbler.plan.rejected"] do
+    case Map.get(payload, "decided_by") do
+      decided_by when is_binary(decided_by) ->
+        if Regex.match?(@human_identity_pattern, decided_by) do
+          :ok
+        else
+          Contract.invalid(:decided_by, "must be a human: identity in this slice")
+        end
+
+      _other ->
+        Contract.invalid(:decided_by, "must be a human: identity in this slice")
+    end
+  end
+
+  defp validate_plan_decision(_type, _version, _payload, _opts), do: :ok
+
+  # Structural hardening for the sequential-executor events: digests are
+  # bound at dispatch time, so a malformed digest, a non-positive
+  # revision/attempt, an unknown gate, or an unknown retry state fails the
+  # write rather than entering history.
+  defp validate_plan_execution("cobbler.plan.execution.requested", 1, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         :ok <- plan_execution_order(payload) do
+      :ok
+    end
+  end
+
+  defp validate_plan_execution("cobbler.plan.task.dispatched", 1, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload) do
+      :ok
+    end
+  end
+
+  defp validate_plan_execution("cobbler.plan.task.accepted", 1, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload),
+         :ok <- plan_execution_gate(payload),
+         :ok <- plan_execution_commit(payload) do
+      :ok
+    end
+  end
+
+  defp validate_plan_execution("cobbler.plan.task.gate_failed", 1, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload),
+         :ok <- plan_execution_gate(payload),
+         :ok <- plan_execution_retry_state(payload) do
+      :ok
+    end
+  end
+
+  defp validate_plan_execution("cobbler.plan.execution.completed", 1, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         :ok <- plan_execution_commit(payload) do
+      :ok
+    end
+  end
+
+  defp validate_plan_execution(_type, _version, _payload, _opts), do: :ok
+
+  defp plan_execution_digest(payload) do
+    case Map.get(payload, "plan_digest") do
+      digest when is_binary(digest) ->
+        if Regex.match?(@plan_digest_pattern, digest) do
+          :ok
+        else
+          Contract.invalid(:plan_digest, "must be a sha256 hex digest")
+        end
+
+      _other ->
+        Contract.invalid(:plan_digest, "must be a sha256 hex digest")
+    end
+  end
+
+  defp plan_execution_revision(payload) do
+    case Map.get(payload, "revision_number") do
+      number when is_integer(number) and number > 0 ->
+        :ok
+
+      _other ->
+        Contract.invalid(:revision_number, "must be a positive integer")
+    end
+  end
+
+  defp plan_execution_attempt(payload) do
+    case Map.get(payload, "attempt") do
+      attempt when is_integer(attempt) and attempt > 0 ->
+        :ok
+
+      _other ->
+        Contract.invalid(:attempt, "must be a positive integer")
+    end
+  end
+
+  defp plan_execution_task_id(payload) do
+    case Map.get(payload, "plan_task_id") do
+      id when is_binary(id) and byte_size(id) > 0 ->
+        :ok
+
+      _other ->
+        Contract.invalid(:plan_task_id, "must be a non-empty task id")
+    end
+  end
+
+  defp plan_execution_order(payload) do
+    case Map.get(payload, "ordered_task_ids") do
+      ids when is_list(ids) and length(ids) > 0 ->
+        if Enum.all?(ids, &(is_binary(&1) and byte_size(&1) > 0)) do
+          :ok
+        else
+          Contract.invalid(:ordered_task_ids, "must be a non-empty list of task ids")
+        end
+
+      _other ->
+        Contract.invalid(:ordered_task_ids, "must be a non-empty list of task ids")
+    end
+  end
+
+  defp plan_execution_gate(payload) do
+    case Map.get(payload, "gate") do
+      gate when is_binary(gate) ->
+        if gate in Shoestring.Cobbler.PlanGate.names() do
+          :ok
+        else
+          Contract.invalid(:gate, "must be a trusted gate name")
+        end
+
+      _other ->
+        Contract.invalid(:gate, "must be a trusted gate name")
+    end
+  end
+
+  defp plan_execution_retry_state(payload) do
+    case Map.get(payload, "retry_state") do
+      state when state in ["retry", "escalate", "needs_user"] ->
+        :ok
+
+      _other ->
+        Contract.invalid(:retry_state, "must be one of retry, escalate, needs_user")
+    end
+  end
+
+  defp plan_execution_commit(payload) do
+    case Map.get(payload, "commit") do
+      commit when is_binary(commit) ->
+        if Regex.match?(~r/\A[0-9a-f]{7,40}\z/, commit) do
+          :ok
+        else
+          Contract.invalid(:commit, "must be a resolved hex revision")
+        end
+
+      _other ->
+        Contract.invalid(:commit, "must be a resolved hex revision")
     end
   end
 

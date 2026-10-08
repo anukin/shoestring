@@ -95,7 +95,7 @@ defmodule ShoestringWeb.CobblerDashboardLive do
     decision_results = admission_results(events)
     commands = safe_list_commands(goal.id)
 
-    state = CobblerPresentation.derive_goal_state(events)
+    state = CobblerPresentation.derive_goal_state_for_plan(events, plan_status(goal.id))
 
     %{
       id: goal.id,
@@ -138,5 +138,26 @@ defmodule ShoestringWeb.CobblerDashboardLive do
     Cobbler.active_claim()
   rescue
     _error -> nil
+  end
+
+  # Plan-aware presentation (iteration 6 narrow override): an approved
+  # plan with unaccepted work holds an intermediate run terminal at
+  # `:working` so the goal never shows complete early. Anything else —
+  # no authority, no execution request, or a completed execution —
+  # keeps the legacy fold.
+  defp plan_status(goal_id) do
+    case Cobbler.plan_authority(goal_id) do
+      nil ->
+        :unplanned
+
+      _authority ->
+        case Cobbler.plan_execution_status(goal_id) do
+          {:ok, %{planned?: true, completed?: true}} -> :planned_complete
+          {:ok, %{planned?: true}} -> :planned_incomplete
+          _other -> :unplanned
+        end
+    end
+  rescue
+    _error -> :unplanned
   end
 end

@@ -14,6 +14,11 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `executor-integration.md` — PR #90 review, behavioral regressions, process-group
+  gate bounds, durable dispatch/worktree binding and worker/restart proof.
+- `sequential-executor.md` — historical PR #90 author report; read its successor
+  above for current claims and limits.
+
 - `cli-approval.md` — package C's repository-only plan inspection, validated
   immutable JSON edits, exact-revision decisions and stored planner budget display.
 

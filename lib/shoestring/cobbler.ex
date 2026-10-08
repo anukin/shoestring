@@ -38,6 +38,8 @@ defmodule Shoestring.Cobbler do
     LeaseRenewal,
     Leases,
     PlanContract,
+    PlanExecutor,
+    PlanGateRunner,
     Plans
   }
 
@@ -356,4 +358,62 @@ defmodule Shoestring.Cobbler do
   @doc "Authors a proposed revision from an exact human-reviewed candidate digest."
   def adopt_planned_revision(goal_id, request_key, attrs, opts \\ []),
     do: Shoestring.Cobbler.Planner.adopt(goal_id, request_key, attrs, opts)
+
+  # ----------------------------------------------------------------------------
+  # Durable sequential approved-plan execution
+  # ----------------------------------------------------------------------------
+
+  @doc """
+  Records the explicit execution request for an approved plan revision.
+
+  See `Shoestring.Cobbler.PlanExecutor.request_execution/3`.
+  """
+  @spec request_plan_execution(Ecto.UUID.t(), map(), keyword()) ::
+          {:ok, %{execution: map(), outcome: :recorded | :replayed}} | {:error, term()}
+  def request_plan_execution(goal_id, attrs, opts \\ []),
+    do: PlanExecutor.request_execution(goal_id, attrs, opts)
+
+  @doc """
+  Dispatches at most one ready plan task through the durable pipeline.
+
+  See `Shoestring.Cobbler.PlanExecutor.advance/2`.
+  """
+  @spec advance_plan_execution(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def advance_plan_execution(goal_id, opts \\ []), do: PlanExecutor.advance(goal_id, opts)
+
+  @doc """
+  Records the gate outcome for a terminal plan-task run.
+
+  See `Shoestring.Cobbler.PlanExecutor.complete_task_run/3`.
+  """
+  @spec complete_plan_task_run(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def complete_plan_task_run(goal_id, run_id, opts \\ []),
+    do: PlanExecutor.complete_task_run(goal_id, run_id, opts)
+
+  @doc """
+  Idempotent continuation after quota sleep, handoff, wake, or restart.
+
+  See `Shoestring.Cobbler.PlanExecutor.resume/2`.
+  """
+  @spec resume_plan_execution(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def resume_plan_execution(goal_id, opts \\ []), do: PlanExecutor.resume(goal_id, opts)
+
+  @doc """
+  Derives plan execution state purely from trajectory events.
+
+  See `Shoestring.Cobbler.PlanExecutor.status/2`.
+  """
+  @spec plan_execution_status(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def plan_execution_status(goal_id, opts \\ []), do: PlanExecutor.status(goal_id, opts)
+
+  @doc """
+  Runs one validated gate reference and returns bound evidence.
+
+  See `Shoestring.Cobbler.PlanGateRunner.run/3`.
+  """
+  @spec run_plan_gate(map(), PlanGateRunner.context(), keyword()) ::
+          {:ok, PlanGateRunner.evidence()} | {:error, term()}
+  def run_plan_gate(gate_ref, context, opts \\ []),
+    do: PlanGateRunner.run(gate_ref, context, opts)
 end

@@ -657,9 +657,14 @@ defmodule Shoestring.Cobbler.Plans do
   def authority(goal_id, opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
+    # The stored digest is re-verified against the recomputed contract
+    # digest on every read: a row whose digest no longer describes its own
+    # content holds no authority, so a tampered or mis-copied revision can
+    # never authorize a dispatch.
     with {:ok, goal_id} <- cast_goal_id(goal_id),
          %PlanRevisionRecord{} = revision <- approved_revision_row(repo, goal_id),
-         {:ok, contract} <- PlanContract.new(revision.content) do
+         {:ok, contract} <- PlanContract.new(revision.content),
+         true <- revision.digest == contract.digest do
       %{
         revision: revision,
         digest: revision.digest,
@@ -773,10 +778,16 @@ defmodule Shoestring.Cobbler.Plans do
     end
   end
 
+  # A decision replays only against the revision it was taken against:
+  # the payload digest must equal the digest recomputed from the
+  # reconstructed immutable revision content. An inconsistent
+  # lineage/authority reference fails the rebuild instead of producing a
+  # valid authority from forged or mismatched history.
   defp fold_event(state, %TrajectoryEvent{type: "cobbler.plan.approved"} = event) do
     payload = event.payload
 
-    with {:ok, state} <- transition_revision(state, payload["revision_number"], "approved", event),
+    with :ok <- verify_decision_digest(state, payload, event),
+         {:ok, state} <- transition_revision(state, payload["revision_number"], "approved", event),
          {:ok, state} <- maybe_supersede(state, payload["superseded_revision_number"], event) do
       {:ok, %{state | decisions: state.decisions ++ [rebuilt_decision(payload, "approve")]}}
     end
@@ -785,8 +796,25 @@ defmodule Shoestring.Cobbler.Plans do
   defp fold_event(state, %TrajectoryEvent{type: "cobbler.plan.rejected"} = event) do
     payload = event.payload
 
-    with {:ok, state} <- transition_revision(state, payload["revision_number"], "rejected", event) do
+    with :ok <- verify_decision_digest(state, payload, event),
+         {:ok, state} <- transition_revision(state, payload["revision_number"], "rejected", event) do
       {:ok, %{state | decisions: state.decisions ++ [rebuilt_decision(payload, "reject")]}}
+    end
+  end
+
+  defp verify_decision_digest(state, payload, event) do
+    number = payload["revision_number"]
+    digest = payload["plan_digest"]
+
+    case Map.fetch(state.revisions, number) do
+      {:ok, %{"digest" => ^digest}} ->
+        :ok
+
+      {:ok, %{"digest" => actual}} ->
+        {:error, {:rebuild_decision_digest_mismatch, event.sequence, number, actual, digest}}
+
+      :error ->
+        {:error, {:rebuild_decision_without_revision, event.sequence, number}}
     end
   end
 

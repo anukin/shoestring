@@ -4,13 +4,14 @@
 Package B adds the separate [planner boundary](planner-boundary.md), which can
 produce a candidate but cannot author or approve a revision. REPO-INSPECTION:
 package C exposes human review/edit/approve/reject through the
-[CLI plan review interface](cli-plan-review.md). Execution and amendment
-orchestration remain pending on main.
+[CLI plan review interface](cli-plan-review.md). Package D now has an integrated domain executor and a hermetic worker/worktree/gate
+restart proof. CLI execution, saved-agent binding, quota continuation and package E
+remain pending; see the current integration evidence.
 
 A plan is a goal acceptance contract plus a validated task DAG. It is a
 *proposal* until a human approves one exact revision at one exact content
-digest, and it stays inert even then: nothing in this slice dispatches,
-spawns, enqueues, grants a lease, or observes capacity.
+digest. Proposing, editing, approving and rejecting remain inert. Execution
+requires an explicit request followed by the sequential executor entrypoints.
 
 ## Modules
 
@@ -20,7 +21,9 @@ spawns, enqueues, grants a lease, or observes capacity.
 | `Shoestring.Cobbler.PlanGraph` | dependency validation and deterministic ordering |
 | `Shoestring.Cobbler.PlanContract` | the strict versioned plan value, canonical rendering, digest |
 | `Shoestring.Cobbler.Plans` | durable revisions, decisions, authority, rebuild |
-| `Shoestring.Cobbler` | the facade: `build_plan/1`, `propose_plan/3`, `approve_plan/3`, `reject_plan/3`, `plan_authority/2`, `rebuild_plans/2` |
+| `Shoestring.Cobbler.PlanGateRunner` | bounded supervised gate execution with bound evidence |
+| `Shoestring.Cobbler.PlanExecutor` | durable sequential approved-plan dispatch and acceptance |
+| `Shoestring.Cobbler` | the facade: `build_plan/1`, `propose_plan/3`, `approve_plan/3`, `reject_plan/3`, `plan_authority/2`, `rebuild_plans/2`, `request_plan_execution/3`, `advance_plan_execution/2`, `complete_plan_task_run/3`, `resume_plan_execution/2`, `plan_execution_status/2`, `run_plan_gate/3` |
 
 Every one of these is reachable without a LiveView. REPO-INSPECTION:
 `mix shoestring.plans` exposes this domain through the CLI, following the
@@ -208,18 +211,76 @@ purely from these events and reports divergence from stored rows without
 mutating anything. The digest it reports is **recomputed from the rebuilt
 content**, not copied from the event.
 
+## Sequential execution (work package D)
+
+An approved plan stays inert until an explicit `request_plan_execution/3`.
+From there `PlanExecutor` dispatches one plan task at a time through the
+existing admission, command/claim, lease, and durable-dispatch machinery
+(`Dispatcher.claim_and_gate/3` with `grant_lease:` — run row and lease
+grant persisted before durable delivery, never a direct spawn), and
+records deterministic gate evidence through `PlanGateRunner`.
+
+- **Dispatch binds the authority at dispatch time.** Every dispatch
+  re-reads the live approved revision and its digest; a proposed,
+  rejected, invalid, or superseded revision cannot dispatch, and a moved
+  digest is stale and refused. Holding a revision struct from earlier is
+  never enough, because supersession is deliberately silent.
+- **One active plan task per goal**, even for dependency-independent
+  nodes. The next task is the first unaccepted dependency-ready task in
+  deterministic `PlanGraph` order — a pure function of the plan content.
+- **No premature goal completion.** A single run completing never
+  completes a multi-task planned goal. The goal completes only after
+  every required task is accepted AND the global acceptance gates pass
+  at the integrated repository revision (the presentation holds an
+  intermediate run terminal at `:working` while the plan is incomplete).
+  Unplanned goals are untouched.
+- **Gates, not self-report.** Every cited task gate executes through a
+  bounded, supervised runner whose argv comes from `PlanGate` — never a
+  plan shell string. Evidence binds goal, task, revision, digest, run,
+  attempt, actual tested commit, and worktree; stale, missing, or forged
+  evidence is refused, and a successful run alone never unlocks a
+  dependent. Oversized output fails the attempt; it is never truncated.
+  Gate failure leaves dependents blocked with a bounded
+  `retry` / `escalate` / `needs_user` state.
+- **Restart.** VERIFIED in the hermetic integration test: accepted task evidence,
+  run/worktree identity and counters survive application restart, without another
+  planning call. One admission decision funds one task dispatch. UNVERIFIED:
+  plan-level quota wake/handoff continuation is not closed by this proof.
+- **Unsuccessful runs.** A failed run records a bounded failed attempt without
+  running acceptance gates. Interrupted/cancelled runs remain unresolved and cannot
+  unlock dependents or be replaced by `resume`. Quota continuation requires the
+  existing checkpoint/wake lifecycle; its plan-level integration remains pending.
+- **Workspace.** Runtime execution requires `repository_path:` for allocation;
+  per-task worktrees start at the latest accepted commit (initially the approved
+  repository base). Gates derive their directory from the run's durable worktree.
+  Global gates require all accepted commits to be ancestors of the final worktree
+  HEAD. Gate injection bypasses filesystem integration only in hermetic unit tests.
+- **Gate process bounds.** Timeout/overflow terminate the owned process group.
+  Real gates require a clean worktree and unchanged HEAD before/after execution.
+  A production caller cannot replace the tested commit with `commit:`.
+- **Safe supersession.** A newer approval stops further dispatch from
+  the old revision. In-flight work still records its attempt result at
+  the safe boundary but grants no authority to changed work.
+- **Authority hardening.** `Plans.authority/2` re-verifies the stored
+  digest against the recomputed contract digest on every read; plan
+  decision events require `human:` deciders consistently with the Plans
+  API; replay verifies each decision digest against the reconstructed
+  immutable revision and fails the rebuild on inconsistency instead of
+  returning forged authority.
+
+New trajectory events (all v1, all validated at the registry boundary):
+`cobbler.plan.execution.requested`, `cobbler.plan.task.dispatched`,
+`cobbler.plan.task.accepted`, `cobbler.plan.task.gate_failed`,
+`cobbler.plan.execution.completed`.
+
 ## Deliberately absent, and what later packages owe
 
-Execution, dispatch, model planning, and amendment orchestration are not in
-this slice. Two obligations follow and are recorded here so they are not
-rediscovered:
+Packages B and C supply planning and CLI approval. Amendment orchestration,
+CLI execution, saved-agent execution binding and plan-level quota continuation
+remain pending. One obligation follows:
 
-1. **Dispatch must bind the authority at dispatch time.** It has to re-read
-   the approved revision and its digest when it dispatches and refuse if the
-   authority moved. Holding a revision struct from earlier is not enough,
-   because supersession is deliberately silent.
-2. **Amendment needs an explicit retirement path.** Because this slice
-   refuses to drop a task id from approved lineage, a genuine scope
-   reduction has no representation yet. The amendment package must add an
-   approval-gated retirement that records *why* an approved task identity is
-   retired, rather than relaxing the retention rule.
+- **Amendment needs an explicit retirement path.** Because this slice
+  refuses to drop a task id from approved lineage, a genuine scope
+  reduction has no representation yet. The amendment package must add an
+  approval-gated retirement that records *why* an approved task identity is
+  retired, rather than relaxing the retention rule.

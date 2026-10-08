@@ -98,6 +98,9 @@ defmodule Shoestring.Harness.Dispatches do
     with {:ok, run_changeset} <- Runs.build_intent_changeset(request, identity, opts) do
       Multi.new()
       |> Multi.insert(:run, run_changeset)
+      |> Multi.run(:plan_authority, fn transaction_repo, %{run: run} ->
+        Shoestring.Cobbler.PlanBinding.transaction_check(transaction_repo, run)
+      end)
       |> Multi.insert(:dispatch, fn %{run: run} ->
         DispatchRecord.intent_changeset(%DispatchRecord{dispatch_id: run.dispatch_id}, run, now)
       end)
@@ -105,7 +108,7 @@ defmodule Shoestring.Harness.Dispatches do
       |> Multi.run(:job_link, fn transaction_repo, %{dispatch: dispatch, job: job} ->
         transaction_repo.update(DispatchRecord.job_changeset(dispatch, job.id, now))
       end)
-      |> repo.transaction()
+      |> repo.transaction(mode: :immediate)
       |> case do
         {:ok, %{run: run, job_link: dispatch, job: job}} ->
           {:ok, dispatch, job, run, false}
@@ -503,12 +506,15 @@ defmodule Shoestring.Harness.Dispatches do
     dispatch = %DispatchRecord{dispatch_id: run.dispatch_id}
 
     Multi.new()
+    |> Multi.run(:plan_authority, fn transaction_repo, _ ->
+      Shoestring.Cobbler.PlanBinding.transaction_check(transaction_repo, run)
+    end)
     |> Multi.insert(:dispatch, DispatchRecord.intent_changeset(dispatch, run, now))
     |> Oban.insert(:job, fn %{dispatch: dispatch} -> job_changeset(dispatch, now) end)
     |> Multi.run(:job_link, fn transaction_repo, %{dispatch: dispatch, job: job} ->
       transaction_repo.update(DispatchRecord.job_changeset(dispatch, job.id, now))
     end)
-    |> repo.transaction()
+    |> repo.transaction(mode: :immediate)
     |> case do
       {:ok, %{job_link: dispatch, job: job}} ->
         {:ok, dispatch, job}
@@ -558,12 +564,16 @@ defmodule Shoestring.Harness.Dispatches do
     now = now(opts)
 
     Multi.new()
+    |> Multi.run(:plan_authority, fn transaction_repo, _ ->
+      run = transaction_repo.get!(RunRecord, dispatch.run_id)
+      Shoestring.Cobbler.PlanBinding.transaction_check(transaction_repo, run)
+    end)
     |> Oban.insert(:job, job_changeset(dispatch, now))
     |> Multi.run(:job_link, fn transaction_repo, %{job: job} ->
       dispatch = transaction_repo.get!(DispatchRecord, dispatch.dispatch_id)
       transaction_repo.update(DispatchRecord.job_changeset(dispatch, job.id, now))
     end)
-    |> repo.transaction()
+    |> repo.transaction(mode: :immediate)
     |> case do
       {:ok, %{job_link: repaired, job: job}} -> {:ok, repaired, job, true}
       {:error, _operation, reason, _changes} -> {:error, reason}
@@ -573,23 +583,32 @@ defmodule Shoestring.Harness.Dispatches do
   defp claim_effect(dispatch, repo, opts) do
     now = now(opts)
 
-    repo.transaction(fn ->
-      with %DispatchRecord{} = dispatch <- repo.get(DispatchRecord, dispatch.dispatch_id),
-           :ok <- verify_canonical_intent(dispatch, repo),
-           :ok <- verify_run_ownership(dispatch, repo),
-           %RunRecord{} = run <-
-             repo.get_by(RunRecord, id: dispatch.run_id, goal_id: dispatch.goal_id) do
-        claim_effect(dispatch, run, repo, now)
-      else
-        nil -> repo.rollback(:run_not_found)
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
+    repo.transaction(
+      fn ->
+        with %DispatchRecord{} = dispatch <- repo.get(DispatchRecord, dispatch.dispatch_id),
+             :ok <- verify_canonical_intent(dispatch, repo),
+             :ok <- verify_run_ownership(dispatch, repo),
+             %RunRecord{} = run <-
+               repo.get_by(RunRecord, id: dispatch.run_id, goal_id: dispatch.goal_id),
+             :ok <- authorize_requested_plan(dispatch, run, repo) do
+          claim_effect(dispatch, run, repo, now)
+        else
+          nil -> repo.rollback(:run_not_found)
+          {:error, reason} -> repo.rollback(reason)
+        end
+      end,
+      mode: :immediate
+    )
     |> case do
       {:ok, result} -> {:ok, result}
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp authorize_requested_plan(%{status: "requested"}, %{status: "requested"} = run, repo),
+    do: Shoestring.Cobbler.PlanBinding.authorize(repo, run)
+
+  defp authorize_requested_plan(_dispatch, _run, _repo), do: :ok
 
   defp claim_effect(dispatch, run, repo, now) do
     cond do
