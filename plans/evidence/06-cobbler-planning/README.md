@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `execution-profile.md` — saved agent revision/role, provider and model binding
+  through admission, dispatch and provider protocol options.
+
 - `amendment-core.md` — exact accepted-contract preservation, bounded approved
   activation, lifetime counters, regression and restart evidence.
 

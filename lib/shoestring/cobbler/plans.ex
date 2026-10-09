@@ -356,6 +356,12 @@ defmodule Shoestring.Cobbler.Plans do
          do: repo.rollback(:plan_authority_changed)
 
       :ok = check_accepted_task_contracts(repo, goal_id, authority.revision.content)
+
+      case Shoestring.Cobbler.ExecutionProfile.validate(payload["agent_profile"], repo) do
+        :ok -> :ok
+        {:error, reason} -> repo.rollback(reason)
+      end
+
       requests = execution_requests(repo, goal_id)
 
       case Enum.find(requests, &(&1.idempotency_key == key)) do

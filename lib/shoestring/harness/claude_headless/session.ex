@@ -706,7 +706,13 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
         argv
       end
 
-    argv ++ ["--tools=#{tools}", prompt]
+    model_args =
+      case Keyword.get(state.opts, :model) do
+        model when is_binary(model) and model != "" -> ["--model", model]
+        _ -> []
+      end
+
+    argv ++ model_args ++ ["--tools=#{tools}", prompt]
   end
 
   defp validate_workdir(nil), do: {:ok, nil}

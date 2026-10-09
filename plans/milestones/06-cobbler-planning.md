@@ -25,8 +25,10 @@ REPO-INSPECTION: E's manual amendment core now preserves unchanged accepted
 contracts/evidence and lifetime attempts across one new approved execution revision.
 Model-assisted replan and explicit retirement remain pending. See
 `../evidence/06-cobbler-planning/amendment-core.md`.
-Package D's remaining CLI execution, saved-agent binding and quota wake/handoff
-integration remain pending. REPO-INSPECTION: PR #90 has been integrated with
+REPO-INSPECTION: package D now binds a saved agent revision/role, provider and
+explicit model through admission, dispatch and provider launch options. See
+`../evidence/06-cobbler-planning/execution-profile.md`. Remaining CLI execution
+and quota wake/handoff integration remain pending. REPO-INSPECTION: PR #90 has been integrated with
 review fixes; the domain executor has a hermetic real-worker/worktree/gate restart
 proof. See `../evidence/06-cobbler-planning/executor-integration.md`. Remaining amendment contract decisions are
 recorded explicitly below.
@@ -47,8 +49,8 @@ in [the configuration and usage UI milestone](configuration-and-usage-ui.md),
 with a repository-owned HTML mockup. That follow-up is separate from the
 iteration-6 sequential execution acceptance gate. REPO-INSPECTION: Usage, Agents,
 Settings and immutable CLI profile lookup are implemented. The separate package C
-CLI now supports plan approval. Approved-run profile binding, model-assisted
-replan and explicit retirement remain pending; the manual amendment core is
+CLI now supports plan approval. Approved-run profile binding is implemented;
+model-assisted replan and explicit retirement remain pending; the manual amendment core is
 recorded above.
 
 **Hard dependencies:** iteration 5 complete

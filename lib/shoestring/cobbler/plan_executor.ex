@@ -105,15 +105,23 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          :ok <- bind_authority(authority, revision_number, digest),
          {:ok, contract} <- PlanContract.new(authority.revision.content),
          :ok <- check_contract_digest(authority, contract),
-         {:ok, _admission} <- resolve_admission(repo, goal_id, attrs, opts) do
+         {:ok, admission} <- resolve_admission(repo, goal_id, attrs, opts),
+         {:ok, profile} <-
+           Shoestring.Cobbler.ExecutionProfile.resolve(
+             Map.get(attrs, :agent_profile, Map.get(attrs, "agent_profile")),
+             repo
+           ),
+         :ok <- Shoestring.Cobbler.ExecutionProfile.admission(profile, admission.payload) do
       execution_id = execution_id(attrs, revision_number, digest)
 
-      payload = %{
-        "execution_id" => execution_id,
-        "revision_number" => revision_number,
-        "plan_digest" => digest,
-        "ordered_task_ids" => contract.ordered_task_ids
-      }
+      payload =
+        %{
+          "execution_id" => execution_id,
+          "revision_number" => revision_number,
+          "plan_digest" => digest,
+          "ordered_task_ids" => contract.ordered_task_ids
+        }
+        |> maybe_put("agent_profile", profile)
 
       Plans.record_execution_request(
         goal_id,
@@ -125,12 +133,14 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         {:ok, %{outcome: outcome}} ->
           {:ok,
            %{
-             execution: %{
-               execution_id: execution_id,
-               revision_number: revision_number,
-               plan_digest: digest,
-               ordered_task_ids: contract.ordered_task_ids
-             },
+             execution:
+               %{
+                 execution_id: execution_id,
+                 revision_number: revision_number,
+                 plan_digest: digest,
+                 ordered_task_ids: contract.ordered_task_ids
+               }
+               |> maybe_put(:agent_profile, profile),
              outcome: outcome
            }}
 
@@ -383,12 +393,14 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       %{execution: nil, dispatched: [], accepted: [], gate_failed: [], completed: nil},
       fn
         %TrajectoryEvent{type: "cobbler.plan.execution.requested", payload: payload}, acc ->
-          execution = %{
-            execution_id: payload["execution_id"],
-            revision_number: payload["revision_number"],
-            plan_digest: payload["plan_digest"],
-            ordered_task_ids: payload["ordered_task_ids"] || []
-          }
+          execution =
+            %{
+              execution_id: payload["execution_id"],
+              revision_number: payload["revision_number"],
+              plan_digest: payload["plan_digest"],
+              ordered_task_ids: payload["ordered_task_ids"] || []
+            }
+            |> maybe_put(:agent_profile, payload["agent_profile"])
 
           %{acc | execution: execution, completed: nil}
 
@@ -711,6 +723,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
     with {:ok, traj_task} <- ensure_trajectory_task(repo, goal_id, task_id, task_contract),
          {:ok, admission} <- resolve_admission(repo, goal_id, %{}, opts),
+         :ok <-
+           Shoestring.Cobbler.ExecutionProfile.admission(
+             execution[:agent_profile],
+             admission.payload
+           ),
          :ok <- refuse_bound_admission(repo, goal_id, admission),
          {:ok, opts} <-
            prepare_workspace(goal_id, projection, contract, task_id, attempt, opts),
@@ -882,26 +899,42 @@ defmodule Shoestring.Cobbler.PlanExecutor do
               "goal" => contract.content["goal"],
               "revision_number" => execution.revision_number,
               "plan_digest" => execution.plan_digest
-            }),
-        extensions: %{
-          Shoestring.Cobbler.PlanBinding.key() => %{
-            "revision_number" => execution.revision_number,
-            "plan_digest" => execution.plan_digest,
-            "execution_id" => execution.execution_id,
-            "plan_task_id" => task_id,
-            "attempt" => attempt
+            }) <> profile_instructions(execution[:agent_profile]),
+        extensions:
+          %{
+            Shoestring.Cobbler.PlanBinding.key() => %{
+              "revision_number" => execution.revision_number,
+              "plan_digest" => execution.plan_digest,
+              "execution_id" => execution.execution_id,
+              "plan_task_id" => task_id,
+              "attempt" => attempt
+            }
           }
-        },
+          |> maybe_put(Shoestring.Cobbler.ExecutionProfile.key(), execution[:agent_profile]),
         workspace_ref: Keyword.get(opts, :workspace_ref, "cobbler/plan-task"),
         clock: clock,
         now: now,
         repo: repo
       ]
       |> then(fn fixed -> Keyword.merge(Keyword.get(opts, :grant_lease_extra, []), fixed) end)
+      |> then(fn fixed ->
+        case execution[:agent_profile] do
+          nil ->
+            fixed
+
+          profile ->
+            Keyword.put(fixed, :identity, Shoestring.Cobbler.ExecutionProfile.identity(profile))
+        end
+      end)
 
     [grant_lease: lease_opts, repo: repo, now: now, clock: clock]
     |> Keyword.merge(Keyword.take(opts, [:writer_opts]))
   end
+
+  defp profile_instructions(nil), do: ""
+
+  defp profile_instructions(profile),
+    do: "\nSaved agent instructions:\n" <> profile["instructions"]
 
   # One admission decision funds exactly one task dispatch: lease replay
   # is keyed by admission decision, so a decision already bound to a

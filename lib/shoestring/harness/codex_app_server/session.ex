@@ -569,7 +569,12 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
         # Send thread/start (or thread/resume if resuming)
         if state.opts[:resume] && state.thread_id do
-          send_rpc(state, "thread/resume", %{"threadId" => state.thread_id}, :thread_resume)
+          send_rpc(
+            state,
+            "thread/resume",
+            model_params(state, %{"threadId" => state.thread_id}),
+            :thread_resume
+          )
         else
           cwd =
             state.opts[:workdir] || (state.run_request && state.run_request.workspace_ref) ||
@@ -586,12 +591,12 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
           send_rpc(
             state,
             "thread/start",
-            %{
+            model_params(state, %{
               "cwd" => cwd,
               "ephemeral" => false,
               "approvalPolicy" => "never",
               "sandbox" => "workspace-write"
-            },
+            }),
             :thread_start
           )
         end
@@ -606,10 +611,10 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         send_rpc(
           state,
           "turn/start",
-          %{
+          model_params(state, %{
             "threadId" => thread_id,
             "input" => [%{"type" => "text", "text" => prompt}]
-          },
+          }),
           :turn_start
         )
 
@@ -624,10 +629,10 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         send_rpc(
           state,
           "turn/start",
-          %{
+          model_params(state, %{
             "threadId" => state.thread_id,
             "input" => [%{"type" => "text", "text" => prompt}]
-          },
+          }),
           :turn_start
         )
 
@@ -963,6 +968,13 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     case Keyword.fetch(source_opts, key) do
       {:ok, val} -> Keyword.put_new(opts, key, val)
       :error -> opts
+    end
+  end
+
+  defp model_params(state, params) do
+    case Keyword.get(state.opts, :model) do
+      model when is_binary(model) and model != "" -> Map.put(params, "model", model)
+      _ -> params
     end
   end
 

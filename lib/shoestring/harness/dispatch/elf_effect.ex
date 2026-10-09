@@ -59,6 +59,7 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
   @impl true
   def perform(%RunRecord{} = run, %DispatchRecord{} = dispatch) do
     with {:ok, request} <- Elves.request_from_run(run),
+         :ok <- Shoestring.Cobbler.ExecutionProfile.run_authority(Shoestring.Repo, run),
          {:ok, opts} <- elf_opts(run) do
       case Elves.start_elf(request, dispatch, opts) do
         {:ok, _pid} -> :ok
@@ -95,7 +96,19 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
               defaults
           end
 
-        {:ok, Keyword.merge(defaults, Application.get_env(:shoestring, :elf_dispatch_opts, []))}
+        opts = Keyword.merge(defaults, Application.get_env(:shoestring, :elf_dispatch_opts, []))
+
+        opts =
+          case extensions[Shoestring.Cobbler.ExecutionProfile.key()] do
+            nil ->
+              opts
+
+            binding ->
+              adapter_opts = Keyword.get(opts, :adapter_opts, %{}) |> Map.drop([:args, :argv])
+              Keyword.put(opts, :adapter_opts, Map.put(adapter_opts, :model, binding["model"]))
+          end
+
+        {:ok, opts}
 
       {:error, _reason} = error ->
         error
