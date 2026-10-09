@@ -42,6 +42,11 @@ amendment, replaces an active Elf, nor overrides a task's needs-user state.
 After editing and approving an amendment, use Start with its new exact revision
 and digest; the domain enforces the one-amendment activation limit.
 
-UNVERIFIED: Plan-bound quota wake/handoff adoption and full run-duration budget
-accounting remain separate iteration-6 work. No live provider integration is
-claimed by the hermetic CLI proof.
+REPO-INSPECTION: same-provider quota wakes retain the task attempt, model and
+worktree through canonical checkpoint lineage. Status lists the current run
+and its ancestor run IDs. Continuation cannot replace a still-active parent,
+fork an attempt, switch its bindings, or bypass a recorded gate failure.
+
+UNVERIFIED: cross-provider plan handoff and full run-duration budget accounting
+remain separate iteration-6 work. No live provider integration is claimed by
+the hermetic CLI proof.

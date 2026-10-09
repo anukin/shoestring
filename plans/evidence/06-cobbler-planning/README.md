@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `quota-continuation.md` — canonical checkpoint lineage, same-provider quota
+  recovery, continuation authorization, counters and amendment preservation.
+
 - `cli-execution.md` — durable repository-only CLI execution requests, per-task
   cached-ledger admission, delivery recovery and material-code restart proof.
 

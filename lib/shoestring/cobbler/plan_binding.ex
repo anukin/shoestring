@@ -9,7 +9,8 @@ defmodule Shoestring.Cobbler.PlanBinding do
   # their lifecycle; plan runs carry an immutable revision/digest binding.
   def authorize(repo, run) do
     with :ok <- Shoestring.Cobbler.ExecutionProfile.run_authority(repo, run) do
-      authorize_plan(repo, run)
+      with :ok <- authorize_plan(repo, run),
+           do: Shoestring.Cobbler.PlanRunLineage.authorize(repo, run)
     end
   end
 

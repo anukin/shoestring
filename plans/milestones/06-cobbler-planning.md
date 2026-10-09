@@ -30,8 +30,11 @@ explicit model through admission, dispatch and provider launch options. See
 `../evidence/06-cobbler-planning/execution-profile.md`. REPO-INSPECTION: durable
 CLI execution, current-ledger per-task admission and startup delivery recovery
 are implemented; see `../../docs/cli-execution.md` and
-`../evidence/06-cobbler-planning/cli-execution.md`. Plan-bound quota wake/handoff
-integration and full run-duration budget accounting remain pending.
+`../evidence/06-cobbler-planning/cli-execution.md`. REPO-INSPECTION: same-provider
+plan-bound quota wake integration now preserves attempt, agent/model, worktree
+and accepted evidence across restart; see
+`../evidence/06-cobbler-planning/quota-continuation.md`. Cross-provider plan
+handoff and full run-duration budget accounting remain pending.
 REPO-INSPECTION: PR #90 has been integrated with
 review fixes; the domain executor has a hermetic real-worker/worktree/gate restart
 proof. See `../evidence/06-cobbler-planning/executor-integration.md`. Remaining amendment contract decisions are

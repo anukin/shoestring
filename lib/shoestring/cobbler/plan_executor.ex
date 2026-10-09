@@ -210,11 +210,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   """
   @spec resume(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def resume(goal_id, opts \\ []) do
-    with {:ok, goal_id} <- cast_goal_id(goal_id) do
+    with {:ok, goal_id} <- cast_goal_id(goal_id),
+         {:ok, projection} <- project(Keyword.get(opts, :repo, Repo), goal_id) do
       # Gate completion runs outside the dispatch lock (it can take as
       # long as the timeout allows); the follow-up advance re-locks.
-      {:ok, projection} = project(Keyword.get(opts, :repo, Repo), goal_id)
-
       case maybe_complete_active(goal_id, projection, opts) do
         {:error, _reason} = error ->
           error
@@ -365,6 +364,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              accepted_count: MapSet.size(accepted),
              total_tasks: length(execution.ordered_task_ids),
              active_task: active && active.plan_task_id,
+             active_run_id: active && active.run_id,
+             active_attempt: active && active.attempt,
+             active_run_ids: if(active, do: active.run_ids, else: []),
              needs_user?:
                is_nil(active) and
                  Enum.any?(execution.ordered_task_ids, fn id ->
@@ -383,14 +385,18 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   # ----------------------------------------------------------------------------
 
   defp project(repo, goal_id) do
+    types = Enum.uniq(@event_types ++ Shoestring.Cobbler.PlanRunLineage.event_types())
+
     events =
       repo.all(
         from event in TrajectoryEvent,
-          where: event.goal_id == ^goal_id and event.type in ^@event_types,
+          where: event.goal_id == ^goal_id and event.type in ^types,
           order_by: [asc: event.sequence]
       )
 
-    {:ok, fold_executor_events(events)}
+    with {:ok, chains} <- Shoestring.Cobbler.PlanRunLineage.rebuild(events) do
+      {:ok, Map.put(fold_executor_events(events), :run_chains, chains)}
+    end
   end
 
   defp fold_executor_events(events) do
@@ -475,7 +481,12 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   defp completed_event(%{completed: completed}), do: completed
 
   defp dispatches_for(projection, execution) do
-    Enum.filter(projection.dispatched, &(&1.execution_id == execution.execution_id))
+    projection.dispatched
+    |> Enum.filter(&(&1.execution_id == execution.execution_id))
+    |> Enum.map(fn dispatch ->
+      ids = Map.get(projection.run_chains, dispatch.run_id, [dispatch.run_id])
+      Map.merge(dispatch, %{run_id: List.last(ids), root_run_id: dispatch.run_id, run_ids: ids})
+    end)
   end
 
   defp accepted_task_ids(projection, _execution) do

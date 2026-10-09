@@ -1242,7 +1242,7 @@ defmodule Shoestring.Cobbler.Wakeups do
         goal_id: goal_id,
         run_id: run.id,
         type: "run.failed",
-        idempotency_key: "elf-terminal:#{run.id}"
+        idempotency_key: "elf-terminal:#{run.dispatch_id}"
       )
 
     checkpoint =

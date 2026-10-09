@@ -336,6 +336,19 @@ defmodule Shoestring.Cobbler.Plans do
       )
       |> MapSet.new(& &1["run_id"])
 
+    resolved_run_ids =
+      case Shoestring.Cobbler.PlanRunLineage.load(repo, goal_id) do
+        {:ok, chains} ->
+          Enum.reduce(chains, resolved_run_ids, fn {_root, ids}, resolved ->
+            if MapSet.member?(resolved, List.last(ids)),
+              do: Enum.reduce(ids, resolved, &MapSet.put(&2, &1)),
+              else: resolved
+          end)
+
+        {:error, _} ->
+          resolved_run_ids
+      end
+
     repo.all(from r in Shoestring.Harness.RunRecord, where: r.goal_id == ^goal_id)
     |> Enum.any?(fn run ->
       Map.has_key?(run.extensions || %{}, Shoestring.Cobbler.PlanBinding.key()) and

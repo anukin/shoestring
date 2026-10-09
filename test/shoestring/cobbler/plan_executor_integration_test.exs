@@ -177,7 +177,7 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
       assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
     end
 
-    test "CLI request drives material code acceptance through ordinary workers after restart" do
+    test "CLI request drives code acceptance through quota continuation and restart" do
       source = Path.join(Shoestring.State.root(), "cli-fixture-repository")
       File.mkdir_p!(Path.join(source, "lib"))
       File.mkdir_p!(Path.join(source, "test"))
@@ -282,39 +282,118 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
       assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^goal.id), :count) == 0
       now = HermeticLifecycleClock.now()
 
-      Shoestring.ConfigurationFixtures.capacity_fixture(%{
-        observed_at: now,
-        scope: "subscription",
-        windows: [
-          %{
-            kind: "five_hour",
-            state: :observed,
-            used_percent: 25.0,
-            reset_at: DateTime.add(now, 3600)
-          },
-          %{
-            kind: "weekly",
-            state: :observed,
-            used_percent: 10.0,
-            reset_at: DateTime.add(now, 86400)
-          }
-        ]
-      })
+      healthy =
+        Shoestring.ConfigurationFixtures.capacity_fixture(%{
+          observed_at: now,
+          scope: "subscription",
+          windows: [
+            %{
+              kind: "five_hour",
+              state: :observed,
+              used_percent: 25.0,
+              reset_at: DateTime.add(now, 3600)
+            },
+            %{
+              kind: "weekly",
+              state: :observed,
+              used_percent: 10.0,
+              reset_at: DateTime.add(now, 86400)
+            }
+          ]
+        })
 
       Application.put_env(:shoestring, :elf_dispatch_opts,
         adapter: Shoestring.Test.FixturePlanFake,
         process_owner: :runner,
         command: ["cat"],
         clock: HermeticLifecycleClock,
-        adapter_opts: %{scenario: Shoestring.Harness.Fake.Scenario.normal_completion(now: now)}
+        adapter_opts: %{
+          scenario: %{
+            Shoestring.Harness.Fake.Scenario.sudden_quota_refusal(now: now)
+            | capacity: %{
+                healthy
+                | snapshot_id: Ecto.UUID.generate(),
+                  windows: Enum.map(healthy.windows, &%{&1 | used_percent: 100.0})
+              }
+          }
+        }
       )
 
       assert {:snooze, 5} = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
       first = Repo.one!(from r in RunRecord, where: r.goal_id == ^goal.id)
       finish_worker!(first.id)
+      assert Repo.get!(RunRecord, first.id).status == "failed"
+
+      checkpoint =
+        Repo.get!(
+          Shoestring.Harness.CheckpointRecord,
+          Shoestring.Elves.TerminalCheckpoint.checkpoint_id(first.id)
+        )
+
+      assert checkpoint.run_id == first.id
+      assert checkpoint.stop_reason == "run.failed:rate_limit_exceeded"
       restart!()
       assert {:snooze, 5} = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
-      second = Repo.one!(from r in RunRecord, where: r.goal_id == ^goal.id and r.id != ^first.id)
+      assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^goal.id), :count) == 1
+      now = HermeticLifecycleClock.advance(61)
+
+      fresh = %{
+        healthy
+        | snapshot_id: Ecto.UUID.generate(),
+          observed_at: now,
+          expires_at: DateTime.add(now, 300)
+      }
+
+      assert {:ok, _, _} = Shoestring.Harness.Observatory.ingest(fresh, now: now)
+
+      Application.put_env(
+        :shoestring,
+        :wakeup_observe,
+        {Shoestring.Cobbler.WakeupObserve, :observe, []}
+      )
+
+      Application.put_env(:shoestring, :elf_dispatch_opts,
+        adapter: Shoestring.Test.FixturePlanFake,
+        process_owner: :runner,
+        command: ["cat"],
+        clock: HermeticLifecycleClock,
+        adapter_opts: %{
+          scenario: %{
+            Shoestring.Harness.Fake.Scenario.normal_completion(now: now)
+            | capacity: fresh
+          }
+        }
+      )
+
+      wake = Repo.get_by!(Shoestring.Cobbler.WakeupRecord, run_id: first.id)
+      wake_job = Repo.one!(from j in Oban.Job, where: j.args["wakeup_id"] == ^wake.id)
+      assert :ok = Shoestring.Cobbler.WakeupWorker.perform(wake_job)
+
+      continued =
+        Repo.one!(from r in RunRecord, where: r.goal_id == ^goal.id and r.id != ^first.id)
+
+      assert continued.task_id == first.task_id
+      assert continued.workspace_ref == first.workspace_ref
+
+      assert continued.extensions ==
+               Map.put(
+                 first.extensions,
+                 "wakeup:resume_prior_session_id",
+                 Repo.get!(RunRecord, first.id).provider_session_id
+               )
+
+      assert continued.continuation["checkpoint_id"] == checkpoint.id
+      finish_worker!(continued.id)
+      assert :ok = Shoestring.Cobbler.WakeupWorker.perform(wake_job)
+      assert {:ok, %{accepted: [], total_attempts: 1}} = Cobbler.plan_execution_status(goal.id)
+      assert {:snooze, 5} = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
+
+      second =
+        Repo.one!(
+          from r in RunRecord,
+            where: r.goal_id == ^goal.id and r.id not in ^[first.id, continued.id]
+        )
+
       finish_worker!(second.id)
       assert :ok = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
 
@@ -329,6 +408,8 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
 
       assert first.extensions["shoestring.agent:binding"] ==
                second.extensions["shoestring.agent:binding"]
+
+      assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^goal.id), :count) == 3
 
       assert Repo.aggregate(
                from(e in Shoestring.Trajectory.TrajectoryEvent,

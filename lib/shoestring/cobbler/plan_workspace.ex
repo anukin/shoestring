@@ -59,12 +59,31 @@ defmodule Shoestring.Cobbler.PlanWorkspace do
     if is_function(Keyword.get(gate_opts, :runner), 3) do
       {:ok, gate_opts}
     else
-      with {:ok, worktree} <- Worktrees.get(run.id),
+      with {:ok, worktree} <- attempt_worktree(run, opts),
            true <-
              worktree.workspace_ref == run.workspace_ref || {:error, :plan_worktree_mismatch},
            :ok <- same_directory(gate_opts, worktree.path) do
         {:ok, Keyword.put(gate_opts, :worktree_path, worktree.path)}
       end
+    end
+  end
+
+  defp attempt_worktree(run, opts) do
+    case Worktrees.get(run.id) do
+      {:ok, worktree} ->
+        {:ok, worktree}
+
+      {:error, _} ->
+        with {:ok, chains} <-
+               Shoestring.Cobbler.PlanRunLineage.load(
+                 Keyword.get(opts, :repo, Shoestring.Repo),
+                 run.goal_id
+               ),
+             {root, _ids} <- Enum.find(chains, fn {_root, ids} -> run.id in ids end) do
+          Worktrees.get(root)
+        else
+          _ -> {:error, :plan_attempt_worktree_missing}
+        end
     end
   end
 
