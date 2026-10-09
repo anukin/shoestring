@@ -96,7 +96,9 @@ anything until approved. Repository-only CLI writes persist canonical events;
 they do not broadcast PubSub hints to a separate server process. Reload views
 to read durable state.
 
-UNVERIFIED: end-to-end approved-plan execution, worktree binding, restart after
-task completion and amendment/replan are not proved by this interface. Package
-D remains draft PR #90; package E and execution binding to agent profile
-snapshots remain open. No live provider was called for this slice.
+REPO-INSPECTION: approved-plan execution is a separate
+[CLI interface](cli-execution.md), with saved-agent binding and a hermetic
+worker/worktree/restart proof. Manual amendments preserve accepted evidence;
+model-assisted amendment and retirement remain open. These later additions do
+not expand the verification claims of this review-interface slice. No live
+provider was called for this slice.

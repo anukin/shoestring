@@ -27,8 +27,12 @@ Model-assisted replan and explicit retirement remain pending. See
 `../evidence/06-cobbler-planning/amendment-core.md`.
 REPO-INSPECTION: package D now binds a saved agent revision/role, provider and
 explicit model through admission, dispatch and provider launch options. See
-`../evidence/06-cobbler-planning/execution-profile.md`. Remaining CLI execution
-and quota wake/handoff integration remain pending. REPO-INSPECTION: PR #90 has been integrated with
+`../evidence/06-cobbler-planning/execution-profile.md`. REPO-INSPECTION: durable
+CLI execution, current-ledger per-task admission and startup delivery recovery
+are implemented; see `../../docs/cli-execution.md` and
+`../evidence/06-cobbler-planning/cli-execution.md`. Plan-bound quota wake/handoff
+integration and full run-duration budget accounting remain pending.
+REPO-INSPECTION: PR #90 has been integrated with
 review fixes; the domain executor has a hermetic real-worker/worktree/gate restart
 proof. See `../evidence/06-cobbler-planning/executor-integration.md`. Remaining amendment contract decisions are
 recorded explicitly below.

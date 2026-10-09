@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `cli-execution.md` — durable repository-only CLI execution requests, per-task
+  cached-ledger admission, delivery recovery and material-code restart proof.
+
 - `execution-profile.md` — saved agent revision/role, provider and model binding
   through admission, dispatch and provider protocol options.
 

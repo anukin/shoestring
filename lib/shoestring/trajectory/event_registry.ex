@@ -575,12 +575,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
     "cobbler.plan.execution.requested" => %{
       1 => %{
         required: [:execution_id, :revision_number, :plan_digest, :ordered_task_ids],
-        optional: [:note, :agent_profile],
+        optional: [:note, :agent_profile, :repository_path, :requested_by],
         uuid_fields: [:execution_id],
         types: %{
           revision_number: :integer,
           ordered_task_ids: {:array, :string},
-          agent_profile: :map
+          agent_profile: :map,
+          repository_path: :string,
+          requested_by: :string
         }
       }
     },

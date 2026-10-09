@@ -105,13 +105,12 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          :ok <- bind_authority(authority, revision_number, digest),
          {:ok, contract} <- PlanContract.new(authority.revision.content),
          :ok <- check_contract_digest(authority, contract),
-         {:ok, admission} <- resolve_admission(repo, goal_id, attrs, opts),
          {:ok, profile} <-
            Shoestring.Cobbler.ExecutionProfile.resolve(
              Map.get(attrs, :agent_profile, Map.get(attrs, "agent_profile")),
              repo
            ),
-         :ok <- Shoestring.Cobbler.ExecutionProfile.admission(profile, admission.payload) do
+         :ok <- request_admission(repo, goal_id, attrs, profile, opts) do
       execution_id = execution_id(attrs, revision_number, digest)
 
       payload =
@@ -122,6 +121,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
           "ordered_task_ids" => contract.ordered_task_ids
         }
         |> maybe_put("agent_profile", profile)
+        |> maybe_put("repository_path", Map.get(attrs, :repository_path))
+        |> maybe_put("requested_by", Map.get(attrs, :requested_by))
 
       Plans.record_execution_request(
         goal_id,
@@ -364,6 +365,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              accepted_count: MapSet.size(accepted),
              total_tasks: length(execution.ordered_task_ids),
              active_task: active && active.plan_task_id,
+             needs_user?:
+               is_nil(active) and
+                 Enum.any?(execution.ordered_task_ids, fn id ->
+                   not MapSet.member?(accepted, id) and not retryable?(projection, execution, id)
+                 end),
              attempts: attempt_counts(projection, execution),
              total_attempts: total_attempts(projection, execution),
              total_gate_duration_ms: total_gate_duration_ms(projection, execution)
@@ -401,6 +407,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
               ordered_task_ids: payload["ordered_task_ids"] || []
             }
             |> maybe_put(:agent_profile, payload["agent_profile"])
+            |> maybe_put(:repository_path, payload["repository_path"])
+            |> maybe_put(:requested_by, payload["requested_by"])
 
           %{acc | execution: execution, completed: nil}
 
@@ -722,7 +730,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     task_id = task_contract["id"]
 
     with {:ok, traj_task} <- ensure_trajectory_task(repo, goal_id, task_id, task_contract),
-         {:ok, admission} <- resolve_admission(repo, goal_id, %{}, opts),
+         {:ok, admission} <-
+           task_admission(repo, goal_id, execution, task_contract, attempt, opts),
          :ok <-
            Shoestring.Cobbler.ExecutionProfile.admission(
              execution[:agent_profile],
@@ -1377,6 +1386,34 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     |> case do
       {:ok, %TrajectoryEvent{} = event} -> check_admitted(event)
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # A durable CLI request may wait for capacity. Deferral authorizes no run;
+  # every task still requires a full admit decision at its dispatch boundary.
+  defp request_admission(repo, goal_id, attrs, profile, opts) do
+    if Keyword.get(opts, :defer_admission, false) do
+      if is_map(profile) and is_binary(attrs[:repository_path]) and
+           is_binary(attrs[:requested_by]),
+         do: :ok,
+         else: {:error, :execution_configuration_required}
+    else
+      with {:ok, admission} <- resolve_admission(repo, goal_id, attrs, opts),
+           do: Shoestring.Cobbler.ExecutionProfile.admission(profile, admission.payload)
+    end
+  end
+
+  defp task_admission(repo, goal_id, execution, task, attempt, opts) do
+    case Keyword.get(opts, :admission_fun) do
+      fun when is_function(fun, 4) ->
+        with {:ok, event_id} <- fun.(goal_id, execution, task, attempt),
+             do: resolve_admission(repo, goal_id, %{admission_event_id: event_id}, [])
+
+      nil ->
+        resolve_admission(repo, goal_id, %{}, opts)
+
+      _ ->
+        {:error, :invalid_execution_admission}
     end
   end
 

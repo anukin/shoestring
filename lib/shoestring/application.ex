@@ -25,6 +25,7 @@ defmodule Shoestring.Application do
         handoff_reconciler_children() ++
         capacity_supervisor_children() ++
         elves_children() ++
+        plan_execution_reconciler_children() ++
         [
           {DNSCluster, query: Application.get_env(:shoestring, :dns_cluster_query) || :ignore},
           ShoestringWeb.Endpoint
@@ -112,5 +113,11 @@ defmodule Shoestring.Application do
       {Registry, keys: :unique, name: Shoestring.Elves.Registry},
       Supervisor.child_spec(Shoestring.Elves.Supervisor, restart: :transient)
     ]
+  end
+
+  defp plan_execution_reconciler_children do
+    if Application.get_env(:shoestring, :plan_execution_reconciler, true),
+      do: [Shoestring.Cobbler.PlanExecutionReconciler],
+      else: []
   end
 end

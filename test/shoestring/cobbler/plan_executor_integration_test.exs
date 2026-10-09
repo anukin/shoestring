@@ -177,6 +177,173 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
       assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
     end
 
+    test "CLI request drives material code acceptance through ordinary workers after restart" do
+      source = Path.join(Shoestring.State.root(), "cli-fixture-repository")
+      File.mkdir_p!(Path.join(source, "lib"))
+      File.mkdir_p!(Path.join(source, "test"))
+
+      File.write!(
+        Path.join(source, "mix.exs"),
+        "defmodule Fixture.MixProject do\n  use Mix.Project\n  def project, do: [app: :fixture, version: \"0.1.0\"]\nend\n"
+      )
+
+      File.write!(Path.join(source, ".gitignore"), "/_build/\n")
+
+      File.write!(
+        Path.join(source, ".formatter.exs"),
+        "[inputs: [\"mix.exs\", \"{lib,test}/**/*.{ex,exs}\"]]\n"
+      )
+
+      File.write!(Path.join(source, "lib/fixture.ex"), "defmodule Fixture do\nend\n")
+      File.write!(Path.join(source, "test/test_helper.exs"), "ExUnit.start()\n")
+
+      File.write!(
+        Path.join(source, "test/alpha_test.exs"),
+        "defmodule Fixture.AlphaTest do\n  use ExUnit.Case\n  test \"greeting\", do: assert(Fixture.greeting() == \"hello\")\nend\n"
+      )
+
+      File.write!(
+        Path.join(source, "test/beta_test.exs"),
+        "defmodule Fixture.BetaTest do\n  use ExUnit.Case\n  test \"composed message\", do: assert(Fixture.message() == \"hello fixture\")\nend\n"
+      )
+
+      git!(source, ["init"])
+      git!(source, ["config", "user.name", "Fixture"])
+      git!(source, ["config", "user.email", "fixture@example.invalid"])
+      git!(source, ["add", "."])
+      git!(source, ["commit", "-m", "CLI fixture acceptance repository"])
+      base = git!(source, ["rev-parse", "HEAD"]) |> String.trim()
+      goal = CobblerHelpers.create_goal!()
+
+      plan =
+        PlanExecutorHelpers.chain_plan(%{
+          "goal" =>
+            PlanFixtures.goal(%{
+              "repository" => %{"base_revision" => base},
+              "acceptance" => %{
+                "gates" => [%{"gate" => "mix_test"}],
+                "evidence" => ["Both fixture tests pass."]
+              }
+            }),
+          "tasks" => [
+            PlanFixtures.task("alpha", "Implement greeting", [], %{
+              "gates" => [%{"gate" => "mix_test", "test_paths" => ["test/alpha_test.exs"]}]
+            }),
+            PlanFixtures.task("beta", "Compose greeting", ["alpha"], %{
+              "gates" => [%{"gate" => "mix_test", "test_paths" => ["test/beta_test.exs"]}]
+            })
+          ]
+        })
+
+      revision = PlanExecutorHelpers.propose_and_approve!(goal, plan)
+
+      assert {:ok, _} =
+               Shoestring.AgentProfiles.save_settings(Shoestring.AgentProfiles.settings(), %{
+                 "codex_models" => "fixture-model"
+               })
+
+      attrs = Shoestring.ConfigurationFixtures.agent_attrs()
+
+      roles =
+        Enum.map(attrs["roles"], fn role ->
+          if role["provider"] == "codex", do: Map.put(role, "model", "fixture-model"), else: role
+        end)
+
+      assert {:ok, agent} = Shoestring.AgentProfiles.create(Map.put(attrs, "roles", roles))
+      assert {:ok, profile} = Shoestring.AgentProfiles.snapshot_by_id(agent.id)
+      previous_shell = Mix.shell()
+      Mix.shell(Mix.Shell.Process)
+      on_exit(fn -> Mix.shell(previous_shell) end)
+
+      Mix.Tasks.Shoestring.Execution.run([
+        "start",
+        goal.id,
+        "--revision",
+        "1",
+        "--digest",
+        revision.digest,
+        "--repo",
+        source,
+        "--agent",
+        agent.id,
+        "--agent-revision",
+        "1",
+        "--agent-digest",
+        profile["digest"],
+        "--role",
+        "Worker",
+        "--by",
+        "human:fixture"
+      ])
+
+      assert_receive {:mix_shell, :info, [json]}
+      result = Jason.decode!(json)
+      job = Repo.get!(Oban.Job, result["job_id"])
+      assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^goal.id), :count) == 0
+      now = HermeticLifecycleClock.now()
+
+      Shoestring.ConfigurationFixtures.capacity_fixture(%{
+        observed_at: now,
+        scope: "subscription",
+        windows: [
+          %{
+            kind: "five_hour",
+            state: :observed,
+            used_percent: 25.0,
+            reset_at: DateTime.add(now, 3600)
+          },
+          %{
+            kind: "weekly",
+            state: :observed,
+            used_percent: 10.0,
+            reset_at: DateTime.add(now, 86400)
+          }
+        ]
+      })
+
+      Application.put_env(:shoestring, :elf_dispatch_opts,
+        adapter: Shoestring.Test.FixturePlanFake,
+        process_owner: :runner,
+        command: ["cat"],
+        clock: HermeticLifecycleClock,
+        adapter_opts: %{scenario: Shoestring.Harness.Fake.Scenario.normal_completion(now: now)}
+      )
+
+      assert {:snooze, 5} = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
+      first = Repo.one!(from r in RunRecord, where: r.goal_id == ^goal.id)
+      finish_worker!(first.id)
+      restart!()
+      assert {:snooze, 5} = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
+      second = Repo.one!(from r in RunRecord, where: r.goal_id == ^goal.id and r.id != ^first.id)
+      finish_worker!(second.id)
+      assert :ok = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
+
+      assert {:ok, %{completed?: true, accepted: ["alpha", "beta"], total_attempts: 2}} =
+               Cobbler.plan_execution_status(goal.id)
+
+      assert {:ok, second_worktree} = Worktrees.get(second.id)
+      assert File.read!(Path.join(second_worktree.path, "lib/fixture.ex")) =~ "def message"
+      assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
+      assert File.read!(Path.join(source, "lib/fixture.ex")) == "defmodule Fixture do\nend\n"
+      assert git!(source, ["status", "--porcelain"]) == ""
+
+      assert first.extensions["shoestring.agent:binding"] ==
+               second.extensions["shoestring.agent:binding"]
+
+      assert Repo.aggregate(
+               from(e in Shoestring.Trajectory.TrajectoryEvent,
+                 where: e.goal_id == ^goal.id and e.type == "cobbler.plan.task.accepted"
+               ),
+               :count
+             ) == 2
+
+      assert {:ok, %{outcome: :completed, job_id: nil}} =
+               Shoestring.Cobbler.ExecutionControl.continue(
+                 goal.id,
+                 result["execution"]["execution_id"]
+               )
+    end
+
     defp finish_worker!(run_id) do
       dispatch = Repo.get_by!(DispatchRecord, run_id: run_id)
       job = Repo.get!(Oban.Job, dispatch.job_id)
@@ -223,7 +390,7 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
         )
 
       assert status == 0, output
-      assert output =~ "1 test, 0 failures"
+      assert output =~ "2 tests, 0 failures"
     end
   end
 end

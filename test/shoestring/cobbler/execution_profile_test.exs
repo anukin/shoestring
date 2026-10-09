@@ -52,6 +52,48 @@ defmodule Shoestring.Cobbler.ExecutionProfileTest do
     )
   end
 
+  @tag :execution_boundary_regression
+  test "a configured approval can wait for admission without allocating a run", c do
+    assert {:ok, _} =
+             Cobbler.request_plan_execution(
+               c.goal.id,
+               %{
+                 revision_number: c.revision.revision_number,
+                 digest: c.revision.digest,
+                 agent_profile: c.profile,
+                 repository_path: File.cwd!(),
+                 requested_by: "human:operator"
+               },
+               exec_opts(defer_admission: true)
+             )
+
+    assert {:ok, %{planned?: true, total_attempts: 0}} = Cobbler.plan_execution_status(c.goal.id)
+    assert {:error, :no_admit_decision} = Cobbler.advance_plan_execution(c.goal.id, exec_opts())
+    assert run_count(c.goal.id) == 0
+  end
+
+  @tag :execution_boundary_regression
+  test "fresh task admission cannot silently reuse an earlier admit decision", c do
+    admission = admitted(c.goal)
+    assert {:ok, _} = request(c.goal, c.revision, c.profile, admission)
+
+    assert {:error, {:execution_admission_blocked, :no_observation}} =
+             Cobbler.advance_plan_execution(
+               c.goal.id,
+               exec_opts(
+                 admission_fun: fn goal_id, execution, task, attempt ->
+                   assert goal_id == c.goal.id
+                   assert execution.agent_profile["model"] == "fixture-model-v1"
+                   assert task["id"] == "alpha"
+                   assert attempt == 1
+                   {:error, {:execution_admission_blocked, :no_observation}}
+                 end
+               )
+             )
+
+    assert run_count(c.goal.id) == 0
+  end
+
   test "saved profile remains pinned after edits and supplied launch identity cannot replace it",
        c do
     admission = admitted(c.goal)

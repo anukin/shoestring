@@ -44,7 +44,7 @@ config :shoestring, :capacity_monitors,
 config :shoestring, Oban,
   engine: Oban.Engines.Lite,
   repo: Shoestring.Repo,
-  queues: [dispatch: 5, wakeup: 5, handoff: 5],
+  queues: [dispatch: 5, wakeup: 5, handoff: 5, plan_execution: 1],
   plugins: [
     # An abandoned executing job must become runnable again; DispatchRecord remains the effect claim.
     {Oban.Lifeline, rescue_after: {5, :minutes}},
