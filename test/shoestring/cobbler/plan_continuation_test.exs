@@ -44,7 +44,7 @@ defmodule Shoestring.Cobbler.PlanContinuationTest do
     checkpoint
   end
 
-  defp stop!(goal, run, category \\ "quota_refused") do
+  defp stop!(goal, run, category \\ "quota_refused", at \\ now()) do
     assert {:ok, _} =
              Trajectory.append(
                goal.id,
@@ -52,7 +52,7 @@ defmodule Shoestring.Cobbler.PlanContinuationTest do
                  "type" => "run.failed",
                  "schema_version" => 1,
                  "actor" => "fixture",
-                 "occurred_at" => now(),
+                 "occurred_at" => at,
                  "payload" => %{
                    "run_id" => run.id,
                    "error_category" => category,
@@ -278,5 +278,42 @@ defmodule Shoestring.Cobbler.PlanContinuationTest do
              )
 
     assert run_count(goal.id) == 1
+  end
+
+  test "duration adds both provider attempts while excluding the paused interval" do
+    {goal, root, checkpoint} = begin!()
+
+    event = fn run, type, at ->
+      assert {:ok, _} =
+               Trajectory.append(
+                 goal.id,
+                 %{
+                   "type" => type,
+                   "schema_version" => 1,
+                   "actor" => "fixture",
+                   "occurred_at" => at,
+                   "payload" => %{"run_id" => run.id}
+                 },
+                 trusted: [run_id: run.id, task_id: run.task_id]
+               )
+    end
+
+    event.(root, "run.starting", now())
+    stop!(goal, root, "quota_refused", DateTime.add(now(), 100))
+    child = continue!(goal, root, checkpoint)
+    event.(child, "run.starting", DateTime.add(now(), 1000))
+    event.(child, "run.completed", DateTime.add(now(), 1100))
+
+    assert {:ok, %{disposition: :accepted}} =
+             Cobbler.complete_plan_task_run(
+               goal.id,
+               child.id,
+               exec_opts(now: DateTime.add(now(), 1100))
+             )
+
+    assert {:ok, status} = Cobbler.plan_execution_status(goal.id, now: DateTime.add(now(), 2000))
+    assert status.total_run_duration_ms == 200_000
+    assert status.total_attempts == 1
+    assert status.task_duration_ms["alpha"] == 200_007
   end
 end

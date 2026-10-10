@@ -47,6 +47,13 @@ worktree through canonical checkpoint lineage. Status lists the current run
 and its ancestor run IDs. Continuation cannot replace a still-active parent,
 fork an attempt, switch its bindings, or bypass a recorded gate failure.
 
-UNVERIFIED: cross-provider plan handoff and full run-duration budget accounting
-remain separate iteration-6 work. No live provider integration is claimed by
-the hermetic CLI proof.
+REPO-INSPECTION: Duration accounting includes provider run intervals and task
+and global gate time across retries, quota continuations and amendments. Queue
+and quota-wait intervals consume no run time. Exhausted budgets prevent new
+dispatch or continuation, and gate timeouts use the remaining allowance. Elapsed
+time alone never interrupts or replaces an active Elf. Status exposes consumed
+time and the remaining goal allowance. Global acceptance failure is durable and
+requires a new approved amendment rather than silently repeating on restart.
+
+UNVERIFIED: cross-provider plan handoff remains separate iteration-6 work.
+No live provider integration is claimed by the hermetic CLI proof.

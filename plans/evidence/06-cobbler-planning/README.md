@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `duration-budgets.md` — lifetime provider/gate time, bounded gates, quota-wait
+  exclusion and durable global acceptance failure.
+
 - `quota-continuation.md` — canonical checkpoint lineage, same-provider quota
   recovery, continuation authorization, counters and amendment preservation.
 

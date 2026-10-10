@@ -33,8 +33,12 @@ are implemented; see `../../docs/cli-execution.md` and
 `../evidence/06-cobbler-planning/cli-execution.md`. REPO-INSPECTION: same-provider
 plan-bound quota wake integration now preserves attempt, agent/model, worktree
 and accepted evidence across restart; see
-`../evidence/06-cobbler-planning/quota-continuation.md`. Cross-provider plan
-handoff and full run-duration budget accounting remain pending.
+`../evidence/06-cobbler-planning/quota-continuation.md`. REPO-INSPECTION: canonical
+provider intervals and task/global gate durations now count against lifetime
+task/goal budgets, including amendments. Exhaustion blocks new work without
+interrupting an active Elf; global gate failures survive restart. See
+`../evidence/06-cobbler-planning/duration-budgets.md`. Cross-provider plan handoff
+remains pending.
 REPO-INSPECTION: PR #90 has been integrated with
 review fixes; the domain executor has a hermetic real-worker/worktree/gate restart
 proof. See `../evidence/06-cobbler-planning/executor-integration.md`. Remaining amendment contract decisions are

@@ -628,7 +628,7 @@ defmodule Shoestring.Cobbler.PlanExecutorTest do
       assert {:ok, %{planned?: false, completed?: false}} =
                Cobbler.plan_execution_status(goal.id)
 
-      assert PlanExecutor.event_types() |> length() == 5
+      assert PlanExecutor.event_types() |> length() == 6
     end
   end
 end

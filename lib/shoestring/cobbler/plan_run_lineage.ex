@@ -56,7 +56,7 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
            {_root, ids} <- Enum.find(chains, fn {_root, ids} -> parent_id in ids end),
            true <- List.last(ids) in [parent_id, run.id] || {:error, :ambiguous_plan_continuation},
            false <- resolved?(events, ids, run.id) do
-        :ok
+        Shoestring.Cobbler.PlanBudget.authorize_continuation(repo, run)
       else
         {:error, _} = error -> error
         true -> {:error, :plan_attempt_already_resolved}

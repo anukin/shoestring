@@ -572,6 +572,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
         }
       }
     },
+    "cobbler.plan.execution.gate_failed" => %{
+      1 => %{
+        required: [:execution_id, :revision_number, :plan_digest, :gate, :reason, :duration_ms],
+        optional: [],
+        uuid_fields: [:execution_id],
+        types: %{revision_number: :integer, duration_ms: :integer}
+      }
+    },
     "cobbler.plan.execution.requested" => %{
       1 => %{
         required: [:execution_id, :revision_number, :plan_digest, :ordered_task_ids],
@@ -1080,6 +1088,19 @@ defmodule Shoestring.Trajectory.EventRegistry do
          :ok <- plan_execution_revision(payload),
          :ok <- plan_execution_commit(payload) do
       :ok
+    end
+  end
+
+  defp validate_plan_execution("cobbler.plan.execution.gate_failed", 1, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         :ok <- plan_execution_gate(payload),
+         true <- is_integer(payload["duration_ms"]) and payload["duration_ms"] >= 0,
+         {:ok, _} <- Contract.text(payload["reason"], :reason, max: 2000) do
+      :ok
+    else
+      {:error, _} = error -> error
+      _ -> Contract.invalid(:duration_ms, "must be nonnegative")
     end
   end
 

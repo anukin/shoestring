@@ -55,7 +55,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   import Bitwise
   import Ecto.Query
 
-  alias Shoestring.Cobbler.{Dispatcher, PlanContract, PlanGateRunner, Plans}
+  alias Shoestring.Cobbler.{Dispatcher, PlanBudget, PlanContract, PlanGateRunner, Plans}
   alias Shoestring.Cobbler.{AdmissionDecision, Commands, PlanRevisionRecord}
   alias Shoestring.Harness.{ExecutionLeaseRecord, RunRecord}
   alias Shoestring.Repo
@@ -70,6 +70,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     "cobbler.plan.task.dispatched",
     "cobbler.plan.task.accepted",
     "cobbler.plan.task.gate_failed",
+    "cobbler.plan.execution.gate_failed",
     "cobbler.plan.execution.completed"
   ]
 
@@ -192,7 +193,21 @@ defmodule Shoestring.Cobbler.PlanExecutor do
           {:ok, %{disposition: :completed, execution: execution, completed: completed}}
 
         nil ->
-          advance_from_projection(repo, goal_id, projection, execution, authority, contract, opts)
+          case projection.global_failed do
+            nil ->
+              advance_from_projection(
+                repo,
+                goal_id,
+                projection,
+                execution,
+                authority,
+                contract,
+                opts
+              )
+
+            detail ->
+              {:error, {:global_gate_failed, detail}}
+          end
       end
     end
   end
@@ -296,8 +311,27 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
       outcome =
         if terminal.type == "run.completed" do
-          with {:ok, gate_opts} <- Shoestring.Cobbler.PlanWorkspace.gate_opts(repo, context, opts) do
-            run_all_gates(task_contract, context, Keyword.put(opts, :gate_runner_opts, gate_opts))
+          with {:ok, gate_opts} <- Shoestring.Cobbler.PlanWorkspace.gate_opts(repo, context, opts),
+               {:ok, usage} <- PlanBudget.usage(repo, goal_id, now(opts)) do
+            case PlanBudget.remaining(usage, contract, task_contract) do
+              {:ok, remaining} ->
+                run_all_gates(
+                  task_contract,
+                  context,
+                  opts
+                  |> Keyword.put(:gate_runner_opts, gate_opts)
+                  |> Keyword.put(:remaining_duration_ms, remaining)
+                )
+
+              {:error, reason} ->
+                {:error,
+                 {:gate_failed,
+                  %{
+                    gate: gate_name(hd(task_contract["gates"])),
+                    reason: Atom.to_string(reason),
+                    duration_ms: 0
+                  }}}
+            end
           end
         else
           {:error,
@@ -346,7 +380,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     repo = Keyword.get(opts, :repo, Repo)
 
     with {:ok, goal_id} <- cast_goal_id(goal_id),
-         {:ok, projection} <- project(repo, goal_id) do
+         {:ok, projection} <- project(repo, goal_id),
+         {:ok, usage} <- PlanBudget.usage(repo, goal_id, now(opts)) do
       case projection.execution do
         nil ->
           {:ok, %{planned?: false, completed?: false}}
@@ -354,6 +389,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         execution ->
           accepted = accepted_task_ids(projection, execution)
           active = active_dispatch(projection, execution)
+          budget = duration_status(repo, goal_id, projection, execution, usage, active)
+
+          duration_blocks? =
+            not is_nil(budget.reason) and
+              (is_nil(active) or not is_nil(terminal_event(repo, goal_id, active.run_id)))
 
           {:ok,
            %{
@@ -368,15 +408,56 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              active_attempt: active && active.attempt,
              active_run_ids: if(active, do: active.run_ids, else: []),
              needs_user?:
-               is_nil(active) and
-                 Enum.any?(execution.ordered_task_ids, fn id ->
-                   not MapSet.member?(accepted, id) and not retryable?(projection, execution, id)
-                 end),
+               (duration_blocks? and is_nil(completed_event(projection))) or
+                 not is_nil(projection.global_failed) or
+                 (is_nil(active) and
+                    Enum.any?(execution.ordered_task_ids, fn id ->
+                      not MapSet.member?(accepted, id) and
+                        not retryable?(projection, execution, id)
+                    end)),
+             global_failure: projection.global_failed,
              attempts: attempt_counts(projection, execution),
              total_attempts: total_attempts(projection, execution),
-             total_gate_duration_ms: total_gate_duration_ms(projection, execution)
+             total_gate_duration_ms: usage.total_gate_duration_ms,
+             total_run_duration_ms: usage.total_run_duration_ms,
+             total_duration_ms: usage.total_duration_ms,
+             task_duration_ms: usage.task_duration_ms,
+             duration_budget: budget
            }}
       end
+    end
+  end
+
+  defp duration_status(repo, goal_id, projection, execution, usage, active) do
+    with {:ok, {_liveness, contract}} <- contract_for(repo, goal_id, execution) do
+      accepted = accepted_task_ids(projection, execution)
+
+      task_id =
+        if active,
+          do: active.plan_task_id,
+          else:
+            next_ready_task(contract, contract.ordered_task_ids, accepted, projection, execution)
+
+      remaining = PlanBudget.global_remaining(usage, contract)
+
+      reason =
+        cond do
+          remaining == 0 ->
+            :total_duration_exhausted
+
+          is_nil(task_id) ->
+            nil
+
+          true ->
+            case PlanBudget.remaining(usage, contract, task_contract!(contract, task_id)) do
+              {:ok, _} -> nil
+              {:error, reason} -> reason
+            end
+        end
+
+      %{remaining_goal_ms: remaining, reason: reason}
+    else
+      _ -> %{remaining_goal_ms: nil, reason: :execution_revision_invalid}
     end
   end
 
@@ -402,7 +483,14 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   defp fold_executor_events(events) do
     Enum.reduce(
       events,
-      %{execution: nil, dispatched: [], accepted: [], gate_failed: [], completed: nil},
+      %{
+        execution: nil,
+        dispatched: [],
+        accepted: [],
+        gate_failed: [],
+        completed: nil,
+        global_failed: nil
+      },
       fn
         %TrajectoryEvent{type: "cobbler.plan.execution.requested", payload: payload}, acc ->
           execution =
@@ -416,7 +504,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
             |> maybe_put(:repository_path, payload["repository_path"])
             |> maybe_put(:requested_by, payload["requested_by"])
 
-          %{acc | execution: execution, completed: nil}
+          %{acc | execution: execution, completed: nil, global_failed: nil}
 
         %TrajectoryEvent{type: "cobbler.plan.task.dispatched", payload: payload}, acc ->
           %{acc | dispatched: acc.dispatched ++ [normalize_dispatch(payload)]}
@@ -426,6 +514,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
         %TrajectoryEvent{type: "cobbler.plan.task.gate_failed", payload: payload}, acc ->
           %{acc | gate_failed: acc.gate_failed ++ [normalize_resolution(payload)]}
+
+        %TrajectoryEvent{type: "cobbler.plan.execution.gate_failed", payload: payload}, acc ->
+          if acc.execution && payload["execution_id"] == acc.execution.execution_id,
+            do: %{acc | global_failed: payload},
+            else: acc
 
         %TrajectoryEvent{type: "cobbler.plan.execution.completed", payload: payload}, acc ->
           if acc.execution && payload["execution_id"] == acc.execution.execution_id,
@@ -533,21 +626,6 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
   defp total_attempts(projection, _execution), do: length(projection.dispatched)
 
-  # Durations accumulate from bound gate evidence (accepted) and the
-  # recorded attempt durations (gate failures). They only grow: nothing
-  # here resets a counter on retry, wake, or restart.
-  defp total_gate_duration_ms(projection, _execution) do
-    accepted_ms =
-      projection.accepted
-      |> Enum.reduce(0, fn accepted, acc -> acc + (accepted.duration_ms || 0) end)
-
-    failed_ms =
-      projection.gate_failed
-      |> Enum.reduce(0, fn failed, acc -> acc + (failed.duration_ms || 0) end)
-
-    accepted_ms + failed_ms
-  end
-
   # ----------------------------------------------------------------------------
   # Advance
   # ----------------------------------------------------------------------------
@@ -558,14 +636,16 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
     case active_dispatch(projection, execution) do
       %{} = active ->
-        {:ok,
-         %{
-           disposition: :awaiting_task,
-           execution: execution,
-           active_task: active.plan_task_id,
-           active_run_id: active.run_id,
-           active_attempt: active.attempt
-         }}
+        with :ok <- paused_duration_budget(repo, goal_id, active, contract, opts) do
+          {:ok,
+           %{
+             disposition: :awaiting_task,
+             execution: execution,
+             active_task: active.plan_task_id,
+             active_run_id: active.run_id,
+             active_attempt: active.attempt
+           }}
+        end
 
       nil ->
         case next_ready_task(contract, ordered, accepted, projection, execution) do
@@ -593,6 +673,18 @@ defmodule Shoestring.Cobbler.PlanExecutor do
               opts
             )
         end
+    end
+  end
+
+  defp paused_duration_budget(repo, goal_id, active, contract, opts) do
+    if not is_nil(terminal_event(repo, goal_id, active.run_id)) and
+         not run_resolvable?(repo, goal_id, active.run_id) do
+      with {:ok, usage} <- PlanBudget.usage(repo, goal_id, now(opts)),
+           {:ok, _} <-
+             PlanBudget.remaining(usage, contract, task_contract!(contract, active.plan_task_id)),
+           do: :ok
+    else
+      :ok
     end
   end
 
@@ -641,7 +733,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
   defp dispatch_task(repo, goal_id, projection, execution, _authority, contract, task_id, opts) do
     with {:ok, task_contract} <- plan_task(contract, task_id),
-         :ok <- check_budgets(contract, task_contract, projection, execution) do
+         :ok <- check_budgets(contract, task_contract, projection, execution, repo, goal_id, opts) do
       attempt = Map.get(attempt_counts(projection, execution), task_id, 0) + 1
 
       case recover_crashed_dispatch(repo, goal_id, execution, task_contract, attempt, opts) do
@@ -1052,9 +1144,34 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     gate_opts = Keyword.get(opts, :gate_runner_opts, [])
 
     Enum.reduce_while(gates, {:ok, []}, fn gate_ref, {:ok, acc} ->
-      case PlanGateRunner.run(gate_ref, context, gate_opts) do
+      spent = evidences_duration_ms(acc)
+      remaining = Keyword.get(opts, :remaining_duration_ms, 86_400_000) - spent
+      timeout = min(Keyword.get(gate_opts, :timeout_ms, 120_000), remaining)
+      started = System.monotonic_time(:millisecond)
+
+      result =
+        if timeout > 0,
+          do: PlanGateRunner.run(gate_ref, context, Keyword.put(gate_opts, :timeout_ms, timeout)),
+          else: {:error, :duration_budget_exhausted}
+
+      elapsed =
+        if is_function(Keyword.get(gate_opts, :runner), 3) do
+          case result do
+            {:error, {:gate_timeout, %{timeout_ms: ms}}} -> ms
+            _ -> 0
+          end
+        else
+          max(0, System.monotonic_time(:millisecond) - started)
+        end
+
+      case result do
         {:ok, evidence} ->
-          case PlanGateRunner.verify(gate_ref, evidence, context, gate_opts) do
+          evidence = Map.update!(evidence, :duration_ms, &max(&1, elapsed))
+
+          case if(evidence.duration_ms <= remaining,
+                 do: PlanGateRunner.verify(gate_ref, evidence, context, gate_opts),
+                 else: {:error, :duration_budget_exhausted}
+               ) do
             {:ok, :accepted} ->
               {:cont, {:ok, acc ++ [evidence]}}
 
@@ -1065,7 +1182,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
           end
 
         {:error, reason} ->
-          detail = gate_failure_detail(gate_ref, reason, context, %{}, acc)
+          detail = gate_failure_detail(gate_ref, reason, context, %{duration_ms: elapsed}, acc)
           {:halt, {:error, {:gate_failed, detail}}}
       end
     end)
@@ -1166,7 +1283,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          detail,
          opts
        ) do
-    retry_state = retry_state(contract, projection, execution, dispatched)
+    retry_state =
+      retry_state(contract, projection, execution, dispatched, detail, repo, goal_id, opts)
 
     payload =
       %{
@@ -1205,14 +1323,18 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
   # Bounded outcome: total budget exhaustion needs an operator, task
   # budget exhaustion escalates, otherwise the executor may retry.
-  defp retry_state(contract, projection, execution, dispatched) do
+  defp retry_state(contract, projection, execution, dispatched, detail, repo, goal_id, opts) do
     task = task_contract!(contract, dispatched.plan_task_id)
     task_max = get_in(task, ["execution", "max_attempts"]) || 1
     total_max = get_in(contract.content, ["budget", "max_total_attempts"]) || 1
     attempts = Map.get(attempt_counts(projection, execution), dispatched.plan_task_id, 1)
     total = total_attempts(projection, execution)
+    {:ok, usage} = PlanBudget.usage(repo, goal_id, now(opts))
+    duration = PlanBudget.remaining(usage, contract, task, detail.duration_ms)
 
     cond do
+      duration == {:error, :total_duration_exhausted} -> "needs_user"
+      duration == {:error, :task_duration_exhausted} -> "escalate"
       total >= total_max -> "needs_user"
       attempts >= task_max -> "escalate"
       true -> "retry"
@@ -1228,8 +1350,15 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
     with {:ok, gate_opts} <-
            Shoestring.Cobbler.PlanWorkspace.global_gate_opts(repo, accepted, opts),
+         {:ok, usage} <- PlanBudget.usage(repo, goal_id, now(opts)),
          {:ok, global_evidences} <-
-           run_global_gates(repo, goal_id, contract, execution, gate_opts),
+           run_global_gates(
+             goal_id,
+             contract,
+             execution,
+             gate_opts,
+             PlanBudget.global_remaining(usage, contract)
+           ),
          first = hd(global_evidences),
          {:ok, _event} <-
            append_executor_event(
@@ -1252,11 +1381,32 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          :ok <- release_own_claim(repo, goal_id, "complete", 1, opts) do
       {:ok, %{disposition: :completed, execution: execution, commit: first.commit}}
     else
-      {:error, reason} -> {:error, reason}
+      {:error, {:gate_failed, detail}} ->
+        with {:ok, _} <-
+               append_executor_event(
+                 repo,
+                 goal_id,
+                 "cobbler.plan.execution.gate_failed",
+                 %{
+                   "execution_id" => execution.execution_id,
+                   "revision_number" => execution.revision_number,
+                   "plan_digest" => execution.plan_digest,
+                   "gate" => detail.gate,
+                   "reason" => detail.reason,
+                   "duration_ms" => detail.duration_ms
+                 },
+                 "plan-global-failed:#{execution.execution_id}",
+                 opts
+               ) do
+          {:error, {:global_gate_failed, Map.take(detail, [:gate, :reason, :duration_ms])}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  defp run_global_gates(repo, goal_id, contract, execution, gate_opts) do
+  defp run_global_gates(goal_id, contract, execution, gate_opts, remaining) do
     gates = get_in(contract.content, ["goal", "acceptance", "gates"]) || []
 
     context = %{
@@ -1268,32 +1418,17 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       attempt: 1
     }
 
-    _ = repo
-
-    Enum.reduce_while(gates, {:ok, []}, fn gate_ref, {:ok, acc} ->
-      case PlanGateRunner.run(gate_ref, context, gate_opts) do
-        {:ok, evidence} ->
-          case PlanGateRunner.verify(gate_ref, evidence, context, gate_opts) do
-            {:ok, :accepted} ->
-              {:cont, {:ok, acc ++ [evidence]}}
-
-            {:error, reason} ->
-              {:halt,
-               {:error,
-                {:global_gate_failed, %{gate: gate_name(gate_ref), reason: inspect(reason)}}}}
-          end
-
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
-    end)
+    run_all_gates(%{"gates" => gates}, context,
+      gate_runner_opts: gate_opts,
+      remaining_duration_ms: remaining
+    )
   end
 
   # ----------------------------------------------------------------------------
   # Budgets
   # ----------------------------------------------------------------------------
 
-  defp check_budgets(contract, task_contract, projection, execution) do
+  defp check_budgets(contract, task_contract, projection, execution, repo, goal_id, opts) do
     task_max = get_in(task_contract, ["execution", "max_attempts"]) || 1
     total_max = get_in(contract.content, ["budget", "max_total_attempts"]) || 1
     task_id = task_contract["id"]
@@ -1308,7 +1443,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         {:error, {:total_attempts_exhausted, %{max_total_attempts: total_max}}}
 
       true ->
-        :ok
+        with {:ok, usage} <- PlanBudget.usage(repo, goal_id, now(opts)),
+             {:ok, _} <- PlanBudget.remaining(usage, contract, task_contract),
+             do: :ok
     end
   end
 

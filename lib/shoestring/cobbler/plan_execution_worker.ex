@@ -21,10 +21,23 @@ defmodule Shoestring.Cobbler.PlanExecutionWorker do
         _ -> {:snooze, 5}
       end
     else
-      {:error, {:execution_admission_blocked, _}} -> {:snooze, 60}
-      {:error, :execution_request_mismatch} -> {:cancel, :execution_request_mismatch}
-      {:error, {:authority_mismatch, _}} -> {:cancel, :plan_authority_changed}
-      {:error, reason} -> {:error, reason}
+      {:error, {:execution_admission_blocked, _}} ->
+        {:snooze, 60}
+
+      {:error, :execution_request_mismatch} ->
+        {:cancel, :execution_request_mismatch}
+
+      {:error, {:authority_mismatch, _}} ->
+        {:cancel, :plan_authority_changed}
+
+      {:error, {:global_gate_failed, _}} ->
+        {:cancel, :plan_needs_user}
+
+      {:error, reason} when reason in [:task_duration_exhausted, :total_duration_exhausted] ->
+        {:cancel, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
