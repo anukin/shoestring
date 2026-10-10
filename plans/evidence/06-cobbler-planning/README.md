@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `task-retirement.md` — explicit approval-gated scope reduction with retained
+  task identities/contracts, evidence rechecks and CLI review.
+
 - `duration-budgets.md` — lifetime provider/gate time, bounded gates, quota-wait
   exclusion and durable global acceptance failure.
 

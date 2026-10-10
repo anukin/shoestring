@@ -96,7 +96,7 @@ defmodule Shoestring.Cobbler.PlanContract do
   @checkpoint_keys ~w(condition evidence)
   @execution_keys ~w(max_attempts max_duration_seconds)
   @planner_keys ~w(identity version source_context_refs)
-  @plan_keys ~w(version goal budget tasks planner)
+  @plan_keys ~w(version goal budget tasks planner retirements)
 
   @enforce_keys [:version, :content, :digest, :ordered_task_ids]
   defstruct [:version, :content, :digest, :ordered_task_ids]
@@ -208,6 +208,15 @@ defmodule Shoestring.Cobbler.PlanContract do
   def task_ids(%__MODULE__{content: content}),
     do: Enum.map(content["tasks"], & &1["id"])
 
+  @doc "Explicit scope reductions; absent on historical contracts."
+  def retirements(%__MODULE__{content: content}), do: Map.get(content, "retirements", [])
+
+  @doc "Topological order of tasks still required by this revision."
+  def required_task_ids(%__MODULE__{} = contract) do
+    retired = MapSet.new(retirements(contract), & &1["task_id"])
+    Enum.reject(contract.ordered_task_ids, &MapSet.member?(retired, &1))
+  end
+
   @doc "Resolves every gate the plan cites to its trusted argv, for inspection only."
   @spec gate_argv(t()) :: {:ok, [[String.t()]]} | {:error, Ecto.Changeset.t()}
   def gate_argv(%__MODULE__{content: content}) do
@@ -316,6 +325,7 @@ defmodule Shoestring.Cobbler.PlanContract do
          {:ok, budget} <- normalize_budget(Contract.fetch(attrs, :budget)),
          {:ok, tasks} <- normalize_tasks(Contract.fetch(attrs, :tasks)),
          {:ok, planner} <- normalize_planner(Contract.fetch(attrs, :planner)),
+         {:ok, retirements} <- normalize_retirements(Contract.fetch(attrs, :retirements), tasks),
          :ok <- check_budget(budget, tasks) do
       content =
         %{
@@ -325,10 +335,57 @@ defmodule Shoestring.Cobbler.PlanContract do
           "tasks" => tasks
         }
         |> maybe_put("planner", planner)
+        |> maybe_put("retirements", retirements)
 
       {:ok, content}
     end
   end
+
+  # Keep absence distinct from an explicit list so historical digests replay
+  # byte-identically. Retirement preserves the full task and its stable id.
+  defp normalize_retirements(:error, _tasks), do: {:ok, nil}
+
+  defp normalize_retirements({:ok, entries}, tasks)
+       when is_list(entries) and length(entries) <= @max_tasks do
+    with {:ok, normalized} <- reduce_ok(entries, &normalize_retirement/1) do
+      ids = Enum.map(normalized, & &1["task_id"])
+      retired = MapSet.new(ids)
+      task_ids = MapSet.new(tasks, & &1["id"])
+
+      cond do
+        length(ids) != MapSet.size(retired) ->
+          invalid(:retirements, "contains duplicate task ids")
+
+        not MapSet.subset?(retired, task_ids) ->
+          invalid(:retirements, "must reference retained tasks")
+
+        MapSet.size(retired) == length(tasks) ->
+          invalid(:retirements, "must leave a required task")
+
+        Enum.any?(tasks, fn task ->
+          not MapSet.member?(retired, task["id"]) and
+              Enum.any?(task["depends_on"], &MapSet.member?(retired, &1))
+        end) ->
+          invalid(:retirements, "a required task depends on a retired task")
+
+        true ->
+          {:ok, normalized}
+      end
+    end
+  end
+
+  defp normalize_retirements(_, _), do: invalid(:retirements, "must be a bounded list")
+
+  defp normalize_retirement(entry) when is_map(entry) do
+    with :ok <- strict_keys(entry, ~w(task_id reason), :retirements),
+         {:ok, id} <- task_id(Contract.required(entry, :task_id)),
+         {:ok, reason} <-
+           Contract.text(Contract.required(entry, :reason), :retirement_reason, max: 500) do
+      {:ok, %{"task_id" => id, "reason" => reason}}
+    end
+  end
+
+  defp normalize_retirement(_), do: invalid(:retirements, "entries must be objects")
 
   defp plan_version(attrs) do
     case Contract.fetch(attrs, :version) do

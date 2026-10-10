@@ -103,6 +103,8 @@ defmodule Mix.Tasks.Shoestring.Plans do
       revision: revision_summary(revision),
       plan: contract.content,
       ordered_tasks: Enum.map(contract.ordered_task_ids, &Map.fetch!(tasks, &1)),
+      required_task_ids: PlanContract.required_task_ids(contract),
+      retirements: PlanContract.retirements(contract),
       decision: decision_summary(decision),
       planner: planner_summary(goal_id)
     })

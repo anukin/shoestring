@@ -23,7 +23,10 @@ close iteration 6. REPO-INSPECTION: package C's CLI approval interface is now
 implemented; its runtime evidence is in `../evidence/06-cobbler-planning/cli-approval.md`.
 REPO-INSPECTION: E's manual amendment core now preserves unchanged accepted
 contracts/evidence and lifetime attempts across one new approved execution revision.
-Model-assisted replan and explicit retirement remain pending. See
+Model-assisted replan remains pending. Explicit retirement now retains the full
+unaccepted task contract and reason, requires approval and activation, preserves
+counters and cannot replace active work. See
+`../evidence/06-cobbler-planning/task-retirement.md` and
 `../evidence/06-cobbler-planning/amendment-core.md`.
 REPO-INSPECTION: package D now binds a saved agent revision/role, provider and
 explicit model through admission, dispatch and provider launch options. See
@@ -61,7 +64,7 @@ with a repository-owned HTML mockup. That follow-up is separate from the
 iteration-6 sequential execution acceptance gate. REPO-INSPECTION: Usage, Agents,
 Settings and immutable CLI profile lookup are implemented. The separate package C
 CLI now supports plan approval. Approved-run profile binding is implemented;
-model-assisted replan and explicit retirement remain pending; the manual amendment core is
+model-assisted replan remains pending; explicit retirement and the manual amendment core are
 recorded above.
 
 **Hard dependencies:** iteration 5 complete
@@ -113,10 +116,12 @@ single-decision confirmation and remains labeled `reactive_only`.
 REPO-INSPECTION: E's manual core permits one amendment activation; accepted task
 contracts and repository bindings must remain identical, and consumed counters
 never reset. Changed accepted work needs a new task identity while preserving
-the original. UNVERIFIED / undecided: explicit approval-gated retirement and
-model-assisted amendment calls sharing the initial planning allowance. The merged
-foundation retains every approved task ID until an explicit retirement path
-exists. These decisions are not implicitly relaxed by the planner boundary.
+the original. REPO-INSPECTION: optional retirement entries preserve the full
+approved task and a bounded reason; accepted tasks cannot retire, required tasks
+cannot depend on retired tasks, and approved retirements cannot be undone or
+rewritten. No active run is cancelled and all lifetime counters remain charged.
+UNVERIFIED: model-assisted amendment calls sharing the initial planning allowance
+remain pending. These decisions are not implicitly relaxed by the planner boundary.
 
 ## Work package A: goal and task contracts
 

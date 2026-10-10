@@ -49,8 +49,17 @@ criteria, unbounded tasks and embedded commands are refused. File reads are
 bounded before decoding. The edited revision becomes a new **proposal** with
 the specified parent; the parent's content/digest remain preserved. The parent
 digest must match the exact content you reviewed. All task identities introduced
-by approved history must remain present. Explicit retirement and completed-work
-evidence preservation belong to package E.
+by approved history must remain present. Accepted task contracts and their
+repository bindings are preserved at proposal, approval and activation.
+
+REPO-INSPECTION: to retire an unaccepted approved task, retain its full task
+contract and add `"retirements": [{"task_id": "beta", "reason": "Scope no longer
+requires this work."}]` to the edited plan. Required tasks cannot depend on a
+retired task; revise their dependencies explicitly. Review shows the retirement
+reasons and remaining required task IDs. Retirement requires approval of the
+new digest and activation through the execution CLI. It cannot stop active
+work, erase evidence/counters, retire accepted work or undo an approved
+retirement. Initial plans cannot retire identities with no approved history.
 
 REPO-INSPECTION: replay the same request ID with identical content to obtain the
 original proposal; use a new ID for a new edit. Reusing an ID with changed content
@@ -99,6 +108,6 @@ to read durable state.
 REPO-INSPECTION: approved-plan execution is a separate
 [CLI interface](cli-execution.md), with saved-agent binding and a hermetic
 worker/worktree/restart proof. Manual amendments preserve accepted evidence;
-model-assisted amendment and retirement remain open. These later additions do
+explicit retirement is implemented and model-assisted amendment remains open. These later additions do
 not expand the verification claims of this review-interface slice. No live
 provider was called for this slice.

@@ -166,6 +166,42 @@ defmodule Mix.Tasks.Shoestring.PlansTest do
     assert Repo.aggregate(PlanDecisionRecord, :count) == 1
   end
 
+  test "retirement review exposes the reason and required tasks before approval", %{goal: goal} do
+    propose!(goal)
+    first = Plans.get_revision(goal.id, 1)
+    cli(decision_args("approve", goal, 1, first.digest, "approve-1"))
+
+    retirement = %{
+      "task_id" => "verify",
+      "reason" => "This final task is outside the revised scope."
+    }
+
+    result =
+      cli([
+        "edit",
+        goal.id,
+        "--revision",
+        "1",
+        "--digest",
+        first.digest,
+        "--file",
+        file!(plan(%{"retirements" => [retirement]})),
+        "--request-id",
+        "retire-verify",
+        "--by",
+        "human:operator"
+      ])
+
+    assert result["revision"]["status"] == "proposed"
+    shown = cli(["show", goal.id])
+    assert shown["retirements"] == [retirement]
+    assert shown["required_task_ids"] == ["survey", "widen", "narrow"]
+    assert Enum.map(shown["ordered_tasks"], & &1["id"]) == ["survey", "widen", "narrow", "verify"]
+    assert Plans.authority(goal.id).revision_number == 1
+    assert Repo.aggregate(RunRecord, :count) == 0
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "stale digests refuse both decision paths and the edit path", %{goal: goal} do
     propose!(goal)
     digest = String.duplicate("f", 64)

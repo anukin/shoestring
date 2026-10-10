@@ -390,6 +390,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
           accepted = accepted_task_ids(projection, execution)
           active = active_dispatch(projection, execution)
           budget = duration_status(repo, goal_id, projection, execution, usage, active)
+          revision = Plans.get_revision(goal_id, execution.revision_number, repo: repo)
+          retirements = if revision, do: Map.get(revision.content, "retirements", []), else: []
+          retired = MapSet.new(retirements, & &1["task_id"])
+          required = Enum.reject(execution.ordered_task_ids, &MapSet.member?(retired, &1))
 
           duration_blocks? =
             not is_nil(budget.reason) and
@@ -402,7 +406,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              execution: execution,
              accepted: accepted |> MapSet.to_list() |> Enum.sort(),
              accepted_count: MapSet.size(accepted),
-             total_tasks: length(execution.ordered_task_ids),
+             total_tasks: length(required),
+             retirements: retirements,
              active_task: active && active.plan_task_id,
              active_run_id: active && active.run_id,
              active_attempt: active && active.attempt,
@@ -411,7 +416,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
                (duration_blocks? and is_nil(completed_event(projection))) or
                  not is_nil(projection.global_failed) or
                  (is_nil(active) and
-                    Enum.any?(execution.ordered_task_ids, fn id ->
+                    Enum.any?(required, fn id ->
                       not MapSet.member?(accepted, id) and
                         not retryable?(projection, execution, id)
                     end)),
@@ -436,7 +441,13 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         if active,
           do: active.plan_task_id,
           else:
-            next_ready_task(contract, contract.ordered_task_ids, accepted, projection, execution)
+            next_ready_task(
+              contract,
+              PlanContract.required_task_ids(contract),
+              accepted,
+              projection,
+              execution
+            )
 
       remaining = PlanBudget.global_remaining(usage, contract)
 
@@ -631,7 +642,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   # ----------------------------------------------------------------------------
 
   defp advance_from_projection(repo, goal_id, projection, execution, authority, contract, opts) do
-    ordered = contract.ordered_task_ids
+    ordered = PlanContract.required_task_ids(contract)
     accepted = accepted_task_ids(projection, execution)
 
     case active_dispatch(projection, execution) do

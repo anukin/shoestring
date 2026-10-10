@@ -74,11 +74,10 @@ defmodule Shoestring.Cobbler.Plans do
   1. **Dispatch must bind the authority.** A dispatch has to re-read the
      approved revision and its digest at dispatch time and refuse if the
      authority moved. Holding a revision struct from earlier is not enough.
-  2. **Amendment needs a retirement path.** Because this slice refuses to
-     drop a task id from approved lineage, a genuine scope reduction has no
-     representation yet. The amendment package must add an explicit,
-     approval-gated retirement that records why an approved task identity
-     is being retired, rather than relaxing the retention rule.
+  2. **Retirement preserves history.** An explicit retirement records why an
+     unaccepted approved task is no longer required. Its full task contract
+     remains in the new revision. Accepted tasks cannot retire, dependent
+     required tasks must be revised, and approval/activation recheck evidence.
 
   ## Event appends inside the store transaction
 
@@ -261,9 +260,8 @@ defmodule Shoestring.Cobbler.Plans do
   # Task identities that approved history introduced are stable facts. An
   # edit may change an unaccepted task's contract, but accepted contracts are
   # preserved exactly. It may not make an approved identity disappear — otherwise completed work
-  # would lose the id its evidence was recorded against. Retiring an
-  # approved task is a real need and deliberately has no representation
-  # here; see the module doc.
+  # would lose the id its evidence was recorded against. Explicit retirements
+  # retain the full task contract and are checked again at approval/activation.
   defp check_retained_task_identities(repo, goal_id, contract) do
     approved_ids = approved_lineage_task_ids(repo, goal_id)
     proposed_ids = MapSet.new(PlanContract.task_ids(contract))
@@ -278,7 +276,9 @@ defmodule Shoestring.Cobbler.Plans do
   end
 
   defp check_accepted_task_contracts(repo, goal_id, content) do
+    :ok = check_retirement_history(repo, goal_id, content)
     incoming = Map.new(content["tasks"], &{&1["id"], &1})
+    retired = MapSet.new(Map.get(content, "retirements", []), & &1["task_id"])
 
     accepted =
       repo.all(
@@ -288,6 +288,10 @@ defmodule Shoestring.Cobbler.Plans do
 
     Enum.each(accepted, fn event ->
       payload = event.payload
+
+      if MapSet.member?(retired, payload["plan_task_id"]),
+        do: repo.rollback({:accepted_task_retired, payload["plan_task_id"]})
+
       source = get_revision_row(repo, goal_id, payload["revision_number"])
 
       if is_nil(source) or source.digest != payload["plan_digest"],
@@ -307,6 +311,37 @@ defmodule Shoestring.Cobbler.Plans do
 
       if content["goal"]["repository"] != contract.content["goal"]["repository"],
         do: repo.rollback(:accepted_repository_changed)
+    end)
+
+    :ok
+  end
+
+  defp check_retirement_history(repo, goal_id, content) do
+    approved =
+      repo.all(
+        from revision in PlanRevisionRecord,
+          where: revision.goal_id == ^goal_id and revision.status in ["approved", "superseded"],
+          order_by: [asc: revision.revision_number],
+          select: revision.content
+      )
+
+    incoming = Map.get(content, "retirements", [])
+    prior = approved |> Enum.flat_map(&Map.get(&1, "retirements", [])) |> Enum.uniq()
+
+    if Enum.any?(prior, &(&1 not in incoming)),
+      do: repo.rollback(:approved_retirement_changed)
+
+    tasks = Map.new(content["tasks"], &{&1["id"], &1})
+    historical = approved |> Enum.flat_map(& &1["tasks"]) |> Map.new(&{&1["id"], &1})
+
+    Enum.each(incoming, fn entry ->
+      id = entry["task_id"]
+
+      cond do
+        not Map.has_key?(historical, id) -> repo.rollback({:retirement_without_approved_task, id})
+        tasks[id] != historical[id] -> repo.rollback({:retired_task_contract_changed, id})
+        true -> :ok
+      end
     end)
 
     :ok

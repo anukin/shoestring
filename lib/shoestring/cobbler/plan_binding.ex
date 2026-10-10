@@ -19,12 +19,16 @@ defmodule Shoestring.Cobbler.PlanBinding do
       nil ->
         :ok
 
-      %{"revision_number" => number, "plan_digest" => digest} ->
+      %{"revision_number" => number, "plan_digest" => digest} = binding ->
         with %{} = authority <- Plans.authority(run.goal_id, repo: repo),
              true <-
                authority.revision.revision_number == number and
                  authority.revision.digest == digest do
-          :ok
+          retired = Map.get(authority.revision.content, "retirements", [])
+
+          if Enum.any?(retired, &(&1["task_id"] == binding["plan_task_id"])),
+            do: {:error, :plan_task_retired},
+            else: :ok
         else
           _ -> {:error, :plan_authority_changed}
         end
