@@ -578,6 +578,7 @@ defmodule Shoestring.Cobbler.Handoffs do
          # auditable capacity claim into the goal's history.
          :ok <- authorize(goal, opts),
          {:ok, identity} <- receiver_identity(intent, opts),
+         :ok <- Shoestring.Cobbler.PlanHandoff.authorize_delivery(repo, sender, command, identity),
          :ok <- ensure_confirmation_intent(intent, opts),
          :ok <- ensure_no_active_elf(sender, opts) do
       handoff_id = command.id
@@ -640,7 +641,16 @@ defmodule Shoestring.Cobbler.Handoffs do
     :decision_superseded,
     :handoff_refs_unauthorized,
     :cross_run_resume,
-    :session_mismatch
+    :session_mismatch,
+    :plan_handoff_authority_mismatch,
+    :invalid_execution_profile,
+    :plan_authority_changed,
+    :plan_task_retired,
+    :plan_attempt_already_resolved,
+    :ambiguous_plan_continuation,
+    :plan_continuation_binding_mismatch,
+    :task_duration_exhausted,
+    :total_duration_exhausted
   ]
 
   @permanent_tags [
@@ -1387,7 +1397,9 @@ defmodule Shoestring.Cobbler.Handoffs do
       goal_id: sender.goal_id,
       task_id: sender.task_id,
       workspace_ref: sender.workspace_ref,
-      prompt: Continuation.compose_handoff_prompt(continuation, checkpoint_record: checkpoint),
+      prompt:
+        Continuation.compose_handoff_prompt(continuation, checkpoint_record: checkpoint) <>
+          saved_instructions(intent),
       continuation: %{
         checkpoint_id: continuation.checkpoint_id,
         next_action: continuation.next_action,
@@ -1407,16 +1419,15 @@ defmodule Shoestring.Cobbler.Handoffs do
 
   # Deliberately does NOT carry `wakeup:resume_prior_session_id`: that key is
   # what makes the Elf prefer `adapter.resume`, and a cross-provider receiver
-  # must start fresh. Only handoff provenance is added.
+  # must start fresh. A plan handoff also pins its explicitly selected saved role.
   defp handoff_extensions(sender, intent, handoff_id) do
-    (sender.extensions || %{})
-    |> Map.delete("wakeup:resume_prior_session_id")
-    |> Map.merge(%{
-      "cobbler.handoff:handoff_id" => handoff_id,
-      "cobbler.handoff:from_provider_id" => sender.provider_id,
-      "cobbler.handoff:to_provider_id" => intent["to_provider_id"]
-    })
+    Shoestring.Cobbler.PlanHandoff.extensions(sender, intent, handoff_id)
   end
+
+  defp saved_instructions(%{"receiver_profile" => profile}),
+    do: "\nSaved agent instructions:\n" <> profile["instructions"]
+
+  defp saved_instructions(_), do: ""
 
   # Twin of `Shoestring.Elves.resume_capabilities/1` and
   # `Shoestring.Cobbler.Wakeups.wake_capabilities/1`: stored string items back

@@ -48,8 +48,14 @@ and accepted evidence across restart; see
 provider intervals and task/global gate durations now count against lifetime
 task/goal budgets, including amendments. Exhaustion blocks new work without
 interrupting an active Elf; global gate failures survive restart. See
-`../evidence/06-cobbler-planning/duration-budgets.md`. Cross-provider plan handoff
-remains pending.
+`../evidence/06-cobbler-planning/duration-budgets.md`. REPO-INSPECTION: explicit
+cross-provider plan continuation now selects a role/model from the same saved
+agent revision, requires a definitive stop and fresh receiver admission, and
+retains task/worktree/lifetime counters. The CLI queues exact checkpoint intents;
+canonical replay guards direct run creation as well as worker delivery. See
+`../evidence/06-cobbler-planning/plan-handoff.md`. Remaining iteration-6 work is
+the composed planner/edit/approval/execution/restart demo and semantic planner
+evaluation; no live model-quality evidence has been collected.
 REPO-INSPECTION: PR #90 has been integrated with
 review fixes; the domain executor has a hermetic real-worker/worktree/gate restart
 proof. See `../evidence/06-cobbler-planning/executor-integration.md`. Remaining amendment contract decisions are

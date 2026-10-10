@@ -64,5 +64,39 @@ time alone never interrupts or replaces an active Elf. Status exposes consumed
 time and the remaining goal allowance. Global acceptance failure is durable and
 requires a new approved amendment rather than silently repeating on restart.
 
-UNVERIFIED: cross-provider plan handoff remains separate iteration-6 work.
-No live provider integration is claimed by the hermetic CLI proof.
+REPO-INSPECTION: an explicit cross-provider continuation selects a named role
+from the same immutable saved agent revision. It keeps the approved task,
+worktree, plan revision and attempt counters; it does not introduce another task
+or a review stage. Inspect status/checkpoint evidence and copy the exact current
+decision references from `status.active_continuation` before submitting. This
+read-only output includes the current saved role/provider; it does not authorize
+a transfer by itself:
+
+```sh
+mix shoestring.execution handoff "$GOAL" \
+  --execution-id "$EXECUTION_ID" --run-id "$RUN_ID" \
+  --checkpoint-id "$CHECKPOINT_ID" \
+  --decision-ref "$DECISION_ID_1" --decision-ref "$DECISION_ID_2" \
+  --role Reviewer --scope "$RECEIVER_SCOPE" \
+  --command-id "$COMMAND_ID" --reason "Continue after sender quota stop" \
+  --by human:operator
+```
+
+REPO-INSPECTION: include each current decision reference exactly once. The role
+must select another provider with an explicit model; provider/model overrides
+are not CLI options. Delivery checks the canonical command, saved revision,
+current approval, definitive Elf terminal and remaining duration before receiver
+capacity observation. Suspension alone is retryable and does not transfer work.
+Live ownership blocks transfer. Receiver admission and its own lease still apply;
+a refusal creates no receiver or fallback. Replaying the identical command
+converges, including after delivery. Changing its role or references conflicts.
+Discarded delivery is repaired from the same durable intent on startup.
+
+REPO-INSPECTION: `--confirm-capacity` optionally records a confirmation for this
+receiver and scope, attributed to the goal's durable owner. It can lift only a
+confirmation-class refusal. Hard quota/scope/compatibility stops remain blocked;
+a goal without an attributable owner cannot use this option. The CLI queues
+only; the service consumes its current provider/scope Observatory observation.
+
+UNVERIFIED: no live provider integration or model plan quality is claimed by the
+hermetic CLI/worker proof. See the iteration-6 handoff evidence record.

@@ -10,7 +10,8 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
            "checkpoint.created",
            "dispatch.requested",
            "cobbler.plan.task.dispatched",
-           "cobbler.plan.task.superseded"
+           "cobbler.plan.task.superseded",
+           "cobbler.command.accepted"
          ] ++ @stops
   def event_types, do: @types
 
@@ -40,6 +41,8 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
         payload: %{
           "workspace_ref" => run.workspace_ref,
           "provider_id" => run.provider_id,
+          "dispatch_id" => run.dispatch_id,
+          "continuation" => %{"checkpoint_id" => checkpoint_id},
           "extensions" => run.extensions
         }
       }
@@ -49,7 +52,8 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
         |> Enum.filter(&(&1.type in @stops and &1.payload["run_id"] == parent_id))
         |> List.last()
 
-      with true <- same_attempt?(parent, child) || {:error, :plan_continuation_binding_mismatch},
+      with true <-
+             same_attempt?(parent, child, events) || {:error, :plan_continuation_binding_mismatch},
            true <-
              (not is_nil(stop) and stop.type != "run.completed") ||
                {:error, :plan_continuation_parent_not_stopped},
@@ -122,7 +126,7 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
         is_nil(root) or not MapSet.member?(delivered, id) ->
           {:cont, {:ok, chains}}
 
-        not same_attempt?(by_id[parent], event) ->
+        not same_attempt?(by_id[parent], event, events) ->
           {:halt, {:error, :plan_continuation_binding_mismatch}}
 
         Enum.any?(events, fn resolution ->
@@ -151,9 +155,9 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
   defp stopped_before?(%{type: "run.completed"}, _), do: false
   defp stopped_before?(stop, request), do: stop.sequence < request.sequence
 
-  defp same_attempt?(nil, _), do: false
+  defp same_attempt?(nil, _, _), do: false
 
-  defp same_attempt?(parent, child) do
+  defp same_attempt?(parent, child, events) do
     left = parent.payload
     right = child.payload
     binding = get_in(left, ["extensions", PlanBinding.key()])
@@ -161,8 +165,9 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
     is_map(binding) and parent.task_id == child.task_id and
       left["workspace_ref"] == right["workspace_ref"] and
       binding == get_in(right, ["extensions", PlanBinding.key()]) and
-      get_in(left, ["extensions", ExecutionProfile.key()]) ==
-        get_in(right, ["extensions", ExecutionProfile.key()]) and
-      left["provider_id"] == right["provider_id"]
+      ((get_in(left, ["extensions", ExecutionProfile.key()]) ==
+          get_in(right, ["extensions", ExecutionProfile.key()]) and
+          left["provider_id"] == right["provider_id"]) or
+         Shoestring.Cobbler.PlanHandoff.authorized?(parent, child, events))
   end
 end

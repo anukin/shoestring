@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `plan-handoff.md` — explicit saved receiver roles, canonical cross-provider
+  lineage, CLI intent/replay and worker/model delivery without new task attempts.
+
 - `checkpoint-amendment.md` — approved supersession of stopped checkpoint
   attempts, active-owner/intent guards and preserved lifetime evidence/counters.
 

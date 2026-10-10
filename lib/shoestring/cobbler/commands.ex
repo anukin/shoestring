@@ -138,6 +138,13 @@ defmodule Shoestring.Cobbler.Commands do
 
   defp record_new_command(goal_id, command, repo, now) do
     {status, result, extra_events, claim_id} = evaluate(command, repo, goal_id, now)
+    record_id = Ecto.UUID.generate()
+
+    result =
+      if result["kind"] == "handoff_requested" and is_map(result["receiver_profile"]),
+        do: Map.put(result, "handoff_id", record_id),
+        else: result
+
     :ok = Command.transition(:pending, :accept, status)
 
     events =
@@ -149,7 +156,7 @@ defmodule Shoestring.Cobbler.Commands do
       )
 
     command_row =
-      %CommandRecord{}
+      %CommandRecord{id: record_id}
       |> CommandRecord.outcome_changeset(
         goal_id,
         command,
@@ -195,6 +202,11 @@ defmodule Shoestring.Cobbler.Commands do
   defp evaluate(%Command{type: "run.handoff"} = command, repo, goal_id, _now) do
     case validate_handoff_reference(repo, goal_id, command) do
       {:ok, checkpoint} ->
+        sender = repo.get!(RunRecord, command.payload["run_id"])
+
+        {:ok, receiver_profile} =
+          Shoestring.Cobbler.PlanHandoff.selection(repo, sender, command.payload)
+
         result = %{
           "kind" => "handoff_requested",
           "run_id" => command.payload["run_id"],
@@ -219,6 +231,7 @@ defmodule Shoestring.Cobbler.Commands do
         # rebuild the job from this row, so every attempt reaches the same
         # bounds. A job that carried its own copy could drift from the intent.
         result = maybe_put_result(result, "lease_policy", command.payload["lease_policy"])
+        result = maybe_put_result(result, "receiver_profile", receiver_profile)
 
         case bind_handoff_confirmation(repo, goal_id, command) do
           {:ok, nil} ->
@@ -394,7 +407,10 @@ defmodule Shoestring.Cobbler.Commands do
         {:rejected, "handoff_decision_refs_stale"}
 
       true ->
-        {:ok, checkpoint}
+        case Shoestring.Cobbler.PlanHandoff.selection(repo, run, command.payload) do
+          {:ok, _} -> {:ok, checkpoint}
+          {:rejected, _} = rejected -> rejected
+        end
     end
   end
 

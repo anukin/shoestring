@@ -258,6 +258,7 @@ defmodule Shoestring.Cobbler.Command do
          {:ok, scope} <- text_field(raw, :scope, max: 200),
          {:ok, reason} <- text_field(raw, :reason, max: 500),
          {:ok, requested_by} <- text_field(raw, :requested_by, max: 200),
+         {:ok, receiver_role} <- optional_receiver_role(raw),
          {:ok, confirmation} <- confirmation_field(raw),
          {:ok, lease_policy} <- lease_policy_field(raw) do
       payload = %{
@@ -277,6 +278,7 @@ defmodule Shoestring.Cobbler.Command do
       # command id still replays.
       {:ok,
        payload
+       |> put_optional("receiver_role", receiver_role)
        |> put_optional("confirmation", confirmation)
        |> put_optional("lease_policy", lease_policy)}
     end
@@ -293,6 +295,12 @@ defmodule Shoestring.Cobbler.Command do
 
   defp put_optional(payload, _key, nil), do: payload
   defp put_optional(payload, key, value), do: Map.put(payload, key, value)
+
+  defp optional_receiver_role(raw) do
+    if Map.has_key?(raw, :receiver_role) or Map.has_key?(raw, "receiver_role"),
+      do: text_field(raw, :receiver_role, max: 80),
+      else: {:ok, nil}
+  end
 
   # The operator's single-decision confirmation, frozen into the durable
   # handoff intent alongside the boundary and the authorized refs.

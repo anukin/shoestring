@@ -18,9 +18,32 @@ defmodule Shoestring.Cobbler.ExecutionControl do
       {:ok,
        Map.merge(status, %{
          last_admission: if(decision, do: decision.payload),
+         active_continuation: active_continuation(goal_id, status[:active_run_id]),
          capacity_observation: capacity_observation(Map.get(status, :execution))
        })}
     end
+  end
+
+  defp active_continuation(_goal_id, nil), do: nil
+
+  defp active_continuation(goal_id, run_id) do
+    run = Repo.get!(Shoestring.Harness.RunRecord, run_id)
+
+    checkpoint =
+      Repo.one(
+        from e in TrajectoryEvent,
+          where: e.goal_id == ^goal_id and e.run_id == ^run_id and e.type == "checkpoint.created",
+          order_by: [desc: e.sequence],
+          limit: 1
+      )
+
+    %{
+      run_id: run_id,
+      checkpoint_id: checkpoint && checkpoint.payload["checkpoint_id"],
+      decision_refs: Shoestring.Harness.Continuation.decision_refs(Repo, goal_id),
+      agent_profile: run.extensions[Shoestring.Cobbler.ExecutionProfile.key()],
+      provider_id: run.provider_id
+    }
   end
 
   # Repair delivery only. The same canonical intent, approval, counters and
@@ -98,6 +121,80 @@ defmodule Shoestring.Cobbler.ExecutionControl do
       _ -> {:error, :execution_request_mismatch}
     end
   end
+
+  # Queue only an exact checkpoint transfer. The receiver is resolved from the
+  # sender's immutable agent revision; the CLI cannot supply a model override.
+  def handoff(goal_id, attrs, opts \\ []) do
+    with {:ok, by} <- human(attrs[:requested_by]),
+         {:ok, run_id} <- Ecto.UUID.cast(attrs[:run_id]),
+         {:ok, status} <- PlanExecutor.status(goal_id),
+         %{execution_id: execution_id} <- status[:execution],
+         true <- execution_id == attrs[:execution_id],
+         true <-
+           status.active_run_id == attrs[:run_id] or handoff_replay?(goal_id, attrs[:command_id]),
+         %Shoestring.Harness.RunRecord{} = sender <-
+           Repo.get(Shoestring.Harness.RunRecord, run_id),
+         true <- sender.goal_id == goal_id,
+         true <-
+           get_in(sender.extensions, [Shoestring.Cobbler.PlanBinding.key(), "execution_id"]) ==
+             execution_id,
+         %{} = pinned <- sender.extensions[Shoestring.Cobbler.ExecutionProfile.key()],
+         {:ok, receiver} <-
+           Shoestring.Cobbler.ExecutionProfile.resolve(
+             Map.put(pinned, "role", attrs[:receiver_role]),
+             Repo
+           ) do
+      payload = %{
+        "run_id" => sender.id,
+        "checkpoint_id" => attrs[:checkpoint_id],
+        "decision_refs" => attrs[:decision_refs],
+        "receiver_role" => receiver["role"],
+        "to_provider_id" => receiver["provider"],
+        "to_adapter_id" => receiver["adapter_id"],
+        "scope" => attrs[:scope],
+        "reason" => attrs[:reason],
+        "requested_by" => by
+      }
+
+      payload =
+        if attrs[:confirm_capacity],
+          do: Map.put(payload, "confirmation", %{"intent" => "supervised_execution"}),
+          else: payload
+
+      case Shoestring.Cobbler.Handoffs.request(
+             goal_id,
+             %{"command_id" => attrs[:command_id], "payload" => payload},
+             opts
+           ) do
+        {:ok, result} ->
+          {:ok,
+           %{
+             outcome: result.outcome,
+             handoff_id: result.handoff_id,
+             command: Map.take(result.command, [:id, :command_id, :digest, :status, :result]),
+             job_id: result.job && result.job.id
+           }}
+
+        error ->
+          error
+      end
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :handoff_execution_request_mismatch}
+    end
+  end
+
+  defp handoff_replay?(goal_id, command_id) when is_binary(command_id) do
+    Repo.exists?(
+      from e in TrajectoryEvent,
+        where:
+          e.goal_id == ^goal_id and e.type == "cobbler.command.accepted" and
+            fragment("json_extract(?, '$.command_id')", e.payload) == ^command_id and
+            fragment("json_extract(?, '$.command_type')", e.payload) == "run.handoff"
+    )
+  end
+
+  defp handoff_replay?(_, _), do: false
 
   defp capacity_observation(%{agent_profile: profile}) do
     scope = Application.get_env(:shoestring, :run_submission_scope, "subscription")
