@@ -177,7 +177,7 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
       assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
     end
 
-    test "CLI request drives code acceptance through quota continuation and restart" do
+    test "CLI planner, edit and approval drive code acceptance through quota continuation and restart" do
       source = Path.join(Shoestring.State.root(), "cli-fixture-repository")
       File.mkdir_p!(Path.join(source, "lib"))
       File.mkdir_p!(Path.join(source, "test"))
@@ -229,13 +229,115 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
             PlanFixtures.task("alpha", "Implement greeting", [], %{
               "gates" => [%{"gate" => "mix_test", "test_paths" => ["test/alpha_test.exs"]}]
             }),
-            PlanFixtures.task("beta", "Compose greeting", ["alpha"], %{
+            PlanFixtures.task("beta", "Compose greeting", [], %{
               "gates" => [%{"gate" => "mix_test", "test_paths" => ["test/beta_test.exs"]}]
             })
           ]
         })
 
-      revision = PlanExecutorHelpers.propose_and_approve!(goal, plan)
+      previous_shell = Mix.shell()
+      Mix.shell(Mix.Shell.Process)
+      on_exit(fn -> Mix.shell(previous_shell) end)
+      planner_config = Shoestring.Test.PlannerFixtures.config([{:ok, Jason.encode!(plan), 12}])
+      Application.put_env(:shoestring, :planner, planner_config)
+      planner_now = DateTime.utc_now()
+
+      assert {:ok, :persisted, _} =
+               Shoestring.Harness.Observatory.ingest(
+                 Shoestring.Test.PlannerFixtures.snapshot(planner_now),
+                 now: planner_now
+               )
+
+      goal_file = Path.join(Shoestring.State.root(), "demo-goal.json")
+      File.write!(goal_file, Jason.encode!(plan["goal"]))
+
+      assert cli_plan!([
+               "request",
+               goal.id,
+               "--file",
+               goal_file,
+               "--request-key",
+               "demo-initial",
+               "--by",
+               "human:fixture"
+             ])["planner"]["attempts"] == 0
+
+      generated = cli_plan!(["generate", goal.id, "--request-key", "demo-initial"])
+      assert generated["planner"]["state"] == "ready"
+      assert_receive {:planner_input, _}
+      refute Shoestring.Cobbler.Plans.authority(goal.id)
+
+      adopted =
+        cli_plan!([
+          "adopt",
+          goal.id,
+          "--request-key",
+          "demo-initial",
+          "--digest",
+          generated["planner"]["candidate_digest"],
+          "--by",
+          "human:fixture"
+        ])
+
+      exported = cli_plan!(["export", goal.id, "--revision", "1"])
+      assert Enum.find(exported["tasks"], &(&1["id"] == "beta"))["depends_on"] == []
+
+      edited =
+        Map.update!(exported, "tasks", fn tasks ->
+          Enum.map(tasks, fn task ->
+            if task["id"] == "beta", do: Map.put(task, "depends_on", ["alpha"]), else: task
+          end)
+        end)
+
+      plan_file = Path.join(Shoestring.State.root(), "demo-edited-plan.json")
+      File.write!(plan_file, Jason.encode!(edited))
+
+      reviewed =
+        cli_plan!([
+          "edit",
+          goal.id,
+          "--revision",
+          "1",
+          "--digest",
+          adopted["revision"]["digest"],
+          "--file",
+          plan_file,
+          "--request-id",
+          "demo-edit",
+          "--by",
+          "human:fixture"
+        ])
+
+      assert reviewed["revision"]["status"] == "proposed"
+      digest = reviewed["revision"]["digest"]
+
+      assert {:error, :no_approved_authority} =
+               Cobbler.request_plan_execution(goal.id, %{revision_number: 2, digest: digest},
+                 now: PlanExecutorHelpers.now()
+               )
+
+      approved =
+        cli_plan!([
+          "approve",
+          goal.id,
+          "--revision",
+          "2",
+          "--digest",
+          digest,
+          "--request-id",
+          "demo-approve",
+          "--by",
+          "human:fixture"
+        ])
+
+      assert approved["revision"]["status"] == "approved"
+
+      assert Shoestring.Cobbler.Plans.get_revision(goal.id, 1).digest ==
+               adopted["revision"]["digest"]
+
+      revision = %{revision_number: 2, digest: digest}
+      assert cli_plan!(["show", goal.id])["plan"] == edited
+      assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^goal.id), :count) == 0
 
       assert {:ok, _} =
                Shoestring.AgentProfiles.save_settings(Shoestring.AgentProfiles.settings(), %{
@@ -251,15 +353,12 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
 
       assert {:ok, agent} = Shoestring.AgentProfiles.create(Map.put(attrs, "roles", roles))
       assert {:ok, profile} = Shoestring.AgentProfiles.snapshot_by_id(agent.id)
-      previous_shell = Mix.shell()
-      Mix.shell(Mix.Shell.Process)
-      on_exit(fn -> Mix.shell(previous_shell) end)
 
       Mix.Tasks.Shoestring.Execution.run([
         "start",
         goal.id,
         "--revision",
-        "1",
+        to_string(revision.revision_number),
         "--digest",
         revision.digest,
         "--repo",
@@ -394,6 +493,18 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
             where: r.goal_id == ^goal.id and r.id not in ^[first.id, continued.id]
         )
 
+      assert {:ok, accepted_before_restart} = Cobbler.plan_execution_status(goal.id)
+      assert accepted_before_restart.accepted == ["alpha"]
+      planner_before_restart = Shoestring.Cobbler.Planner.get(goal.id)
+      assert planner_before_restart.attempts == 1
+      restart!()
+      assert {:ok, ^accepted_before_restart} = Cobbler.plan_execution_status(goal.id)
+
+      assert Shoestring.Cobbler.Planner.get(goal.id).result_digest ==
+               planner_before_restart.result_digest
+
+      assert cli_plan!(["planner", goal.id])["attempts"] == 1
+      refute_receive {:planner_input, _}
       finish_worker!(second.id)
       assert :ok = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
 
@@ -409,6 +520,53 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
       assert first.extensions["shoestring.agent:binding"] ==
                second.extensions["shoestring.agent:binding"]
 
+      invalid_goal = CobblerHelpers.create_goal!()
+
+      cyclic =
+        Map.update!(plan, "tasks", fn tasks ->
+          Enum.map(tasks, fn task ->
+            Map.put(task, "depends_on", if(task["id"] == "alpha", do: ["beta"], else: ["alpha"]))
+          end)
+        end)
+
+      Application.put_env(
+        :shoestring,
+        :planner,
+        Shoestring.Test.PlannerFixtures.config([{:ok, Jason.encode!(cyclic), 12}])
+      )
+
+      planner_now = DateTime.utc_now()
+
+      assert {:ok, :persisted, _} =
+               Shoestring.Harness.Observatory.ingest(
+                 Shoestring.Test.PlannerFixtures.snapshot(planner_now),
+                 now: planner_now
+               )
+
+      cli_plan!([
+        "request",
+        invalid_goal.id,
+        "--file",
+        goal_file,
+        "--request-key",
+        "demo-invalid",
+        "--by",
+        "human:fixture"
+      ])
+
+      rejected = cli_plan!(["generate", invalid_goal.id, "--request-key", "demo-invalid"])
+      assert rejected["planner"]["state"] == "schema_failed"
+      assert rejected["planner"]["candidate"] == nil
+      assert rejected["planner"]["errors"] != []
+      assert cli_plan!(["planner", invalid_goal.id])["state"] == "schema_failed"
+      assert Shoestring.Cobbler.Plans.list_revisions(invalid_goal.id) == []
+
+      assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^invalid_goal.id), :count) ==
+               0
+
+      assert_receive {:planner_input, _}
+      refute_receive {:planner_input, _}
+
       assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^goal.id), :count) == 3
 
       assert Repo.aggregate(
@@ -423,6 +581,12 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
                  goal.id,
                  result["execution"]["execution_id"]
                )
+    end
+
+    defp cli_plan!(args) do
+      Mix.Tasks.Shoestring.Plans.run(args)
+      assert_receive {:mix_shell, :info, [json]}
+      Jason.decode!(json)
     end
 
     defp finish_worker!(run_id) do

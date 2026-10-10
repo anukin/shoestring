@@ -12,6 +12,8 @@ defmodule Mix.Tasks.Shoestring.Plans do
       mix shoestring.plans show GOAL [--revision N]
       mix shoestring.plans export GOAL --revision N
       mix shoestring.plans planner GOAL
+      mix shoestring.plans request GOAL --file goal-contract.json --request-key KEY --by human:NAME
+      mix shoestring.plans generate GOAL --request-key KEY [--confirm-unknown-capacity]
       mix shoestring.plans propose GOAL --file plan.json --request-id ID --by human:NAME
       mix shoestring.plans edit GOAL --revision N --digest DIGEST --file plan.json --request-id ID --by human:NAME
       mix shoestring.plans adopt GOAL --request-key KEY --digest DIGEST --by human:NAME
@@ -25,7 +27,9 @@ defmodule Mix.Tasks.Shoestring.Plans do
   or digest. `export` returns only the editable plan JSON. `edit` creates a new
   proposal with an explicit parent; it does not approve, cancel or continue work.
   `planner` shows stored budget charges, support tier and validation errors; it
-  never calls a model. `replan` records a parent-bound amendment request;
+  never calls a model. `request` stores a validated initial goal contract without
+  inference; `generate` explicitly spends one admitted planner attempt.
+  `replan` records a parent-bound amendment request;
   `generate-amendment` and `repair` explicitly call the configured tool-free
   planner within the shared allowance. `adopt` authors an exact reviewed planner
   candidate and leaves it unapproved. No command here dispatches task work.
@@ -47,6 +51,8 @@ defmodule Mix.Tasks.Shoestring.Plans do
     "show" => {[], [:revision]},
     "export" => {[:revision], []},
     "planner" => {[], []},
+    "request" => {[:file, :request_key, :by], []},
+    "generate" => {[:request_key], [:confirm_unknown_capacity]},
     "propose" => {[:file, :request_id, :by], []},
     "edit" => {[:revision, :digest, :file, :request_id, :by], []},
     "adopt" => {[:request_key, :digest, :by], []},
@@ -130,6 +136,21 @@ defmodule Mix.Tasks.Shoestring.Plans do
 
   defp execute("planner", goal_id, _opts), do: output(planner_summary(goal_id))
 
+  defp execute("request", goal_id, opts) do
+    goal = read_goal!(opts[:file])
+
+    Planner.request(
+      goal_id,
+      %{
+        goal_contract: goal,
+        request_key: opts[:request_key],
+        requested_by: opts[:by]
+      },
+      domain_options()
+    )
+    |> planner_result!(goal_id)
+  end
+
   defp execute("replan", goal_id, opts) do
     Planner.request_amendment(
       goal_id,
@@ -145,7 +166,8 @@ defmodule Mix.Tasks.Shoestring.Plans do
     |> planner_result!(goal_id)
   end
 
-  defp execute(command, goal_id, opts) when command in ["generate-amendment", "repair"] do
+  defp execute(command, goal_id, opts)
+       when command in ["generate", "generate-amendment", "repair"] do
     # This explicit CLI action owns one bounded, tool-free inference task.
     {:ok, supervisor} = Task.Supervisor.start_link()
 
@@ -158,9 +180,11 @@ defmodule Mix.Tasks.Shoestring.Plans do
           ]
 
       result =
-        if command == "repair",
-          do: Planner.repair(goal_id, opts[:request_key], options),
-          else: Planner.generate_amendment(goal_id, opts[:request_key], options)
+        case command do
+          "generate" -> Planner.generate(goal_id, opts[:request_key], options)
+          "repair" -> Planner.repair(goal_id, opts[:request_key], options)
+          "generate-amendment" -> Planner.generate_amendment(goal_id, opts[:request_key], options)
+        end
 
       planner_result!(result, goal_id)
     after
@@ -262,6 +286,22 @@ defmodule Mix.Tasks.Shoestring.Plans do
 
       _ ->
         Mix.raise("Unable to read plan file")
+    end
+  end
+
+  defp read_goal!(path) do
+    result =
+      File.open(path, [:read, :binary], fn file ->
+        IO.binread(file, PlanContract.max_plan_bytes() + 1)
+      end)
+
+    with {:ok, json} when is_binary(json) <- result,
+         true <- byte_size(json) <= PlanContract.max_plan_bytes(),
+         {:ok, %{} = goal} <- Jason.decode(json),
+         {:ok, contract} <- PlanContract.validate_goal(goal) do
+      contract
+    else
+      _ -> Mix.raise("Invalid goal contract file; expected bounded goal-contract JSON")
     end
   end
 

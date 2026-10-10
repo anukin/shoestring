@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `planner-demo.md` — initial planner CLI request/generation and composed
+  edit/approval/material-code/quota/restart demo, with live-quality limits.
+
 - `plan-handoff.md` — explicit saved receiver roles, canonical cross-provider
   lineage, CLI intent/replay and worker/model delivery without new task attempts.
 

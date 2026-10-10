@@ -9,8 +9,9 @@ VERIFIED (GitHub inspection, 2026-10-07): package A merged in
 follow-up merged in [PR #87](https://github.com/anukin/shoestring/pull/87).
 REPO-INSPECTION (2026-10-08): the head of
 [PR #90](https://github.com/anukin/shoestring/pull/90) is integrated on main with
-review fixes and a real-worker/worktree/gate restart proof. Package D remains
-open for the remaining bindings and CLI lifecycle described below.
+review fixes and a real-worker/worktree/gate restart proof. Subsequent package D
+binding, continuation and CLI work is recorded below; semantic iteration
+acceptance remains open.
 The older draft [PR #88](https://github.com/anukin/shoestring/pull/88) remains
 open; it does not add completed work beyond the merged foundation.
 
@@ -53,9 +54,12 @@ cross-provider plan continuation now selects a role/model from the same saved
 agent revision, requires a definitive stop and fresh receiver admission, and
 retains task/worktree/lifetime counters. The CLI queues exact checkpoint intents;
 canonical replay guards direct run creation as well as worker delivery. See
-`../evidence/06-cobbler-planning/plan-handoff.md`. Remaining iteration-6 work is
-the composed planner/edit/approval/execution/restart demo and semantic planner
-evaluation; no live model-quality evidence has been collected.
+`../evidence/06-cobbler-planning/plan-handoff.md`. REPO-INSPECTION: initial planner request/generation are now exposed in the CLI.
+The composed fixture demo covers generation, dependency edit, exact approval,
+material code acceptance, quota continuation and restart without replanning,
+plus visible cyclic-candidate rejection. See
+`../evidence/06-cobbler-planning/planner-demo.md`. Semantic planner evaluation
+remains open; no live model-quality evidence has been collected.
 REPO-INSPECTION: PR #90 has been integrated with
 review fixes; the domain executor has a hermetic real-worker/worktree/gate restart
 proof. See `../evidence/06-cobbler-planning/executor-integration.md`. Remaining amendment contract decisions are

@@ -150,3 +150,26 @@ worker/worktree/restart proof. Manual amendments preserve accepted evidence;
 explicit retirement and bounded model-assisted amendment are implemented.
 Their evidence records distinguish hermetic runtime proof from live model
 quality; no live provider was called for these additions.
+
+## Request an initial candidate
+
+REPO-INSPECTION: for an existing goal, save the goal contract object (statement,
+repository/base, constraints, non-goals and acceptance) in a JSON file:
+
+```sh
+mix shoestring.plans request "$GOAL" --file goal-contract.json \
+  --request-key initial --by human:operator
+mix shoestring.plans generate "$GOAL" --request-key initial
+mix shoestring.plans planner "$GOAL"
+```
+
+REPO-INSPECTION: Request validates and freezes the bounded input/configuration;
+it performs no inference. Generate explicitly admits and charges one attempt
+against that durable request. Missing quota evidence blocks with zero spending.
+Local unknown capacity needs `--confirm-unknown-capacity` for that one call;
+hard stops cannot be confirmed away. Configuring an installed local model and
+its run budget is an operator action; these commands do not install models.
+A ready result is a candidate with an exact digest. Review it, then use `adopt`
+and exact revision approval before execution. Repeated generation reads the
+recorded result; `repair` remains a separate explicit bounded action. Initial,
+amendment and repair calls share the same lifetime allowance.

@@ -116,8 +116,15 @@ and finish. They validate canonical inputs/results on write and replay.
 admission lineage; cache divergence prevents further inference or adoption.
 The planner task supervisor restarts empty and never redispatches a lost call.
 
-UNVERIFIED: real model quality, live quota measurement, and production UI wiring
-were not verified. Package C must render the stored candidate, errors and quota
-data and request exact human actions. Package E must define its amendment
-budget and protect completed evidence before admitting any new replan. Neither
-package is silently implemented by this initial-planning budget.
+REPO-INSPECTION: the CLI exposes initial `request` and explicit `generate`,
+read-only `planner`, exact-digest `adopt`, human edit/approval and the bounded
+amendment commands. See `cli-plan-review.md`. The composed fixture demo exercises
+these CLI actions through actual worktrees, task/global gates, quota continuation
+and application restart; see the iteration-6 `planner-demo.md` evidence record.
+Package E's implementation shares the lifetime planner budget and preserves
+completed evidence; its separate amendment evidence records the tested limits.
+
+UNVERIFIED: real model plan quality and live quota measurement remain unverified.
+Fixture proposals and adapter transport tests do not establish semantic model
+quality. The web interface remains configuration and usage visualization;
+planning and execution belong to the CLI.

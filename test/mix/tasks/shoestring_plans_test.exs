@@ -73,6 +73,116 @@ defmodule Mix.Tasks.Shoestring.PlansTest do
     assert Repo.aggregate(PlanDecisionRecord, :count) == 0
   end
 
+  test "initial planner CLI stores an inert contract then generates a reviewable unapproved candidate",
+       %{goal: target} do
+    previous = Application.fetch_env(:shoestring, :planner)
+
+    Application.put_env(
+      :shoestring,
+      :planner,
+      Shoestring.Test.PlannerFixtures.config([{:ok, Jason.encode!(plan()), 12}])
+    )
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:shoestring, :planner, value)
+        :error -> Application.delete_env(:shoestring, :planner)
+      end
+    end)
+
+    arguments = [
+      "request",
+      target.id,
+      "--file",
+      file!(goal()),
+      "--request-key",
+      "cli-initial",
+      "--by",
+      "human:operator"
+    ]
+
+    pending = cli(arguments)
+    assert pending["planner"]["state"] == "pending"
+    assert pending["planner"]["attempts"] == 0
+    assert cli(arguments)["outcome"] == "replayed"
+    refute_receive {:planner_input, _}
+    assert cli(["generate", target.id, "--request-key", "cli-initial"])["outcome"] == "blocked"
+    refute_receive {:planner_input, _}
+    now = DateTime.utc_now()
+
+    assert {:ok, :persisted, _} =
+             Shoestring.Harness.Observatory.ingest(Shoestring.Test.PlannerFixtures.snapshot(now),
+               now: now
+             )
+
+    candidate = cli(["generate", target.id, "--request-key", "cli-initial"])
+    assert candidate["planner"]["state"] == "ready"
+    assert candidate["planner"]["candidate"]["tasks"] == plan()["tasks"]
+    assert candidate["planner"]["charged_output_tokens"] == 4096
+    assert_receive {:planner_input, _}
+    assert cli(["generate", target.id, "--request-key", "cli-initial"])["outcome"] == "replayed"
+    refute_receive {:planner_input, _}
+    assert Plans.list_revisions(target.id) == []
+    assert Plans.authority(target.id) == nil
+    assert Repo.aggregate(RunRecord, :count) == 0
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "initial goal files and non-human requesters fail without persisting or echoing input", %{
+    goal: target
+  } do
+    for contents <- [
+          "{secret-fixture",
+          "[]",
+          "",
+          String.duplicate("x", Shoestring.Cobbler.PlanContract.max_plan_bytes() + 1),
+          Map.put(goal(), "shell", "secret-fixture")
+        ] do
+      error =
+        assert_raise Mix.Error, fn ->
+          cli([
+            "request",
+            target.id,
+            "--file",
+            file!(contents),
+            "--request-key",
+            "bad",
+            "--by",
+            "human:operator"
+          ])
+        end
+
+      refute Exception.message(error) =~ "secret-fixture"
+    end
+
+    assert Planner.get(target.id) == nil
+    previous = Application.fetch_env(:shoestring, :planner)
+    Application.put_env(:shoestring, :planner, Shoestring.Test.PlannerFixtures.config([]))
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:shoestring, :planner, value)
+        :error -> Application.delete_env(:shoestring, :planner)
+      end
+    end)
+
+    assert_raise Mix.Error, ~r/non_human_planner_request/, fn ->
+      cli([
+        "request",
+        target.id,
+        "--file",
+        file!(goal()),
+        "--request-key",
+        "bad",
+        "--by",
+        "model:fixture"
+      ])
+    end
+
+    assert Planner.get(target.id) == nil
+    assert Repo.aggregate(TrajectoryEvent, :count) == 0
+  end
+
   test "edits preserve approved content, require another approval and replay safely", %{
     goal: goal
   } do
