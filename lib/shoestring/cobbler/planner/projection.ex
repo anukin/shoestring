@@ -36,7 +36,7 @@ defmodule Shoestring.Cobbler.Planner.Projection do
 
   def validate(projection) when is_map(projection) do
     with true <-
-           Map.keys(projection) |> Enum.sort() ==
+           Map.keys(Map.delete(projection, "amendment")) |> Enum.sort() ==
              Enum.sort(
                ~w(goal_id title description requested_by goal_contract source_context_refs evidence_summaries)
              ),
@@ -56,11 +56,12 @@ defmodule Shoestring.Cobbler.Planner.Projection do
          true <-
            Enum.all?(
              refs,
-             &(is_binary(&1) && String.match?(&1, ~r/\Aevent:[0-9a-f-]{36}:[a-z0-9.]{1,100}\z/))
+             &(is_binary(&1) && String.match?(&1, ~r/\Aevent:[0-9a-f-]{36}:[a-z0-9._]{1,100}\z/))
            ),
          %{"items" => evidence} when is_list(evidence) <- projection["evidence_summaries"],
          true <- Enum.all?(evidence, &valid_summary?/1),
          true <- Enum.map(evidence, &Map.get(&1, "reference")) == refs,
+         true <- Shoestring.Cobbler.Planner.Amendment.valid_projection?(projection),
          [] <- Security.scan_term(projection),
          true <- byte_size(Jason.encode!(projection)) <= @max_bytes do
       :ok
@@ -109,6 +110,13 @@ defmodule Shoestring.Cobbler.Planner.Projection do
   defp summary_fields("decision.recorded"), do: ~w(decision rationale)
   defp summary_fields("task.completed"), do: ~w(task_id result)
   defp summary_fields("checkpoint.created"), do: ~w(repository_state next_action stop_reason)
+
+  defp summary_fields("cobbler.plan.task.accepted"),
+    do: ~w(plan_task_id revision_number plan_digest run_id attempt commit)
+
+  defp summary_fields("cobbler.plan.task.gate_failed"),
+    do: ~w(plan_task_id revision_number plan_digest run_id attempt gate retry_state)
+
   defp summary_fields(_), do: []
 
   defp valid_summary?(%{"reference" => ref, "facts" => facts} = summary)
@@ -131,6 +139,9 @@ defmodule Shoestring.Cobbler.Planner.Projection do
     map_size(state) == 2 and is_binary(revision) and byte_size(revision) <= 128 and
       is_boolean(dirty)
   end
+
+  defp valid_fact?({key, value}) when key in ["revision_number", "attempt"],
+    do: is_integer(value) and value > 0
 
   defp valid_fact?({_key, value}),
     do: is_nil(value) or (is_binary(value) and byte_size(value) <= 2000)

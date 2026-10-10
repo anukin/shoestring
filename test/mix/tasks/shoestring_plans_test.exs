@@ -202,6 +202,81 @@ defmodule Mix.Tasks.Shoestring.PlansTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
+  test "CLI requests, generates and adopts an amendment without approving or dispatching", %{
+    goal: goal
+  } do
+    alias Shoestring.Test.PlannerFixtures
+    previous = Application.get_env(:shoestring, :planner)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:shoestring, :planner, previous),
+        else: Application.delete_env(:shoestring, :planner)
+    end)
+
+    Application.put_env(
+      :shoestring,
+      :planner,
+      PlannerFixtures.config([{:ok, Jason.encode!(plan()), 10}])
+    )
+
+    propose!(goal)
+    first = Plans.get_revision(goal.id, 1)
+    cli(decision_args("approve", goal, 1, first.digest, "approve-1"))
+    now = DateTime.utc_now()
+
+    assert {:ok, :persisted, _} =
+             Shoestring.Harness.Observatory.ingest(PlannerFixtures.snapshot(now), now: now)
+
+    args = [
+      "replan",
+      goal.id,
+      "--revision",
+      "1",
+      "--digest",
+      first.digest,
+      "--request-key",
+      "cli-amendment",
+      "--by",
+      "human:operator",
+      "--reason",
+      "Review unfinished decomposition."
+    ]
+
+    pending = cli(args)
+    assert pending["planner"]["state"] == "pending"
+    assert pending["planner"]["amendment"]["plan_digest"] == first.digest
+    assert pending["planner"]["attempts"] == 0
+    candidate = cli(["generate-amendment", goal.id, "--request-key", "cli-amendment"])
+    assert candidate["planner"]["state"] == "ready"
+    assert candidate["planner"]["charged_output_tokens"] == 4096
+    digest = candidate["planner"]["candidate_digest"]
+
+    adopted =
+      cli([
+        "adopt",
+        goal.id,
+        "--request-key",
+        "cli-amendment",
+        "--digest",
+        digest,
+        "--by",
+        "human:operator"
+      ])
+
+    assert adopted["revision"]["revision_number"] == 2
+    assert adopted["revision"]["parent_revision_number"] == 1
+    assert adopted["revision"]["status"] == "proposed"
+    assert cli(args)["outcome"] == "replayed"
+    assert Plans.authority(goal.id).revision_number == 1
+    assert Repo.aggregate(RunRecord, :count) == 0
+    assert Repo.aggregate(Oban.Job, :count) == 0
+    assert {:ok, %{consistent?: true}} = Planner.rebuild(goal.id)
+    assert_received {:planner_input, input}
+    assert input["projection"]["amendment"]["plan_digest"] == first.digest
+    refute_received {:planner_input, _}
+  end
+
   test "stale digests refuse both decision paths and the edit path", %{goal: goal} do
     propose!(goal)
     digest = String.duplicate("f", 64)

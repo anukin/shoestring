@@ -15,6 +15,9 @@ defmodule Mix.Tasks.Shoestring.Plans do
       mix shoestring.plans propose GOAL --file plan.json --request-id ID --by human:NAME
       mix shoestring.plans edit GOAL --revision N --digest DIGEST --file plan.json --request-id ID --by human:NAME
       mix shoestring.plans adopt GOAL --request-key KEY --digest DIGEST --by human:NAME
+      mix shoestring.plans replan GOAL --revision N --digest DIGEST --request-key KEY --by human:NAME --reason TEXT
+      mix shoestring.plans generate-amendment GOAL --request-key KEY [--confirm-unknown-capacity]
+      mix shoestring.plans repair GOAL --request-key KEY [--confirm-unknown-capacity]
       mix shoestring.plans approve GOAL --revision N --digest DIGEST --request-id ID --by human:NAME [--note TEXT]
       mix shoestring.plans reject GOAL --revision N --digest DIGEST --request-id ID --by human:NAME --reason TEXT
 
@@ -22,8 +25,10 @@ defmodule Mix.Tasks.Shoestring.Plans do
   or digest. `export` returns only the editable plan JSON. `edit` creates a new
   proposal with an explicit parent; it does not approve, cancel or continue work.
   `planner` shows stored budget charges, support tier and validation errors; it
-  never calls a model. `adopt` authors an exact reviewed planner candidate and
-  leaves it unapproved. No command here dispatches work.
+  never calls a model. `replan` records a parent-bound amendment request;
+  `generate-amendment` and `repair` explicitly call the configured tool-free
+  planner within the shared allowance. `adopt` authors an exact reviewed planner
+  candidate and leaves it unapproved. No command here dispatches task work.
   """
 
   @switches [
@@ -34,7 +39,8 @@ defmodule Mix.Tasks.Shoestring.Plans do
     request_key: :string,
     by: :string,
     note: :string,
-    reason: :string
+    reason: :string,
+    confirm_unknown_capacity: :boolean
   ]
   @options %{
     "list" => {[], []},
@@ -44,6 +50,9 @@ defmodule Mix.Tasks.Shoestring.Plans do
     "propose" => {[:file, :request_id, :by], []},
     "edit" => {[:revision, :digest, :file, :request_id, :by], []},
     "adopt" => {[:request_key, :digest, :by], []},
+    "replan" => {[:revision, :digest, :request_key, :by, :reason], []},
+    "generate-amendment" => {[:request_key], [:confirm_unknown_capacity]},
+    "repair" => {[:request_key], [:confirm_unknown_capacity]},
     "approve" => {[:revision, :digest, :request_id, :by], [:note]},
     "reject" => {[:revision, :digest, :request_id, :by, :reason], []}
   }
@@ -74,6 +83,7 @@ defmodule Mix.Tasks.Shoestring.Plans do
       (is_nil(opts[:revision]) or opts[:revision] > 0) and
       Enum.all?(opts, fn
         {:revision, _} -> true
+        {:confirm_unknown_capacity, value} -> is_boolean(value)
         {_key, value} -> String.trim(value) != ""
       end)
   end
@@ -119,6 +129,44 @@ defmodule Mix.Tasks.Shoestring.Plans do
   end
 
   defp execute("planner", goal_id, _opts), do: output(planner_summary(goal_id))
+
+  defp execute("replan", goal_id, opts) do
+    Planner.request_amendment(
+      goal_id,
+      %{
+        revision_number: opts[:revision],
+        digest: opts[:digest],
+        request_key: opts[:request_key],
+        requested_by: opts[:by],
+        reason: opts[:reason]
+      },
+      domain_options()
+    )
+    |> planner_result!(goal_id)
+  end
+
+  defp execute(command, goal_id, opts) when command in ["generate-amendment", "repair"] do
+    # This explicit CLI action owns one bounded, tool-free inference task.
+    {:ok, supervisor} = Task.Supervisor.start_link()
+
+    try do
+      options =
+        domain_options() ++
+          [
+            task_supervisor: supervisor,
+            confirm_unknown_capacity: Keyword.get(opts, :confirm_unknown_capacity, false)
+          ]
+
+      result =
+        if command == "repair",
+          do: Planner.repair(goal_id, opts[:request_key], options),
+          else: Planner.generate_amendment(goal_id, opts[:request_key], options)
+
+      planner_result!(result, goal_id)
+    after
+      Supervisor.stop(supervisor)
+    end
+  end
 
   defp execute(command, goal_id, opts) when command in ["propose", "edit"] do
     if command == "edit" do
@@ -177,6 +225,11 @@ defmodule Mix.Tasks.Shoestring.Plans do
 
   defp fetch_revision!(goal_id, number),
     do: Plans.get_revision(goal_id, number) || Mix.raise("Plan revision not found")
+
+  defp planner_result!({:ok, result}, goal_id),
+    do: output(%{outcome: result.outcome, planner: planner_summary(goal_id)})
+
+  defp planner_result!({:error, reason}, _goal_id), do: refuse!(reason)
 
   defp verified_contract!(revision) do
     case PlanContract.new(revision.content) do
@@ -238,6 +291,10 @@ defmodule Mix.Tasks.Shoestring.Plans do
 
         %{
           state: row.state,
+          amendment:
+            if(row.projection["amendment"],
+              do: Map.drop(row.projection["amendment"], ["current_plan_json"])
+            ),
           request_key: row.request_key,
           model: config["model"],
           provider: config["provider_id"],

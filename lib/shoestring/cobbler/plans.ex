@@ -150,11 +150,21 @@ defmodule Shoestring.Cobbler.Plans do
          {:ok, proposal_id} <- identifier(attrs, :proposal_id),
          {:ok, authored_by} <- human_identity(attrs, :authored_by),
          {:ok, parent} <- optional_revision_number(attrs, :parent_revision_number),
+         {:ok, parent_digest} <- optional_parent_digest(attrs, parent),
          {:ok, contract} <- plan_contract(attrs),
          :ok <- ensure_goal(repo, goal_id) do
       repo
       |> run_transaction(fn ->
-        propose_transaction(repo, goal_id, proposal_id, authored_by, parent, contract, now(opts))
+        propose_transaction(
+          repo,
+          goal_id,
+          proposal_id,
+          authored_by,
+          parent,
+          parent_digest,
+          contract,
+          now(opts)
+        )
       end)
       |> resolve_proposal_replay(repo, goal_id, proposal_id, contract)
       |> publish_result(opts)
@@ -184,7 +194,16 @@ defmodule Shoestring.Cobbler.Plans do
 
   defp resolve_proposal_replay(result, _repo, _goal_id, _proposal_id, _contract), do: result
 
-  defp propose_transaction(repo, goal_id, proposal_id, authored_by, parent, contract, now) do
+  defp propose_transaction(
+         repo,
+         goal_id,
+         proposal_id,
+         authored_by,
+         parent,
+         parent_digest,
+         contract,
+         now
+       ) do
     case existing_revision_by_proposal(repo, goal_id, proposal_id) do
       %PlanRevisionRecord{digest: digest} = existing when digest == contract.digest ->
         %{revision: existing, outcome: :replayed, events: []}
@@ -200,6 +219,13 @@ defmodule Shoestring.Cobbler.Plans do
         )
 
       nil ->
+        if parent_digest do
+          case authority(goal_id, repo: repo) do
+            %{revision_number: ^parent, digest: ^parent_digest} -> :ok
+            _ -> repo.rollback(:amendment_parent_changed)
+          end
+        end
+
         record_revision(repo, goal_id, proposal_id, authored_by, parent, contract, now)
     end
   end
@@ -389,6 +415,13 @@ defmodule Shoestring.Cobbler.Plans do
       Map.has_key?(run.extensions || %{}, Shoestring.Cobbler.PlanBinding.key()) and
         not MapSet.member?(resolved_run_ids, run.id)
     end)
+  end
+
+  @doc false
+  def amendment_inference_boundary(goal_id, opts \\ []) do
+    if unresolved_bound_run?(Keyword.get(opts, :repo, Repo), goal_id),
+      do: {:error, :active_plan_execution},
+      else: :ok
   end
 
   @doc false
@@ -1323,6 +1356,24 @@ defmodule Shoestring.Cobbler.Plans do
       {:ok, nil} -> {:ok, nil}
       {:ok, value} when is_integer(value) and value > 0 -> {:ok, value}
       _other -> {:error, {:invalid_plan_request, field, "must be a positive integer"}}
+    end
+  end
+
+  defp optional_parent_digest(attrs, parent) do
+    case Contract.fetch(attrs, :parent_digest) do
+      :error ->
+        {:ok, nil}
+
+      {:ok, nil} ->
+        {:ok, nil}
+
+      {:ok, value} when is_binary(value) and not is_nil(parent) ->
+        if Regex.match?(~r/\A[0-9a-f]{64}\z/, value),
+          do: {:ok, value},
+          else: {:error, :invalid_amendment_parent_digest}
+
+      _ ->
+        {:error, :invalid_amendment_parent_digest}
     end
   end
 

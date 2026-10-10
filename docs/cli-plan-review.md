@@ -2,8 +2,10 @@
 
 REPO-INSPECTION: `mix shoestring.plans` provides package C's local review flow.
 Commands return JSON on stdout; refusals raise a Mix error with a nonzero exit.
-They migrate/start only the repository and do not start application workers,
-provider monitors, inference, leases or task dispatch. Use the same state root
+Review and decision commands start only the repository. The explicit generation
+and repair commands additionally own one bounded tool-free inference task;
+they start no application workers, provider monitors, leases or task dispatch.
+Use the same state root
 as the server (`SHOESTRING_STATE_DIR` in dev/prod). Tests use the separate
 `SHOESTRING_TEST_STATE_DIR` variable.
 
@@ -76,10 +78,44 @@ mix shoestring.plans adopt "$GOAL" --request-key "$PLANNER_REQUEST_KEY" \
 
 REPO-INSPECTION: adoption uses the existing planner boundary's human-only API and
 fixed candidate request identity. It records a proposed revision; a separate
-approval is required. It does not run inference or repair. This CLI slice does
-not expose planner generation/repair or goal creation; those existing domain
-entrypoints remain separate. Adoption here covers initial planning, not an
-amendment to an executing plan.
+approval is required. Adoption does not run inference or repair. Initial goal
+creation and initial planner requests remain separate domain entrypoints.
+
+## Request a model-assisted amendment
+
+```sh
+mix shoestring.plans replan "$GOAL" --revision 1 --digest "$PARENT_DIGEST" \
+  --request-key amendment-1 --by human:operator --reason "Revise unfinished work."
+mix shoestring.plans generate-amendment "$GOAL" --request-key amendment-1
+mix shoestring.plans planner "$GOAL"
+mix shoestring.plans adopt "$GOAL" --request-key amendment-1 \
+  --digest "$CANDIDATE_DIGEST" --by human:operator
+```
+
+REPO-INSPECTION: `replan` records one bounded request against an exact approved
+parent. It includes the current plan, accepted task IDs, fixed goal constraints
+and up to 15 canonical checkpoint/gate summaries. Unsafe or oversized context
+is refused; use a manual edit rather than dropping evidence. Generation requires
+the same current parent and fresh capacity admission. It cannot release an
+unresolved run to obtain the global planning claim. A resolved plan claim may
+be released for this explicitly requested inference.
+
+REPO-INSPECTION: initial generation, repair and amendment share two calls and
+the original configured output allowance per goal. One successful initial call
+leaves one amendment call; an initial repair uses the remaining call. A manually
+authored plan can use amendment generation plus one explicit repair. New keys,
+configuration changes, restart, rejection and adoption do not reset charges.
+Only schema/unsafe failure permits `mix shoestring.plans repair "$GOAL"
+--request-key amendment-1`, and only while the shared allowance remains. Unknown
+local capacity requires explicit `--confirm-unknown-capacity` for that decision.
+Transport failure and an ambiguous running call never trigger another call.
+
+REPO-INSPECTION: a model must preserve every approved task identity, exact
+accepted contracts and existing human retirements. Scope retirement requires
+a human JSON edit. The candidate never approves or dispatches itself. Adoption
+atomically checks the reviewed parent digest and latest accepted evidence;
+approval and execution activation recheck evidence again. After adoption use
+the normal exact-revision approval and execution Start commands.
 
 ## Decide an exact revision
 
@@ -108,6 +144,6 @@ to read durable state.
 REPO-INSPECTION: approved-plan execution is a separate
 [CLI interface](cli-execution.md), with saved-agent binding and a hermetic
 worker/worktree/restart proof. Manual amendments preserve accepted evidence;
-explicit retirement is implemented and model-assisted amendment remains open. These later additions do
-not expand the verification claims of this review-interface slice. No live
-provider was called for this slice.
+explicit retirement and bounded model-assisted amendment are implemented.
+Their evidence records distinguish hermetic runtime proof from live model
+quality; no live provider was called for these additions.

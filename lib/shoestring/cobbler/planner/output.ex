@@ -9,6 +9,7 @@ defmodule Shoestring.Cobbler.Planner.Output do
          {:ok, contract} <- PlanContract.new(attrs),
          true <- contract.content["goal"] == projection["goal_contract"],
          false <- Map.has_key?(attrs, "planner"),
+         :ok <- preservation(contract, projection),
          [] <- Security.scan_term(contract.content) do
       attrs
       |> Map.put("planner", provenance(projection, configuration))
@@ -26,6 +27,13 @@ defmodule Shoestring.Cobbler.Planner.Output do
           "unsafe_proposal",
           "planner_provenance_supplied",
           "Planner provenance is owned by Shoestring."
+        )
+
+      {:error, :amendment_preservation_failed} ->
+        failure(
+          "unsafe_proposal",
+          "amendment_preservation_failed",
+          "Preserve approved task identities, accepted contracts and existing retirements; scope retirement requires a human edit."
         )
 
       {:error, {:forbidden_command_field, _}} ->
@@ -78,6 +86,12 @@ defmodule Shoestring.Cobbler.Planner.Output do
   end
 
   def validate(_, _, _), do: failure("schema_failed", "invalid_output", "Return a JSON string.")
+
+  defp preservation(contract, projection) do
+    if Shoestring.Cobbler.Planner.Amendment.output_allowed?(contract, projection),
+      do: :ok,
+      else: {:error, :amendment_preservation_failed}
+  end
 
   def provenance(projection, configuration) do
     %{

@@ -1,5 +1,5 @@
 defmodule Shoestring.Cobbler.PlannerRequestRecord do
-  @moduledoc "Durable initial planning budget, model-visible projection and attempt outcomes."
+  @moduledoc "Shared lifetime planning budget, current canonical projection and retained attempt outcomes."
   use Ecto.Schema
 
   @primary_key {:id, :binary_id, autogenerate: true}

@@ -1,7 +1,7 @@
 defmodule Shoestring.Cobbler.Planner.Replay do
   @moduledoc "Rebuilds initial planning state from events and detects cache divergence without mutation."
   alias Shoestring.Cobbler.{PlanContract, PlannerRequestRecord}
-  alias Shoestring.Cobbler.Planner.{Output, Projection}
+  alias Shoestring.Cobbler.Planner.{Amendment, Output, Projection}
 
   @fields ~w(id goal_id request_key input_digest projection configuration state attempts charged_output_tokens attempt_history errors result_json result_digest)a
 
@@ -28,13 +28,17 @@ defmodule Shoestring.Cobbler.Planner.Replay do
 
   defp apply_event(
          nil,
-         %{type: "cobbler.planner.requested", payload: p} = request,
+         %{type: type, payload: p} = request,
          events,
          goal_id
-       ) do
+       )
+       when type in ["cobbler.planner.requested", "cobbler.planner.amendment.requested"] do
     with {:ok, projection} <- Jason.decode(p["projection_json"]),
          true <- projection["goal_id"] == goal_id,
-         true <- context_owned?(projection, events, request.sequence) do
+         true <- context_owned?(projection, events, request.sequence),
+         true <-
+           type == "cobbler.planner.requested" or
+             Amendment.valid_history?(projection, events, request.sequence) do
       {:ok,
        %{
          id: p["request_id"],
@@ -51,6 +55,39 @@ defmodule Shoestring.Cobbler.Planner.Replay do
          result_json: nil,
          result_digest: nil
        }}
+    end
+  end
+
+  defp apply_event(
+         state,
+         %{type: "cobbler.planner.amendment.requested", payload: p} = request,
+         events,
+         goal_id
+       )
+       when is_map(state) do
+    with true <-
+           state.state != "running" and state.attempts < 2 and
+             is_nil(state.projection["amendment"]),
+         true <- p["request_id"] == state.id and p["configuration"] == state.configuration,
+         {:ok, projection} <- Jason.decode(p["projection_json"]),
+         true <-
+           projection["goal_id"] == goal_id and
+             projection["goal_contract"] == state.projection["goal_contract"],
+         true <- context_owned?(projection, events, request.sequence),
+         true <- Amendment.valid_history?(projection, events, request.sequence) do
+      {:ok,
+       %{
+         state
+         | request_key: p["request_key"],
+           input_digest: p["input_digest"],
+           projection: projection,
+           state: "pending",
+           errors: %{"items" => []},
+           result_json: nil,
+           result_digest: nil
+       }}
+    else
+      _ -> :error
     end
   end
 
@@ -140,7 +177,7 @@ defmodule Shoestring.Cobbler.Planner.Replay do
          true <- contract.content["goal"] == state.projection["goal_contract"],
          true <-
            contract.content["planner"] == Output.provenance(state.projection, state.configuration) do
-      :ok
+      if Amendment.output_allowed?(contract, state.projection), do: :ok, else: :error
     else
       _ -> :error
     end

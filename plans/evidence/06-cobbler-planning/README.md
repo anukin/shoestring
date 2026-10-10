@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `model-amendment.md` — shared lifetime planner allowance, parent/evidence
+  projection, human adoption/approval, CLI inference and restart ownership.
+
 - `task-retirement.md` — explicit approval-gated scope reduction with retained
   task identities/contracts, evidence rechecks and CLI review.
 

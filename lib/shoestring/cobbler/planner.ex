@@ -1,8 +1,10 @@
 defmodule Shoestring.Cobbler.Planner do
   @moduledoc """
-  Initial plan generation through quota admission and an exclusive global claim.
+  Plan generation and one explicit amendment through quota admission and an exclusive global claim.
 
-  `request/3` stores one immutable, bounded projection per goal. `generate/3`
+  `request/3` stores the initial bounded projection per goal. `request_amendment/3`
+  records one new canonical context while preserving the same lifetime ledger.
+  Initial generation, amendment and repair share at most two calls. `generate/3`
   admits and charges one attempt before tool-free inference. `repair/3` permits
   exactly one explicit repair after schema/unsafe output. Transport failures and
   ambiguous in-flight attempts are never retried automatically. A lost result
@@ -24,7 +26,7 @@ defmodule Shoestring.Cobbler.Planner do
     Plans
   }
 
-  alias Shoestring.Cobbler.Planner.{Configuration, Output, Projection, Replay, Schema}
+  alias Shoestring.Cobbler.Planner.{Amendment, Configuration, Output, Projection, Replay, Schema}
   alias Shoestring.Harness.{CapacitySnapshot, Observatory}
   alias Shoestring.Repo
   alias Shoestring.Trajectory.Goal
@@ -93,7 +95,99 @@ defmodule Shoestring.Cobbler.Planner do
 
   def rebuild(goal_id), do: Replay.rebuild(goal_id, get(goal_id))
 
+  @doc "Requests one bounded amendment using the goal's existing lifetime planning allowance."
+  def request_amendment(goal_id, attrs, opts \\ []) do
+    with {:ok, goal_id} <- Ecto.UUID.cast(goal_id),
+         {:ok, config} <- Configuration.load(opts),
+         {:ok, key} <- request_key(attrs) do
+      transaction(fn ->
+        row = get(goal_id)
+
+        if row do
+          case Replay.rebuild(goal_id, row) do
+            {:ok, %{consistent?: true}} -> :ok
+            _ -> Repo.rollback(:planner_state_diverged)
+          end
+
+          if row.configuration != config.public, do: Repo.rollback(:planner_configuration_changed)
+        end
+
+        cond do
+          row && is_map(row.projection["amendment"]) ->
+            if Amendment.matches_request?(row, attrs),
+              do: %{request: row, outcome: :replayed},
+              else: Repo.rollback(:planner_amendment_already_requested)
+
+          row && row.state == "running" ->
+            Repo.rollback(:planner_attempt_in_flight)
+
+          row && row.attempts >= 2 ->
+            Repo.rollback(:planner_budget_exhausted)
+
+          true ->
+            execution_count =
+              Repo.aggregate(
+                from(e in TrajectoryEvent,
+                  where: e.goal_id == ^goal_id and e.type == "cobbler.plan.execution.requested"
+                ),
+                :count
+              )
+
+            if execution_count >= 2, do: Repo.rollback(:amendment_execution_limit)
+            projection = unwrap!(Amendment.build(Repo, goal_id, attrs))
+            unwrap!(Amendment.authorize_parent(goal_id, projection))
+
+            if row && row.projection["goal_contract"] != projection["goal_contract"],
+              do: Repo.rollback(:planner_goal_contract_changed)
+
+            digest =
+              PlanContract.digest(%{"projection" => projection, "configuration" => config.public})
+
+            values = %{
+              request_key: key,
+              input_digest: digest,
+              projection: projection,
+              state: "pending",
+              errors: %{"items" => []},
+              result_json: nil,
+              result_digest: nil
+            }
+
+            row =
+              if row,
+                do: update_owned!(row, values),
+                else:
+                  struct(
+                    PlannerRequestRecord,
+                    Map.merge(values, %{goal_id: goal_id, configuration: config.public})
+                  )
+                  |> Ecto.Changeset.change()
+                  |> insert!()
+
+            append!(
+              goal_id,
+              "cobbler.planner.amendment.requested",
+              %{
+                "request_id" => row.id,
+                "request_key" => key,
+                "input_digest" => digest,
+                "projection_json" => PlanContract.canonical_json(projection),
+                "configuration" => config.public
+              },
+              opts
+            )
+
+            %{request: row, outcome: :recorded}
+        end
+      end)
+    else
+      :error -> {:error, :invalid_goal_id}
+      error -> error
+    end
+  end
+
   def generate(goal_id, key, opts \\ []), do: run(goal_id, key, :initial, opts)
+  def generate_amendment(goal_id, key, opts \\ []), do: run(goal_id, key, :amendment, opts)
   def repair(goal_id, key, opts \\ []), do: run(goal_id, key, :repair, opts)
 
   @doc "Authors a human revision from one exact reviewed candidate digest; never approves it."
@@ -104,16 +198,7 @@ defmodule Shoestring.Cobbler.Planner do
           with {:ok, %{consistent?: true}} <- rebuild(goal_id),
                {:ok, contract} <- PlanContract.from_canonical_json(row.result_json),
                true <- contract.digest == row.result_digest do
-            Plans.propose(
-              goal_id,
-              %{
-                proposal_id: "planner:#{row.id}",
-                authored_by: attrs[:authored_by],
-                plan: contract.content,
-                parent_revision_number: attrs[:parent_revision_number]
-              },
-              opts
-            )
+            adopt_contract(goal_id, row, contract, attrs, opts)
           else
             _ -> {:error, :planner_result_corrupt}
           end
@@ -123,6 +208,27 @@ defmodule Shoestring.Cobbler.Planner do
 
       _ ->
         {:error, :planner_result_not_ready}
+    end
+  end
+
+  defp adopt_contract(goal_id, row, contract, attrs, opts) do
+    amendment = row.projection["amendment"]
+    parent = if amendment, do: amendment["revision_number"], else: attrs[:parent_revision_number]
+
+    if amendment && attrs[:parent_revision_number] not in [nil, parent] do
+      {:error, :amendment_parent_changed}
+    else
+      Plans.propose(
+        goal_id,
+        %{
+          proposal_id: "planner:#{row.id}" <> if(amendment, do: ":amendment", else: ""),
+          authored_by: attrs[:authored_by],
+          plan: contract.content,
+          parent_revision_number: parent,
+          parent_digest: amendment && amendment["plan_digest"]
+        },
+        opts
+      )
     end
   end
 
@@ -148,8 +254,17 @@ defmodule Shoestring.Cobbler.Planner do
       if row.request_key != key, do: Repo.rollback(:planner_request_conflict)
       if row.configuration != config.public, do: Repo.rollback(:planner_configuration_changed)
 
+      amendment = row.projection["amendment"]
+
+      if (mode == :amendment and is_nil(amendment)) or
+           (mode == :initial and not is_nil(amendment)),
+         do: Repo.rollback(:planner_request_mode_mismatch)
+
       cond do
         row.state == "running" ->
+          %{request: row, outcome: :replayed}
+
+        mode == :amendment and row.state not in ["pending", "blocked"] ->
           %{request: row, outcome: :replayed}
 
         mode == :initial and row.attempts > 0 ->
@@ -159,10 +274,51 @@ defmodule Shoestring.Cobbler.Planner do
             (row.attempts != 1 or row.state not in ["schema_failed", "unsafe_proposal", "blocked"]) ->
           Repo.rollback(:planner_repair_unavailable)
 
+        row.attempts >= 2 ->
+          Repo.rollback(:planner_budget_exhausted)
+
         true ->
+          if amendment do
+            unwrap!(Amendment.authorize_parent(goal_id, row.projection))
+            release_plan_claim!(row, opts)
+          end
+
           admit!(row, config, opts)
       end
     end)
+  end
+
+  defp release_plan_claim!(row, opts) do
+    unwrap!(Plans.amendment_inference_boundary(row.goal_id))
+
+    case Commands.active_claim() do
+      %{goal_id: goal_id, command_id: command_id} when goal_id == row.goal_id ->
+        dispatch =
+          Repo.one(
+            from e in TrajectoryEvent,
+              where: e.goal_id == ^goal_id and e.type == "cobbler.plan.task.dispatched",
+              order_by: [desc: e.sequence],
+              limit: 1
+          )
+
+        if dispatch && dispatch.payload["command_id"] == command_id do
+          unwrap!(
+            Commands.submit(
+              goal_id,
+              %{
+                command_id: "planner-amendment-release:#{row.id}",
+                type: "task.release",
+                requested_by: row.projection["requested_by"],
+                payload: %{reason: "Explicit amendment inference after resolved plan work."}
+              },
+              command_opts(opts)
+            )
+          )
+        end
+
+      _ ->
+        :ok
+    end
   end
 
   defp admit!(row, config, opts) do
@@ -275,7 +431,7 @@ defmodule Shoestring.Cobbler.Planner do
   defp infer(row, config, opts) do
     input = %{
       "projection" => row.projection,
-      "schema" => Schema.for_goal(row.projection["goal_contract"]),
+      "schema" => Schema.for_projection(row.projection),
       "model" => config.public["model"],
       "attempt" => row.attempts,
       "max_output_tokens" => config.public["max_output_tokens"],
@@ -492,6 +648,7 @@ defmodule Shoestring.Cobbler.Planner do
   defp now(opts),
     do: Keyword.get(opts, :now, DateTime.utc_now()) |> DateTime.truncate(:microsecond)
 
+  defp unwrap!(:ok), do: :ok
   defp unwrap!({:ok, result}), do: result
   defp unwrap!({:error, reason}), do: Repo.rollback(reason)
   defp insert!(changeset), do: changeset |> Repo.insert() |> unwrap!()

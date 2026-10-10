@@ -4,9 +4,13 @@ defmodule Shoestring.Cobbler.Planner.Events do
   alias Shoestring.Cobbler.Planner.Projection
   alias Shoestring.Harness.{Contract, Security}
 
-  def validate("cobbler.planner.requested", payload) do
+  def validate(type, payload)
+      when type in ["cobbler.planner.requested", "cobbler.planner.amendment.requested"] do
     with {:ok, projection} <- Jason.decode(payload["projection_json"]),
          :ok <- Projection.validate(projection),
+         true <-
+           Map.has_key?(projection, "amendment") ==
+             (type == "cobbler.planner.amendment.requested"),
          :ok <- configuration(payload["configuration"]),
          true <-
            payload["input_digest"] ==

@@ -14,6 +14,27 @@ defmodule Shoestring.Cobbler.Planner.Schema do
     })
   end
 
+  def for_projection(projection) do
+    schema = for_goal(projection["goal_contract"])
+
+    case projection["amendment"] do
+      nil ->
+        schema
+
+      a ->
+        {:ok, parent} =
+          Shoestring.Cobbler.PlanContract.from_canonical_json(a["current_plan_json"])
+
+        if Map.has_key?(parent.content, "retirements") do
+          schema
+          |> put_in(["properties", "retirements"], %{"const" => parent.content["retirements"]})
+          |> Map.update!("required", &Enum.sort(["retirements" | &1]))
+        else
+          schema
+        end
+    end
+  end
+
   defp task do
     object(%{
       "id" => Map.put(text(63), "pattern", "^[a-z0-9][a-z0-9_-]{0,62}$"),

@@ -20,6 +20,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
   alias Shoestring.Trajectory.EventEnvelope
 
   @payload_schemas %{
+    "cobbler.planner.amendment.requested" => %{
+      1 => %{
+        required: [:request_id, :request_key, :input_digest, :projection_json, :configuration],
+        optional: [],
+        uuid_fields: [:request_id],
+        types: %{configuration: :map}
+      }
+    },
     "cobbler.planner.requested" => %{
       1 => %{
         required: [:request_id, :request_key, :input_digest, :projection_json, :configuration],
