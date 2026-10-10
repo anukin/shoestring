@@ -588,6 +588,29 @@ defmodule Shoestring.Trajectory.EventRegistry do
         types: %{revision_number: :integer, duration_ms: :integer}
       }
     },
+    "cobbler.plan.task.superseded" => %{
+      1 => %{
+        required: [
+          :execution_id,
+          :plan_task_id,
+          :revision_number,
+          :plan_digest,
+          :run_id,
+          :attempt,
+          :checkpoint_id,
+          :successor_execution_id,
+          :successor_revision_number,
+          :successor_plan_digest
+        ],
+        optional: [],
+        uuid_fields: [:execution_id, :run_id, :checkpoint_id, :successor_execution_id],
+        types: %{
+          revision_number: :integer,
+          attempt: :integer,
+          successor_revision_number: :integer
+        }
+      }
+    },
     "cobbler.plan.execution.requested" => %{
       1 => %{
         required: [:execution_id, :revision_number, :plan_digest, :ordered_task_ids],
@@ -1057,6 +1080,25 @@ defmodule Shoestring.Trajectory.EventRegistry do
          :ok <- plan_execution_revision(payload),
          :ok <- plan_execution_order(payload) do
       :ok
+    end
+  end
+
+  defp validate_plan_execution("cobbler.plan.task.superseded", 1, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload),
+         true <-
+           is_integer(payload["successor_revision_number"]) and
+             payload["successor_revision_number"] > payload["revision_number"],
+         true <-
+           is_binary(payload["successor_plan_digest"]) and
+             Regex.match?(@plan_digest_pattern, payload["successor_plan_digest"]),
+         true <- payload["successor_execution_id"] != payload["execution_id"] do
+      :ok
+    else
+      _ ->
+        Contract.invalid(:successor_execution_id, "must bind a later approved execution revision")
     end
   end
 

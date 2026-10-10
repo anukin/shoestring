@@ -96,9 +96,12 @@ REPO-INSPECTION: `replan` records one bounded request against an exact approved
 parent. It includes the current plan, accepted task IDs, fixed goal constraints
 and up to 15 canonical checkpoint/gate summaries. Unsafe or oversized context
 is refused; use a manual edit rather than dropping evidence. Generation requires
-the same current parent and fresh capacity admission. It cannot release an
-unresolved run to obtain the global planning claim. A resolved plan claim may
-be released for this explicitly requested inference.
+the same current parent and fresh capacity admission. It cannot release active
+work to obtain the global planning claim. A plan claim may be released after
+task resolution or at a canonical stopped checkpoint with no live Elf or
+competing run intent. This explicitly requested inference accepts no task and
+does not supersede the old attempt; supersession requires later human approval
+and execution activation.
 
 REPO-INSPECTION: initial generation, repair and amendment share two calls and
 the original configured output allowance per goal. One successful initial call

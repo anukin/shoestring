@@ -31,8 +31,11 @@ unaccepted task contract and reason, requires approval and activation, preserves
 counters and cannot replace active work. See
 `../evidence/06-cobbler-planning/task-retirement.md` and
 `../evidence/06-cobbler-planning/amendment-core.md`.
-UNVERIFIED: checkpoint-bound amendment activation for stopped, unresolved quota
-attempts remains open; approval still cannot replace active work.
+REPO-INSPECTION: checkpoint-bound activation now supersedes a stopped quota or
+explicit stop attempt atomically with the new approved execution request,
+preserving accepted work, checkpoint history and counters. Live Elves and
+competing intents prevent replacement; approval alone still does nothing.
+See `../evidence/06-cobbler-planning/checkpoint-amendment.md`.
 REPO-INSPECTION: package D now binds a saved agent revision/role, provider and
 explicit model through admission, dispatch and provider launch options. See
 `../evidence/06-cobbler-planning/execution-profile.md`. REPO-INSPECTION: durable

@@ -9,7 +9,8 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
            "run.requested",
            "checkpoint.created",
            "dispatch.requested",
-           "cobbler.plan.task.dispatched"
+           "cobbler.plan.task.dispatched",
+           "cobbler.plan.task.superseded"
          ] ++ @stops
   def event_types, do: @types
 
@@ -69,7 +70,11 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
 
   defp resolved?(events, ids, own_id) do
     Enum.any?(events, fn event ->
-      event.type in ["cobbler.plan.task.accepted", "cobbler.plan.task.gate_failed"] and
+      event.type in [
+        "cobbler.plan.task.accepted",
+        "cobbler.plan.task.gate_failed",
+        "cobbler.plan.task.superseded"
+      ] and
         event.payload["run_id"] in ids and event.payload["run_id"] != own_id
     end)
   end
@@ -121,7 +126,11 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
           {:halt, {:error, :plan_continuation_binding_mismatch}}
 
         Enum.any?(events, fn resolution ->
-          resolution.type in ["cobbler.plan.task.accepted", "cobbler.plan.task.gate_failed"] and
+          resolution.type in [
+            "cobbler.plan.task.accepted",
+            "cobbler.plan.task.gate_failed",
+            "cobbler.plan.task.superseded"
+          ] and
             resolution.payload["run_id"] in chains[root] and resolution.sequence < event.sequence
         end) ->
           {:halt, {:error, :plan_attempt_already_resolved}}

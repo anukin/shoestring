@@ -392,7 +392,11 @@ defmodule Shoestring.Cobbler.Plans do
         from e in TrajectoryEvent,
           where:
             e.goal_id == ^goal_id and
-              e.type in ["cobbler.plan.task.accepted", "cobbler.plan.task.gate_failed"],
+              e.type in [
+                "cobbler.plan.task.accepted",
+                "cobbler.plan.task.gate_failed",
+                "cobbler.plan.task.superseded"
+              ],
           select: e.payload
       )
       |> MapSet.new(& &1["run_id"])
@@ -419,9 +423,15 @@ defmodule Shoestring.Cobbler.Plans do
 
   @doc false
   def amendment_inference_boundary(goal_id, opts \\ []) do
-    if unresolved_bound_run?(Keyword.get(opts, :repo, Repo), goal_id),
-      do: {:error, :active_plan_execution},
-      else: :ok
+    repo = Keyword.get(opts, :repo, Repo)
+
+    if unresolved_bound_run?(repo, goal_id) do
+      with {:ok, status} <- Shoestring.Cobbler.PlanExecutor.status(goal_id, repo: repo),
+           {:ok, _} <- Shoestring.Cobbler.PlanSupersession.boundary(repo, goal_id, status),
+           do: :ok
+    else
+      :ok
+    end
   end
 
   @doc false
@@ -455,16 +465,23 @@ defmodule Shoestring.Cobbler.Plans do
         nil ->
           {:ok, status} = Shoestring.Cobbler.PlanExecutor.status(goal_id, repo: repo)
 
-          if not is_nil(status[:active_task]) or unresolved_bound_run?(repo, goal_id),
-            do: repo.rollback(:active_plan_execution)
-
           if length(requests) >= 2, do: repo.rollback(:amendment_execution_limit)
 
-          event =
-            hd(
-              append_events(
-                repo,
-                goal_id,
+          supersession =
+            if not is_nil(status[:active_task]) or unresolved_bound_run?(repo, goal_id) do
+              case Shoestring.Cobbler.PlanSupersession.prepare(repo, goal_id, status, payload) do
+                {:ok, event} -> [event]
+                {:error, reason} -> repo.rollback(reason)
+              end
+            else
+              []
+            end
+
+          events =
+            append_events(
+              repo,
+              goal_id,
+              supersession ++
                 [
                   %{
                     "type" => "cobbler.plan.execution.requested",
@@ -472,11 +489,10 @@ defmodule Shoestring.Cobbler.Plans do
                     "idempotency_key" => key
                   }
                 ],
-                now(opts)
-              )
+              now(opts)
             )
 
-          %{event: event, events: [event], outcome: :recorded}
+          %{event: List.last(events), events: events, outcome: :recorded}
       end
     end)
     |> publish_result(opts)

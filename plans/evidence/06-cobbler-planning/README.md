@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `checkpoint-amendment.md` — approved supersession of stopped checkpoint
+  attempts, active-owner/intent guards and preserved lifetime evidence/counters.
+
 - `model-amendment.md` — shared lifetime planner allowance, parent/evidence
   projection, human adoption/approval, CLI inference and restart ownership.
 

@@ -42,6 +42,15 @@ amendment, replaces an active Elf, nor overrides a task's needs-user state.
 After editing and approving an amendment, use Start with its new exact revision
 and digest; the domain enforces the one-amendment activation limit.
 
+REPO-INSPECTION: if the prior attempt is stopped at a canonical checkpoint,
+Start may atomically record its supersession and activate the approved amendment.
+Quota refusal, cancellation or interruption qualify only with the Elf's durable
+terminal record and no live Elf or competing run intent. Suspension alone is
+insufficient. A successful completion or transport
+failure still needs its normal task resolution. Supersession accepts no work,
+retains checkpoint/history/counters, and allocates no provider run by itself.
+The next task attempt still needs fresh admission and remaining lifetime budget.
+
 REPO-INSPECTION: same-provider quota wakes retain the task attempt, model and
 worktree through canonical checkpoint lineage. Status lists the current run
 and its ancestor run IDs. Continuation cannot replace a still-active parent,

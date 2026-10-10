@@ -70,6 +70,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     "cobbler.plan.task.dispatched",
     "cobbler.plan.task.accepted",
     "cobbler.plan.task.gate_failed",
+    "cobbler.plan.task.superseded",
     "cobbler.plan.execution.gate_failed",
     "cobbler.plan.execution.completed"
   ]
@@ -408,6 +409,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              accepted_count: MapSet.size(accepted),
              total_tasks: length(required),
              retirements: retirements,
+             superseded_attempts: projection.superseded,
              active_task: active && active.plan_task_id,
              active_run_id: active && active.run_id,
              active_attempt: active && active.attempt,
@@ -498,6 +500,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         execution: nil,
         dispatched: [],
         accepted: [],
+        superseded: [],
         gate_failed: [],
         completed: nil,
         global_failed: nil
@@ -525,6 +528,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
         %TrajectoryEvent{type: "cobbler.plan.task.gate_failed", payload: payload}, acc ->
           %{acc | gate_failed: acc.gate_failed ++ [normalize_resolution(payload)]}
+
+        %TrajectoryEvent{type: "cobbler.plan.task.superseded", payload: payload}, acc ->
+          %{acc | superseded: acc.superseded ++ [payload]}
 
         %TrajectoryEvent{type: "cobbler.plan.execution.gate_failed", payload: payload}, acc ->
           if acc.execution && payload["execution_id"] == acc.execution.execution_id,
@@ -619,6 +625,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       Enum.any?(
         projection.gate_failed,
         &(&1.execution_id == execution_id and &1.plan_task_id == task_id and &1.attempt == attempt)
+      ) or
+      Enum.any?(
+        projection.superseded,
+        &(&1["execution_id"] == execution_id and &1["plan_task_id"] == task_id and
+            &1["attempt"] == attempt)
       )
   end
 
