@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "goal": {
+    "statement": "Compute basket totals in integer cents and render Total: N cents using that total, including an empty basket.",
+    "repository": {
+      "base_revision": "1111111"
+    },
+    "constraints": [
+      "Change only lib/pantry.ex; keep existing public function signatures.",
+      "Use the supplied dependency-free repository; do not fetch packages or use the network."
+    ],
+    "non_goals": [
+      "Authentication, persistence, UI, parallel execution, and unrelated Pantry functions."
+    ],
+    "acceptance": {
+      "gates": [
+        {
+          "gate": "mix_test",
+          "test_paths": [
+            "test/total_test.exs",
+            "test/receipt_test.exs"
+          ]
+        }
+      ],
+      "evidence": [
+        "Named acceptance tests pass with material implementation changes."
+      ]
+    }
+  },
+  "budget": {
+    "max_total_attempts": 4,
+    "max_total_duration_seconds": 1260
+  },
+  "tasks": [
+    {
+      "id": "total",
+      "title": "Compute integer basket totals",
+      "outcome": "Sum price_cents multiplied by quantity without floats.",
+      "depends_on": [],
+      "inputs": [],
+      "expected_artifacts": [],
+      "hints": {
+        "files": [
+          "lib/pantry.ex",
+          "test/total_test.exs"
+        ],
+        "symbols": [
+          "Pantry.total_cents/1"
+        ]
+      },
+      "acceptance_criteria": [
+        "The sample basket totals 475 cents; empty basket totals zero."
+      ],
+      "gates": [
+        {
+          "gate": "mix_test",
+          "test_paths": [
+            "test/total_test.exs"
+          ]
+        }
+      ],
+      "checkpoint": {
+        "condition": "Compute integer basket totals is committed and its named tests pass; stop here before dependent work.",
+        "evidence": [
+          "Commit revision, changed paths and named test gate result."
+        ]
+      },
+      "risks": [],
+      "execution": {
+        "max_attempts": 2,
+        "max_duration_seconds": 600
+      }
+    },
+    {
+      "id": "receipt",
+      "title": "Render the basket total",
+      "outcome": "Receipt calls the accepted total function.",
+      "depends_on": [
+        "total"
+      ],
+      "inputs": [
+        "Accepted total implementation and its gate result."
+      ],
+      "expected_artifacts": [],
+      "hints": {
+        "files": [
+          "lib/pantry.ex",
+          "test/total_test.exs",
+          "test/receipt_test.exs"
+        ],
+        "symbols": [
+          "Pantry.receipt/1",
+          "Pantry.total_cents/1"
+        ]
+      },
+      "acceptance_criteria": [
+        "Sample receipt is Total: 475 cents; empty receipt is Total: 0 cents."
+      ],
+      "gates": [
+        {
+          "gate": "mix_test",
+          "test_paths": [
+            "test/total_test.exs",
+            "test/receipt_test.exs"
+          ]
+        }
+      ],
+      "checkpoint": {
+        "condition": "Render the basket total is committed and its named tests pass; stop here before dependent work.",
+        "evidence": [
+          "Commit revision, changed paths and named test gate result."
+        ]
+      },
+      "risks": [],
+      "execution": {
+        "max_attempts": 2,
+        "max_duration_seconds": 600
+      }
+    }
+  ]
+}

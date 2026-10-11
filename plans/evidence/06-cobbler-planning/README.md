@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `semantic-evaluation-preparation.md` — offline repository corpus, reference
+  steps, bounded saved-output comparison and explicit pending semantic evidence.
+
 - `planner-demo.md` — initial planner CLI request/generation and composed
   edit/approval/material-code/quota/restart demo, with live-quality limits.
 

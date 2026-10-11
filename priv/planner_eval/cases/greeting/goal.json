@@ -1,0 +1,26 @@
+{
+  "statement": "Trim greeting names; use friend when the trimmed name is blank. Preserve punctuation and nonblank names.",
+  "repository": {
+    "base_revision": "1111111"
+  },
+  "constraints": [
+    "Change only lib/pantry.ex; keep existing public function signatures.",
+    "Use the supplied dependency-free repository; do not fetch packages or use the network."
+  ],
+  "non_goals": [
+    "Authentication, persistence, UI, parallel execution, and unrelated Pantry functions."
+  ],
+  "acceptance": {
+    "gates": [
+      {
+        "gate": "mix_test",
+        "test_paths": [
+          "test/greeting_test.exs"
+        ]
+      }
+    ],
+    "evidence": [
+      "Named acceptance tests pass with material implementation changes."
+    ]
+  }
+}

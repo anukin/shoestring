@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "goal": {
+    "statement": "Trim greeting names; use friend when the trimmed name is blank. Preserve punctuation and nonblank names.",
+    "repository": {
+      "base_revision": "1111111"
+    },
+    "constraints": [
+      "Change only lib/pantry.ex; keep existing public function signatures.",
+      "Use the supplied dependency-free repository; do not fetch packages or use the network."
+    ],
+    "non_goals": [
+      "Authentication, persistence, UI, parallel execution, and unrelated Pantry functions."
+    ],
+    "acceptance": {
+      "gates": [
+        {
+          "gate": "mix_test",
+          "test_paths": [
+            "test/greeting_test.exs"
+          ]
+        }
+      ],
+      "evidence": [
+        "Named acceptance tests pass with material implementation changes."
+      ]
+    }
+  },
+  "budget": {
+    "max_total_attempts": 2,
+    "max_total_duration_seconds": 660
+  },
+  "tasks": [
+    {
+      "id": "greeting",
+      "title": "Normalize greeting names",
+      "outcome": "Greeting trims whitespace and substitutes friend for blank names.",
+      "depends_on": [],
+      "inputs": [],
+      "expected_artifacts": [],
+      "hints": {
+        "files": [
+          "lib/pantry.ex",
+          "test/greeting_test.exs"
+        ],
+        "symbols": [
+          "Pantry.greeting/1"
+        ]
+      },
+      "acceptance_criteria": [
+        "Whitespace around Sam is removed; blanks become friend; Jo stays Jo."
+      ],
+      "gates": [
+        {
+          "gate": "mix_test",
+          "test_paths": [
+            "test/greeting_test.exs"
+          ]
+        }
+      ],
+      "checkpoint": {
+        "condition": "Normalize greeting names is committed and its named tests pass; stop here before dependent work.",
+        "evidence": [
+          "Commit revision, changed paths and named test gate result."
+        ]
+      },
+      "risks": [],
+      "execution": {
+        "max_attempts": 2,
+        "max_duration_seconds": 600
+      }
+    }
+  ]
+}

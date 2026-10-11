@@ -60,6 +60,13 @@ material code acceptance, quota continuation and restart without replanning,
 plus visible cyclic-candidate rejection. See
 `../evidence/06-cobbler-planning/planner-demo.md`. Semantic planner evaluation
 remains open; no live model-quality evidence has been collected.
+REPO-INSPECTION: an offline evaluation pack now supplies three small repository
+goals, reference plans/implementation steps, pinned context export and saved
+proposal comparison. Schema/count observations remain separate from unreviewed
+semantic criteria and unrun model execution. Human reference review and
+budget-authorized model evaluation are still pending. See
+`../../docs/planner-evaluation.md` and
+`../evidence/06-cobbler-planning/semantic-evaluation-preparation.md`.
 REPO-INSPECTION: PR #90 has been integrated with
 review fixes; the domain executor has a hermetic real-worker/worktree/gate restart
 proof. See `../evidence/06-cobbler-planning/executor-integration.md`. Remaining amendment contract decisions are
@@ -273,6 +280,10 @@ Use several small repository goals and score proposals on:
 
 Compare model plans to a human-authored fixture plan. Keep deterministic schema
 and execution results separate from an optional judge score.
+
+REPO-INSPECTION: use `mix shoestring.plans.eval` and the procedure in
+`../../docs/planner-evaluation.md`. Reference smoke checks are preparation;
+they do not satisfy this semantic evaluation gate.
 
 ## Demo
 

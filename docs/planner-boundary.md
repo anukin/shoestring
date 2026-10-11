@@ -128,3 +128,7 @@ UNVERIFIED: real model plan quality and live quota measurement remain unverified
 Fixture proposals and adapter transport tests do not establish semantic model
 quality. The web interface remains configuration and usage visualization;
 planning and execution belong to the CLI.
+
+REPO-INSPECTION: `planner-evaluation.md` describes the offline corpus, context
+export and saved-proposal comparison command. Its reference smoke checks prepare
+semantic evaluation without claiming actual model quality or spending quota.

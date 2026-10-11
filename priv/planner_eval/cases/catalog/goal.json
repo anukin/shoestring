@@ -1,0 +1,26 @@
+{
+  "statement": "Return trimmed, nonblank, unique catalog names sorted with case-sensitive string ordering; preserve distinct Apple and apple.",
+  "repository": {
+    "base_revision": "1111111"
+  },
+  "constraints": [
+    "Change only lib/pantry.ex; keep existing public function signatures.",
+    "Use the supplied dependency-free repository; do not fetch packages or use the network."
+  ],
+  "non_goals": [
+    "Authentication, persistence, UI, parallel execution, and unrelated Pantry functions."
+  ],
+  "acceptance": {
+    "gates": [
+      {
+        "gate": "mix_test",
+        "test_paths": [
+          "test/catalog_test.exs"
+        ]
+      }
+    ],
+    "evidence": [
+      "Named acceptance tests pass with material implementation changes."
+    ]
+  }
+}
