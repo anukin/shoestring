@@ -326,14 +326,35 @@ they do not satisfy this semantic evaluation gate.
 
 ## Completion record
 
-- **Final status:**
-- **Completed on:**
-- **Plan/goal schema versions:**
-- **Events/projections/configuration:**
-- **Planner adapters/fixtures:**
-- **Deterministic eval results:**
-- **Semantic planner eval results:**
-- **Verification commands:**
-- **Demo result:**
-- **Deviations and remaining risks:**
-- **Instructions for iteration 7:**
+- **Final status:** REPO-INSPECTION: in progress. Implementation and deterministic
+  fixture evidence are recorded; semantic acceptance remains open.
+- **Completed on:** UNVERIFIED: not complete.
+- **Plan/goal schema versions:** REPO-INSPECTION: plan contract version 1,
+  strict goal contract, plan/planner trajectory event schema version 1.
+- **Events/projections/configuration:** REPO-INSPECTION: immutable revisions,
+  human decisions, planner accounting and sequential execution derive from
+  durable trajectory facts; saved agent revision/role/provider/model binding
+  and current-ledger task admission are implemented. See package evidence above.
+- **Planner adapters/fixtures:** REPO-INSPECTION: deterministic fixture and
+  configured local model boundary; three offline Pantry evaluation cases.
+- **Deterministic eval results:** see
+  [the acceptance audit](../evidence/06-cobbler-planning/acceptance-audit.md)
+  for all ten required evals, named assertions and current-run verification.
+- **Semantic planner eval results:** UNVERIFIED: human reference review, actual
+  model proposals, scored comparisons and approved model-plan execution remain
+  open. [Pinned references](../evidence/06-cobbler-planning/reference-review.md)
+  are ready for review. A named model/provider and explicit budget are required.
+- **Verification commands:** `mix precommit`; focused deterministic-matrix
+  command and exact counts are in the acceptance audit. Historical package
+  commands remain in their evidence records.
+- **Demo result:** REPO-INSPECTION: composed hermetic CLI generation, dependency
+  edit, approval, real-worker/worktree gates, quota continuation, restart and
+  cyclic refusal are implemented. Goal creation/profile/capacity setup uses
+  helpers; this does not prove a brand-new-goal CLI or live model quality.
+- **Deviations and remaining risks:** VERIFIED (user direction): workflow is
+  CLI-based; configuration and usage visualization are a separate UI milestone.
+  REPO-INSPECTION: small one-/two-task evaluation fixtures have limited
+  complexity and cannot establish general planner quality or live handoff cost.
+- **Instructions for iteration 7:** REPO-INSPECTION: do not mark iteration 6
+  complete or unlock multi-Elf fan-out until the semantic evaluation and final
+  acceptance record are complete.

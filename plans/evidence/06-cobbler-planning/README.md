@@ -14,6 +14,11 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `acceptance-audit.md` — all ten required deterministic evals mapped to existing
+  assertions, current verification, demo limits and remaining closeout work.
+- `reference-review.md` — three concrete reference plans and pinned context/plan
+  digests for human review; no human approval or live budget is implied.
+
 - `semantic-evaluation-preparation.md` — offline repository corpus, reference
   steps, bounded saved-output comparison and explicit pending semantic evidence.
 

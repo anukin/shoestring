@@ -25,6 +25,11 @@ output schema and repository file contents, bound by a digest. Reference plans
 and solutions are excluded from model input. `1111111` is a synthetic base
 revision, not an executable Git revision.
 
+VERIFIED: the [reference review packet](../plans/evidence/06-cobbler-planning/reference-review.md)
+records the three concrete decompositions and their context/plan digests.
+Human review remains pending. The [acceptance audit](../plans/evidence/06-cobbler-planning/acceptance-audit.md)
+maps the separate deterministic milestone checks to existing test assertions.
+
 ```sh
 mix shoestring.plans.eval list
 mix shoestring.plans.eval context receipt > receipt-context.json
