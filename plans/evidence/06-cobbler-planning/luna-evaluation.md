@@ -187,3 +187,9 @@ VERIFIED: `mix precommit` exited 0. ExUnit reported **4 doctests, 1907 tests,
 (8.6 seconds async, 166.3 seconds sync). JavaScript suites reported **52/52**
 and **8/8** passing, with no failures or skips. The new ExUnit capture wrapper
 includes all 13 hermetic Python checks. Full command wall time was 178.414 seconds.
+
+VERIFIED (subsequent run): [the receipt execution packet](receipt-live-run.md)
+records the approved plan's first real production-path attempt. Its total
+implementation passed its named test but remained uncommitted, so acceptance
+failed and the dependent task stayed blocked across restart. This does not
+establish successful model-plan completion.

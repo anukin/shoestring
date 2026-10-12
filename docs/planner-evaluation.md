@@ -96,10 +96,12 @@ output is not enabled in this run. Schema validation happens after capture.
 
 UNVERIFIED: this route has no demonstrated provider-side output-token cap or
 Shoestring planner admission. Local invocation records are not the durable
-domain planner allowance. It cannot close those acceptance requirements. A
-production subscription adapter must establish those boundaries before wiring
-it into normal admission and the lifetime planner allowance. Preparing or
-comparing files spends no quota.
+domain planner allowance. A production subscription adapter, if added, must
+establish those boundaries before wiring into normal admission and lifetime
+allowances. That integration is separate from evaluating saved model proposals
+through the existing approval/execution path. Deterministic planner admission
+evidence and semantic execution evidence must retain their distinct scope.
+Preparing or comparing files spends no quota.
 
 1. Record the human reference review and its scope against the pinned goal and
    repository. Current review accepted the task scopes with a language change;
@@ -137,3 +139,10 @@ UNVERIFIED: human semantic review, approved model-plan execution and production
 subscription planner admission remain open. The first live packet adds two
 valid proposals, one rejected proposal and partial assistant static review;
 reference smoke checks do not supply execution or admission evidence.
+
+VERIFIED (subsequent run): [the receipt execution packet](../plans/evidence/06-cobbler-planning/receipt-live-run.md)
+records an approved model-plan attempt through real production admission,
+workers, harness and worktree. Its dirty-worktree acceptance failure and blocked
+dependent survive restart. Successful model-plan acceptance/completion and
+restart between accepted tasks remain unverified. No production planner call
+is claimed by this execution packet.

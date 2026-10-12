@@ -357,8 +357,13 @@ they do not satisfy this semantic evaluation gate.
   `chatgpt/gpt-6-luna` evaluation produced two valid plans and one invalid-JSON
   rejection, with partial assistant static scores; see
   [the live packet](../evidence/06-cobbler-planning/luna-evaluation.md).
-  UNVERIFIED: human semantic review, approved model-plan execution and production
-  subscription planner admission remain open. The external evaluation utility
+  VERIFIED: [one receipt execution attempt](../evidence/06-cobbler-planning/receipt-live-run.md)
+  used production admission/workers and a real model/worktree, then was rejected
+  at acceptance because its implementation remained uncommitted. Restart retained
+  the failed attempt and blocked dependent. UNVERIFIED: successful model-plan
+  acceptance/completion and restart between accepted tasks remain open.
+  Production subscription planner support is separate integration work.
+  The external evaluation utility
   is not a production planner adapter or a proof of its token/admission limits.
   See [the production-path preparation](../evidence/06-cobbler-planning/live-path-preparation.md)
   for the pending subscription limit decision, explicit ephemeral execution

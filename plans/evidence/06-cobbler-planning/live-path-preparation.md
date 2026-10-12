@@ -91,3 +91,8 @@ reported **52 tests, 52 pass, 0 fail** and **8 tests, 8 pass, 0 fail**, both wit
 zero skips. One explanatory comment was corrected while tests were running;
 formatting was checked again afterward. No runtime behavior changed after
 the gate began.
+
+VERIFIED (subsequent run): [the receipt execution packet](receipt-live-run.md)
+records user approval and one real production-path attempt. Its uncommitted
+implementation failed acceptance; restart preserved that failure and blocked
+the dependent task. Successful acceptance/completion remains unverified.

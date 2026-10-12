@@ -1,0 +1,12 @@
+{
+  "normalized_events": 271,
+  "kinds": {
+    "lifecycle": 19,
+    "output": 241,
+    "command": 8,
+    "tool": 2,
+    "result": 1
+  },
+  "raw_provider_frames_retained": false,
+  "reported_token_usage": "UNVERIFIED"
+}

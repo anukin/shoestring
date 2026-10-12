@@ -1,0 +1,13 @@
+diff --git a/pantry.py b/pantry.py
+index 3871b6f..4102185 100644
+--- a/pantry.py
++++ b/pantry.py
+@@ -3,7 +3,7 @@ def greeting(name):
+ 
+ 
+ def total_cents(items):
+-    return len(items)
++    return sum(item["price_cents"] * item["quantity"] for item in items)
+ 
+ 
+ def receipt(items):

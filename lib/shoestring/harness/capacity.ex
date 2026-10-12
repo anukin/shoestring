@@ -1143,7 +1143,16 @@ defmodule Shoestring.Harness.Capacity do
   # --- Extensions & Helpers ---
 
   defp extract_codex_extensions(rate_limits, payload) do
-    ext = %{}
+    ext =
+      Enum.reduce(~w(primary secondary), %{}, fn kind, acc ->
+        case Map.get(rate_limits, kind) do
+          %{"windowDurationMins" => minutes} when is_integer(minutes) and minutes > 0 ->
+            Map.put(acc, "codex:#{kind}_window_minutes", minutes)
+
+          _ ->
+            acc
+        end
+      end)
 
     ext =
       case Map.get(rate_limits, "planType") do

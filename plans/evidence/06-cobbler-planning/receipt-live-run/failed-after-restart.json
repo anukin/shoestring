@@ -1,0 +1,354 @@
+{
+  "events": [
+    {
+      "payload": {
+        "agent_profile": {
+          "adapter_id": "codex_app_server_stdio",
+          "digest": "6ce04cb6bb373252be67300bce83f18312ade215dfcc94a0380af58a6f13b0dc",
+          "instructions": "Implement only the current approved task in its assigned worktree. Read pantry.py and the named tests. Change only pantry.py, preserve signatures and unrelated functions, and never edit tests. Do not implement a dependent task before it is assigned. Run the named Python gate using python3 -B -m unittest. Commit task changes using the configured Git identity, with no authorship or contributor trailers; leave the worktree clean. Do not push, install packages, use network tools, create other agents, delete files or perform cleanup. Report the commit and gate result.",
+          "model": "gpt-6-luna",
+          "profile_id": "80377f31-9dba-4d02-9170-92bd989ade29",
+          "provider": "codex",
+          "revision": 1,
+          "role": "Worker"
+        },
+        "execution_id": "8701f2ad-165e-51f2-81c7-808500298886",
+        "ordered_task_ids": [
+          "implement-total",
+          "render-receipt"
+        ],
+        "plan_digest": "13ba4b39f66d01dd9d1e37a119803e73f85caebdb3792181d134843138d8decd",
+        "repository_path": "/private/tmp/shoestring-luna-evaluation/execution-fixture-receipt",
+        "requested_by": "human:user",
+        "revision_number": 1
+      },
+      "sequence": 3,
+      "type": "cobbler.plan.execution.requested"
+    },
+    {
+      "payload": {
+        "candidate": {
+          "adapter_id": "codex_app_server_stdio",
+          "compatibility_state": "compatible",
+          "provider_id": "codex",
+          "support_tier": "proactive"
+        },
+        "decision_id": "e34ab857-fa6c-432e-ad0e-5f5b2b0a9af1",
+        "evaluated_at": "2026-10-12T02:20:43.449670Z",
+        "explanation": "Five-hour observation window is missing_window; requires attributable single-decision confirmation",
+        "extensions": {},
+        "observation": {
+          "age_seconds": 0,
+          "capacity_state": "observed",
+          "confidence": "high",
+          "expires_at": "2026-10-12T02:25:43.350428Z",
+          "freshness": "fresh",
+          "observed_at": "2026-10-12T02:20:43.350428Z",
+          "snapshot_id": "57d0cf2d-938a-5d95-8772-bf7006b9693c",
+          "windows": [
+            {
+              "kind": "primary",
+              "reason": null,
+              "reset_at": "2026-10-12T07:03:26.000000Z",
+              "state": "observed",
+              "used_percent": 15.0
+            },
+            {
+              "kind": "secondary",
+              "reason": null,
+              "reset_at": "2026-10-18T21:02:21.000000Z",
+              "state": "observed",
+              "used_percent": 9.0
+            }
+          ]
+        },
+        "policy": {
+          "candidate_priority": [
+            "codex",
+            "claude"
+          ],
+          "checkpoint_cadence": 1,
+          "deadline_seconds": 300,
+          "delayed_recheck_seconds": 60,
+          "five_hour_max_used_percent": 80,
+          "five_hour_reserve_percent": 20,
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "stale_after_seconds": 300,
+          "supported_capabilities": [
+            "supervised_execution",
+            "read_only"
+          ],
+          "tool_budget": 25,
+          "version": 1,
+          "weekly_max_used_percent": 90,
+          "weekly_reserve_percent": 10
+        },
+        "proposed_bounds": {
+          "checkpoint_cadence": 1,
+          "deadline": "2026-10-12T02:25:43.449670Z",
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "tool_budget": 25
+        },
+        "reason_code": "missing_window_five_hour",
+        "reobservation_required": true,
+        "requested_capability": "supervised_execution",
+        "result": "require_confirmation",
+        "scope": "subscription"
+      },
+      "sequence": 5,
+      "type": "admission.decided"
+    },
+    {
+      "payload": {
+        "candidate": {
+          "adapter_id": "codex_app_server_stdio",
+          "compatibility_state": "compatible",
+          "provider_id": "codex",
+          "support_tier": "proactive"
+        },
+        "decision_id": "d17036a6-7105-4ce0-9d16-2703de04902b",
+        "evaluated_at": "2026-10-12T02:25:49.666647Z",
+        "explanation": "Candidate 'codex' is eligible for automatic admission with fresh proactive observations within reserves",
+        "extensions": {},
+        "observation": {
+          "age_seconds": 0,
+          "capacity_state": "observed",
+          "confidence": "high",
+          "expires_at": "2026-10-12T02:30:49.575797Z",
+          "freshness": "fresh",
+          "observed_at": "2026-10-12T02:25:49.575797Z",
+          "snapshot_id": "33cb1aa6-9b67-578b-a0ff-530188537a99",
+          "windows": [
+            {
+              "kind": "primary",
+              "reason": null,
+              "reset_at": "2026-10-12T07:03:26.000000Z",
+              "state": "observed",
+              "used_percent": 20.0
+            },
+            {
+              "kind": "secondary",
+              "reason": null,
+              "reset_at": "2026-10-18T21:02:21.000000Z",
+              "state": "observed",
+              "used_percent": 10.0
+            }
+          ]
+        },
+        "policy": {
+          "candidate_priority": [
+            "codex",
+            "claude"
+          ],
+          "checkpoint_cadence": 1,
+          "deadline_seconds": 300,
+          "delayed_recheck_seconds": 60,
+          "five_hour_max_used_percent": 80,
+          "five_hour_reserve_percent": 20,
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "stale_after_seconds": 300,
+          "supported_capabilities": [
+            "supervised_execution",
+            "read_only"
+          ],
+          "tool_budget": 25,
+          "version": 1,
+          "weekly_max_used_percent": 90,
+          "weekly_reserve_percent": 10
+        },
+        "proposed_bounds": {
+          "checkpoint_cadence": 1,
+          "deadline": "2026-10-12T02:30:49.666647Z",
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "tool_budget": 25
+        },
+        "reason_code": "automatic_admission_eligible",
+        "reobservation_required": false,
+        "requested_capability": "supervised_execution",
+        "result": "admit",
+        "scope": "subscription"
+      },
+      "sequence": 7,
+      "type": "admission.decided"
+    },
+    {
+      "payload": {
+        "attempt": 1,
+        "command_id": "plan-implement-total-1",
+        "execution_id": "8701f2ad-165e-51f2-81c7-808500298886",
+        "grant_id": "f7aeea42-5357-43ba-a309-0fd45f5d40b5",
+        "plan_digest": "13ba4b39f66d01dd9d1e37a119803e73f85caebdb3792181d134843138d8decd",
+        "plan_task_id": "implement-total",
+        "revision_number": 1,
+        "run_id": "7cebe110-a597-5b65-8e62-b6414b0ff772",
+        "trajectory_task_id": "996105d6-676a-5081-864e-93ce1f8d8805"
+      },
+      "sequence": 15,
+      "type": "cobbler.plan.task.dispatched"
+    },
+    {
+      "payload": {
+        "candidate": {
+          "adapter_id": "codex_app_server_stdio",
+          "compatibility_state": "compatible",
+          "provider_id": "codex",
+          "support_tier": "proactive"
+        },
+        "decision_id": "31dfc331-77ae-4135-8ff1-4d977c570bd6",
+        "evaluated_at": "2026-10-12T02:25:53.563074Z",
+        "explanation": "Candidate 'codex' is eligible for automatic admission with fresh proactive observations within reserves",
+        "extensions": {},
+        "observation": {
+          "age_seconds": 3,
+          "capacity_state": "observed",
+          "confidence": "high",
+          "expires_at": "2026-10-12T02:30:49.575797Z",
+          "freshness": "fresh",
+          "observed_at": "2026-10-12T02:25:49.575797Z",
+          "snapshot_id": "6d9a25fa-c46a-5de6-84eb-3664eac749a7",
+          "windows": [
+            {
+              "kind": "primary",
+              "reason": null,
+              "reset_at": "2026-10-12T07:03:26Z",
+              "state": "observed",
+              "used_percent": 20
+            },
+            {
+              "kind": "secondary",
+              "reason": null,
+              "reset_at": "2026-10-18T21:02:21Z",
+              "state": "observed",
+              "used_percent": 10
+            }
+          ]
+        },
+        "policy": {
+          "candidate_priority": [
+            "codex",
+            "claude"
+          ],
+          "checkpoint_cadence": 1,
+          "deadline_seconds": 300,
+          "delayed_recheck_seconds": 60,
+          "five_hour_max_used_percent": 80,
+          "five_hour_reserve_percent": 20,
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "stale_after_seconds": 300,
+          "supported_capabilities": [
+            "supervised_execution",
+            "read_only"
+          ],
+          "tool_budget": 25,
+          "version": 1,
+          "weekly_max_used_percent": 90,
+          "weekly_reserve_percent": 10
+        },
+        "proposed_bounds": {
+          "checkpoint_cadence": 1,
+          "deadline": "2026-10-12T02:30:53.563074Z",
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "tool_budget": 25
+        },
+        "reason_code": "automatic_admission_eligible",
+        "reobservation_required": false,
+        "requested_capability": "supervised_execution",
+        "result": "admit",
+        "run_id": "7cebe110-a597-5b65-8e62-b6414b0ff772",
+        "scope": "subscription"
+      },
+      "sequence": 56,
+      "type": "admission.decided"
+    },
+    {
+      "payload": {
+        "attempt": 1,
+        "duration_ms": 98,
+        "execution_id": "8701f2ad-165e-51f2-81c7-808500298886",
+        "gate": "python_unittest",
+        "plan_digest": "13ba4b39f66d01dd9d1e37a119803e73f85caebdb3792181d134843138d8decd",
+        "plan_task_id": "implement-total",
+        "reason": "{:gate_worktree_dirty, \"/private/tmp/shoestring-iter6-live-receipt/worktrees/run-7cebe110-a597-5b65-8e62-b6414b0ff772\"}",
+        "retry_state": "escalate",
+        "revision_number": 1,
+        "run_id": "7cebe110-a597-5b65-8e62-b6414b0ff772"
+      },
+      "sequence": 298,
+      "type": "cobbler.plan.task.gate_failed"
+    }
+  ],
+  "status": {
+    "accepted": [],
+    "accepted_count": 0,
+    "active_attempt": null,
+    "active_run_id": null,
+    "active_run_ids": [],
+    "active_task": null,
+    "attempts": {
+      "implement-total": 1
+    },
+    "completed?": false,
+    "duration_budget": {
+      "reason": null,
+      "remaining_goal_ms": 579825
+    },
+    "execution": {
+      "agent_profile": {
+        "adapter_id": "codex_app_server_stdio",
+        "digest": "6ce04cb6bb373252be67300bce83f18312ade215dfcc94a0380af58a6f13b0dc",
+        "instructions": "Implement only the current approved task in its assigned worktree. Read pantry.py and the named tests. Change only pantry.py, preserve signatures and unrelated functions, and never edit tests. Do not implement a dependent task before it is assigned. Run the named Python gate using python3 -B -m unittest. Commit task changes using the configured Git identity, with no authorship or contributor trailers; leave the worktree clean. Do not push, install packages, use network tools, create other agents, delete files or perform cleanup. Report the commit and gate result.",
+        "model": "gpt-6-luna",
+        "profile_id": "80377f31-9dba-4d02-9170-92bd989ade29",
+        "provider": "codex",
+        "revision": 1,
+        "role": "Worker"
+      },
+      "execution_id": "8701f2ad-165e-51f2-81c7-808500298886",
+      "ordered_task_ids": [
+        "implement-total",
+        "render-receipt"
+      ],
+      "plan_digest": "13ba4b39f66d01dd9d1e37a119803e73f85caebdb3792181d134843138d8decd",
+      "repository_path": "/private/tmp/shoestring-luna-evaluation/execution-fixture-receipt",
+      "requested_by": "human:user",
+      "revision_number": 1
+    },
+    "global_failure": null,
+    "needs_user?": true,
+    "planned?": true,
+    "retirements": [],
+    "superseded_attempts": [],
+    "task_duration_ms": {
+      "implement-total": 20175
+    },
+    "total_attempts": 1,
+    "total_duration_ms": 20175,
+    "total_gate_duration_ms": 98,
+    "total_run_duration_ms": 20077,
+    "total_tasks": 2
+  }
+}

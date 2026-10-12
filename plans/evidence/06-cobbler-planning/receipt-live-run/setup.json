@@ -1,0 +1,14 @@
+{
+  "base": "84876c7022c9712aedd38cbc1f767cb58156be17",
+  "model": "gpt-6-luna",
+  "plan_digest": "13ba4b39f66d01dd9d1e37a119803e73f85caebdb3792181d134843138d8decd",
+  "task_order": [
+    "implement-total",
+    "render-receipt"
+  ],
+  "task_attempt_limit": 1,
+  "goal_attempt_limit": 2,
+  "goal_seconds": 600,
+  "approval_attribution": "human:user",
+  "source_clean": true
+}

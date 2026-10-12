@@ -636,23 +636,47 @@ defmodule Shoestring.Cobbler.AdmissionEvaluation do
     end
   end
 
-  defp find_window(%CapacitySnapshot{windows: windows}, kind) when is_list(windows) do
-    Enum.find(windows, &(&1.kind == kind))
+  defp find_window(%CapacitySnapshot{windows: windows} = snapshot, kind) when is_list(windows) do
+    find_policy_window(snapshot, windows, kind)
   end
 
-  defp find_window(%{"windows" => %{"items" => items}}, kind) when is_list(items) do
-    Enum.find(items, fn item ->
-      item["kind"] == kind or item[:kind] == kind
-    end)
+  defp find_window(%{"windows" => %{"items" => items}} = snapshot, kind) when is_list(items) do
+    find_policy_window(snapshot, items, kind)
   end
 
-  defp find_window(%{"windows" => windows}, kind) when is_list(windows) do
-    Enum.find(windows, fn item ->
-      item["kind"] == kind or item[:kind] == kind
-    end)
+  defp find_window(%{"windows" => windows} = snapshot, kind) when is_list(windows) do
+    find_policy_window(snapshot, windows, kind)
   end
 
   defp find_window(_snapshot, _kind), do: nil
+
+  defp find_policy_window(snapshot, windows, kind) do
+    Enum.find(windows, fn window ->
+      provider_kind = Map.get(window, :kind, Map.get(window, "kind"))
+      policy_kind(snapshot, provider_kind) == kind
+    end)
+  end
+
+  # Preserve provider labels in evidence. Codex position alone does not
+  # establish a duration; only the reported minutes can bind reserve policy.
+  defp policy_kind(snapshot, provider_kind) do
+    extensions = Map.get(snapshot, :extensions, Map.get(snapshot, "extensions", %{})) || %{}
+
+    case {snapshot_identity_provider(snapshot), provider_kind} do
+      {"codex", kind} when kind in ["primary", "secondary"] ->
+        case extensions["codex:#{kind}_window_minutes"] do
+          300 -> "five_hour"
+          10_080 -> "weekly"
+          _ -> kind
+        end
+
+      {"claude", "seven_day"} ->
+        "weekly"
+
+      _ ->
+        provider_kind
+    end
+  end
 
   # Unknown windows carry no `reset_at` key at all (see `CapacitySnapshot`
   # window construction and the `window_unknown/2` normalizer shape), so the

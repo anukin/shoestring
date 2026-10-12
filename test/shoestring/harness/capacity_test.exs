@@ -8,6 +8,14 @@ defmodule Shoestring.Harness.CapacityTest do
   @claude_eval_time ~U[2026-08-29 07:34:25Z]
 
   describe "compatibility/3" do
+    test "accepts the live-verified 0.162.0 capacity protocol and keeps future drift degraded" do
+      assert %{compatibility_state: :compatible, version: "0.162.0"} =
+               Capacity.compatibility(:codex, :app_server_stdio, "0.162.0")
+
+      assert %{compatibility_state: :degraded} =
+               Capacity.compatibility(:codex, :app_server_stdio, "0.163.0")
+    end
+
     test "evaluates supported Codex stdio with tested version" do
       result = Capacity.compatibility(:codex, :app_server_stdio, "0.150.1")
 

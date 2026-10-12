@@ -1,0 +1,186 @@
+[
+  {
+    "sequence": 1,
+    "type": "cobbler.plan.revision.created",
+    "payload": {
+      "author_kind": "human",
+      "authored_by": "human:user",
+      "ordered_task_ids": [
+        "implement-total",
+        "render-receipt"
+      ],
+      "plan_content": "{\"budget\":{\"max_total_attempts\":2,\"max_total_duration_seconds\":600},\"goal\":{\"acceptance\":{\"evidence\":[\"Named acceptance tests pass with material implementation changes.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_total.py\",\"test/test_receipt.py\"]}]},\"constraints\":[\"Change only pantry.py; keep existing public function signatures.\",\"Use the supplied dependency-free Python repository; do not fetch packages or use the network.\"],\"non_goals\":[\"Authentication, persistence, UI, parallel execution, and unrelated Pantry functions.\"],\"repository\":{\"base_revision\":\"84876c7022c9712aedd38cbc1f767cb58156be17\"},\"statement\":\"Compute basket totals in integer cents and render Total: N cents using that total, including an empty basket.\"},\"tasks\":[{\"acceptance_criteria\":[\"Preserve the public total_cents(items) signature.\",\"Return the sum of price_cents multiplied by quantity for all basket items.\",\"Return 0 for an empty basket.\"],\"checkpoint\":{\"condition\":\"The total calculation implements integer-cent multiplication and summation.\",\"evidence\":[\"test/test_total.py passes for empty and multi-item baskets.\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":1,\"max_duration_seconds\":300},\"expected_artifacts\":[\"Updated total_cents implementation in pantry.py.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_total.py\"]}],\"hints\":{\"files\":[\"pantry.py\",\"test/test_total.py\"],\"symbols\":[\"total_cents\"]},\"id\":\"implement-total\",\"inputs\":[\"pantry.py currently implements total_cents as len(items).\",\"test/test_total.py specifies empty-basket and multiple-item behavior.\"],\"outcome\":\"total_cents sums each item's integer price_cents multiplied by its quantity, returning zero for an empty basket.\",\"risks\":[\"Changing the function signature or using non-integer currency arithmetic would violate the contract.\"],\"title\":\"Calculate basket totals in integer cents\"},{\"acceptance_criteria\":[\"Preserve the public receipt(items) signature.\",\"Use total_cents(items) as the receipt amount.\",\"Render the exact string Total: N cents, including Total: 0 cents for an empty basket.\"],\"checkpoint\":{\"condition\":\"Receipt output reflects the calculated basket total and both named acceptance tests pass.\",\"evidence\":[\"test/test_receipt.py passes for empty and multi-item baskets.\",\"test/test_total.py passes for empty and multi-item baskets.\"]},\"depends_on\":[\"implement-total\"],\"execution\":{\"max_attempts\":1,\"max_duration_seconds\":300},\"expected_artifacts\":[\"Updated receipt implementation in pantry.py.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_receipt.py\",\"test/test_total.py\"]}],\"hints\":{\"files\":[\"pantry.py\",\"test/test_receipt.py\"],\"symbols\":[\"receipt\",\"total_cents\"]},\"id\":\"render-receipt\",\"inputs\":[\"pantry.py currently renders the item count.\",\"test/test_receipt.py specifies exact output for empty and multi-item baskets.\"],\"outcome\":\"receipt(items) renders the computed total in the exact format Total: N cents, including for an empty basket.\",\"risks\":[\"Receipt formatting must match the specified output exactly.\"],\"title\":\"Render receipt using the basket total\"}],\"version\":1}",
+      "plan_digest": "13ba4b39f66d01dd9d1e37a119803e73f85caebdb3792181d134843138d8decd",
+      "plan_revision_id": "199890a4-9c55-447c-9725-f4dc52f291e4",
+      "plan_version": 1,
+      "proposal_id": "live-receipt-import",
+      "revision_number": 1,
+      "task_count": 2
+    }
+  },
+  {
+    "sequence": 2,
+    "type": "cobbler.plan.approved",
+    "payload": {
+      "decided_at": "2026-10-12T02:20:12.899995Z",
+      "decided_by": "human:user",
+      "decision_id": "live-receipt-user-authorized-run",
+      "note": "User requested one evidence-backed run of the reviewed model plan.",
+      "plan_digest": "13ba4b39f66d01dd9d1e37a119803e73f85caebdb3792181d134843138d8decd",
+      "plan_revision_id": "199890a4-9c55-447c-9725-f4dc52f291e4",
+      "revision_number": 1
+    }
+  },
+  {
+    "sequence": 4,
+    "type": "capacity.snapshot_observed",
+    "payload": {
+      "capacity_state": "observed",
+      "compatibility_state": "compatible",
+      "confidence": "high",
+      "contract_version": 2,
+      "expires_at": "2026-10-12T02:25:43.350428Z",
+      "extensions": {
+        "cobbler.submission:observed_snapshot_id": "902f9df6-dcb6-4aa7-8611-d01ca1c730ef",
+        "codex:plan_type": "plus",
+        "codex:reset_credit_count": 3
+      },
+      "freshness": {
+        "max_age_seconds": 300
+      },
+      "observed_at": "2026-10-12T02:20:43.350428Z",
+      "reason": null,
+      "run_id": null,
+      "scope": "subscription",
+      "snapshot_id": "57d0cf2d-938a-5d95-8772-bf7006b9693c",
+      "source": {
+        "adapter_id": "codex_app_server_stdio",
+        "event": "explicit_read",
+        "invocation_mode": "app_server_stdio",
+        "provider_id": "codex"
+      },
+      "support_tier": "proactive",
+      "windows": {
+        "items": [
+          {
+            "kind": "primary",
+            "reset_at": "2026-10-12T07:03:26.000000Z",
+            "state": "observed",
+            "used_percent": 15.0
+          },
+          {
+            "kind": "secondary",
+            "reset_at": "2026-10-18T21:02:21.000000Z",
+            "state": "observed",
+            "used_percent": 9.0
+          }
+        ]
+      }
+    }
+  },
+  {
+    "sequence": 6,
+    "type": "capacity.snapshot_observed",
+    "payload": {
+      "capacity_state": "observed",
+      "compatibility_state": "compatible",
+      "confidence": "high",
+      "contract_version": 2,
+      "expires_at": "2026-10-12T02:30:49.575797Z",
+      "extensions": {
+        "cobbler.submission:observed_snapshot_id": "8494ef24-582b-474e-a4d8-eed238fa3d48",
+        "codex:plan_type": "plus",
+        "codex:primary_window_minutes": 300,
+        "codex:reset_credit_count": 3,
+        "codex:secondary_window_minutes": 10080
+      },
+      "freshness": {
+        "max_age_seconds": 300
+      },
+      "observed_at": "2026-10-12T02:25:49.575797Z",
+      "reason": null,
+      "run_id": null,
+      "scope": "subscription",
+      "snapshot_id": "33cb1aa6-9b67-578b-a0ff-530188537a99",
+      "source": {
+        "adapter_id": "codex_app_server_stdio",
+        "event": "explicit_read",
+        "invocation_mode": "app_server_stdio",
+        "provider_id": "codex"
+      },
+      "support_tier": "proactive",
+      "windows": {
+        "items": [
+          {
+            "kind": "primary",
+            "reset_at": "2026-10-12T07:03:26.000000Z",
+            "state": "observed",
+            "used_percent": 20.0
+          },
+          {
+            "kind": "secondary",
+            "reset_at": "2026-10-18T21:02:21.000000Z",
+            "state": "observed",
+            "used_percent": 10.0
+          }
+        ]
+      }
+    }
+  },
+  {
+    "sequence": 55,
+    "type": "capacity.snapshot_observed",
+    "payload": {
+      "capacity_state": "observed",
+      "compatibility_state": "compatible",
+      "confidence": "high",
+      "contract_version": 2,
+      "expires_at": "2026-10-12T02:30:49.575797Z",
+      "extensions": {
+        "cobbler.lease-renewal:observed_snapshot_id": "8494ef24-582b-474e-a4d8-eed238fa3d48",
+        "codex:plan_type": "plus",
+        "codex:primary_window_minutes": 300,
+        "codex:reset_credit_count": 3,
+        "codex:secondary_window_minutes": 10080
+      },
+      "freshness": {
+        "max_age_seconds": 300
+      },
+      "observed_at": "2026-10-12T02:25:49.575797Z",
+      "reason": null,
+      "run_id": "7cebe110-a597-5b65-8e62-b6414b0ff772",
+      "scope": "subscription",
+      "snapshot_id": "6d9a25fa-c46a-5de6-84eb-3664eac749a7",
+      "source": {
+        "adapter_id": "codex_app_server_stdio",
+        "event": "explicit_read",
+        "invocation_mode": "app_server_stdio",
+        "provider_id": "codex"
+      },
+      "support_tier": "proactive",
+      "windows": {
+        "items": [
+          {
+            "kind": "primary",
+            "reset_at": "2026-10-12T07:03:26Z",
+            "state": "observed",
+            "used_percent": 20
+          },
+          {
+            "kind": "secondary",
+            "reset_at": "2026-10-18T21:02:21Z",
+            "state": "observed",
+            "used_percent": 10
+          }
+        ]
+      }
+    }
+  },
+  {
+    "sequence": 295,
+    "type": "run.completed",
+    "payload": {
+      "run_id": "7cebe110-a597-5b65-8e62-b6414b0ff772"
+    }
+  }
+]

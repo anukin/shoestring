@@ -14,6 +14,10 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `receipt-live-run.md` — one real receipt task, corrected capacity-window
+  admission, dirty-worktree refusal and preserved blocked state across restart;
+  successful model-plan completion remains open.
+
 - `live-path-preparation.md` — subscription adapter/limit gaps, explicit
   ephemeral execution option and pending real production-path evidence.
 

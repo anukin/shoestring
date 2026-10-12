@@ -1,0 +1,18 @@
+{
+  "completed": false,
+  "plan_digest": "13ba4b39f66d01dd9d1e37a119803e73f85caebdb3792181d134843138d8decd",
+  "accepted": [],
+  "total_attempts": 1,
+  "run_count": 1,
+  "source_clean_and_unchanged": true,
+  "needs_user": true,
+  "provider_completed": true,
+  "task_gate_rejected_dirty_worktree": true,
+  "unaccepted_total_test_exit": 0,
+  "dependent_dispatched": false,
+  "restart_snapshot_equal": true,
+  "continue_outcome": "needs_user",
+  "continue_job": null,
+  "active_elf": false,
+  "worktree_head_unchanged": true
+}
