@@ -112,10 +112,20 @@ defmodule Shoestring.Harness.CodexAppServer do
         {:error, Error.new(:task_failed, "resume_failed", "Simulated resume failure")}
 
       _ ->
-        if live_or_transport?(opts) do
-          resume_session(prior, request, opts)
-        else
-          resume_simulated(prior, request, opts)
+        cond do
+          live_or_transport?(opts) && Map.get(opts, :ephemeral) == true ->
+            {:error,
+             Error.new(
+               :unsupported_capability,
+               "ephemeral_resume_unsupported",
+               "Ephemeral Codex execution cannot resume provider history"
+             )}
+
+          live_or_transport?(opts) ->
+            resume_session(prior, request, opts)
+
+          true ->
+            resume_simulated(prior, request, opts)
         end
     end
   end

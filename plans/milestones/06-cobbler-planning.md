@@ -360,6 +360,9 @@ they do not satisfy this semantic evaluation gate.
   UNVERIFIED: human semantic review, approved model-plan execution and production
   subscription planner admission remain open. The external evaluation utility
   is not a production planner adapter or a proof of its token/admission limits.
+  See [the production-path preparation](../evidence/06-cobbler-planning/live-path-preparation.md)
+  for the pending subscription limit decision, explicit ephemeral execution
+  option and required live admission/approval/execution/restart evidence.
 - **Verification commands:** `mix precommit`; focused deterministic-matrix
   command and exact counts are in the acceptance audit. Historical package
   commands remain in their evidence records.

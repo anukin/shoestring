@@ -81,7 +81,16 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
   @doc "Starts a new session process."
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts)
+    cond do
+      Keyword.get(opts, :ephemeral, false) not in [true, false] ->
+        {:error, :invalid_ephemeral_option}
+
+      Keyword.get(opts, :ephemeral, false) && Keyword.get(opts, :resume, false) ->
+        {:error, :ephemeral_resume_unsupported}
+
+      true ->
+        GenServer.start_link(__MODULE__, opts)
+    end
   end
 
   @doc """
@@ -580,20 +589,22 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
             state.opts[:workdir] || (state.run_request && state.run_request.workspace_ref) ||
               "/tmp"
 
-          # NOTE on ephemeral: false (Required for thread/resume):
+          # The default remains non-ephemeral for provider thread/resume.
           # Codex only persists rollout files on disk (~/.codex/sessions) for non-ephemeral threads.
-          # Consequently, every Elf run writes a rollout file to local user storage.
+          # Consequently, default Elf runs write a rollout file to local user storage.
           # Because task prompts flow verbatim into rollouts outside Shoestring's trajectory store
           # and normalizer scrubbing, prompts MUST stay credential-free.
           # Furthermore, rollouts are vendor-written transcripts that may contain raw model reasoning
           # or scratchpads, and currently accumulate without automated retention bounds
-          # (follow-up tracked for thread/archive or periodic cleanup).
+          # No retention or cleanup is introduced here. Operators can explicitly
+          # use ephemeral: true for fresh runs with no provider history; that
+          # mode refuses thread/resume before opening a transport.
           send_rpc(
             state,
             "thread/start",
             model_params(state, %{
               "cwd" => cwd,
-              "ephemeral" => false,
+              "ephemeral" => Keyword.get(state.opts, :ephemeral, false),
               "approvalPolicy" => "never",
               "sandbox" => "workspace-write"
             }),

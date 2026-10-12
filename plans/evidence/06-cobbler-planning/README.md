@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `live-path-preparation.md` — subscription adapter/limit gaps, explicit
+  ephemeral execution option and pending real production-path evidence.
+
 - `luna-evaluation.md` — authorized subscription-model proposal capture, initial
   failures, contract results, partial assistant review and exact bound plans;
   production admission and execution remain unverified.
