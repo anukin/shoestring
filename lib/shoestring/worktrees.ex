@@ -57,6 +57,7 @@ defmodule Shoestring.Worktrees do
     * `:runner` - command runner conforming to `Shoestring.Harness.Capacity.CommandRunner`
       (defaults to `Shoestring.Harness.Capacity.SystemCommandRunner`).
     * `:metadata` - optional map of arbitrary metadata to persist with the worktree.
+    * `:private_git` - copy the pinned commit into independent per-run Git storage.
   """
   @spec create(Path.t(), String.t(), String.t() | keyword(), keyword()) ::
           {:ok, Worktree.t()} | {:error, create_error()}
@@ -85,16 +86,19 @@ defmodule Shoestring.Worktrees do
          target_path = resolve_target_path(worktrees_dir, run_id, opts),
          branch = Keyword.get(opts, :branch, "shoestring/run-#{run_id}"),
          :ok <- validate_not_source_repo(target_path, canonical_repo_path),
+         :ok <- validate_private_storage(opts, worktrees_dir, run_id, canonical_repo_path),
          :ok <- validate_target_directory_available(target_path, worktrees_dir, runner),
          :ok <- validate_branch_available(canonical_repo_path, branch, runner),
          :ok <- File.mkdir_p(worktrees_dir),
-         :ok <- Git.worktree_add(canonical_repo_path, branch, target_path, base_commit, runner) do
+         {:ok, storage_repo} <-
+           storage_repository(canonical_repo_path, base_commit, worktrees_dir, run_id, opts),
+         :ok <- Git.worktree_add(storage_repo, branch, target_path, base_commit, runner) do
       workspace_ref = compute_workspace_ref(target_path, worktrees_dir, run_id)
 
       worktree = %Worktree{
         run_id: run_id,
         repo_id: repo_id,
-        repo_path: canonical_repo_path,
+        repo_path: storage_repo,
         base_commit: base_commit,
         branch: branch,
         path: target_path,
@@ -109,15 +113,31 @@ defmodule Shoestring.Worktrees do
           {:ok, worktree}
 
         {:error, {:record_save_failed, _}} = error ->
-          _ = Git.worktree_remove(canonical_repo_path, target_path, runner)
+          _ = Git.worktree_remove(storage_repo, target_path, runner)
           _ = Record.delete_record(worktree, worktrees_dir, runner)
           error
 
         {:error, reason} ->
-          _ = Git.worktree_remove(canonical_repo_path, target_path, runner)
+          _ = Git.worktree_remove(storage_repo, target_path, runner)
           _ = Record.delete_record(worktree, worktrees_dir, runner)
           {:error, {:record_save_failed, reason}}
       end
+    end
+  end
+
+  defp storage_repository(source, base, root, run_id, opts) do
+    case Keyword.get(opts, :private_git, false) do
+      false -> {:ok, source}
+      true -> Shoestring.Worktrees.PrivateGit.prepare(source, base, root, run_id)
+      _ -> {:error, :invalid_private_git_option}
+    end
+  end
+
+  defp validate_private_storage(opts, root, run_id, source) do
+    if Keyword.get(opts, :private_git, false) do
+      validate_not_source_repo(Shoestring.Worktrees.PrivateGit.path(root, run_id), source)
+    else
+      :ok
     end
   end
 

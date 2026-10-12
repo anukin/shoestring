@@ -146,9 +146,13 @@ defmodule Iter6Receipt do
     {:ok, contract} = PlanContract.new(plan)
     true = contract.digest == @digest
     source = System.fetch_env!("ITER6_REPOSITORY")
-    base = plan["goal"]["repository"]["base_revision"]
-    true = git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
+    base = git!(source, ["rev-parse", "HEAD"]) |> String.trim()
     "" = git!(source, ["status", "--porcelain"])
+    # A new explicitly authorized evaluation gets its own goal/allowance. Only
+    # the repository binding changes; the previous consumed attempt is retained.
+    plan = put_in(plan, ["goal", "repository", "base_revision"], base)
+    {:ok, contract} = PlanContract.new(plan)
+    File.write!(local("bound-plan.json"), Jason.encode!(plan, pretty: true))
 
     {:ok, goal} =
       %Goal{}
@@ -165,7 +169,7 @@ defmodule Iter6Receipt do
         plan: plan
       })
 
-    true = revision.digest == @digest
+    true = revision.digest == contract.digest
 
     {:ok, _} =
       Cobbler.approve_plan(goal.id, %{
@@ -173,7 +177,8 @@ defmodule Iter6Receipt do
         decided_by: "human:user",
         revision_number: revision.revision_number,
         digest: revision.digest,
-        note: "User requested one evidence-backed run of the reviewed model plan."
+        note:
+          "User authorized a new receipt evaluation after controlled commit access changes. One attempt per task, two total attempts, 300 seconds per task and 600 seconds per goal. Previous evaluation remains failed; no counters are reset. Only the fresh fixture base binding changes."
       })
 
     {:ok, _} =
@@ -197,7 +202,7 @@ defmodule Iter6Receipt do
     identity = %{
       goal_id: goal.id,
       revision: revision.revision_number,
-      digest: @digest,
+      digest: contract.digest,
       source: source,
       base: base,
       profile: Map.put(Map.delete(profile, "configuration"), "role", "Worker")
@@ -206,7 +211,9 @@ defmodule Iter6Receipt do
     File.write!(local("identity.json"), Jason.encode!(identity))
 
     record("setup", %{
-      plan_digest: @digest,
+      plan_digest: contract.digest,
+      original_plan_digest: @digest,
+      new_evaluation_allowance: true,
       base: base,
       task_order: contract.ordered_task_ids,
       task_attempt_limit: 1,
@@ -232,7 +239,8 @@ defmodule Iter6Receipt do
     identity = identity!()
     # Re-delivery after admission refusal is permitted; a consumed task
     # attempt is never reset by this verification driver.
-    true = status!(identity["goal_id"]).total_attempts == 0
+    true = Map.get(status!(identity["goal_id"]), :total_attempts, 0) == 0
+    true = runs(identity["goal_id"]) == []
     capacity = capacity!()
     true = capacity.compatibility_state == :compatible
     record("capacity-first", capacity)
@@ -374,7 +382,7 @@ defmodule Iter6Receipt do
       run_count: 2,
       first: first_git,
       second: second_git,
-      plan_digest: @digest,
+      plan_digest: identity["digest"],
       accepted: final["status"]["accepted"],
       total_attempts: 2
     })
@@ -476,7 +484,7 @@ defmodule Iter6Receipt do
       continue_job: nil,
       active_elf: false,
       source_clean_and_unchanged: true,
-      plan_digest: @digest,
+      plan_digest: identity["digest"],
       worktree_head_unchanged:
         git!(worktree.path, ["rev-parse", "HEAD"]) |> String.trim() == identity["base"]
     })

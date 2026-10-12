@@ -990,12 +990,27 @@ defmodule Shoestring.Cobbler.PlanExecutor do
           last -> last.commit
         end
 
-      with {:ok, worktree} <- execution_worktree(run_id, base, opts),
+      with {:ok, workspace_opts} <- accepted_repository(List.last(accepted), projection, opts),
+           {:ok, worktree} <- execution_worktree(run_id, base, workspace_opts),
            true <-
              String.starts_with?(worktree.base_commit, base) ||
                {:error, :plan_worktree_base_mismatch} do
         {:ok, Keyword.put(opts, :workspace_ref, worktree.workspace_ref)}
       end
+    end
+  end
+
+  defp accepted_repository(nil, _projection, opts), do: {:ok, opts}
+
+  defp accepted_repository(last, projection, opts) do
+    owner =
+      Enum.find(Enum.reverse(projection.dispatched), fn dispatch ->
+        dispatch.plan_task_id == last.plan_task_id and dispatch.attempt == last.attempt
+      end)
+
+    case Shoestring.Worktrees.get(if(owner, do: owner.run_id, else: last.run_id)) do
+      {:ok, worktree} -> {:ok, Keyword.put(opts, :repository_path, worktree.path)}
+      error -> error
     end
   end
 
@@ -1006,8 +1021,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
       {:error, :not_found} ->
         case Keyword.get(opts, :repository_path) do
-          path when is_binary(path) -> Shoestring.Worktrees.create(path, run_id, base)
-          _ -> {:error, :plan_repository_required}
+          path when is_binary(path) ->
+            Shoestring.Worktrees.create(path, run_id, base, private_git: true)
+
+          _ ->
+            {:error, :plan_repository_required}
         end
 
       error ->

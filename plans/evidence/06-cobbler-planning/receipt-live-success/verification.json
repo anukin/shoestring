@@ -1,0 +1,27 @@
+{
+  "command": "mix precommit",
+  "exit_status": 0,
+  "doctests": 4,
+  "tests": 1928,
+  "failures": 0,
+  "skipped": 1,
+  "excluded": 6,
+  "seed": 67961,
+  "seconds": 175.8,
+  "async_seconds": 8.8,
+  "sync_seconds": 167.0,
+  "node_suites": [
+    {
+      "tests": 52,
+      "pass": 52,
+      "fail": 0,
+      "skipped": 0
+    },
+    {
+      "tests": 8,
+      "pass": 8,
+      "fail": 0,
+      "skipped": 0
+    }
+  ]
+}

@@ -36,6 +36,14 @@ provider completion still requires the task gates before dependents unlock.
 The next worktree starts from accepted evidence; the source checkout is preserved.
 The final task's integrated worktree must pass global acceptance too.
 
+REPO-INSPECTION: new task worktrees copy the pinned base into independent
+per-run Git storage. Successors copy the last accepted owning worktree's commit;
+accepted commits need not exist in the source repository. Codex receives only
+registered private Git write roots, never source Git write access. Existing
+shared worktrees are not migrated. Private storage is preserved for inspection;
+no automatic cleanup is introduced. The real commit/restart proof is in
+[the receipt evaluation](../plans/evidence/06-cobbler-planning/receipt-live-success.md).
+
 REPO-INSPECTION: Continue repairs delivery of the same execution intent. Startup
 also performs one delivery repair pass. Neither resets counters, approves an
 amendment, replaces an active Elf, nor overrides a task's needs-user state.

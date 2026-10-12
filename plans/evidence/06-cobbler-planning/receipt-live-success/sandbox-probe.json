@@ -1,0 +1,5 @@
+{
+  "exitCode": 0,
+  "stderr": "",
+  "stdout": "{\"commit_created\": true, \"clean\": true, \"blocked\": {\"source_file\": true, \"source_head\": true}}\n"
+}

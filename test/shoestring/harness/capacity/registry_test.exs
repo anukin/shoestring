@@ -19,7 +19,7 @@ defmodule Shoestring.Harness.Capacity.RegistryTest do
       assert %Entry{} = codex_stdio
       assert codex_stdio.supported_tier == :proactive
       assert codex_stdio.compatibility_outcome == :compatible
-      assert codex_stdio.tested_versions == ["0.150.1", "0.162.0"]
+      assert codex_stdio.tested_versions == ["0.150.1", "0.162.0", "0.162.1"]
       assert "rateLimits" in codex_stdio.required_semantic_fields
       assert "primary" in codex_stdio.required_semantic_fields
       assert "secondary" in codex_stdio.required_semantic_fields

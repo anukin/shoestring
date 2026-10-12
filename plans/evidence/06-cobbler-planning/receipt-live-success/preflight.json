@@ -1,0 +1,26 @@
+{
+  "scope": "subscription",
+  "version": "0.162.1",
+  "windows": [
+    {
+      "state": "observed",
+      "kind": "primary",
+      "used_percent": 10,
+      "reset_at": "2026-10-12T22:51:03Z"
+    },
+    {
+      "state": "observed",
+      "kind": "secondary",
+      "used_percent": 14,
+      "reset_at": "2026-10-18T21:02:21Z"
+    }
+  ],
+  "support_tier": "proactive",
+  "compatibility_state": "degraded",
+  "capacity_state": "degraded",
+  "monitor_status": "incompatible_schema",
+  "window_minutes": {
+    "primary": 300,
+    "secondary": 10080
+  }
+}

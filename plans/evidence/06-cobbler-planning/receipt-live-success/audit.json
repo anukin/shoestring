@@ -1,0 +1,66 @@
+{
+  "runs": [
+    {
+      "id": "d9076cb9-faa0-5f0c-9ac0-7800ed7a4308",
+      "status": "completed"
+    },
+    {
+      "id": "18f957b3-17d2-5624-a80c-cd0d797549b4",
+      "status": "completed"
+    }
+  ],
+  "source_clean_and_head_unchanged": true,
+  "only_pantry_changed": true,
+  "tests_unchanged": true,
+  "test_sha256": {
+    "test/test_total.py": "3f0a0eab1c6147b286bc1dada1b7685bdcbd48ee7e307165c79275d76b9eb652",
+    "test/test_greeting.py": "85cbec1c4c495e1ea24f22eb91927623bd23d3974ef49930517b6bae0e2294d0",
+    "test/test_catalog.py": "7b865d8e08641346494f273cd85af63fabd8f1cdae81a99fc59c515b95633df5",
+    "test/__init__.py": "065d4434fc68048ea32cd2059444db84ee36f2f50f37a7e06bb61e5795650a72",
+    "test/test_receipt.py": "90550eb645ddc8cb8e0864bc9b0e416e36f73207dd6200f1918332cf4282451f"
+  },
+  "local_gate_checks": [
+    {
+      "label": "baseline",
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "test/test_total.py",
+        "test/test_receipt.py"
+      ],
+      "exit_status": 1
+    },
+    {
+      "label": "first",
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "test/test_total.py"
+      ],
+      "exit_status": 0
+    },
+    {
+      "label": "final",
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "test/test_total.py",
+        "test/test_receipt.py"
+      ],
+      "exit_status": 0
+    }
+  ],
+  "lease_states": {
+    "checkpoint_required": 2
+  },
+  "active_plan_run_ids": [],
+  "planner_requests": 0,
+  "source_worktrees": 1,
+  "goal_row_status": "active"
+}

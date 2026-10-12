@@ -135,14 +135,22 @@ revision. Record that binding transformation and the new plan digest; the
 synthetic reference is not directly executable. The smoke script does not prove
 approved model-plan execution.
 
-UNVERIFIED: human semantic review, approved model-plan execution and production
-subscription planner admission remain open. The first live packet adds two
-valid proposals, one rejected proposal and partial assistant static review;
-reference smoke checks do not supply execution or admission evidence.
+UNVERIFIED: human semantic review across the pack remains open. Production
+subscription planner admission is separate integration work. The first live
+packet adds two valid proposals, one rejected proposal and partial assistant
+static review; reference smoke checks do not supply execution or admission evidence.
 
 VERIFIED (subsequent run): [the receipt execution packet](../plans/evidence/06-cobbler-planning/receipt-live-run.md)
 records an approved model-plan attempt through real production admission,
 workers, harness and worktree. Its dirty-worktree acceptance failure and blocked
-dependent survive restart. Successful model-plan acceptance/completion and
-restart between accepted tasks remain unverified. No production planner call
-is claimed by this execution packet.
+dependent survive restart. No production planner call is claimed by this packet.
+
+VERIFIED (2026-10-12): [the new receipt evaluation](../plans/evidence/06-cobbler-planning/receipt-live-success.md)
+completed both tasks through real production admission/workers and Codex after
+controlled private Git storage was added. Both material commits and task/global
+gates were accepted, and node restart preserved task one's acceptance before
+task two ran without replanning. It used a new explicitly authorized goal and
+allowance; the failed evaluation remains intact. This proves execution of that
+saved model proposal, with the fresh fixture base binding disclosed. It does
+not supply a production subscription planner adapter or close semantic review
+across the whole evaluation pack.

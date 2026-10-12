@@ -71,8 +71,12 @@ bytes have not separately been human-reviewed. VERIFIED (user direction):
 cap. VERIFIED: the first run returned three proposals, of which greeting and
 receipt validate and catalog fails `invalid_json`. Partial assistant static
 review and exact Git-bound review plans are in
-`../evidence/06-cobbler-planning/luna-evaluation.md`. Human semantic review,
-approved execution and production subscription planner admission remain open. See
+`../evidence/06-cobbler-planning/luna-evaluation.md`. VERIFIED (2026-10-12): the
+approved receipt model plan now completes through real production admission,
+workers and Codex, with accepted commits and restart between tasks. See
+`../evidence/06-cobbler-planning/receipt-live-success.md`. Human semantic review
+and final iteration closeout remain open; production subscription planner
+integration is separate work. See
 `../../docs/planner-evaluation.md` and
 `../evidence/06-cobbler-planning/semantic-evaluation-preparation.md`.
 The conversion and real Python gate evidence are in
@@ -360,8 +364,12 @@ they do not satisfy this semantic evaluation gate.
   VERIFIED: [one receipt execution attempt](../evidence/06-cobbler-planning/receipt-live-run.md)
   used production admission/workers and a real model/worktree, then was rejected
   at acceptance because its implementation remained uncommitted. Restart retained
-  the failed attempt and blocked dependent. UNVERIFIED: successful model-plan
-  acceptance/completion and restart between accepted tasks remain open.
+  the failed attempt and blocked dependent. VERIFIED: a newly authorized
+  [receipt evaluation](../evidence/06-cobbler-planning/receipt-live-success.md)
+  completed both tasks with accepted material commits, unchanged tests, passing
+  task/global gates and restart between tasks without replanning. The old failure
+  remains recorded. Human semantic review across the pack and the final closure
+  record remain open.
   Production subscription planner support is separate integration work.
   The external evaluation utility
   is not a production planner adapter or a proof of its token/admission limits.

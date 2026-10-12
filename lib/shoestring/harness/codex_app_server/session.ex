@@ -89,7 +89,16 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         {:error, :ephemeral_resume_unsupported}
 
       true ->
-        GenServer.start_link(__MODULE__, opts)
+        request = Keyword.get(opts, :run_request)
+        workspace_ref = request && request.workspace_ref
+
+        with {:ok, policy} <-
+               Shoestring.Harness.CodexAppServer.GitSandbox.policy(
+                 Keyword.get(opts, :workdir),
+                 workspace_ref
+               ) do
+          GenServer.start_link(__MODULE__, Keyword.put(opts, :git_sandbox_policy, policy))
+        end
     end
   end
 
@@ -622,7 +631,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         send_rpc(
           state,
           "turn/start",
-          model_params(state, %{
+          turn_params(state, %{
             "threadId" => thread_id,
             "input" => [%{"type" => "text", "text" => prompt}]
           }),
@@ -640,7 +649,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         send_rpc(
           state,
           "turn/start",
-          model_params(state, %{
+          turn_params(state, %{
             "threadId" => state.thread_id,
             "input" => [%{"type" => "text", "text" => prompt}]
           }),
@@ -979,6 +988,22 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     case Keyword.fetch(source_opts, key) do
       {:ok, val} -> Keyword.put_new(opts, key, val)
       :error -> opts
+    end
+  end
+
+  defp turn_params(state, params) do
+    params = model_params(state, params)
+
+    case state.opts[:git_sandbox_policy] do
+      nil ->
+        params
+
+      policy ->
+        Map.merge(params, %{
+          "cwd" => state.opts[:workdir],
+          "approvalPolicy" => "never",
+          "sandboxPolicy" => policy
+        })
     end
   end
 

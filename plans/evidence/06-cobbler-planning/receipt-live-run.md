@@ -202,3 +202,10 @@ needs accepted material commits for both tasks, task/global gates and restart
 between accepted tasks. The production subscription planner adapter is separate
 integration work: this run imports a saved model proposal and makes no planner
 call. Existing planner admission/allowance contracts are not relaxed.
+
+VERIFIED (subsequent evaluation, 2026-10-12):
+[the new receipt packet](receipt-live-success.md) records controlled independent
+Git storage, a new user-authorized goal/allowance, accepted commits for both
+tasks, task/global gate success and restart between tasks without replanning.
+This earlier failure packet and its consumed attempt remain historical evidence;
+the new evaluation does not reset them.

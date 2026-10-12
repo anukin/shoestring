@@ -1,0 +1,13 @@
+{
+  "total_attempts": 2,
+  "accepted": [
+    "implement-total"
+  ],
+  "run_count": 2,
+  "first_terminal": "completed",
+  "second_status": "requested",
+  "second_not_started": true,
+  "execution_id": "da2356db-dd21-5878-b8b3-70cf77efdb3a",
+  "first_commit": "fa0b1c41e9baec460ec427c13d3a8ab6f1d0bf2a",
+  "restart_ready": true
+}

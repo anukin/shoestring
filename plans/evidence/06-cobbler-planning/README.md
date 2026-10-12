@@ -14,6 +14,10 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `receipt-live-success.md` — independent per-run Git storage, native sandbox
+  write-denial/commit proof, and an approved real two-task receipt execution
+  with accepted commits and restart between tasks; semantic closeout stays open.
+
 - `receipt-live-run.md` — one real receipt task, corrected capacity-window
   admission, dirty-worktree refusal and preserved blocked state across restart;
   successful model-plan completion remains open.

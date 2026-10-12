@@ -1,0 +1,394 @@
+{
+  "events": [
+    {
+      "payload": {
+        "agent_profile": {
+          "adapter_id": "codex_app_server_stdio",
+          "digest": "6ce04cb6bb373252be67300bce83f18312ade215dfcc94a0380af58a6f13b0dc",
+          "instructions": "Implement only the current approved task in its assigned worktree. Read pantry.py and the named tests. Change only pantry.py, preserve signatures and unrelated functions, and never edit tests. Do not implement a dependent task before it is assigned. Run the named Python gate using python3 -B -m unittest. Commit task changes using the configured Git identity, with no authorship or contributor trailers; leave the worktree clean. Do not push, install packages, use network tools, create other agents, delete files or perform cleanup. Report the commit and gate result.",
+          "model": "gpt-6-luna",
+          "profile_id": "2f0cc18f-b623-49b4-bcc8-e7997e78db99",
+          "provider": "codex",
+          "revision": 1,
+          "role": "Worker"
+        },
+        "execution_id": "da2356db-dd21-5878-b8b3-70cf77efdb3a",
+        "ordered_task_ids": [
+          "implement-total",
+          "render-receipt"
+        ],
+        "plan_digest": "11886648ba7c6fc2cc5c6b6add0985a963fe9ebe924f311f4911c21a2f795399",
+        "repository_path": "$EVALUATION/repos/source",
+        "requested_by": "human:user",
+        "revision_number": 1
+      },
+      "sequence": 3,
+      "type": "cobbler.plan.execution.requested"
+    },
+    {
+      "payload": {
+        "candidate": {
+          "adapter_id": "codex_app_server_stdio",
+          "compatibility_state": "compatible",
+          "provider_id": "codex",
+          "support_tier": "proactive"
+        },
+        "decision_id": "7c3ee34f-13ad-434d-abe9-d6208685007a",
+        "evaluated_at": "2026-10-12T18:22:13.154282Z",
+        "explanation": "Candidate 'codex' is eligible for automatic admission with fresh proactive observations within reserves",
+        "extensions": {},
+        "observation": {
+          "age_seconds": 0,
+          "capacity_state": "observed",
+          "confidence": "high",
+          "expires_at": "2026-10-12T18:27:13.043113Z",
+          "freshness": "fresh",
+          "observed_at": "2026-10-12T18:22:13.043113Z",
+          "snapshot_id": "8e6ae8e9-128c-572a-9a40-ec62d567aa1f",
+          "windows": [
+            {
+              "kind": "primary",
+              "reason": null,
+              "reset_at": "2026-10-12T22:51:03.000000Z",
+              "state": "observed",
+              "used_percent": 16.0
+            },
+            {
+              "kind": "secondary",
+              "reason": null,
+              "reset_at": "2026-10-18T21:02:21.000000Z",
+              "state": "observed",
+              "used_percent": 15.0
+            }
+          ]
+        },
+        "policy": {
+          "candidate_priority": [
+            "codex",
+            "claude"
+          ],
+          "checkpoint_cadence": 1,
+          "deadline_seconds": 300,
+          "delayed_recheck_seconds": 60,
+          "five_hour_max_used_percent": 80,
+          "five_hour_reserve_percent": 20,
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "stale_after_seconds": 300,
+          "supported_capabilities": [
+            "supervised_execution",
+            "read_only"
+          ],
+          "tool_budget": 25,
+          "version": 1,
+          "weekly_max_used_percent": 90,
+          "weekly_reserve_percent": 10
+        },
+        "proposed_bounds": {
+          "checkpoint_cadence": 1,
+          "deadline": "2026-10-12T18:27:13.154282Z",
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "tool_budget": 25
+        },
+        "reason_code": "automatic_admission_eligible",
+        "reobservation_required": false,
+        "requested_capability": "supervised_execution",
+        "result": "admit",
+        "scope": "subscription"
+      },
+      "sequence": 5,
+      "type": "admission.decided"
+    },
+    {
+      "payload": {
+        "attempt": 1,
+        "command_id": "plan-implement-total-1",
+        "execution_id": "da2356db-dd21-5878-b8b3-70cf77efdb3a",
+        "grant_id": "e29e57b0-c913-493c-ba6b-4266829711d7",
+        "plan_digest": "11886648ba7c6fc2cc5c6b6add0985a963fe9ebe924f311f4911c21a2f795399",
+        "plan_task_id": "implement-total",
+        "revision_number": 1,
+        "run_id": "d9076cb9-faa0-5f0c-9ac0-7800ed7a4308",
+        "trajectory_task_id": "aedf375d-f6cb-5997-a3db-3f9da37ac984"
+      },
+      "sequence": 13,
+      "type": "cobbler.plan.task.dispatched"
+    },
+    {
+      "payload": {
+        "candidate": {
+          "adapter_id": "codex_app_server_stdio",
+          "compatibility_state": "compatible",
+          "provider_id": "codex",
+          "support_tier": "proactive"
+        },
+        "decision_id": "985c324e-45a8-47a9-9ed9-31162acd2a46",
+        "evaluated_at": "2026-10-12T18:22:17.726516Z",
+        "explanation": "Candidate 'codex' is eligible for automatic admission with fresh proactive observations within reserves",
+        "extensions": {},
+        "observation": {
+          "age_seconds": 4,
+          "capacity_state": "observed",
+          "confidence": "high",
+          "expires_at": "2026-10-12T18:27:13.043113Z",
+          "freshness": "fresh",
+          "observed_at": "2026-10-12T18:22:13.043113Z",
+          "snapshot_id": "78cedcf3-5291-58ab-af4d-08d56fe3f472",
+          "windows": [
+            {
+              "kind": "primary",
+              "reason": null,
+              "reset_at": "2026-10-12T22:51:03Z",
+              "state": "observed",
+              "used_percent": 16
+            },
+            {
+              "kind": "secondary",
+              "reason": null,
+              "reset_at": "2026-10-18T21:02:21Z",
+              "state": "observed",
+              "used_percent": 15
+            }
+          ]
+        },
+        "policy": {
+          "candidate_priority": [
+            "codex",
+            "claude"
+          ],
+          "checkpoint_cadence": 1,
+          "deadline_seconds": 300,
+          "delayed_recheck_seconds": 60,
+          "five_hour_max_used_percent": 80,
+          "five_hour_reserve_percent": 20,
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "stale_after_seconds": 300,
+          "supported_capabilities": [
+            "supervised_execution",
+            "read_only"
+          ],
+          "tool_budget": 25,
+          "version": 1,
+          "weekly_max_used_percent": 90,
+          "weekly_reserve_percent": 10
+        },
+        "proposed_bounds": {
+          "checkpoint_cadence": 1,
+          "deadline": "2026-10-12T18:27:17.726516Z",
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "tool_budget": 25
+        },
+        "reason_code": "automatic_admission_eligible",
+        "reobservation_required": false,
+        "requested_capability": "supervised_execution",
+        "result": "admit",
+        "run_id": "d9076cb9-faa0-5f0c-9ac0-7800ed7a4308",
+        "scope": "subscription"
+      },
+      "sequence": 53,
+      "type": "admission.decided"
+    },
+    {
+      "payload": {
+        "attempt": 1,
+        "commit": "fa0b1c41e9baec460ec427c13d3a8ab6f1d0bf2a",
+        "evidence": {
+          "gates": [
+            {
+              "argv": "python3 -B -m unittest test/test_total.py",
+              "commit": "fa0b1c41e9baec460ec427c13d3a8ab6f1d0bf2a",
+              "duration_ms": 248,
+              "exit_status": 0,
+              "gate": "python_unittest",
+              "output": ".\n----------------------------------------------------------------------\nRan 1 test in 0.000s\n\nOK\n",
+              "worktree": "$EVALUATION/worktrees/run-d9076cb9-faa0-5f0c-9ac0-7800ed7a4308"
+            }
+          ],
+          "run_completed": true
+        },
+        "execution_id": "da2356db-dd21-5878-b8b3-70cf77efdb3a",
+        "gate": "python_unittest",
+        "gate_argv": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "test/test_total.py"
+        ],
+        "plan_digest": "11886648ba7c6fc2cc5c6b6add0985a963fe9ebe924f311f4911c21a2f795399",
+        "plan_task_id": "implement-total",
+        "revision_number": 1,
+        "run_id": "d9076cb9-faa0-5f0c-9ac0-7800ed7a4308"
+      },
+      "sequence": 295,
+      "type": "cobbler.plan.task.accepted"
+    },
+    {
+      "payload": {
+        "candidate": {
+          "adapter_id": "codex_app_server_stdio",
+          "compatibility_state": "compatible",
+          "provider_id": "codex",
+          "support_tier": "proactive"
+        },
+        "decision_id": "c74e25a3-3be9-4663-9dc9-365cc4bfce45",
+        "evaluated_at": "2026-10-12T18:23:01.146039Z",
+        "explanation": "Candidate 'codex' is eligible for automatic admission with fresh proactive observations within reserves",
+        "extensions": {},
+        "observation": {
+          "age_seconds": 48,
+          "capacity_state": "observed",
+          "confidence": "high",
+          "expires_at": "2026-10-12T18:27:13.043113Z",
+          "freshness": "fresh",
+          "observed_at": "2026-10-12T18:22:13.043113Z",
+          "snapshot_id": "82380490-4636-5ddd-a764-45fe8eee9100",
+          "windows": [
+            {
+              "kind": "primary",
+              "reason": null,
+              "reset_at": "2026-10-12T22:51:03.000000Z",
+              "state": "observed",
+              "used_percent": 16.0
+            },
+            {
+              "kind": "secondary",
+              "reason": null,
+              "reset_at": "2026-10-18T21:02:21.000000Z",
+              "state": "observed",
+              "used_percent": 15.0
+            }
+          ]
+        },
+        "policy": {
+          "candidate_priority": [
+            "codex",
+            "claude"
+          ],
+          "checkpoint_cadence": 1,
+          "deadline_seconds": 300,
+          "delayed_recheck_seconds": 60,
+          "five_hour_max_used_percent": 80,
+          "five_hour_reserve_percent": 20,
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "stale_after_seconds": 300,
+          "supported_capabilities": [
+            "supervised_execution",
+            "read_only"
+          ],
+          "tool_budget": 25,
+          "version": 1,
+          "weekly_max_used_percent": 90,
+          "weekly_reserve_percent": 10
+        },
+        "proposed_bounds": {
+          "checkpoint_cadence": 1,
+          "deadline": "2026-10-12T18:28:01.146039Z",
+          "reserves": {
+            "response": 1,
+            "tool": 1
+          },
+          "response_budget": 10,
+          "tool_budget": 25
+        },
+        "reason_code": "automatic_admission_eligible",
+        "reobservation_required": false,
+        "requested_capability": "supervised_execution",
+        "result": "admit",
+        "scope": "subscription"
+      },
+      "sequence": 297,
+      "type": "admission.decided"
+    },
+    {
+      "payload": {
+        "attempt": 1,
+        "command_id": "plan-render-receipt-1",
+        "execution_id": "da2356db-dd21-5878-b8b3-70cf77efdb3a",
+        "grant_id": "a8698a0d-255b-4164-96a4-82d5ee8fcade",
+        "plan_digest": "11886648ba7c6fc2cc5c6b6add0985a963fe9ebe924f311f4911c21a2f795399",
+        "plan_task_id": "render-receipt",
+        "revision_number": 1,
+        "run_id": "18f957b3-17d2-5624-a80c-cd0d797549b4",
+        "trajectory_task_id": "af8f9fa7-f867-54a8-a7d3-351fee070c00"
+      },
+      "sequence": 307,
+      "type": "cobbler.plan.task.dispatched"
+    }
+  ],
+  "status": {
+    "accepted": [
+      "implement-total"
+    ],
+    "accepted_count": 1,
+    "active_attempt": 1,
+    "active_run_id": "18f957b3-17d2-5624-a80c-cd0d797549b4",
+    "active_run_ids": [
+      "18f957b3-17d2-5624-a80c-cd0d797549b4"
+    ],
+    "active_task": "render-receipt",
+    "attempts": {
+      "implement-total": 1,
+      "render-receipt": 1
+    },
+    "completed?": false,
+    "duration_budget": {
+      "reason": null,
+      "remaining_goal_ms": 554682
+    },
+    "execution": {
+      "agent_profile": {
+        "adapter_id": "codex_app_server_stdio",
+        "digest": "6ce04cb6bb373252be67300bce83f18312ade215dfcc94a0380af58a6f13b0dc",
+        "instructions": "Implement only the current approved task in its assigned worktree. Read pantry.py and the named tests. Change only pantry.py, preserve signatures and unrelated functions, and never edit tests. Do not implement a dependent task before it is assigned. Run the named Python gate using python3 -B -m unittest. Commit task changes using the configured Git identity, with no authorship or contributor trailers; leave the worktree clean. Do not push, install packages, use network tools, create other agents, delete files or perform cleanup. Report the commit and gate result.",
+        "model": "gpt-6-luna",
+        "profile_id": "2f0cc18f-b623-49b4-bcc8-e7997e78db99",
+        "provider": "codex",
+        "revision": 1,
+        "role": "Worker"
+      },
+      "execution_id": "da2356db-dd21-5878-b8b3-70cf77efdb3a",
+      "ordered_task_ids": [
+        "implement-total",
+        "render-receipt"
+      ],
+      "plan_digest": "11886648ba7c6fc2cc5c6b6add0985a963fe9ebe924f311f4911c21a2f795399",
+      "repository_path": "$EVALUATION/repos/source",
+      "requested_by": "human:user",
+      "revision_number": 1
+    },
+    "global_failure": null,
+    "needs_user?": false,
+    "planned?": true,
+    "retirements": [],
+    "superseded_attempts": [],
+    "task_duration_ms": {
+      "implement-total": 45318,
+      "render-receipt": 0
+    },
+    "total_attempts": 2,
+    "total_duration_ms": 45318,
+    "total_gate_duration_ms": 248,
+    "total_run_duration_ms": 45070,
+    "total_tasks": 2
+  }
+}

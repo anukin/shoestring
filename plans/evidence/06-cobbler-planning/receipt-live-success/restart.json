@@ -1,0 +1,9 @@
+{
+  "total_attempts": 2,
+  "accepted": [
+    "implement-total"
+  ],
+  "run_count": 2,
+  "canonical_snapshot_equal": true,
+  "planning_requests": 0
+}

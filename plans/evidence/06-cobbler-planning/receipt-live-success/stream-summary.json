@@ -1,0 +1,28 @@
+{
+  "normalized_events": 449,
+  "kinds": {
+    "lifecycle": 34,
+    "output": 393,
+    "command": 16,
+    "tool": 4,
+    "result": 2
+  },
+  "by_run": {
+    "d9076cb9-faa0-5f0c-9ac0-7800ed7a4308": {
+      "lifecycle": 17,
+      "output": 242,
+      "command": 8,
+      "tool": 2,
+      "result": 1
+    },
+    "18f957b3-17d2-5624-a80c-cd0d797549b4": {
+      "lifecycle": 17,
+      "output": 151,
+      "command": 8,
+      "tool": 2,
+      "result": 1
+    }
+  },
+  "raw_provider_frames_retained": false,
+  "reported_token_usage": "UNVERIFIED"
+}
