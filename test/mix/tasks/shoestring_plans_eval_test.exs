@@ -17,7 +17,7 @@ defmodule Mix.Tasks.Shoestring.Plans.EvalTest do
 
     Eval.run(["context", "receipt"])
     assert_receive {:mix_shell, :info, [json]}
-    assert Jason.decode!(json)["repository_files"]["test/receipt_test.exs"] =~ "475 cents"
+    assert Jason.decode!(json)["repository_files"]["test/test_receipt.py"] =~ "475 cents"
 
     Eval.run(["reference", "receipt"])
     assert_receive {:mix_shell, :info, [json]}

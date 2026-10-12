@@ -6,8 +6,8 @@
       "base_revision": "1111111"
     },
     "constraints": [
-      "Change only lib/pantry.ex; keep existing public function signatures.",
-      "Use the supplied dependency-free repository; do not fetch packages or use the network."
+      "Change only pantry.py; keep existing public function signatures.",
+      "Use the supplied dependency-free Python repository; do not fetch packages or use the network."
     ],
     "non_goals": [
       "Authentication, persistence, UI, parallel execution, and unrelated Pantry functions."
@@ -15,9 +15,9 @@
     "acceptance": {
       "gates": [
         {
-          "gate": "mix_test",
+          "gate": "python_unittest",
           "test_paths": [
-            "test/greeting_test.exs"
+            "test/test_greeting.py"
           ]
         }
       ],
@@ -40,11 +40,11 @@
       "expected_artifacts": [],
       "hints": {
         "files": [
-          "lib/pantry.ex",
-          "test/greeting_test.exs"
+          "pantry.py",
+          "test/test_greeting.py"
         ],
         "symbols": [
-          "Pantry.greeting/1"
+          "pantry.greeting"
         ]
       },
       "acceptance_criteria": [
@@ -52,9 +52,9 @@
       ],
       "gates": [
         {
-          "gate": "mix_test",
+          "gate": "python_unittest",
           "test_paths": [
-            "test/greeting_test.exs"
+            "test/test_greeting.py"
           ]
         }
       ],

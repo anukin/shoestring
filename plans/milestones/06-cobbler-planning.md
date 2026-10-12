@@ -63,10 +63,15 @@ remains open; no live model-quality evidence has been collected.
 REPO-INSPECTION: an offline evaluation pack now supplies three small repository
 goals, reference plans/implementation steps, pinned context export and saved
 proposal comparison. Schema/count observations remain separate from unreviewed
-semantic criteria and unrun model execution. Human reference review and
-budget-authorized model evaluation are still pending. See
+semantic criteria and unrun model execution. VERIFIED (user direction): the user
+accepted the three reference task scopes and requested Python or Go; the pack
+now uses Python with trusted standard-library unittest gates. Converted artifact
+bytes have not separately been human-reviewed. Budget-authorized model
+evaluation remains pending. See
 `../../docs/planner-evaluation.md` and
 `../evidence/06-cobbler-planning/semantic-evaluation-preparation.md`.
+The conversion and real Python gate evidence are in
+`../evidence/06-cobbler-planning/python-evaluation.md`.
 REPO-INSPECTION: PR #90 has been integrated with
 review fixes; the domain executor has a hermetic real-worker/worktree/gate restart
 proof. See `../evidence/06-cobbler-planning/executor-integration.md`. Remaining amendment contract decisions are
@@ -336,14 +341,16 @@ they do not satisfy this semantic evaluation gate.
   durable trajectory facts; saved agent revision/role/provider/model binding
   and current-ledger task admission are implemented. See package evidence above.
 - **Planner adapters/fixtures:** REPO-INSPECTION: deterministic fixture and
-  configured local model boundary; three offline Pantry evaluation cases.
+  configured local model boundary; three offline Python Pantry evaluation cases.
 - **Deterministic eval results:** see
   [the acceptance audit](../evidence/06-cobbler-planning/acceptance-audit.md)
   for all ten required evals, named assertions and current-run verification.
-- **Semantic planner eval results:** UNVERIFIED: human reference review, actual
-  model proposals, scored comparisons and approved model-plan execution remain
-  open. [Pinned references](../evidence/06-cobbler-planning/reference-review.md)
-  are ready for review. A named model/provider and explicit budget are required.
+- **Semantic planner eval results:** VERIFIED (user direction): reference task
+  scopes accepted with a Python/Go language change; translated Python artifacts
+  are pinned in [the reference record](../evidence/06-cobbler-planning/reference-review.md).
+  Converted bytes were not separately human-reviewed. UNVERIFIED: actual model
+  proposals, scored comparisons and approved model-plan execution remain open.
+  A named model/provider and explicit budget are required.
 - **Verification commands:** `mix precommit`; focused deterministic-matrix
   command and exact counts are in the acceptance audit. Historical package
   commands remain in their evidence records.

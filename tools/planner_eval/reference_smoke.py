@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 
@@ -21,7 +22,7 @@ CASES = {
 
 
 def gate(repository, paths, log):
-    command = ["mix", "test", *paths]
+    command = [sys.executable, "-B", "-m", "unittest", *paths]
     with log.open("w") as output:
         result = subprocess.run(
             command,
@@ -33,14 +34,15 @@ def gate(repository, paths, log):
             check=False,
         )
     text = log.read_text()
-    counts = re.search(r"(\d+) tests?, (\d+) failures?", text)
+    counts = re.search(r"Ran (\d+) tests? in", text)
     if counts is None:
         raise RuntimeError(f"Missing test summary: {log}")
+    failures = re.search(r"FAILED \(failures=(\d+)\)", text)
     return {
         "command": command,
         "exit_code": result.returncode,
         "tests": int(counts[1]),
-        "failures": int(counts[2]),
+        "failures": int(failures[1]) if failures else 0,
     }, text
 
 
@@ -60,20 +62,20 @@ def main():
         baseline, text = gate(repository, goal_paths, owned / f"{case_id}-baseline.log")
         expected = 2 if case_id == "receipt" else 1
         if not (
-            baseline["exit_code"] == 2
+            baseline["exit_code"] == 1
             and baseline["tests"] == expected
             and baseline["failures"] == expected
-            and text.count("Assertion with == failed") == expected
+            and text.count("AssertionError:") == expected
         ):
             raise RuntimeError(f"Baseline did not fail on behavior: {case_id}: {baseline}")
         entry = {"case_id": case_id, "baseline": baseline, "steps": []}
         for step, task in zip(steps, plan["tasks"], strict=True):
             if step != task["id"]:
                 raise RuntimeError("Reference step and task identity mismatch")
-            shutil.copyfile(ROOT / "reference_steps" / f"{step}.ex", repository / "lib/pantry.ex")
+            shutil.copyfile(ROOT / "reference_steps" / f"{step}.py", repository / "pantry.py")
             paths = task["gates"][0]["test_paths"]
             result, _ = gate(repository, paths, owned / f"{case_id}-{step}.log")
-            if result["exit_code"] != 0 or result["failures"] != 0:
+            if result["exit_code"] != 0 or result["failures"] != 0 or result["tests"] != len(paths):
                 raise RuntimeError(f"Reference step failed: {case_id}/{step}: {result}")
             entry["steps"].append({"task_id": step, **result})
         report["cases"].append(entry)

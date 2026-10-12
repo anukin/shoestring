@@ -489,7 +489,8 @@ defmodule Shoestring.Cobbler.PlanContractTest do
                "mix_compile_strict",
                "mix_format_check",
                "mix_precommit",
-               "mix_test"
+               "mix_test",
+               "python_unittest"
              ]
     end
   end

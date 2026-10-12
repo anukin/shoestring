@@ -6,8 +6,8 @@
       "base_revision": "1111111"
     },
     "constraints": [
-      "Change only lib/pantry.ex; keep existing public function signatures.",
-      "Use the supplied dependency-free repository; do not fetch packages or use the network."
+      "Change only pantry.py; keep existing public function signatures.",
+      "Use the supplied dependency-free Python repository; do not fetch packages or use the network."
     ],
     "non_goals": [
       "Authentication, persistence, UI, parallel execution, and unrelated Pantry functions."
@@ -15,10 +15,10 @@
     "acceptance": {
       "gates": [
         {
-          "gate": "mix_test",
+          "gate": "python_unittest",
           "test_paths": [
-            "test/total_test.exs",
-            "test/receipt_test.exs"
+            "test/test_total.py",
+            "test/test_receipt.py"
           ]
         }
       ],
@@ -41,11 +41,11 @@
       "expected_artifacts": [],
       "hints": {
         "files": [
-          "lib/pantry.ex",
-          "test/total_test.exs"
+          "pantry.py",
+          "test/test_total.py"
         ],
         "symbols": [
-          "Pantry.total_cents/1"
+          "pantry.total_cents"
         ]
       },
       "acceptance_criteria": [
@@ -53,9 +53,9 @@
       ],
       "gates": [
         {
-          "gate": "mix_test",
+          "gate": "python_unittest",
           "test_paths": [
-            "test/total_test.exs"
+            "test/test_total.py"
           ]
         }
       ],
@@ -84,13 +84,13 @@
       "expected_artifacts": [],
       "hints": {
         "files": [
-          "lib/pantry.ex",
-          "test/total_test.exs",
-          "test/receipt_test.exs"
+          "pantry.py",
+          "test/test_total.py",
+          "test/test_receipt.py"
         ],
         "symbols": [
-          "Pantry.receipt/1",
-          "Pantry.total_cents/1"
+          "pantry.receipt",
+          "pantry.total_cents"
         ]
       },
       "acceptance_criteria": [
@@ -98,10 +98,10 @@
       ],
       "gates": [
         {
-          "gate": "mix_test",
+          "gate": "python_unittest",
           "test_paths": [
-            "test/total_test.exs",
-            "test/receipt_test.exs"
+            "test/test_total.py",
+            "test/test_receipt.py"
           ]
         }
       ],

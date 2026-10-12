@@ -10,7 +10,7 @@ the command's exit code.
 ## Cases and references
 
 REPO-INSPECTION: `priv/planner_eval/` supplies three goals in a dependency-free
-Pantry repository:
+Python Pantry repository, using standard-library `unittest`:
 
 | Case | Goal | Reference tasks | Named tests |
 | --- | --- | --- | --- |
@@ -18,16 +18,20 @@ Pantry repository:
 | `receipt` | Sum integer prices times quantities; render the total | Total, then dependent receipt | Total and receipt |
 | `catalog` | Trim, remove blanks, deduplicate and sort case-sensitively | One normalization task | Catalog |
 
+VERIFIED (user direction): the user accepted the three task scopes and requested
+Python or Go instead of Elixir. The artifacts now use Python; the converted
+bytes have not separately been human-reviewed. Reports record
+`user_approved_with_language_change` and explain that distinction. This approval
+is for evaluation baselines, not an executable production revision.
 REPO-INSPECTION: reference plans and implementation steps are deterministic
-fixtures written during implementation. Human review is pending; these are not
-human-approved quality baselines. The context export includes the exact goal,
+fixtures written during implementation. The context export includes the exact goal,
 output schema and repository file contents, bound by a digest. Reference plans
 and solutions are excluded from model input. `1111111` is a synthetic base
 revision, not an executable Git revision.
 
 VERIFIED: the [reference review packet](../plans/evidence/06-cobbler-planning/reference-review.md)
 records the three concrete decompositions and their context/plan digests.
-Human review remains pending. The [acceptance audit](../plans/evidence/06-cobbler-planning/acceptance-audit.md)
+The user's scope approval and the conversion are recorded there. The [acceptance audit](../plans/evidence/06-cobbler-planning/acceptance-audit.md)
 maps the separate deterministic milestone checks to existing test assertions.
 
 ```sh
@@ -56,13 +60,22 @@ python3 tools/planner_eval/reference_smoke.py
 ```
 
 REPO-INSPECTION: this Python 3.10+ script creates new owned temporary repositories,
-runs named local Mix tests with closed stdin and a 60-second bound per invocation,
+runs named local Python tests with closed stdin and a 60-second bound per invocation,
 and leaves logs and a JSON summary for inspection. Each initial goal must fail
 on behavior assertions. Shipped reference implementations are then applied in
 task order; total passes before receipt rendering is applied. The script never
 accepts model output. It verifies reference test/implementation steps, not the
 Shoestring executor, quota or approval lifecycle. The composed lifecycle proof
 is in the iteration-6 `planner-demo.md` evidence record.
+
+REPO-INSPECTION: plan references use the trusted `python_unittest` gate, resolved
+to `python3 -B -m unittest` plus mandatory named `test/**/test_*.py` paths.
+Options, arbitrary executable/module parameters, absolute paths and traversal
+are rejected. `-B` prevents bytecode caches from dirtying the tested worktree.
+Real-gate capability checks cover failed baselines, passing reference steps,
+Git commit/worktree binding and clean snapshots. They do not execute a model
+proposal through the complete Shoestring worker lifecycle. See
+[the Python conversion evidence](../plans/evidence/06-cobbler-planning/python-evaluation.md).
 
 ## Semantic review procedure
 
@@ -71,8 +84,10 @@ No live provider/model run budget is authorized. A later run must name the model
 provider, maximum calls and output-token budget and obey normal admission and
 the lifetime planner allowance. Preparing or comparing files spends no quota.
 
-1. Have a human review or revise each reference against the pinned goal and
-   repository. Record reference/context digests; rerun fixture checks after edits.
+1. Record the human reference review and its scope against the pinned goal and
+   repository. Current review accepted the task scopes with a language change;
+   do not describe the converted bytes as separately human-reviewed. Record
+   reference/context digests; rerun fixture checks after edits.
 2. After run authorization, preserve the context, configuration, bounded attempt
    accounting and raw structured proposal. Keep initial and repaired outputs as
    separate results. Never store credentials, private paths, provider identifiers
@@ -101,6 +116,6 @@ revision. Record that binding transformation and the new plan digest; the
 synthetic reference is not directly executable. The smoke script does not prove
 approved model-plan execution.
 
-UNVERIFIED: this pack prepares evaluation. Human reference review, authorized
-model proposals, scored comparisons and execution evidence remain necessary for
-semantic iteration-6 acceptance.
+UNVERIFIED: this pack prepares evaluation. Authorized model proposals, scored
+comparisons and approved model-plan execution evidence remain necessary for
+semantic iteration-6 acceptance. Reference smoke checks do not supply them.

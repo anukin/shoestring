@@ -75,7 +75,7 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
   Runs one validated gate reference and returns bound evidence.
 
   `gate_ref` is a validated `%{"gate" => name}` reference (optionally with
-  `test_paths` for `mix_test`). `context` binds the run to its plan task.
+  `test_paths` for `mix_test` or `python_unittest`). `context` binds the run to its plan task.
   Options: `:worktree_path` (required), `:timeout_ms`,
   `:runner` (test injection, see moduledoc).
   """

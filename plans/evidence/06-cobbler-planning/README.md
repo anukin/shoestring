@@ -14,6 +14,9 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `python-evaluation.md` — user-approved task scopes translated to Python,
+  trusted unittest gates and clean Git-bound reference checks.
+
 - `acceptance-audit.md` — all ten required deterministic evals mapped to existing
   assertions, current verification, demo limits and remaining closeout work.
 - `reference-review.md` — three concrete reference plans and pinned context/plan

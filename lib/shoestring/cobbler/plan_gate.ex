@@ -11,8 +11,11 @@ defmodule Shoestring.Cobbler.PlanGate do
   A gate may accept a bounded, allow-listed parameter. `mix_test` accepts
   `test_paths`: repository-relative `test/**.exs` paths, each matched against
   a strict pattern that admits no shell metacharacter, no absolute path, and
-  no parent-directory segment. Every other gate accepts no parameter at all,
-  so a parameter that a gate does not declare rejects the plan.
+  no parent-directory segment. The Mix formatting, compilation and precommit
+  gates accept no parameters. Parameters a gate does not declare reject the plan.
+  `python_unittest` requires named repository-relative `test/**/test_*.py`
+  files and uses Python's standard-library unittest runner with bytecode
+  writing disabled, preserving the tested Git snapshot.
 
   Model success is never an acceptance gate. Acceptance is what a trusted
   deterministic command reports, not what a provider claims about itself;
@@ -28,6 +31,10 @@ defmodule Shoestring.Cobbler.PlanGate do
   @gates %{
     "mix_precommit" => %{argv: ["mix", "precommit"], parameters: []},
     "mix_test" => %{argv: ["mix", "test"], parameters: ["test_paths"]},
+    "python_unittest" => %{
+      argv: ["python3", "-B", "-m", "unittest"],
+      parameters: ["test_paths"]
+    },
     "mix_format_check" => %{argv: ["mix", "format", "--check-formatted"], parameters: []},
     "mix_compile_strict" => %{
       argv: ["mix", "compile", "--warnings-as-errors"],
@@ -37,6 +44,7 @@ defmodule Shoestring.Cobbler.PlanGate do
 
   @max_test_paths 16
   @test_path_pattern ~r/\Atest\/[A-Za-z0-9_][A-Za-z0-9_.\/-]{0,180}_test\.exs\z/
+  @python_test_path_pattern ~r/\Atest\/(?:[A-Za-z_][A-Za-z0-9_]*\/)*test_[A-Za-z0-9_]+\.py\z/
 
   @doc "The sorted list of trusted gate names a plan may reference."
   @spec names() :: [String.t()]
@@ -51,7 +59,7 @@ defmodule Shoestring.Cobbler.PlanGate do
   def validate(reference, field) when is_map(reference) do
     with {:ok, name} <- gate_name(reference, field),
          {:ok, spec} <- fetch_spec(name, field),
-         {:ok, parameters} <- validate_parameters(reference, spec, field) do
+         {:ok, parameters} <- validate_parameters(reference, name, spec, field) do
       {:ok, Map.merge(%{"gate" => name}, parameters)}
     end
   end
@@ -90,7 +98,7 @@ defmodule Shoestring.Cobbler.PlanGate do
     end
   end
 
-  defp validate_parameters(reference, spec, field) do
+  defp validate_parameters(reference, name, spec, field) do
     supplied = reference |> Map.keys() |> Enum.map(&to_string/1) |> List.delete("gate")
 
     cond do
@@ -98,16 +106,19 @@ defmodule Shoestring.Cobbler.PlanGate do
         Contract.invalid(field, "carries a parameter this gate does not accept")
 
       "test_paths" in supplied ->
-        with {:ok, paths} <- test_paths(Map.get(reference, "test_paths"), field) do
+        with {:ok, paths} <- test_paths(Map.get(reference, "test_paths"), name, field) do
           {:ok, %{"test_paths" => paths}}
         end
+
+      name == "python_unittest" ->
+        Contract.invalid(field, "python_unittest requires named test_paths")
 
       true ->
         {:ok, %{}}
     end
   end
 
-  defp test_paths(value, field) when is_list(value) do
+  defp test_paths(value, name, field) when is_list(value) do
     cond do
       value == [] ->
         Contract.invalid(field, "test_paths must list at least one path")
@@ -115,8 +126,9 @@ defmodule Shoestring.Cobbler.PlanGate do
       length(value) > @max_test_paths ->
         Contract.invalid(field, "test_paths contains too many entries")
 
-      not Enum.all?(value, &test_path?/1) ->
-        Contract.invalid(field, "test_paths must be repository-relative test/*_test.exs paths")
+      not Enum.all?(value, &test_path?(&1, name)) ->
+        pattern = if name == "python_unittest", do: "test/**/test_*.py", else: "test/*_test.exs"
+        Contract.invalid(field, "test_paths must be repository-relative #{pattern} paths")
 
       length(Enum.uniq(value)) != length(value) ->
         Contract.invalid(field, "test_paths must not repeat a path")
@@ -126,11 +138,14 @@ defmodule Shoestring.Cobbler.PlanGate do
     end
   end
 
-  defp test_paths(_value, field), do: Contract.invalid(field, "test_paths must be a list")
+  defp test_paths(_value, _name, field), do: Contract.invalid(field, "test_paths must be a list")
 
-  defp test_path?(path) when is_binary(path) do
-    Regex.match?(@test_path_pattern, path) and not String.contains?(path, "..")
+  defp test_path?(path, name) when is_binary(path) do
+    pattern =
+      if name == "python_unittest", do: @python_test_path_pattern, else: @test_path_pattern
+
+    byte_size(path) <= 200 and Regex.match?(pattern, path) and not String.contains?(path, "..")
   end
 
-  defp test_path?(_path), do: false
+  defp test_path?(_path, _name), do: false
 end

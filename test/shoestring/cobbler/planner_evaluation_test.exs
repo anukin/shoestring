@@ -11,13 +11,22 @@ defmodule Shoestring.Cobbler.PlannerEvaluationTest do
       assert {:ok, context} = Evaluation.context(case_id)
       assert {:ok, json} = Evaluation.reference(case_id)
       assert context["digest"] == PlanContract.digest(Map.delete(context, "digest"))
-      assert context["repository_files"]["lib/pantry.ex"] =~ "def greeting(name)"
+      assert context["repository_files"]["pantry.py"] =~ "def greeting(name):"
+      assert Enum.all?(Map.keys(context["repository_files"]), &String.ends_with?(&1, ".py"))
+
+      assert context["goal_contract"]["acceptance"]["gates"] |> hd() |> Map.get("gate") ==
+               "python_unittest"
+
       assert context["output_schema"]["properties"]["goal"]["const"] == context["goal_contract"]
       assert {:ok, report} = Evaluation.compare(case_id, json)
       assert report["candidate"]["schema_status"] == "valid"
       assert report["candidate"]["digest"] == report["reference"]["digest"]
       assert report["candidate"]["paths_absent_from_snapshot"] == []
-      assert report["reference_review_status"] == "pending_human_review"
+      assert report["reference_review_status"] == "user_approved_with_language_change"
+
+      assert report["reference_review_note"] =~
+               "converted bytes were not separately human-reviewed"
+
       assert report["quality_verdict"] == "UNVERIFIED"
       assert report["execution"] == %{"status" => "not_run", "evidence" => []}
       assert report["semantic_review"]["status"] == "unreviewed"
@@ -33,13 +42,13 @@ defmodule Shoestring.Cobbler.PlannerEvaluationTest do
 
     changed =
       put_in(plan, ["tasks"], [
-        put_in(total, ["hints", "files"], ["lib/pantry.ex", "lib/new_total.ex"]),
+        put_in(total, ["hints", "files"], ["pantry.py", "new_total.py"]),
         receipt
       ])
 
     assert {:ok, report} = Evaluation.compare("receipt", Jason.encode!(changed))
     assert report["candidate"]["schema_status"] == "valid"
-    assert report["candidate"]["paths_absent_from_snapshot"] == ["lib/new_total.ex"]
+    assert report["candidate"]["paths_absent_from_snapshot"] == ["new_total.py"]
     assert report["candidate"]["metrics"]["task_count"] == 2
     assert report["candidate"]["metrics"]["dependency_edges"] == 1
     assert report["candidate"]["metrics"]["sequential_task_transitions"] == 1

@@ -69,6 +69,19 @@ defmodule Shoestring.Cobbler.Planner.Schema do
         object(%{
           "gate" => %{"type" => "string", "const" => "mix_test"},
           "test_paths" => array(text(200), 0, 16)
+        }),
+        object(%{
+          "gate" => %{"type" => "string", "const" => "python_unittest"},
+          "test_paths" =>
+            array(
+              Map.put(
+                text(200),
+                "pattern",
+                "^test/(?:[A-Za-z_][A-Za-z0-9_]*/)*test_[A-Za-z0-9_]+\\.py$"
+              ),
+              1,
+              16
+            )
         })
       ]
     }

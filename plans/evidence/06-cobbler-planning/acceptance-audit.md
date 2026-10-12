@@ -92,8 +92,11 @@ documentation only; no runtime or fixture edits followed the gate.
 
 ## Still required to close the iteration
 
-1. Human review of the pinned references in
-   [reference-review.md](reference-review.md).
+1. VERIFIED (subsequent user direction): reference task scopes were accepted
+   with a Python/Go language change. The translated Python artifacts and fresh
+   digests are in [reference-review.md](reference-review.md); converted bytes
+   were not separately human-reviewed. See [python-evaluation.md](python-evaluation.md)
+   for the current corpus/gate checks; the matrix run above predates conversion.
 2. Explicit provider/model/run-budget authorization, followed by actual proposals
    and scored comparisons, preserving every failure and repair.
 3. Approved sequential execution evidence for model proposals, with actual Git
@@ -101,5 +104,6 @@ documentation only; no runtime or fixture edits followed the gate.
 4. Final completion record with semantic results and remaining risks. Do not
    mark the iteration complete or unlock iteration 7 on fixture results alone.
 
-UNVERIFIED: no live model generation, human baseline approval, scored semantic
-comparison or execution of model proposals has been verified by this audit.
+UNVERIFIED: no live model generation, scored semantic comparison or execution of
+model proposals has been verified by this audit. Later reference-scope approval
+does not turn earlier fixture evidence into model-quality evidence.

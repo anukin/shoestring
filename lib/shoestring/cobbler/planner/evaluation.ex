@@ -9,7 +9,7 @@ defmodule Shoestring.Cobbler.Planner.Evaluation do
   alias Shoestring.Cobbler.Planner.{Output, Schema}
 
   @cases ~w(catalog greeting receipt)
-  @files ~w(mix.exs lib/pantry.ex test/test_helper.exs test/catalog_test.exs test/greeting_test.exs test/receipt_test.exs test/total_test.exs)
+  @files ~w(pantry.py test/__init__.py test/test_catalog.py test/test_greeting.py test/test_receipt.py test/test_total.py)
   @criteria ~w(acceptance_coverage task_boundedness_and_independence dependency_ordering checkpoint_usefulness repository_grounding task_count_and_handoff_overhead sequential_execution_success)
 
   def cases, do: @cases
@@ -53,7 +53,9 @@ defmodule Shoestring.Cobbler.Planner.Evaluation do
          "version" => 1,
          "case_id" => case_id,
          "context_digest" => context["digest"],
-         "reference_review_status" => "pending_human_review",
+         "reference_review_status" => "user_approved_with_language_change",
+         "reference_review_note" =>
+           "The user approved these task scopes and requested Python or Go. The artifacts were translated to Python; the converted bytes were not separately human-reviewed. This is evaluation baseline review, not execution approval.",
          "candidate_output_digest" => output_digest(proposal_json),
          "reference" => observations(reference, context),
          "candidate" => candidate_result(candidate, context),
