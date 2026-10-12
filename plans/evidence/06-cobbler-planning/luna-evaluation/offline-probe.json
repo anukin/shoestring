@@ -1,0 +1,32 @@
+{
+  "source": "manual_offline_compatibility_probe_not_precommit_or_live_inference",
+  "provider": "loopback_mock",
+  "requires_openai_auth": false,
+  "response_status": 400,
+  "request_tool_names": [],
+  "request_tool_choice": "auto",
+  "authorization_header_present": false,
+  "event_types": [
+    {
+      "event_type": "thread.started",
+      "item_type": null
+    },
+    {
+      "event_type": "item.completed",
+      "item_type": "error"
+    },
+    {
+      "event_type": "turn.started",
+      "item_type": null
+    },
+    {
+      "event_type": "error",
+      "item_type": null
+    },
+    {
+      "event_type": "turn.failed",
+      "item_type": null
+    }
+  ],
+  "limitation": "This is an observed mock-provider request for the named model with execution features disabled. It is not a provider-independent guarantee or a production tool-free adapter proof."
+}

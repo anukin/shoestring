@@ -79,10 +79,27 @@ proposal through the complete Shoestring worker lifecycle. See
 
 ## Semantic review procedure
 
-UNVERIFIED: no actual model proposal has been generated or scored with this pack.
-No live provider/model run budget is authorized. A later run must name the model,
-provider, maximum calls and output-token budget and obey normal admission and
-the lifetime planner allowance. Preparing or comparing files spends no quota.
+VERIFIED (user direction): the user authorized `chatgpt/gpt-6-luna` through the
+subscription without a spending cap. The first recorded live comparison has
+three completed proposals: greeting and receipt validate; catalog fails with
+`invalid_json`. Assistant static review stays separate from human review and
+execution. See [the run and review packet](../plans/evidence/06-cobbler-planning/luna-evaluation.md).
+
+REPO-INSPECTION: `tools/planner_eval/codex_proposal.py` is an explicitly invoked
+evaluation utility, not a production planner adapter. It runs one ephemeral
+Codex CLI invocation in an empty read-only directory, ignores user configuration,
+disables execution features and retains final-answer bytes and numeric usage.
+It bounds each invocation to 180 seconds, each answer to 65,536 bytes, each frame
+to 1 MiB and the stream to 8 MiB. It rejects tool items and never repairs output
+automatically. It requests JSON through the prompt schema; native structured
+output is not enabled in this run. Schema validation happens after capture.
+
+UNVERIFIED: this route has no demonstrated provider-side output-token cap or
+Shoestring planner admission. Local invocation records are not the durable
+domain planner allowance. It cannot close those acceptance requirements. A
+production subscription adapter must establish those boundaries before wiring
+it into normal admission and the lifetime planner allowance. Preparing or
+comparing files spends no quota.
 
 1. Record the human reference review and its scope against the pinned goal and
    repository. Current review accepted the task scopes with a language change;
@@ -116,6 +133,7 @@ revision. Record that binding transformation and the new plan digest; the
 synthetic reference is not directly executable. The smoke script does not prove
 approved model-plan execution.
 
-UNVERIFIED: this pack prepares evaluation. Authorized model proposals, scored
-comparisons and approved model-plan execution evidence remain necessary for
-semantic iteration-6 acceptance. Reference smoke checks do not supply them.
+UNVERIFIED: human semantic review, approved model-plan execution and production
+subscription planner admission remain open. The first live packet adds two
+valid proposals, one rejected proposal and partial assistant static review;
+reference smoke checks do not supply execution or admission evidence.

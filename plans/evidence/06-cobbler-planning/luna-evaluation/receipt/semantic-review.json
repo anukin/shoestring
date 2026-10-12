@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "case_id": "receipt",
+  "reviewer": "implementation_assistant",
+  "review_type": "assistant_static_review_not_human_or_independent_judge",
+  "context_digest": "cadb79e4c206920b980e7684b0ce10dd7e14e6ca984a0b7a04f23abe5909de89",
+  "candidate_output_digest": "69f08831a199a08938130b9a060d5a3dc48d3a78a03ce1ee540e393cda4e17e0",
+  "status": "partial_static_review",
+  "criteria": [
+    {
+      "criterion": "acceptance_coverage",
+      "score": 2,
+      "evidence": [
+        "implement-total covers integer multiplication, summation and empty basket; render-receipt explicitly reuses total_cents and covers exact receipt formatting. Task/global named gates cover both functions."
+      ]
+    },
+    {
+      "criterion": "task_boundedness_and_independence",
+      "score": 2,
+      "evidence": [
+        "Two scoped tasks share pantry.py and run sequentially. Each has 1 attempt/300 seconds; the goal has 2 attempts/600 seconds. There is no extra global-gate time if both task maxima are consumed; this is a budget risk, not a demonstrated execution failure."
+      ]
+    },
+    {
+      "criterion": "dependency_ordering",
+      "score": 2,
+      "evidence": [
+        "render-receipt depends on implement-total, matching the reference prerequisite and the required function reuse."
+      ]
+    },
+    {
+      "criterion": "checkpoint_usefulness",
+      "score": 1,
+      "evidence": [
+        "Both checkpoints request passing named tests, but neither requests a commit identity or changed-path evidence for a successor. Runtime acceptance has separate mandatory evidence checks."
+      ]
+    },
+    {
+      "criterion": "repository_grounding",
+      "score": 2,
+      "evidence": [
+        "total_cents, receipt, test/test_total.py and test/test_receipt.py all exist; inputs accurately describe len(items) and the item-count receipt in the snapshot."
+      ]
+    },
+    {
+      "criterion": "task_count_and_handoff_overhead",
+      "score": 1,
+      "evidence": [
+        "Two tasks and one expected inter-task transition match the reference. Actual provider transfers and execution overhead were not observed."
+      ]
+    },
+    {
+      "criterion": "sequential_execution_success",
+      "score": null,
+      "evidence": []
+    }
+  ],
+  "execution": {
+    "status": "not_run",
+    "human_approval": "not_recorded",
+    "handoffs": "not_observed"
+  },
+  "quality_verdict": "UNVERIFIED",
+  "note": "Partial assistant review of planning content only. No human semantic scores, production planner admission or actual model-plan execution are established."
+}

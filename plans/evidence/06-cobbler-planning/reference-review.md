@@ -104,8 +104,11 @@ the change-only constraint, correct reuse of `total_cents(items)`, or all semant
 requirements. Review material diffs as well as gates. Fewer tasks than the
 reference is not automatically worse, and more tasks is not automatically better.
 
-UNVERIFIED: no provider/model budget is authorized by this document. The proposed
-planning run is three calls total, at most 4096 output tokens each, one per case,
-with no automatic repair. The provider/model must be named and the budget
-explicitly authorized before any call. Sequential model execution requires
-its own explicit budget; the planning allowance does not authorize it.
+VERIFIED (later user direction): the user authorized `chatgpt/gpt-6-luna` through
+the subscription without a spending cap. The [first live packet](luna-evaluation.md)
+records three completed proposals and two earlier setup/capture failures.
+The CLI route did not establish a provider output-token cap or production
+planner admission; it uses explicit byte/time bounds and no automatic repair.
+The earlier proposed 4096-token budget is not claimed as enforced on that route.
+UNVERIFIED: no exact model-plan execution approval is recorded. The two valid
+plans, rebound to a real clean Git fixture base, are in the packet for review.

@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "case_id": "greeting",
+  "reviewer": "implementation_assistant",
+  "review_type": "assistant_static_review_not_human_or_independent_judge",
+  "context_digest": "1b615cce63d34c930838e9ae12f1b1f612796d2752c7c31bb8508a7cb497c40d",
+  "candidate_output_digest": "d936e669fb17809a28dbf43748745516a43f57e0a8239106dbd74a459325142d",
+  "status": "partial_static_review",
+  "criteria": [
+    {
+      "criterion": "acceptance_coverage",
+      "score": 2,
+      "evidence": [
+        "update-greeting acceptance criteria cover trimming, blank fallback, public signature and punctuation preservation; goal and named greeting gate are unchanged."
+      ]
+    },
+    {
+      "criterion": "task_boundedness_and_independence",
+      "score": 2,
+      "evidence": [
+        "One task edits pantry.py; task cap is 2 attempts/180 seconds, goal cap is 3 attempts/300 seconds. The unused third goal attempt does not override the per-task cap."
+      ]
+    },
+    {
+      "criterion": "dependency_ordering",
+      "score": 2,
+      "evidence": [
+        "update-greeting has no dependency; no prerequisite is required for this isolated function."
+      ]
+    },
+    {
+      "criterion": "checkpoint_usefulness",
+      "score": 1,
+      "evidence": [
+        "The checkpoint requests a scoped diff and a test invocation, but no commit identity or captured passing test result. Runtime acceptance still enforces its own commit/gate evidence."
+      ]
+    },
+    {
+      "criterion": "repository_grounding",
+      "score": 2,
+      "evidence": [
+        "pantry.py:greeting and test/test_greeting.py exist in the exact exported snapshot; the stated current behavior and test cases match."
+      ]
+    },
+    {
+      "criterion": "task_count_and_handoff_overhead",
+      "score": 1,
+      "evidence": [
+        "One task matches the reference with zero expected inter-task transitions. Actual provider transfers and execution overhead were not observed."
+      ]
+    },
+    {
+      "criterion": "sequential_execution_success",
+      "score": null,
+      "evidence": []
+    }
+  ],
+  "execution": {
+    "status": "not_run",
+    "human_approval": "not_recorded",
+    "handoffs": "not_observed"
+  },
+  "quality_verdict": "UNVERIFIED",
+  "note": "Partial assistant review of planning content only. No human semantic scores, production planner admission or actual model-plan execution are established."
+}

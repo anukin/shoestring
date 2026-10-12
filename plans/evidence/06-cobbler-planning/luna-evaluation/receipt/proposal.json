@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "goal": {
+    "acceptance": {
+      "evidence": [
+        "Named acceptance tests pass with material implementation changes."
+      ],
+      "gates": [
+        {
+          "gate": "python_unittest",
+          "test_paths": [
+            "test/test_total.py",
+            "test/test_receipt.py"
+          ]
+        }
+      ]
+    },
+    "constraints": [
+      "Change only pantry.py; keep existing public function signatures.",
+      "Use the supplied dependency-free Python repository; do not fetch packages or use the network."
+    ],
+    "non_goals": [
+      "Authentication, persistence, UI, parallel execution, and unrelated Pantry functions."
+    ],
+    "repository": {
+      "base_revision": "1111111"
+    },
+    "statement": "Compute basket totals in integer cents and render Total: N cents using that total, including an empty basket."
+  },
+  "budget": {
+    "max_total_attempts": 2,
+    "max_total_duration_seconds": 600
+  },
+  "tasks": [
+    {
+      "id": "implement-total",
+      "title": "Calculate basket totals in integer cents",
+      "outcome": "total_cents sums each item's integer price_cents multiplied by its quantity, returning zero for an empty basket.",
+      "inputs": [
+        "pantry.py currently implements total_cents as len(items).",
+        "test/test_total.py specifies empty-basket and multiple-item behavior."
+      ],
+      "depends_on": [],
+      "hints": {
+        "files": [
+          "pantry.py",
+          "test/test_total.py"
+        ],
+        "symbols": [
+          "total_cents"
+        ]
+      },
+      "acceptance_criteria": [
+        "Preserve the public total_cents(items) signature.",
+        "Return the sum of price_cents multiplied by quantity for all basket items.",
+        "Return 0 for an empty basket."
+      ],
+      "expected_artifacts": [
+        "Updated total_cents implementation in pantry.py."
+      ],
+      "gates": [
+        {
+          "gate": "python_unittest",
+          "test_paths": [
+            "test/test_total.py"
+          ]
+        }
+      ],
+      "checkpoint": {
+        "condition": "The total calculation implements integer-cent multiplication and summation.",
+        "evidence": [
+          "test/test_total.py passes for empty and multi-item baskets."
+        ]
+      },
+      "risks": [
+        "Changing the function signature or using non-integer currency arithmetic would violate the contract."
+      ],
+      "execution": {
+        "max_attempts": 1,
+        "max_duration_seconds": 300
+      }
+    },
+    {
+      "id": "render-receipt",
+      "title": "Render receipt using the basket total",
+      "outcome": "receipt(items) renders the computed total in the exact format Total: N cents, including for an empty basket.",
+      "inputs": [
+        "pantry.py currently renders the item count.",
+        "test/test_receipt.py specifies exact output for empty and multi-item baskets."
+      ],
+      "depends_on": [
+        "implement-total"
+      ],
+      "hints": {
+        "files": [
+          "pantry.py",
+          "test/test_receipt.py"
+        ],
+        "symbols": [
+          "receipt",
+          "total_cents"
+        ]
+      },
+      "acceptance_criteria": [
+        "Preserve the public receipt(items) signature.",
+        "Use total_cents(items) as the receipt amount.",
+        "Render the exact string Total: N cents, including Total: 0 cents for an empty basket."
+      ],
+      "expected_artifacts": [
+        "Updated receipt implementation in pantry.py."
+      ],
+      "gates": [
+        {
+          "gate": "python_unittest",
+          "test_paths": [
+            "test/test_receipt.py",
+            "test/test_total.py"
+          ]
+        }
+      ],
+      "checkpoint": {
+        "condition": "Receipt output reflects the calculated basket total and both named acceptance tests pass.",
+        "evidence": [
+          "test/test_receipt.py passes for empty and multi-item baskets.",
+          "test/test_total.py passes for empty and multi-item baskets."
+        ]
+      },
+      "risks": [
+        "Receipt formatting must match the specified output exactly."
+      ],
+      "execution": {
+        "max_attempts": 1,
+        "max_duration_seconds": 300
+      }
+    }
+  ]
+}

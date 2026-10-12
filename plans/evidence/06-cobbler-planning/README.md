@@ -14,6 +14,10 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `luna-evaluation.md` — authorized subscription-model proposal capture, initial
+  failures, contract results, partial assistant review and exact bound plans;
+  production admission and execution remain unverified.
+
 - `python-evaluation.md` — user-approved task scopes translated to Python,
   trusted unittest gates and clean Git-bound reference checks.
 

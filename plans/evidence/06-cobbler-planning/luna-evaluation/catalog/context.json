@@ -1,0 +1,347 @@
+{
+  "base_revision_note": "1111111 is a synthetic fixture reference, not an executable Git revision.",
+  "case_id": "catalog",
+  "digest": "22c68771588ada558a0d3dc29cb2ad19fcdbf5ec9508143c60f9c28e3b845ad3",
+  "goal_contract": {
+    "acceptance": {
+      "evidence": [
+        "Named acceptance tests pass with material implementation changes."
+      ],
+      "gates": [
+        {
+          "gate": "python_unittest",
+          "test_paths": [
+            "test/test_catalog.py"
+          ]
+        }
+      ]
+    },
+    "constraints": [
+      "Change only pantry.py; keep existing public function signatures.",
+      "Use the supplied dependency-free Python repository; do not fetch packages or use the network."
+    ],
+    "non_goals": [
+      "Authentication, persistence, UI, parallel execution, and unrelated Pantry functions."
+    ],
+    "repository": {
+      "base_revision": "1111111"
+    },
+    "statement": "Return trimmed, nonblank, unique catalog names sorted with case-sensitive string ordering; preserve distinct Apple and apple."
+  },
+  "instruction": "Return only the structured plan. Use this repository snapshot, preserve the exact goal and omit planner provenance. No tools or commands are available.",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "budget": {
+        "additionalProperties": false,
+        "properties": {
+          "max_total_attempts": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_total_duration_seconds": {
+            "maximum": 86400,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_total_attempts",
+          "max_total_duration_seconds"
+        ],
+        "type": "object"
+      },
+      "goal": {
+        "const": {
+          "acceptance": {
+            "evidence": [
+              "Named acceptance tests pass with material implementation changes."
+            ],
+            "gates": [
+              {
+                "gate": "python_unittest",
+                "test_paths": [
+                  "test/test_catalog.py"
+                ]
+              }
+            ]
+          },
+          "constraints": [
+            "Change only pantry.py; keep existing public function signatures.",
+            "Use the supplied dependency-free Python repository; do not fetch packages or use the network."
+          ],
+          "non_goals": [
+            "Authentication, persistence, UI, parallel execution, and unrelated Pantry functions."
+          ],
+          "repository": {
+            "base_revision": "1111111"
+          },
+          "statement": "Return trimmed, nonblank, unique catalog names sorted with case-sensitive string ordering; preserve distinct Apple and apple."
+        },
+        "type": "object"
+      },
+      "tasks": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_criteria": {
+              "items": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "checkpoint": {
+              "additionalProperties": false,
+              "properties": {
+                "condition": {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "evidence": {
+                  "items": {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 8,
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "condition",
+                "evidence"
+              ],
+              "type": "object"
+            },
+            "depends_on": {
+              "items": {
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 0,
+              "type": "array"
+            },
+            "execution": {
+              "additionalProperties": false,
+              "properties": {
+                "max_attempts": {
+                  "maximum": 20,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "max_duration_seconds": {
+                  "maximum": 14400,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "max_attempts",
+                "max_duration_seconds"
+              ],
+              "type": "object"
+            },
+            "expected_artifacts": {
+              "items": {
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 0,
+              "type": "array"
+            },
+            "gates": {
+              "items": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "gate": {
+                        "enum": [
+                          "mix_precommit",
+                          "mix_format_check",
+                          "mix_compile_strict"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "gate"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "gate": {
+                        "const": "mix_test",
+                        "type": "string"
+                      },
+                      "test_paths": {
+                        "items": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 16,
+                        "minItems": 0,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "gate",
+                      "test_paths"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "gate": {
+                        "const": "python_unittest",
+                        "type": "string"
+                      },
+                      "test_paths": {
+                        "items": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "pattern": "^test/(?:[A-Za-z_][A-Za-z0-9_]*/)*test_[A-Za-z0-9_]+\\.py$",
+                          "type": "string"
+                        },
+                        "maxItems": 16,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "gate",
+                      "test_paths"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "maxItems": 4,
+              "minItems": 1,
+              "type": "array"
+            },
+            "hints": {
+              "additionalProperties": false,
+              "properties": {
+                "files": {
+                  "items": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 32,
+                  "minItems": 0,
+                  "type": "array"
+                },
+                "symbols": {
+                  "items": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 32,
+                  "minItems": 0,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "files",
+                "symbols"
+              ],
+              "type": "object"
+            },
+            "id": {
+              "maxLength": 63,
+              "minLength": 1,
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+              "type": "string"
+            },
+            "inputs": {
+              "items": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 0,
+              "type": "array"
+            },
+            "outcome": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "risks": {
+              "items": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 8,
+              "minItems": 0,
+              "type": "array"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "acceptance_criteria",
+            "checkpoint",
+            "depends_on",
+            "execution",
+            "expected_artifacts",
+            "gates",
+            "hints",
+            "id",
+            "inputs",
+            "outcome",
+            "risks",
+            "title"
+          ],
+          "type": "object"
+        },
+        "maxItems": 32,
+        "minItems": 1,
+        "type": "array"
+      },
+      "version": {
+        "const": 1,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "budget",
+      "goal",
+      "tasks",
+      "version"
+    ],
+    "type": "object"
+  },
+  "repository_files": {
+    "pantry.py": "def greeting(name):\n    return \"Hello, \" + name + \"!\"\n\n\ndef total_cents(items):\n    return len(items)\n\n\ndef receipt(items):\n    return f\"Items: {len(items)}\"\n\n\ndef catalog(names):\n    return names\n",
+    "test/__init__.py": "\"\"\"Standard-library acceptance tests for the Pantry evaluation fixture.\"\"\"\n",
+    "test/test_catalog.py": "import unittest\n\nfrom pantry import catalog\n\n\nclass CatalogTest(unittest.TestCase):\n    def test_trim_remove_blanks_deduplicate_and_sort(self):\n        self.assertEqual(\n            catalog([\" pear \", \"Apple\", \"\", \"pear\", \"  \", \"apple\"]),\n            [\"Apple\", \"apple\", \"pear\"],\n        )\n        self.assertEqual(catalog([]), [])\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n",
+    "test/test_greeting.py": "import unittest\n\nfrom pantry import greeting\n\n\nclass GreetingTest(unittest.TestCase):\n    def test_trim_names_and_substitute_blanks(self):\n        self.assertEqual(greeting(\"  Sam  \"), \"Hello, Sam!\")\n        self.assertEqual(greeting(\"   \"), \"Hello, friend!\")\n        self.assertEqual(greeting(\"Jo\"), \"Hello, Jo!\")\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n",
+    "test/test_receipt.py": "import unittest\n\nfrom pantry import receipt\n\n\nclass ReceiptTest(unittest.TestCase):\n    def test_render_using_basket_total(self):\n        self.assertEqual(receipt([]), \"Total: 0 cents\")\n        self.assertEqual(\n            receipt([\n                {\"price_cents\": 125, \"quantity\": 2},\n                {\"price_cents\": 75, \"quantity\": 3},\n            ]),\n            \"Total: 475 cents\",\n        )\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n",
+    "test/test_total.py": "import unittest\n\nfrom pantry import total_cents\n\n\nclass TotalTest(unittest.TestCase):\n    def test_sum_integer_prices_with_quantities(self):\n        self.assertEqual(total_cents([]), 0)\n        self.assertEqual(\n            total_cents([\n                {\"price_cents\": 125, \"quantity\": 2},\n                {\"price_cents\": 75, \"quantity\": 3},\n            ]),\n            475,\n        )\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+  },
+  "version": 1
+}

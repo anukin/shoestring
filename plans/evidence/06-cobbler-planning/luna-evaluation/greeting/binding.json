@@ -1,0 +1,10 @@
+{
+  "approval_status": "not_approved",
+  "base_revision": "84876c7022c9712aedd38cbc1f767cb58156be17",
+  "binding_transformation": "goal.repository.base_revision only",
+  "bound_plan_digest": "6b9bc3ae436268cae8be56dc2f8c22ef17ba9b1b88b76d9c15ac277955e686b0",
+  "case_id": "greeting",
+  "execution_status": "not_run",
+  "schema_status": "valid",
+  "source_plan_digest": "292fa8fe893bb575af0c045611415eabe7ef054418c0eaba0e9791ec73f58876"
+}

@@ -59,15 +59,20 @@ The composed fixture demo covers generation, dependency edit, exact approval,
 material code acceptance, quota continuation and restart without replanning,
 plus visible cyclic-candidate rejection. See
 `../evidence/06-cobbler-planning/planner-demo.md`. Semantic planner evaluation
-remains open; no live model-quality evidence has been collected.
+remains open. The first subscription-model evaluation is recorded below.
 REPO-INSPECTION: an offline evaluation pack now supplies three small repository
 goals, reference plans/implementation steps, pinned context export and saved
 proposal comparison. Schema/count observations remain separate from unreviewed
 semantic criteria and unrun model execution. VERIFIED (user direction): the user
 accepted the three reference task scopes and requested Python or Go; the pack
 now uses Python with trusted standard-library unittest gates. Converted artifact
-bytes have not separately been human-reviewed. Budget-authorized model
-evaluation remains pending. See
+bytes have not separately been human-reviewed. VERIFIED (user direction):
+`chatgpt/gpt-6-luna` is authorized through the subscription without a spending
+cap. VERIFIED: the first run returned three proposals, of which greeting and
+receipt validate and catalog fails `invalid_json`. Partial assistant static
+review and exact Git-bound review plans are in
+`../evidence/06-cobbler-planning/luna-evaluation.md`. Human semantic review,
+approved execution and production subscription planner admission remain open. See
 `../../docs/planner-evaluation.md` and
 `../evidence/06-cobbler-planning/semantic-evaluation-preparation.md`.
 The conversion and real Python gate evidence are in
@@ -348,9 +353,13 @@ they do not satisfy this semantic evaluation gate.
 - **Semantic planner eval results:** VERIFIED (user direction): reference task
   scopes accepted with a Python/Go language change; translated Python artifacts
   are pinned in [the reference record](../evidence/06-cobbler-planning/reference-review.md).
-  Converted bytes were not separately human-reviewed. UNVERIFIED: actual model
-  proposals, scored comparisons and approved model-plan execution remain open.
-  A named model/provider and explicit budget are required.
+  Converted bytes were not separately human-reviewed. VERIFIED: the authorized
+  `chatgpt/gpt-6-luna` evaluation produced two valid plans and one invalid-JSON
+  rejection, with partial assistant static scores; see
+  [the live packet](../evidence/06-cobbler-planning/luna-evaluation.md).
+  UNVERIFIED: human semantic review, approved model-plan execution and production
+  subscription planner admission remain open. The external evaluation utility
+  is not a production planner adapter or a proof of its token/admission limits.
 - **Verification commands:** `mix precommit`; focused deterministic-matrix
   command and exact counts are in the acceptance audit. Historical package
   commands remain in their evidence records.

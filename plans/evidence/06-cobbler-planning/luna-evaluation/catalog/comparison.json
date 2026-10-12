@@ -1,0 +1,78 @@
+{
+  "candidate": {
+    "error_codes": [
+      "invalid_json"
+    ],
+    "metrics": null,
+    "schema_status": "schema_failed"
+  },
+  "candidate_output_digest": "b748ac2c125f1c554dc16cf0687b40c487b4aef5a6f125c86063cc32400d0dda",
+  "case_id": "catalog",
+  "context_digest": "22c68771588ada558a0d3dc29cb2ad19fcdbf5ec9508143c60f9c28e3b845ad3",
+  "execution": {
+    "evidence": [],
+    "status": "not_run"
+  },
+  "note": "Schema validity and relative counts do not establish goal coverage, correct dependencies, useful checkpoints or execution success. This command never runs a model or a gate.",
+  "quality_verdict": "UNVERIFIED",
+  "reference": {
+    "digest": "8311ee7ff16318cdc5359909902cb459d7a12696ee522b189b8edd99483b3a96",
+    "metrics": {
+      "declared_attempts": 2,
+      "declared_task_seconds": 600,
+      "dependency_edges": 0,
+      "goal_budget": {
+        "max_total_attempts": 2,
+        "max_total_duration_seconds": 660
+      },
+      "sequential_task_transitions": 0,
+      "task_count": 1
+    },
+    "path_note": "Absent paths require review; they may describe intended new files. Existing paths do not prove correct repository facts. Task transitions do not predict provider handoffs.",
+    "paths_absent_from_snapshot": []
+  },
+  "reference_review_note": "The user approved these task scopes and requested Python or Go. The artifacts were translated to Python; the converted bytes were not separately human-reviewed. This is evaluation baseline review, not execution approval.",
+  "reference_review_status": "user_approved_with_language_change",
+  "semantic_review": {
+    "criteria": [
+      {
+        "criterion": "acceptance_coverage",
+        "evidence": [],
+        "score": null
+      },
+      {
+        "criterion": "task_boundedness_and_independence",
+        "evidence": [],
+        "score": null
+      },
+      {
+        "criterion": "dependency_ordering",
+        "evidence": [],
+        "score": null
+      },
+      {
+        "criterion": "checkpoint_usefulness",
+        "evidence": [],
+        "score": null
+      },
+      {
+        "criterion": "repository_grounding",
+        "evidence": [],
+        "score": null
+      },
+      {
+        "criterion": "task_count_and_handoff_overhead",
+        "evidence": [],
+        "score": null
+      },
+      {
+        "criterion": "sequential_execution_success",
+        "evidence": [],
+        "score": null
+      }
+    ],
+    "status": "unreviewed"
+  },
+  "source": "saved_proposal_unverified_origin",
+  "version": 1
+}

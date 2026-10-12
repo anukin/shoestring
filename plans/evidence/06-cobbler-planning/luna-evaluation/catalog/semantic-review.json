@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "case_id": "catalog",
+  "reviewer": "implementation_assistant",
+  "review_type": "assistant_static_review_not_human_or_independent_judge",
+  "context_digest": "22c68771588ada558a0d3dc29cb2ad19fcdbf5ec9508143c60f9c28e3b845ad3",
+  "candidate_output_digest": "b748ac2c125f1c554dc16cf0687b40c487b4aef5a6f125c86063cc32400d0dda",
+  "status": "unscorable_invalid_json",
+  "criteria": [
+    {
+      "criterion": "acceptance_coverage",
+      "score": null,
+      "evidence": [
+        "The production validator rejected the raw proposal with invalid_json; no valid plan graph or contract exists to score."
+      ]
+    },
+    {
+      "criterion": "task_boundedness_and_independence",
+      "score": null,
+      "evidence": [
+        "The production validator rejected the raw proposal with invalid_json; no valid plan graph or contract exists to score."
+      ]
+    },
+    {
+      "criterion": "dependency_ordering",
+      "score": null,
+      "evidence": [
+        "The production validator rejected the raw proposal with invalid_json; no valid plan graph or contract exists to score."
+      ]
+    },
+    {
+      "criterion": "checkpoint_usefulness",
+      "score": null,
+      "evidence": [
+        "The production validator rejected the raw proposal with invalid_json; no valid plan graph or contract exists to score."
+      ]
+    },
+    {
+      "criterion": "repository_grounding",
+      "score": null,
+      "evidence": [
+        "The production validator rejected the raw proposal with invalid_json; no valid plan graph or contract exists to score."
+      ]
+    },
+    {
+      "criterion": "task_count_and_handoff_overhead",
+      "score": null,
+      "evidence": [
+        "The production validator rejected the raw proposal with invalid_json; no valid plan graph or contract exists to score."
+      ]
+    },
+    {
+      "criterion": "sequential_execution_success",
+      "score": null,
+      "evidence": [
+        "The production validator rejected the raw proposal with invalid_json; no valid plan graph or contract exists to score."
+      ]
+    }
+  ],
+  "execution": {
+    "status": "not_run",
+    "human_approval": "not_recorded",
+    "handoffs": "not_observed"
+  },
+  "quality_verdict": "UNVERIFIED",
+  "note": "Partial assistant review of planning content only. No human semantic scores, production planner admission or actual model-plan execution are established."
+}
