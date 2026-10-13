@@ -29,7 +29,25 @@ admission decision, accepted tasks, active task and lifetime attempts/gate time.
 A recorded observation may still be stale or insufficient; the decision carries
 that distinction. `last_admission` is historical and may be absent before the
 first decision. Unknown/reactive capacity is not automatically confirmed by this
-interface.
+interface. For a dependency-ready task with no active run, the operator can
+explicitly confirm one admission decision:
+
+```sh
+mix shoestring.execution confirm-capacity "$GOAL" \
+  --execution-id "$EXECUTION_ID" --task-id "$TASK_ID" --attempt 1 \
+  --scope subscription --command-id "$CONFIRMATION_UUID" --by human:operator
+```
+
+REPO-INSPECTION: confirmation binds the exact execution, approved revision/digest,
+task attempt, saved provider/adapter and account scope. It records no run and starts
+no provider; the waiting worker rechecks the real ledger on its next delivery.
+One admission decision consumes it, including a hard refusal. It never carries
+over to a dependent task, retry, amendment or handoff. Another decision needs a
+new explicit confirmation ID. Replaying the same command is inert. Known reserve
+breaches, hard quota refusals, incompatible adapters and occupied scopes remain
+blocked. Capacity stays labeled unknown/partial; confirmation does not manufacture
+telemetry. `human:` attribution follows the application's existing local-user
+convention and is not a new authentication boundary.
 
 REPO-INSPECTION: Tasks execute sequentially in owned Git worktrees. Successful
 provider completion still requires the task gates before dependents unlock.

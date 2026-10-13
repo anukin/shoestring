@@ -6,6 +6,7 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
     AdmissionPolicy,
     Commands,
     GoalLocalObservation,
+    PlanCapacityConfirmation,
     WakeupObserve
   }
 
@@ -38,9 +39,16 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
              "payload" => EventPayload.capacity_snapshot(snapshot, nil)
            }),
          {:ok, _} <- Projector.project(goal_id),
+         confirmation =
+           PlanCapacityConfirmation.available(goal_id, execution, task, attempt, scope),
          {:ok, decision} <-
            AdmissionEvaluation.evaluate(
-             %{goal_id: goal_id, requested_capability: "supervised_execution", scope: scope},
+             %{
+               goal_id: goal_id,
+               requested_capability: "supervised_execution",
+               scope: scope,
+               override: PlanCapacityConfirmation.override(confirmation)
+             },
              %{
                provider_id: profile["provider"],
                adapter_id: profile["adapter_id"],
@@ -54,8 +62,8 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
                AdmissionPolicy.default()
                | deadline_seconds: min(task["execution"]["max_duration_seconds"], 300)
              },
-             now: now,
-             occupancy: occupied_by_other_goal?(goal_id)
+             [now: now, occupancy: occupied_by_other_goal?(goal_id)] ++
+               PlanCapacityConfirmation.evaluation_options(confirmation)
            ),
          {:ok, event} <-
            Trajectory.append(goal_id, %{
@@ -63,11 +71,20 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
              "schema_version" => 1,
              "actor" => "cobbler",
              "occurred_at" => now,
+             "idempotency_key" =>
+               if(confirmation, do: "plan-capacity-decision:#{confirmation.id}"),
              "payload" => AdmissionDecision.to_payload(decision)
            }) do
-      if decision.result == :admit,
-        do: {:ok, event.id},
-        else: {:error, {:execution_admission_blocked, decision.reason_code}}
+      cond do
+        decision.result != :admit ->
+          {:error, {:execution_admission_blocked, decision.reason_code}}
+
+        event.payload["result"] != "admit" ->
+          {:error, {:execution_admission_blocked, event.payload["reason_code"]}}
+
+        true ->
+          {:ok, event.id}
+      end
     else
       {:error, reason} -> {:error, {:execution_admission_blocked, reason}}
       _ -> {:error, {:execution_admission_blocked, :execution_profile_required}}

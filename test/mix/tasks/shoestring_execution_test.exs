@@ -129,4 +129,34 @@ defmodule Mix.Tasks.Shoestring.ExecutionTest do
     assert_raise Mix.Error, fn -> cli(["status", c.goal.id, "--force"]) end
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
+
+  test "CLI capacity confirmation is task-bound, inert and attributed", c do
+    result = cli(args(c))
+
+    request = [
+      "confirm-capacity",
+      c.goal.id,
+      "--execution-id",
+      result["execution"]["execution_id"],
+      "--task-id",
+      "alpha",
+      "--attempt",
+      "1",
+      "--scope",
+      "subscription",
+      "--command-id",
+      Ecto.UUID.generate(),
+      "--by",
+      "human:operator"
+    ]
+
+    confirmation = cli(request)
+    assert confirmation["confirmation"]["plan_task_id"] == "alpha"
+    assert confirmation["confirmation"]["confirmed_by"] == "human:operator"
+    assert cli(request)["event_id"] == confirmation["event_id"]
+    assert run_count(c.goal.id) == 0
+    assert Repo.aggregate(Oban.Job, :count) == 1
+    assert_raise Mix.Error, fn -> cli(request ++ ["--attempt", "1"]) end
+    assert_raise Mix.Error, fn -> cli(List.replace_at(request, 5, "beta")) end
+  end
 end

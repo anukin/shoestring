@@ -8,6 +8,7 @@ defmodule Mix.Tasks.Shoestring.Execution do
       mix shoestring.execution start GOAL --revision N --digest DIGEST --repo PATH --agent ID --agent-revision N --agent-digest DIGEST --role ROLE --by human:NAME
       mix shoestring.execution status GOAL
       mix shoestring.execution continue GOAL --execution-id ID
+      mix shoestring.execution confirm-capacity GOAL --execution-id ID --task-id TASK --attempt N --scope SCOPE --command-id ID --by human:NAME
       mix shoestring.execution handoff GOAL --execution-id ID --run-id ID --checkpoint-id ID --decision-ref ID --role ROLE --scope SCOPE --command-id ID --reason TEXT --by human:NAME [--confirm-capacity]
 
   Start binds exact approved plan and saved-agent revisions. The service admits
@@ -18,6 +19,8 @@ defmodule Mix.Tasks.Shoestring.Execution do
   receiver admission. Repeat --decision-ref for the exact current reference set.
   --confirm-capacity permits confirmation-class capacity only, attributed to the
   goal owner; hard stops remain blocked. No provider is started by this CLI.
+  The confirm-capacity command records a human confirmation for one admission
+  decision of one dependency-ready task attempt, never for future tasks/retries.
   """
   @switches [
     revision: :integer,
@@ -29,6 +32,8 @@ defmodule Mix.Tasks.Shoestring.Execution do
     role: :string,
     by: :string,
     execution_id: :string,
+    task_id: :string,
+    attempt: :integer,
     run_id: :string,
     checkpoint_id: :string,
     decision_ref: :string,
@@ -56,6 +61,19 @@ defmodule Mix.Tasks.Shoestring.Execution do
           case command do
             "status" ->
               ExecutionControl.status(goal_id)
+
+            "confirm-capacity" ->
+              case ExecutionControl.confirm_capacity(goal_id, %{
+                     execution_id: opts[:execution_id],
+                     task_id: opts[:task_id],
+                     attempt: opts[:attempt],
+                     scope: opts[:scope],
+                     command_id: opts[:command_id],
+                     requested_by: opts[:by]
+                   }) do
+                {:ok, event} -> {:ok, %{event_id: event.id, confirmation: event.payload}}
+                error -> error
+              end
 
             _ ->
               Shoestring.CLI.Jobs.with_client(fn client ->
@@ -135,13 +153,14 @@ defmodule Mix.Tasks.Shoestring.Execution do
       case command do
         "status" -> []
         "continue" -> [:execution_id]
+        "confirm-capacity" -> [:execution_id, :task_id, :attempt, :scope, :command_id, :by]
         "start" -> [:revision, :digest, :repo, :agent, :agent_revision, :agent_digest, :role, :by]
         _ -> nil
       end
 
     is_list(required) and Enum.sort(Keyword.keys(opts)) == Enum.sort(required) and
       Enum.all?(opts, fn
-        {key, value} when key in [:revision, :agent_revision] -> value > 0
+        {key, value} when key in [:revision, :agent_revision, :attempt] -> value > 0
         {_, value} -> String.trim(value) != ""
       end)
   end

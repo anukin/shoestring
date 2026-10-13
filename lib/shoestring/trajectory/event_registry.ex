@@ -611,6 +611,25 @@ defmodule Shoestring.Trajectory.EventRegistry do
         }
       }
     },
+    "cobbler.plan.capacity.confirmed" => %{
+      1 => %{
+        required: [
+          :confirmation_id,
+          :execution_id,
+          :revision_number,
+          :plan_digest,
+          :plan_task_id,
+          :attempt,
+          :provider_id,
+          :adapter_id,
+          :scope,
+          :confirmed_by
+        ],
+        optional: [],
+        uuid_fields: [:confirmation_id, :execution_id],
+        types: %{revision_number: :integer, attempt: :integer}
+      }
+    },
     "cobbler.plan.execution.requested" => %{
       1 => %{
         required: [:execution_id, :revision_number, :plan_digest, :ordered_task_ids],
@@ -1075,6 +1094,19 @@ defmodule Shoestring.Trajectory.EventRegistry do
   # bound at dispatch time, so a malformed digest, a non-positive
   # revision/attempt, an unknown gate, or an unknown retry state fails the
   # write rather than entering history.
+  defp validate_plan_execution("cobbler.plan.capacity.confirmed", 1, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload),
+         true <- human_identity?(payload["confirmed_by"]) do
+      :ok
+    else
+      false -> Contract.invalid(:confirmed_by, "must be a human: identity")
+      error -> error
+    end
+  end
+
   defp validate_plan_execution("cobbler.plan.execution.requested", 1, payload, _opts) do
     with :ok <- plan_execution_digest(payload),
          :ok <- plan_execution_revision(payload),
