@@ -1,0 +1,436 @@
+[
+  {
+    "sequence": 1,
+    "type": "cobbler.plan.revision.created",
+    "payload": {
+      "author_kind": "human",
+      "authored_by": "human:user",
+      "ordered_task_ids": [
+        "implement-total",
+        "render-receipt"
+      ],
+      "plan_content": "{\"budget\":{\"max_total_attempts\":2,\"max_total_duration_seconds\":600},\"goal\":{\"acceptance\":{\"evidence\":[\"Named acceptance tests pass with material implementation changes.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_total.py\",\"test/test_receipt.py\"]}]},\"constraints\":[\"Change only pantry.py; keep existing public function signatures.\",\"Use the supplied dependency-free Python repository; do not fetch packages or use the network.\"],\"non_goals\":[\"Authentication, persistence, UI, parallel execution, and unrelated Pantry functions.\"],\"repository\":{\"base_revision\":\"2a68bd7c087f05f31dac6c98ff2c1dd0894f0105\"},\"statement\":\"Compute basket totals in integer cents and render Total: N cents using that total, including an empty basket.\"},\"tasks\":[{\"acceptance_criteria\":[\"Preserve the public total_cents(items) signature.\",\"Return the sum of price_cents multiplied by quantity for all basket items.\",\"Return 0 for an empty basket.\"],\"checkpoint\":{\"condition\":\"The total calculation implements integer-cent multiplication and summation.\",\"evidence\":[\"test/test_total.py passes for empty and multi-item baskets.\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":1,\"max_duration_seconds\":300},\"expected_artifacts\":[\"Updated total_cents implementation in pantry.py.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_total.py\"]}],\"hints\":{\"files\":[\"pantry.py\",\"test/test_total.py\"],\"symbols\":[\"total_cents\"]},\"id\":\"implement-total\",\"inputs\":[\"pantry.py currently implements total_cents as len(items).\",\"test/test_total.py specifies empty-basket and multiple-item behavior.\"],\"outcome\":\"total_cents sums each item's integer price_cents multiplied by its quantity, returning zero for an empty basket.\",\"risks\":[\"Changing the function signature or using non-integer currency arithmetic would violate the contract.\"],\"title\":\"Calculate basket totals in integer cents\"},{\"acceptance_criteria\":[\"Preserve the public receipt(items) signature.\",\"Use total_cents(items) as the receipt amount.\",\"Render the exact string Total: N cents, including Total: 0 cents for an empty basket.\"],\"checkpoint\":{\"condition\":\"Receipt output reflects the calculated basket total and both named acceptance tests pass.\",\"evidence\":[\"test/test_receipt.py passes for empty and multi-item baskets.\",\"test/test_total.py passes for empty and multi-item baskets.\"]},\"depends_on\":[\"implement-total\"],\"execution\":{\"max_attempts\":1,\"max_duration_seconds\":300},\"expected_artifacts\":[\"Updated receipt implementation in pantry.py.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_receipt.py\",\"test/test_total.py\"]}],\"hints\":{\"files\":[\"pantry.py\",\"test/test_receipt.py\"],\"symbols\":[\"receipt\",\"total_cents\"]},\"id\":\"render-receipt\",\"inputs\":[\"pantry.py currently renders the item count.\",\"test/test_receipt.py specifies exact output for empty and multi-item baskets.\"],\"outcome\":\"receipt(items) renders the computed total in the exact format Total: N cents, including for an empty basket.\",\"risks\":[\"Receipt formatting must match the specified output exactly.\"],\"title\":\"Render receipt using the basket total\"}],\"version\":1}",
+      "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+      "plan_revision_id": "0756195c-19b7-4f6b-943b-55a6d112308f",
+      "plan_version": 1,
+      "proposal_id": "live-receipt-import",
+      "revision_number": 1,
+      "task_count": 2
+    }
+  },
+  {
+    "sequence": 2,
+    "type": "cobbler.plan.approved",
+    "payload": {
+      "decided_at": "2026-10-13T21:46:42.307458Z",
+      "decided_by": "human:user",
+      "decision_id": "live-receipt-user-authorized-run",
+      "note": "User explicitly authorized this Claude Code subscription verification without a spending cap. This new fixture retains the reviewed plan execution limits. One attempt per task, two total attempts, 300 seconds per task and 600 seconds per goal. Previous evaluation remains failed; no counters are reset. Only the fresh fixture base binding changes.",
+      "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+      "plan_revision_id": "0756195c-19b7-4f6b-943b-55a6d112308f",
+      "revision_number": 1
+    }
+  },
+  {
+    "sequence": 3,
+    "type": "cobbler.plan.execution.requested",
+    "payload": {
+      "agent_profile": {
+        "adapter_id": "claude_headless_stream_json",
+        "digest": "d588d34fc9864bc3337b3fdc86670c3b74a8d0a5417bf3302fb9787d44a021b0",
+        "instructions": "Implement only the current approved task in its assigned worktree. Read pantry.py and the named tests. Change only pantry.py, preserve signatures and unrelated functions, and never edit tests. Do not implement a dependent task before it is assigned. Run the named Python gate using python3 -B -m unittest. Commit task changes using the configured Git identity, with no authorship or contributor trailers; leave the worktree clean. Do not push, install packages, use network tools, create other agents, delete files or perform cleanup. Report the commit and gate result.",
+        "model": "opus",
+        "profile_id": "c88caab4-64fb-4619-a375-51c50af8ca92",
+        "provider": "claude",
+        "revision": 1,
+        "role": "Worker"
+      },
+      "execution_id": "1220c079-e4d7-5ea7-bf56-e929f57d9033",
+      "ordered_task_ids": [
+        "implement-total",
+        "render-receipt"
+      ],
+      "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+      "repository_path": "$EVALUATION/repos/source",
+      "requested_by": "human:user",
+      "revision_number": 1
+    }
+  },
+  {
+    "sequence": 4,
+    "type": "cobbler.plan.capacity.confirmed",
+    "payload": {
+      "adapter_id": "claude_headless_stream_json",
+      "attempt": 1,
+      "confirmation_id": "7a85b1d5-4837-4956-8f9b-c70c988208c9",
+      "confirmed_by": "human:user",
+      "execution_id": "1220c079-e4d7-5ea7-bf56-e929f57d9033",
+      "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+      "plan_task_id": "implement-total",
+      "provider_id": "claude",
+      "revision_number": 1,
+      "scope": "subscription"
+    }
+  },
+  {
+    "sequence": 6,
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "claude_headless_stream_json",
+        "compatibility_state": "degraded",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "09aeb524-eb73-4e87-983d-ac9d2e51b1b3",
+      "evaluated_at": "2026-10-13T21:47:11.265072Z",
+      "explanation": "Admitted via attributable single-decision confirmation by 'human:user' (intent: 'supervised_execution'); not automatically safe (Candidate support tier 'conservative_partial' requires attributable single-decision confirmation)",
+      "extensions": {
+        "shoestring.plan:capacity_confirmation_id": "09aeb524-eb73-4e87-983d-ac9d2e51b1b3"
+      },
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "5c675538-5f79-5e7f-bb13-ab02a065e257",
+        "windows": []
+      },
+      "override": {
+        "confirmed_at": "2026-10-13T21:47:11.241282Z",
+        "confirmed_by": "human:user",
+        "intent": "supervised_execution",
+        "reason": "valid",
+        "target_provider_id": "claude",
+        "target_scope": "subscription",
+        "valid": true
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-13T21:52:11.265072Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confirmed_support_tier_conservative_partial",
+      "reobservation_required": false,
+      "requested_capability": "supervised_execution",
+      "result": "admit",
+      "scope": "subscription"
+    }
+  },
+  {
+    "sequence": 14,
+    "type": "cobbler.plan.task.dispatched",
+    "payload": {
+      "attempt": 1,
+      "command_id": "plan-implement-total-1",
+      "execution_id": "1220c079-e4d7-5ea7-bf56-e929f57d9033",
+      "grant_id": "4f3496d4-ca1c-444f-bbfa-933a4e08a9d1",
+      "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+      "plan_task_id": "implement-total",
+      "revision_number": 1,
+      "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+      "trajectory_task_id": "22963ee6-6d7f-5d59-bb21-04cb9d9022a7"
+    }
+  },
+  {
+    "sequence": 34,
+    "type": "cobbler.plan.task.accepted",
+    "payload": {
+      "attempt": 1,
+      "commit": "8daa96e36516336398482b44dbaf4c455dc794bb",
+      "evidence": {
+        "gates": [
+          {
+            "argv": "python3 -B -m unittest test/test_total.py",
+            "commit": "8daa96e36516336398482b44dbaf4c455dc794bb",
+            "duration_ms": 266,
+            "exit_status": 0,
+            "gate": "python_unittest",
+            "output": ".\n----------------------------------------------------------------------\nRan 1 test in 0.000s\n\nOK\n",
+            "worktree": "$EVALUATION/worktrees/run-fbf32e36-ae26-5e7e-9d5c-e3159ee59c89"
+          }
+        ],
+        "run_completed": true
+      },
+      "execution_id": "1220c079-e4d7-5ea7-bf56-e929f57d9033",
+      "gate": "python_unittest",
+      "gate_argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "test/test_total.py"
+      ],
+      "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+      "plan_task_id": "implement-total",
+      "revision_number": 1,
+      "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89"
+    }
+  },
+  {
+    "sequence": 36,
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "claude_headless_stream_json",
+        "compatibility_state": "degraded",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "b13d8c02-4a02-46eb-a917-3a75ba903487",
+      "evaluated_at": "2026-10-13T21:47:47.572549Z",
+      "explanation": "Candidate support tier 'conservative_partial' requires attributable single-decision confirmation",
+      "extensions": {},
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "94f37034-f336-5b39-aca0-46d2eb2aa279",
+        "windows": []
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-13T21:52:47.572549Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "support_tier_conservative_partial",
+      "reobservation_required": true,
+      "requested_capability": "supervised_execution",
+      "result": "require_confirmation",
+      "scope": "subscription"
+    }
+  },
+  {
+    "sequence": 37,
+    "type": "cobbler.plan.capacity.confirmed",
+    "payload": {
+      "adapter_id": "claude_headless_stream_json",
+      "attempt": 1,
+      "confirmation_id": "f0a1bab7-c32c-4159-b5ce-5f40e7ee2f63",
+      "confirmed_by": "human:user",
+      "execution_id": "1220c079-e4d7-5ea7-bf56-e929f57d9033",
+      "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+      "plan_task_id": "render-receipt",
+      "provider_id": "claude",
+      "revision_number": 1,
+      "scope": "subscription"
+    }
+  },
+  {
+    "sequence": 38,
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "claude_headless_stream_json",
+        "compatibility_state": "degraded",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "0c422ac3-3894-448f-8ca0-ac7087db0a5b",
+      "evaluated_at": "2026-10-13T21:48:47.808710Z",
+      "explanation": "Admitted via attributable single-decision confirmation by 'human:user' (intent: 'supervised_execution'); not automatically safe (Candidate support tier 'conservative_partial' requires attributable single-decision confirmation)",
+      "extensions": {
+        "shoestring.plan:capacity_confirmation_id": "0c422ac3-3894-448f-8ca0-ac7087db0a5b"
+      },
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "94f37034-f336-5b39-aca0-46d2eb2aa279",
+        "windows": []
+      },
+      "override": {
+        "confirmed_at": "2026-10-13T21:48:13.796296Z",
+        "confirmed_by": "human:user",
+        "intent": "supervised_execution",
+        "reason": "valid",
+        "target_provider_id": "claude",
+        "target_scope": "subscription",
+        "valid": true
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-13T21:53:47.808710Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confirmed_support_tier_conservative_partial",
+      "reobservation_required": false,
+      "requested_capability": "supervised_execution",
+      "result": "admit",
+      "scope": "subscription"
+    }
+  },
+  {
+    "sequence": 48,
+    "type": "cobbler.plan.task.dispatched",
+    "payload": {
+      "attempt": 1,
+      "command_id": "plan-render-receipt-1",
+      "execution_id": "1220c079-e4d7-5ea7-bf56-e929f57d9033",
+      "grant_id": "de71b573-5775-42d5-b888-1f5a020e362c",
+      "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+      "plan_task_id": "render-receipt",
+      "revision_number": 1,
+      "run_id": "159f7d39-4245-53c9-834c-68c343586738",
+      "trajectory_task_id": "b8021b29-f0d5-5fd4-9ccf-a3c100493e3a"
+    }
+  },
+  {
+    "sequence": 69,
+    "type": "cobbler.plan.task.accepted",
+    "payload": {
+      "attempt": 1,
+      "commit": "c0ec06161393e462eea8e0b608a8ad5eae5d2867",
+      "evidence": {
+        "gates": [
+          {
+            "argv": "python3 -B -m unittest test/test_receipt.py test/test_total.py",
+            "commit": "c0ec06161393e462eea8e0b608a8ad5eae5d2867",
+            "duration_ms": 279,
+            "exit_status": 0,
+            "gate": "python_unittest",
+            "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+            "worktree": "$EVALUATION/worktrees/run-159f7d39-4245-53c9-834c-68c343586738"
+          }
+        ],
+        "run_completed": true
+      },
+      "execution_id": "1220c079-e4d7-5ea7-bf56-e929f57d9033",
+      "gate": "python_unittest",
+      "gate_argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "test/test_receipt.py",
+        "test/test_total.py"
+      ],
+      "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+      "plan_task_id": "render-receipt",
+      "revision_number": 1,
+      "run_id": "159f7d39-4245-53c9-834c-68c343586738"
+    }
+  },
+  {
+    "sequence": 70,
+    "type": "cobbler.plan.execution.completed",
+    "payload": {
+      "commit": "c0ec06161393e462eea8e0b608a8ad5eae5d2867",
+      "evidence": {
+        "gates": [
+          {
+            "argv": "python3 -B -m unittest test/test_total.py test/test_receipt.py",
+            "commit": "c0ec06161393e462eea8e0b608a8ad5eae5d2867",
+            "duration_ms": 273,
+            "exit_status": 0,
+            "gate": "python_unittest",
+            "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+            "worktree": "$EVALUATION/worktrees/run-159f7d39-4245-53c9-834c-68c343586738"
+          }
+        ]
+      },
+      "execution_id": "1220c079-e4d7-5ea7-bf56-e929f57d9033",
+      "global_gate": "python_unittest",
+      "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+      "revision_number": 1
+    }
+  }
+]

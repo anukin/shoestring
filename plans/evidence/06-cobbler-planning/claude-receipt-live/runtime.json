@@ -1,0 +1,22 @@
+[
+  {
+    "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+    "ordinal": 1,
+    "model": "claude-opus-5-5",
+    "cli_version": "2.1.296",
+    "permission_mode": "dontAsk",
+    "tools": [
+      "Bash"
+    ]
+  },
+  {
+    "run_id": "159f7d39-4245-53c9-834c-68c343586738",
+    "ordinal": 1,
+    "model": "claude-opus-5-5",
+    "cli_version": "2.1.296",
+    "permission_mode": "dontAsk",
+    "tools": [
+      "Bash"
+    ]
+  }
+]

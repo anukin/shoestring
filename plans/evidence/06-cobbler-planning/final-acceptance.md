@@ -4,6 +4,16 @@
 **Prepared:** 2026-10-13.
 **Implementation baseline:** `6700a732081e2220fa2a47991ac9f10b3ca7e884`.
 
+VERIFIED (subsequent Claude verification, 2026-10-13):
+[the Claude packet](claude-receipt-live.md) now adds the same approved receipt
+contract executed through real Claude Code workers, with two accepted commits,
+task/global gates, separate-node restart and unchanged source/test bytes. It ran
+at `f24aef16b1cf424bd9a9a140c20dfb849daa13bb`, which adds task-scoped capacity
+confirmation; Claude's unknown/partial telemetry remains explicitly confirmed,
+not automatic. Its fresh gate is **1937 tests, 0 failures**, **4 doctests,
+1 skipped (6 excluded)**; Node **52/52** and **8/8**. Historical baseline and
+verification below remain scoped to the original closure audit.
+
 REPO-INSPECTION: packages A–E and L1 have implementation and deterministic
 evidence. The saved receipt model proposal also has successful production-path
 execution and restart evidence. The implementation assistant recommends closing
@@ -133,6 +143,12 @@ gated orchestration boundary and this small evaluation corpus. Retained follow-u
   lifetime accounting and output bounds; the saved-proposal capture utility
   does not supply them. The configured local adapter is tested hermetically;
   live Ollama inference was not verified.
+- Claude now has a successful sequential execution/restart proof. Same-session
+  resume and real quota-refusal classification remain unverified. The live test
+  explicitly disables the adapter's default permission bypass and supplies a
+  sandboxed launcher; it does not certify that default configuration. The existing
+  Claude normalizer retains public text as 500-character previews; full responses
+  are not available in the packet. Actual commits/gates establish acceptance.
 - Greeting has no model execution evidence; catalog has no valid proposal or
   live repair. Closing with that coverage needs the human decision below; it
   does not promise success for all three goals or larger repositories.

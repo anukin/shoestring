@@ -14,6 +14,10 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `claude-receipt-live.md` — pre-registered production Claude receipt execution,
+  task-scoped single-decision capacity confirmation, accepted commits and node
+  restart proof; real telemetry remains unknown/partial, not automatically safe.
+
 - `final-acceptance.md` — current closure packet: all acceptance conditions,
   semantic assessment across the pack, retained limits and fresh verification;
   human acceptance remains pending. Historical reports below keep their original

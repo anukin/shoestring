@@ -1,0 +1,25 @@
+{
+  "first": {
+    "base": "2a68bd7c087f05f31dac6c98ff2c1dd0894f0105",
+    "diff": "diff --git a/pantry.py b/pantry.py\nindex 3871b6f..4102185 100644\n--- a/pantry.py\n+++ b/pantry.py\n@@ -3,7 +3,7 @@ def greeting(name):\n \n \n def total_cents(items):\n-    return len(items)\n+    return sum(item[\"price_cents\"] * item[\"quantity\"] for item in items)\n \n \n def receipt(items):\n",
+    "dirty": false,
+    "head": "8daa96e36516336398482b44dbaf4c455dc794bb",
+    "message": "Calculate basket totals in integer cents\n\n"
+  },
+  "second": {
+    "base": "8daa96e36516336398482b44dbaf4c455dc794bb",
+    "diff": "diff --git a/pantry.py b/pantry.py\nindex 4102185..2889c45 100644\n--- a/pantry.py\n+++ b/pantry.py\n@@ -7,7 +7,7 @@ def total_cents(items):\n \n \n def receipt(items):\n-    return f\"Items: {len(items)}\"\n+    return f\"Total: {total_cents(items)} cents\"\n \n \n def catalog(names):\n",
+    "dirty": false,
+    "head": "c0ec06161393e462eea8e0b608a8ad5eae5d2867",
+    "message": "Render receipt using the basket total\n\n"
+  },
+  "completed": true,
+  "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+  "total_attempts": 2,
+  "accepted": [
+    "implement-total",
+    "render-receipt"
+  ],
+  "run_count": 2,
+  "source_clean_and_unchanged": true
+}

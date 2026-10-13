@@ -1,0 +1,36 @@
+{
+  "alwaysThinkingEnabled": false,
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "excludedCommands": [],
+    "filesystem": {
+      "allowWrite": [
+        "$EVALUATION/worktrees/run-fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+        "$EVALUATION/worktrees/.git-repositories/fbf32e36-ae26-5e7e-9d5c-e3159ee59c89/worktrees/run-fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+        "$EVALUATION/worktrees/.git-repositories/fbf32e36-ae26-5e7e-9d5c-e3159ee59c89/objects",
+        "$EVALUATION/worktrees/.git-repositories/fbf32e36-ae26-5e7e-9d5c-e3159ee59c89/refs/heads",
+        "$EVALUATION/worktrees/.git-repositories/fbf32e36-ae26-5e7e-9d5c-e3159ee59c89/logs/refs/heads"
+      ],
+      "denyWrite": [
+        "$EVALUATION/repos/source"
+      ],
+      "denyRead": [
+        "$USER_HOME"
+      ],
+      "allowRead": [
+        "$EVALUATION/worktrees/run-fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+        "$EVALUATION/worktrees/.git-repositories/fbf32e36-ae26-5e7e-9d5c-e3159ee59c89"
+      ]
+    },
+    "network": {
+      "allowedDomains": []
+    }
+  }
+}

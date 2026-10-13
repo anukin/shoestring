@@ -8,6 +8,13 @@ receipt execution and retained failures/limitations. It recommends completion;
 the human decision is pending and iteration 7 is not yet unlocked. Older status
 entries below retain their historical scope.
 
+VERIFIED (2026-10-13): [Claude Code verification](../evidence/06-cobbler-planning/claude-receipt-live.md)
+now completes the receipt contract through the second real harness, including
+accepted commits, task/global gates and restart. Its new CLI capacity confirmation
+is single-decision/task-attempt bound; unknown Claude telemetry stays unknown,
+and hard stops remain enforced. Same-session resume and real quota refusal are
+not claimed. Human closure acceptance remains pending.
+
 ## Implementation status
 
 VERIFIED (GitHub inspection, 2026-10-07): package A merged in

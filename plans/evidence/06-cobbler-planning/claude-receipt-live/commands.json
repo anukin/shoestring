@@ -1,0 +1,99 @@
+[
+  {
+    "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+    "ordinal": 2,
+    "boundary": "start",
+    "command": "cat pantry.py test/test_total.py; ls test"
+  },
+  {
+    "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+    "ordinal": 4,
+    "boundary": "end",
+    "status": "completed",
+    "is_error": false,
+    "interrupted": false
+  },
+  {
+    "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+    "ordinal": 5,
+    "boundary": "start",
+    "command": "python3 - <<'EOF'\np='pantry.py'\ns=open(p).read()\ns=s.replace(\"\"\"def total_cents(items):\n    return len(items)\"\"\",\"\"\"def total_cents(items):\n    return sum(item[\"price_cents\"] * item[\"quantity\"] for item in items)\"\"\")\nopen(p,'w').write(s)\nEOF\ngit diff; python3 -B -m unittest test/test_total.py"
+  },
+  {
+    "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+    "ordinal": 6,
+    "boundary": "end",
+    "status": "completed",
+    "is_error": false,
+    "interrupted": false
+  },
+  {
+    "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+    "ordinal": 7,
+    "boundary": "start",
+    "command": "git add pantry.py && git commit -q -m \"Calculate basket totals in integer cents\" && git log --oneline -1 && git status --short"
+  },
+  {
+    "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+    "ordinal": 8,
+    "boundary": "end",
+    "status": "completed",
+    "is_error": false,
+    "interrupted": false
+  },
+  {
+    "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+    "ordinal": 9,
+    "boundary": "start",
+    "command": "git rev-parse HEAD shoestring/run-fbf32e36-ae26-5e7e-9d5c-e3159ee59c89 2>&1; git status --short 2>/dev/null; git show --stat --format='%an <%ae>%n%B' HEAD 2>/dev/null"
+  },
+  {
+    "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+    "ordinal": 10,
+    "boundary": "end",
+    "status": "completed",
+    "is_error": false,
+    "interrupted": false
+  },
+  {
+    "run_id": "159f7d39-4245-53c9-834c-68c343586738",
+    "ordinal": 2,
+    "boundary": "start",
+    "command": "cat pantry.py test/test_receipt.py test/test_total.py"
+  },
+  {
+    "run_id": "159f7d39-4245-53c9-834c-68c343586738",
+    "ordinal": 4,
+    "boundary": "end",
+    "status": "completed",
+    "is_error": false,
+    "interrupted": false
+  },
+  {
+    "run_id": "159f7d39-4245-53c9-834c-68c343586738",
+    "ordinal": 5,
+    "boundary": "start",
+    "command": "sed -i '' 's/    return f\"Items: {len(items)}\"/    return f\"Total: {total_cents(items)} cents\"/' pantry.py && git diff && python3 -B -m unittest test/test_receipt.py test/test_total.py 2>&1 | tail -3 && git commit -qam \"Render receipt using the basket total\" && git log --oneline -1 && git status --short"
+  },
+  {
+    "run_id": "159f7d39-4245-53c9-834c-68c343586738",
+    "ordinal": 6,
+    "boundary": "end",
+    "status": "completed",
+    "is_error": false,
+    "interrupted": false
+  },
+  {
+    "run_id": "159f7d39-4245-53c9-834c-68c343586738",
+    "ordinal": 7,
+    "boundary": "start",
+    "command": "git rev-parse HEAD shoestring/run-159f7d39-4245-53c9-834c-68c343586738; git log --format='%h %an <%ae>%n%B' -1; git status --short 2>/dev/null; echo \"status-exit=$?\""
+  },
+  {
+    "run_id": "159f7d39-4245-53c9-834c-68c343586738",
+    "ordinal": 9,
+    "boundary": "end",
+    "status": "failed",
+    "is_error": true
+  }
+]

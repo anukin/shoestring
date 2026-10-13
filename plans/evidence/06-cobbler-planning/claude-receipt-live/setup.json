@@ -1,0 +1,16 @@
+{
+  "base": "2a68bd7c087f05f31dac6c98ff2c1dd0894f0105",
+  "plan_digest": "61c26213cbbb82ac13698ba58058bbfad6b928949382936b491c9879ca3bb67b",
+  "original_plan_digest": "13ba4b39f66d01dd9d1e37a119803e73f85caebdb3792181d134843138d8decd",
+  "new_evaluation_allowance": true,
+  "task_order": [
+    "implement-total",
+    "render-receipt"
+  ],
+  "task_attempt_limit": 1,
+  "goal_attempt_limit": 2,
+  "goal_seconds": 600,
+  "model": "opus",
+  "approval_attribution": "human:user",
+  "source_clean": true
+}

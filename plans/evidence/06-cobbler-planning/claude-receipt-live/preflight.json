@@ -1,0 +1,9 @@
+{
+  "scope": "subscription",
+  "version": "2.1.296",
+  "windows": [],
+  "support_tier": "conservative_partial",
+  "compatibility_state": "degraded",
+  "capacity_state": "unknown",
+  "confidence": "none"
+}

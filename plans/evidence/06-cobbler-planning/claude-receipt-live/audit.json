@@ -1,0 +1,39 @@
+{
+  "runs": [
+    {
+      "run_id": "fbf32e36-ae26-5e7e-9d5c-e3159ee59c89",
+      "status": "completed",
+      "provider_id": "claude_headless_stream_json",
+      "only_pantry_changed": true,
+      "tests_unchanged": true,
+      "local_gate_exit_status": 0
+    },
+    {
+      "run_id": "159f7d39-4245-53c9-834c-68c343586738",
+      "status": "completed",
+      "provider_id": "claude_headless_stream_json",
+      "only_pantry_changed": true,
+      "tests_unchanged": true,
+      "local_gate_exit_status": 0
+    }
+  ],
+  "source_all_bytes_unchanged": true,
+  "source_file_count": 38,
+  "tests_unchanged": true,
+  "plan_binding_only_base_changed": true,
+  "source_before_manifest": "source-before.json",
+  "planner_requests": 0,
+  "lease_states": {
+    "checkpoint_required": 2
+  },
+  "goal_row_status": "active",
+  "active_plan_run_ids": [],
+  "canonical_plan_completed": true,
+  "total_attempts": 2,
+  "provider_interval_ms": 46747,
+  "gate_ms": 818,
+  "charged_ms": 47565,
+  "remaining_goal_ms": 552435,
+  "confirmed_admissions": 2,
+  "intermediate_unconfirmed_refusals": 1
+}

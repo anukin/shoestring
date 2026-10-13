@@ -1,0 +1,11 @@
+{
+  "count": 25,
+  "kinds": {
+    "lifecycle": 7,
+    "command": 14,
+    "output": 2,
+    "result": 2
+  },
+  "note": "Selected normalized facts only; command stdout/stderr, provider IDs, raw frames and hidden reasoning excluded.",
+  "public_output_note": "Existing Claude normalizer retains at most 500 characters per public output; these are previews, not complete final answers."
+}

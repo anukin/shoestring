@@ -1,0 +1,30 @@
+{
+  "command": "mix precommit",
+  "exit_status": 0,
+  "doctests": 4,
+  "tests": 1937,
+  "failures": 0,
+  "skipped": 1,
+  "excluded": 6,
+  "seed": 784719,
+  "seconds": 190.6,
+  "async_seconds": 10.5,
+  "sync_seconds": 180.0,
+  "wall_seconds": 194.14,
+  "node_suites": [
+    {
+      "tests": 52,
+      "pass": 52,
+      "fail": 0,
+      "skipped": 0
+    },
+    {
+      "tests": 8,
+      "pass": 8,
+      "fail": 0,
+      "skipped": 0
+    }
+  ],
+  "implementation_commit": "f24aef16b1cf424bd9a9a140c20dfb849daa13bb",
+  "note": "Pre-live gate on final runtime/test/launcher code. Subsequent changes are evidence/documentation only; earlier red gate retained in the narrative."
+}

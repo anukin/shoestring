@@ -157,3 +157,11 @@ allowance; the failed evaluation remains intact. This proves execution of that
 saved model proposal, with the fresh fixture base binding disclosed. It does
 not supply a production subscription planner adapter or close semantic review
 across the whole evaluation pack.
+
+VERIFIED (2026-10-13): [the Claude execution packet](../plans/evidence/06-cobbler-planning/claude-receipt-live.md)
+adds successful execution of that same receipt contract through Claude Code,
+including two accepted commits, task/global gates and restart between tasks.
+The new fixture changes only the repository base. Each task uses its own
+attributable capacity confirmation against honestly unknown/partial telemetry.
+This verifies another execution harness; it does not add planner generation,
+same-session resume or live quota-refusal evidence.
