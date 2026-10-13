@@ -20,7 +20,7 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 - `final-acceptance.md` — current closure packet: all acceptance conditions,
   semantic assessment across the pack, retained limits and fresh verification;
-  human acceptance remains pending. Historical reports below keep their original
+  accepted by the user on 2026-10-13. Historical reports below keep their original
   scope; newer evidence is not retroactively attributed to their runs.
 
 - `receipt-live-success.md` — independent per-run Git storage, native sandbox

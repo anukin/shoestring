@@ -1,11 +1,11 @@
 # Iteration 6: Cobbler planning and approval
 
-**Status:** awaiting human acceptance (closure packet prepared 2026-10-13)
+**Status:** complete — accepted by the user on 2026-10-13
 
 REPO-INSPECTION: [the final acceptance packet](../evidence/06-cobbler-planning/final-acceptance.md)
 consolidates all seven acceptance conditions, the semantic scorecard, successful
-receipt execution and retained failures/limitations. It recommends completion;
-the human decision is pending and iteration 7 is not yet unlocked. Older status
+receipt execution and retained failures/limitations. The user accepted this
+packet and authorized iteration 7. Older status
 entries below retain their historical scope.
 
 VERIFIED (2026-10-13): [Claude Code verification](../evidence/06-cobbler-planning/claude-receipt-live.md)
@@ -13,7 +13,7 @@ now completes the receipt contract through the second real harness, including
 accepted commits, task/global gates and restart. Its new CLI capacity confirmation
 is single-decision/task-attempt bound; unknown Claude telemetry stays unknown,
 and hard stops remain enforced. Same-session resume and real quota refusal are
-not claimed. Human closure acceptance remains pending.
+not claimed. These limitations remain part of the accepted closure.
 
 ## Implementation status
 
@@ -353,10 +353,10 @@ they do not satisfy this semantic evaluation gate.
 
 ## Completion record
 
-- **Final status:** REPO-INSPECTION: awaiting human acceptance. Implementation,
+- **Final status:** VERIFIED (user decision, 2026-10-13): complete. Implementation,
   deterministic evidence and the assistant semantic assessment are consolidated
   in [final-acceptance.md](../evidence/06-cobbler-planning/final-acceptance.md).
-- **Completed on:** UNVERIFIED: not complete.
+- **Completed on:** 2026-10-13.
 - **Plan/goal schema versions:** REPO-INSPECTION: plan contract version 1,
   strict goal contract, plan/planner trajectory event schema version 1.
 - **Events/projections/configuration:** REPO-INSPECTION: immutable revisions,
@@ -383,7 +383,7 @@ they do not satisfy this semantic evaluation gate.
   completed both tasks with accepted material commits, unchanged tests, passing
   task/global gates and restart between tasks without replanning. The old failure
   remains recorded. The final acceptance packet now assesses the whole pack;
-  human acceptance of that assessment and its coverage limits remains pending.
+  the user accepted that assessment with its coverage limits on 2026-10-13.
   Production subscription planner support is separate integration work.
   The external evaluation utility
   is not a production planner adapter or a proof of its token/admission limits.
@@ -402,5 +402,6 @@ they do not satisfy this semantic evaluation gate.
   REPO-INSPECTION: small one-/two-task evaluation fixtures have limited
   complexity and cannot establish general planner quality or live handoff cost.
 - **Instructions for iteration 7:** REPO-INSPECTION: the final acceptance packet
-  includes preflight notes. Do not mark iteration 6 complete or unlock multi-Elf
-  fan-out until the user accepts its semantic assessment and retained limits.
+  includes preflight notes. User acceptance unlocks iteration 7 implementation;
+  preserve its limitations and prove atomic ownership and reconciliation before
+  enabling production fan-out.

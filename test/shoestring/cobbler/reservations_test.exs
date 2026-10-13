@@ -1,0 +1,434 @@
+defmodule Shoestring.Cobbler.ReservationsTest do
+  @moduledoc """
+  New-capability checks against real, independent SQLite connections. Scratch
+  databases are retained; no cleanup/reaper behavior or provider calls. These
+  exercise the reservation boundary, not parallel production dispatch.
+  """
+  use ExUnit.Case, async: false
+  import Ecto.Query
+  import Shoestring.Test.CobblerHelpers, only: [create_goal!: 1, admission_payload: 1]
+  alias Shoestring.Cobbler.{ReservationPolicy, ReservationRecord, Reservations}
+  alias Shoestring.Test.MigrationRepo
+  alias Shoestring.Trajectory.{EventRegistry, TrajectoryEvent}
+
+  @now ~U[2026-10-13 12:00:00.000000Z]
+
+  @migrations [
+    {20_260_830_012_112, Shoestring.Repo.Migrations.CreateTrajectoryFoundation},
+    {20_260_830_023_603, Shoestring.Repo.Migrations.AddProjectorStatusAndFailureDetails},
+    {20_260_831_050_006, Shoestring.Repo.Migrations.AddHarnessFoundation},
+    {20_260_901_232_504, Shoestring.Repo.Migrations.AddObanDispatch},
+    {20_260_901_232_628, Shoestring.Repo.Migrations.EvolveCapacitySnapshotContractV2},
+    {20_260_902_232_748, Shoestring.Repo.Migrations.AddHarnessRunRequestExtensions},
+    {20_260_903_000_650, Shoestring.Repo.Migrations.HardenCapacitySnapshotContractV2},
+    {20_260_903_054_508, Shoestring.Repo.Migrations.CreateCapacityObservatorySingleton},
+    {20_260_903_061_948, Shoestring.Repo.Migrations.AddCapacityObservatoryLookupIndex},
+    {20_260_903_231_739, Shoestring.Repo.Migrations.RepairCapacityObservatorySingletonTriggers},
+    {20_260_905_162_804, Shoestring.Repo.Migrations.AddInterruptedRunStatus},
+    {20_260_907_234_352, Shoestring.Repo.Migrations.CreateCobblerFoundation},
+    {20_260_907_234_724, Shoestring.Repo.Migrations.AddCobblerCommands},
+    {20_260_908_061_716, Shoestring.Repo.Migrations.CreateCobblerWakeups},
+    {20_260_909_035_800, Shoestring.Repo.Migrations.AddResponseAttributionToCobblerCommands},
+    {20_260_919_034_454, Shoestring.Repo.Migrations.WidenCobblerCommandTypes},
+    {20_261_001_014_010, Shoestring.Repo.Migrations.AddCobblerPlanRevisions},
+    {20_261_004_192_021, Shoestring.Repo.Migrations.AddPlannerRequests},
+    {20_261_007_024_346, Shoestring.Repo.Migrations.AddAgentProfiles},
+    {20_261_013_225_751, Shoestring.Repo.Migrations.AddCobblerCapacityReservations}
+  ]
+
+  setup do
+    directory = Path.join(System.tmp_dir!(), "shoestring-reservations-#{Ecto.UUID.generate()}")
+    File.mkdir_p!(directory)
+
+    repo_opts = [
+      database: Path.join(directory, "reservations.db"),
+      pool_size: 8,
+      journal_mode: :wal,
+      busy_timeout: 5_000
+    ]
+
+    # Historical SQLite table rebuilds use connection-local PRAGMA switches.
+    # Migrate on one connection, then reopen with eight independent writers.
+    start_supervised!({MigrationRepo, Keyword.put(repo_opts, :pool_size, 1)})
+    Ecto.Migrator.run(MigrationRepo, @migrations, :up, all: true, log: false)
+    stop_supervised!(MigrationRepo)
+    start_supervised!({MigrationRepo, repo_opts})
+
+    goal = create_goal!(MigrationRepo)
+    %{goal: goal, repo_opts: repo_opts, opts: [repo: MigrationRepo, now: @now]}
+  end
+
+  defp policy(changes \\ %{}) do
+    {:ok, policy} = ReservationPolicy.new(changes)
+    policy
+  end
+
+  defp candidate(goal, changes \\ %{}, payload_changes \\ %{}) do
+    payload = admission_payload(provider_id: "codex", scope: "subscription")
+
+    payload =
+      Map.merge(payload, %{
+        "evaluated_at" => DateTime.to_iso8601(@now),
+        "observation" => %{
+          "snapshot_id" => Ecto.UUID.generate(),
+          "age_seconds" => 5,
+          "observed_at" => DateTime.to_iso8601(DateTime.add(@now, -5)),
+          "confidence" => "none",
+          "freshness" => "fresh"
+        },
+        "proposed_bounds" => %{
+          "response_budget" => 10,
+          "tool_budget" => 25,
+          "deadline" => DateTime.to_iso8601(DateTime.add(@now, 300))
+        }
+      })
+      |> Map.merge(payload_changes)
+
+    assert {:ok, payload} =
+             EventRegistry.validate_payload("admission.decided", 1, payload, now: @now)
+
+    sequence =
+      (MigrationRepo.one(
+         from e in TrajectoryEvent, where: e.goal_id == ^goal.id, select: max(e.sequence)
+       ) || 0) + 1
+
+    event =
+      %TrajectoryEvent{
+        id: Ecto.UUID.generate(),
+        goal_id: goal.id,
+        sequence: sequence,
+        type: "admission.decided",
+        actor: "cobbler",
+        schema_version: 1,
+        occurred_at: @now,
+        payload: payload
+      }
+      |> TrajectoryEvent.changeset(%{})
+      |> MigrationRepo.insert!()
+
+    Map.merge(
+      %{
+        id: Ecto.UUID.generate(),
+        goal_id: goal.id,
+        execution_id: Ecto.UUID.generate(),
+        plan_task_id: "alpha",
+        attempt: 1,
+        run_id: Ecto.UUID.generate(),
+        admission_event_id: event.id
+      },
+      changes
+    )
+  end
+
+  test "hold retains exact admission provenance and ignores caller attempts to choose allowance",
+       c do
+    attrs = candidate(c.goal)
+
+    assert {:ok, row} =
+             Reservations.hold(
+               Map.merge(attrs, %{units: 0, scope: "invented", provider_id: "other"}),
+               policy(),
+               c.opts
+             )
+
+    event = MigrationRepo.get!(TrajectoryEvent, attrs.admission_event_id)
+    assert row.provider_id == "codex"
+    assert row.scope == "subscription"
+    assert row.units == 1
+    assert row.snapshot_id == event.payload["observation"]["snapshot_id"]
+    assert row.observation_age_seconds == 5
+    assert row.admission_policy == event.payload["policy"]
+    assert row.lease_bounds == event.payload["proposed_bounds"]
+    assert row.concurrency_policy == ReservationPolicy.to_map(policy())
+    assert row.status == "held"
+    assert MigrationRepo.aggregate("harness_runs", :count) == 0
+  end
+
+  test "exact replay survives repository restart without acquiring another allowance", c do
+    attrs = candidate(c.goal)
+    assert {:ok, row} = Reservations.hold(attrs, policy(), c.opts)
+    stop_supervised!(MigrationRepo)
+    start_supervised!({MigrationRepo, c.repo_opts})
+
+    assert {:ok, same} =
+             Reservations.hold(
+               attrs,
+               policy(),
+               Keyword.put(c.opts, :now, DateTime.add(@now, 600))
+             )
+
+    assert same == row
+    assert Reservations.outstanding(c.opts) == [row]
+    assert MigrationRepo.aggregate(ReservationRecord, :count) == 1
+  end
+
+  test "replay cannot rebind any ownership field or policy", c do
+    attrs = candidate(c.goal)
+    assert {:ok, _} = Reservations.hold(attrs, policy(), c.opts)
+
+    for changes <- [
+          %{goal_id: Ecto.UUID.generate()},
+          %{execution_id: Ecto.UUID.generate()},
+          %{run_id: Ecto.UUID.generate()},
+          %{plan_task_id: "other"},
+          %{attempt: 2},
+          %{admission_event_id: Ecto.UUID.generate()}
+        ] do
+      assert {:error, :reservation_identity_mismatch} =
+               Reservations.hold(Map.merge(attrs, changes), policy(), c.opts)
+    end
+
+    assert {:error, :reservation_identity_mismatch} =
+             Reservations.hold(attrs, policy(%{global_limit: 2}), c.opts)
+
+    assert MigrationRepo.aggregate(ReservationRecord, :count) == 1
+  end
+
+  test "global cap spans providers and goals", c do
+    assert {:ok, _} = Reservations.hold(candidate(c.goal), policy(), c.opts)
+    other = create_goal!(MigrationRepo)
+
+    attrs =
+      candidate(other, %{}, %{
+        "candidate" => %{
+          "provider_id" => "claude",
+          "adapter_id" => "claude_code",
+          "support_tier" => "reactive_only",
+          "compatibility_state" => "compatible"
+        }
+      })
+
+    assert {:error, {:reservation_blocked, :global_limit}} =
+             Reservations.hold(attrs, policy(), c.opts)
+
+    assert MigrationRepo.aggregate(ReservationRecord, :count) == 1
+  end
+
+  test "provider-account cap spans goals while unrelated provider can proceed", c do
+    policy = policy(%{global_limit: 3, goal_limit: 3, account_units: 3})
+    assert {:ok, _} = Reservations.hold(candidate(c.goal), policy, c.opts)
+    other = create_goal!(MigrationRepo)
+
+    assert {:error, {:reservation_blocked, :provider_account_limit}} =
+             Reservations.hold(candidate(other), policy, c.opts)
+
+    claude = %{
+      "provider_id" => "claude",
+      "adapter_id" => "claude_code",
+      "support_tier" => "reactive_only",
+      "compatibility_state" => "compatible"
+    }
+
+    assert {:ok, row} =
+             Reservations.hold(candidate(other, %{}, %{"candidate" => claude}), policy, c.opts)
+
+    assert row.provider_id == "claude"
+    assert MigrationRepo.aggregate(ReservationRecord, :count) == 2
+  end
+
+  test "goal cap spans provider buckets", c do
+    policy = policy(%{global_limit: 3, provider_account_limit: 3, account_units: 3})
+    assert {:ok, _} = Reservations.hold(candidate(c.goal), policy, c.opts)
+
+    claude = %{
+      "provider_id" => "claude",
+      "adapter_id" => "claude_code",
+      "support_tier" => "reactive_only",
+      "compatibility_state" => "compatible"
+    }
+
+    assert {:error, {:reservation_blocked, :goal_limit}} =
+             Reservations.hold(candidate(c.goal, %{}, %{"candidate" => claude}), policy, c.opts)
+
+    assert {:ok, _} = Reservations.hold(candidate(create_goal!(MigrationRepo)), policy, c.opts)
+  end
+
+  test "configured weighted units share an account across different observations", c do
+    policy =
+      policy(%{
+        global_limit: 4,
+        provider_account_limit: 4,
+        goal_limit: 4,
+        account_units: 3,
+        task_units: 2
+      })
+
+    a = candidate(c.goal)
+    b = candidate(create_goal!(MigrationRepo))
+    assert {:ok, row} = Reservations.hold(a, policy, c.opts)
+    assert row.units == 2
+    assert {:error, {:reservation_blocked, :account_units}} = Reservations.hold(b, policy, c.opts)
+
+    refute MigrationRepo.get!(TrajectoryEvent, a.admission_event_id).payload["observation"][
+             "snapshot_id"
+           ] ==
+             MigrationRepo.get!(TrajectoryEvent, b.admission_event_id).payload["observation"][
+               "snapshot_id"
+             ]
+
+    assert MigrationRepo.aggregate(ReservationRecord, :count) == 1
+  end
+
+  test "deadline and uncertain ownership never free allowance or authorize replacement", c do
+    attrs = candidate(c.goal)
+    assert {:ok, row} = Reservations.hold(attrs, policy(), c.opts)
+    later = Keyword.put(c.opts, :now, DateTime.add(@now, 600))
+    assert Reservations.outstanding(later) == [row]
+
+    assert {:ok, uncertain} =
+             Reservations.require_reconciliation(
+               row.id,
+               "deadline observed; owner unresolved",
+               later
+             )
+
+    assert uncertain.status == "reconciliation_required"
+
+    assert {:ok, ^uncertain} =
+             Reservations.require_reconciliation(row.id, uncertain.reconciliation_reason, later)
+
+    assert {:error, :reconciliation_reason_mismatch} =
+             Reservations.require_reconciliation(row.id, "different evidence", later)
+
+    # Give the new candidate a still-valid admission deadline; only ownership blocks it.
+    next =
+      candidate(create_goal!(MigrationRepo), %{}, %{
+        "proposed_bounds" => %{"deadline" => DateTime.to_iso8601(DateTime.add(@now, 900))}
+      })
+
+    assert {:error, {:reservation_blocked, :global_limit}} =
+             Reservations.hold(next, policy(), later)
+
+    assert Reservations.outstanding(later) == [uncertain]
+    assert {:ok, ^uncertain} = Reservations.hold(attrs, policy(), later)
+  end
+
+  test "changing configured policy cannot erase outstanding ownership", c do
+    assert {:ok, row} = Reservations.hold(candidate(c.goal), policy(), c.opts)
+
+    changed =
+      policy(%{global_limit: 2, provider_account_limit: 2, goal_limit: 2, account_units: 2})
+
+    assert {:error, :reservation_policy_change_requires_reconciliation} =
+             Reservations.hold(candidate(create_goal!(MigrationRepo)), changed, c.opts)
+
+    assert Reservations.outstanding(c.opts) == [row]
+  end
+
+  test "invalid ownership, foreign goals, rejected, expired and missing observation admissions fail closed",
+       c do
+    valid = candidate(c.goal)
+
+    for changes <- [%{id: "invalid"}, %{attempt: 0}, %{plan_task_id: "../escape"}] do
+      assert {:error, :invalid_reservation_identity} =
+               Reservations.hold(Map.merge(valid, changes), policy(), c.opts)
+    end
+
+    for changes <- [%{goal_id: Ecto.UUID.generate()}, %{admission_event_id: Ecto.UUID.generate()}] do
+      assert {:error, :reservation_admission_mismatch} =
+               Reservations.hold(Map.merge(valid, changes), policy(), c.opts)
+    end
+
+    for payload <- [
+          %{"result" => "reject"},
+          %{"run_id" => Ecto.UUID.generate()},
+          %{"observation" => %{"snapshot_id" => nil}},
+          %{"policy" => %{}},
+          %{"proposed_bounds" => %{"deadline" => 123}},
+          %{"proposed_bounds" => %{"deadline" => DateTime.to_iso8601(@now)}}
+        ] do
+      assert {:error, :reservation_admission_mismatch} =
+               Reservations.hold(candidate(c.goal, %{}, payload), policy(), c.opts)
+    end
+
+    assert Reservations.outstanding(c.opts) == []
+  end
+
+  test "attempt, run and admission IDs cannot be consumed twice under new reservation IDs", c do
+    policy =
+      policy(%{global_limit: 8, provider_account_limit: 8, goal_limit: 8, account_units: 8})
+
+    attrs = candidate(c.goal)
+    assert {:ok, _} = Reservations.hold(attrs, policy, c.opts)
+
+    for next <- [
+          Map.put(attrs, :id, Ecto.UUID.generate()),
+          Map.merge(attrs, %{
+            id: Ecto.UUID.generate(),
+            execution_id: Ecto.UUID.generate(),
+            run_id: Ecto.UUID.generate()
+          }),
+          candidate(c.goal, %{run_id: attrs.run_id}),
+          candidate(c.goal, %{execution_id: attrs.execution_id})
+        ] do
+      assert {:error, {:reservation_conflict, %Ecto.Changeset{}}} =
+               Reservations.hold(next, policy, c.opts)
+    end
+
+    assert MigrationRepo.aggregate(ReservationRecord, :count) == 1
+  end
+
+  test "missing observation time stays unknown and invalid reconciliation creates no facts", c do
+    attrs =
+      candidate(c.goal, %{}, %{
+        "observation" => %{"snapshot_id" => Ecto.UUID.generate(), "confidence" => "none"}
+      })
+
+    assert {:ok, row} = Reservations.hold(attrs, policy(), c.opts)
+    assert row.observation_age_seconds == nil
+
+    assert {:error, :invalid_reconciliation} =
+             Reservations.require_reconciliation(row.id, "", c.opts)
+
+    assert {:error, :invalid_reconciliation} =
+             Reservations.require_reconciliation("invalid", "unresolved", c.opts)
+
+    assert {:error, :reservation_not_found} =
+             Reservations.require_reconciliation(Ecto.UUID.generate(), "unresolved", c.opts)
+
+    assert Reservations.outstanding(c.opts) == [row]
+
+    assert {:error, _} =
+             Reservations.hold(candidate(c.goal), %ReservationPolicy{global_limit: 0}, c.opts)
+  end
+
+  test "eight concurrent independent connections cannot double-claim three shared units", c do
+    policy =
+      policy(%{global_limit: 8, provider_account_limit: 8, goal_limit: 8, account_units: 3})
+
+    candidates = Enum.map(1..8, fn _ -> candidate(create_goal!(MigrationRepo)) end)
+    results = race(candidates, policy, c.opts)
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 3
+    assert Enum.count(results, &(&1 == {:error, {:reservation_blocked, :account_units}})) == 5
+    assert MigrationRepo.aggregate(ReservationRecord, :sum, :units) == 3
+  end
+
+  test "eight concurrent exact replays converge on one durable reservation", c do
+    attrs = candidate(c.goal)
+    results = race(List.duplicate(attrs, 8), policy(), c.opts)
+    assert Enum.all?(results, &match?({:ok, %{id: id}} when id == attrs.id, &1))
+    assert MigrationRepo.aggregate(ReservationRecord, :count) == 1
+  end
+
+  defp race(candidates, policy, opts) do
+    supervisor = start_supervised!(Task.Supervisor)
+    parent = self()
+
+    tasks =
+      Enum.map(candidates, fn attrs ->
+        Task.Supervisor.async_nolink(supervisor, fn ->
+          send(parent, {:ready, self()})
+
+          receive do
+            :go -> Reservations.hold(attrs, policy, opts)
+          after
+            10_000 -> raise "reservation race start timed out"
+          end
+        end)
+      end)
+
+    Enum.each(tasks, fn %{pid: pid} -> assert_receive {:ready, ^pid}, 10_000 end)
+    Enum.each(tasks, &send(&1.pid, :go))
+    Enum.map(tasks, &Task.await(&1, 10_000))
+  end
+end

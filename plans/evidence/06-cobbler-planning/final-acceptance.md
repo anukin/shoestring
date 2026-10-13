@@ -196,15 +196,18 @@ and `git diff --check` passed.
 
 ## Human decision and iteration 7 handoff
 
-**Human decision:** pending. **Iteration completion date:** not assigned.
+**Human decision:** accepted on 2026-10-13. **Iteration completion date:** 2026-10-13.
 
-REPO-INSPECTION: the proposed decision is to accept the seven deterministic
+VERIFIED (conversation, 2026-10-13): the user said, “seems good to me. We can
+start on iteration 7 now”. This accepts closure with the limitations above and
+authorizes iteration 7 implementation. It does not grant new live provider runs.
+
+REPO-INSPECTION: the accepted decision covers the seven deterministic
 conditions, the scored valid proposals, catalog's preserved refusal, and the
 successful two-task receipt run as sufficient iteration-6 evidence, with the
 coverage and follow-ups above explicitly retained. It does not approve execution
-of another model proposal or grant new provider calls. After acceptance, record
-the user's decision, mark iteration 6 complete and make iteration 7 ready for
-preflight. Until then, do not launch parallel implementation.
+of another model proposal or grant new provider calls. Iteration 6 is complete
+and iteration 7 is unlocked for preflight and implementation.
 
 REPO-INSPECTION: iteration 7 preflight should replay an approved completed plan
 using canonical status, account for private Git commit ownership and continuation
