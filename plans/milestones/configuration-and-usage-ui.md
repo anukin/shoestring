@@ -1,7 +1,8 @@
 # Product follow-up: agent configuration and usage UI
 
-**Status:** configuration and usage implementation complete; execution binding
-and CLI approval remain separate iteration-6 work. See the acceptance record below.
+**Status:** configuration and usage implemented; CLI approval and execution
+binding are implemented in iteration 6. Keyboard/screen-reader acceptance remains
+open. See the dated acceptance records below.
 
 **Decision recorded:** 2026-10-05.
 
@@ -74,7 +75,7 @@ illustrative rather than a provider support claim.
 
 - [x] Define persisted orchestrator configuration and immutable revision semantics.
 - [x] Establish CLI lookup of named, default and historical agent snapshots.
-- [ ] Establish CLI-facing approval and bind snapshots to approved execution.
+- [x] Establish CLI-facing approval and bind snapshots to approved execution.
 - [x] Build Usage from existing normalized capacity observations.
 - [x] Build Agents create/edit/duplicate and provider/model selection.
 - [x] Build Settings for configured model identifiers and shared defaults.
@@ -107,7 +108,16 @@ VERIFIED: `perl -e 'alarm 600; exec @ARGV' mix precommit < /dev/null` passed:
 Node capacity 52/52 and UI 8/8 passed. The earlier intermittent red gate and
 its transaction-abort regression/fix are retained in the evidence record.
 
-UNVERIFIED: acceptance item 2 is not closed. Immutable profile lookup is available,
-but approved execution does not yet bind these snapshots. Live entitlement,
-provider inference and complete keyboard/screen-reader coverage were not verified.
-Settings does not test provider authentication; it states that boundary explicitly.
+Historical limitation at the UI implementation gate: acceptance item 2 was not
+closed then; immutable profile lookup existed without execution binding.
+
+VERIFIED (subsequent implementation evidence): [execution-profile.md](../evidence/06-cobbler-planning/execution-profile.md)
+records approved execution binding and the regression proving saved revision/model
+identity survives later agent edits. Package C's [CLI approval evidence](../evidence/06-cobbler-planning/cli-approval.md)
+records exact-revision approval. These close the previously pending binding/approval
+item; they do not turn the earlier UI gate into a binding test.
+
+UNVERIFIED: live entitlement for all configured models and complete keyboard/
+screen-reader acceptance remain open. Settings does not test provider
+authentication; it states that boundary explicitly. Iteration 6's receipt run
+verifies inference only for its explicitly selected model and account.

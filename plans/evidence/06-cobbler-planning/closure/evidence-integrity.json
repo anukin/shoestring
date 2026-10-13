@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "date": "2026-10-13",
+  "receipt_manifest_artifacts_verified": 22,
+  "cases": {
+    "greeting": {
+      "proposal_sha256": "d936e669fb17809a28dbf43748745516a43f57e0a8239106dbd74a459325142d",
+      "context_digest": "1b615cce63d34c930838e9ae12f1b1f612796d2752c7c31bb8508a7cb497c40d",
+      "schema_status": "valid",
+      "reference_sha256": "398126ce931c40c9bfdc27711ef7795b0cb619631f9aad18b0274797d498efaf",
+      "offline_comparison_exit_status": 0,
+      "saved_comparison_reproduced": true
+    },
+    "receipt": {
+      "proposal_sha256": "69f08831a199a08938130b9a060d5a3dc48d3a78a03ce1ee540e393cda4e17e0",
+      "context_digest": "cadb79e4c206920b980e7684b0ce10dd7e14e6ca984a0b7a04f23abe5909de89",
+      "schema_status": "valid",
+      "reference_sha256": "d26ef35c3ff1e7e807a911d49856ff7775705327ddd14f442161dcff9a63d146",
+      "offline_comparison_exit_status": 0,
+      "saved_comparison_reproduced": true
+    },
+    "catalog": {
+      "proposal_sha256": "b748ac2c125f1c554dc16cf0687b40c487b4aef5a6f125c86063cc32400d0dda",
+      "context_digest": "22c68771588ada558a0d3dc29cb2ad19fcdbf5ec9508143c60f9c28e3b845ad3",
+      "schema_status": "schema_failed",
+      "reference_sha256": "d3a1f4a6757c97e6b8beccfa7e9e59bc652db4895c24ad6366ee6ab46c86c01e",
+      "offline_comparison_exit_status": 0,
+      "saved_comparison_reproduced": true
+    }
+  },
+  "receipt_binding_only_base_changed": true,
+  "receipt_order_restart_completion_verified": true,
+  "scope": "Revalidation of retained artifacts and current offline production validator, not a new live provider run."
+}

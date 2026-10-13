@@ -14,6 +14,11 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 ## Documents
 
+- `final-acceptance.md` — current closure packet: all acceptance conditions,
+  semantic assessment across the pack, retained limits and fresh verification;
+  human acceptance remains pending. Historical reports below keep their original
+  scope; newer evidence is not retroactively attributed to their runs.
+
 - `receipt-live-success.md` — independent per-run Git storage, native sandbox
   write-denial/commit proof, and an approved real two-task receipt execution
   with accepted commits and restart between tasks; semantic closeout stays open.
@@ -27,7 +32,7 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 - `luna-evaluation.md` — authorized subscription-model proposal capture, initial
   failures, contract results, partial assistant review and exact bound plans;
-  production admission and execution remain unverified.
+  later receipt execution and consolidated assessment are in the newer packets.
 
 - `python-evaluation.md` — user-approved task scopes translated to Python,
   trusted unittest gates and clean Git-bound reference checks.
@@ -80,7 +85,8 @@ schema without runtime integration; UNVERIFIED means not verified.
 
 - `configuration-and-usage.md` — persisted orchestrators, immutable CLI snapshot
   lookup, configuration/allowance UI, browser evidence, reconstructed regressions
-  and the final-gate transaction-abort correction. Execution binding remains open.
+  and the final-gate transaction-abort correction. Subsequent execution binding
+  is recorded in `execution-profile.md`.
 
 - `planner-boundary.md` — package B's bounded fixture/local-model inference,
   quota admission, durable budget/replay, strict validation and single repair.

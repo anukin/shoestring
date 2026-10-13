@@ -135,8 +135,11 @@ revision. Record that binding transformation and the new plan digest; the
 synthetic reference is not directly executable. The smoke script does not prove
 approved model-plan execution.
 
-UNVERIFIED: human semantic review across the pack remains open. Production
-subscription planner admission is separate integration work. The first live
+REPO-INSPECTION: [the final acceptance packet](../plans/evidence/06-cobbler-planning/final-acceptance.md)
+now consolidates assistant scores, accepted receipt diffs, retained failures and
+coverage limits for the whole pack. UNVERIFIED: human acceptance of that packet
+remains open. Production subscription planner admission is separate integration
+work. The first live
 packet adds two valid proposals, one rejected proposal and partial assistant
 static review; reference smoke checks do not supply execution or admission evidence.
 

@@ -1,6 +1,12 @@
 # Iteration 6: Cobbler planning and approval
 
-**Status:** in progress
+**Status:** awaiting human acceptance (closure packet prepared 2026-10-13)
+
+REPO-INSPECTION: [the final acceptance packet](../evidence/06-cobbler-planning/final-acceptance.md)
+consolidates all seven acceptance conditions, the semantic scorecard, successful
+receipt execution and retained failures/limitations. It recommends completion;
+the human decision is pending and iteration 7 is not yet unlocked. Older status
+entries below retain their historical scope.
 
 ## Implementation status
 
@@ -340,8 +346,9 @@ they do not satisfy this semantic evaluation gate.
 
 ## Completion record
 
-- **Final status:** REPO-INSPECTION: in progress. Implementation and deterministic
-  fixture evidence are recorded; semantic acceptance remains open.
+- **Final status:** REPO-INSPECTION: awaiting human acceptance. Implementation,
+  deterministic evidence and the assistant semantic assessment are consolidated
+  in [final-acceptance.md](../evidence/06-cobbler-planning/final-acceptance.md).
 - **Completed on:** UNVERIFIED: not complete.
 - **Plan/goal schema versions:** REPO-INSPECTION: plan contract version 1,
   strict goal contract, plan/planner trajectory event schema version 1.
@@ -368,17 +375,17 @@ they do not satisfy this semantic evaluation gate.
   [receipt evaluation](../evidence/06-cobbler-planning/receipt-live-success.md)
   completed both tasks with accepted material commits, unchanged tests, passing
   task/global gates and restart between tasks without replanning. The old failure
-  remains recorded. Human semantic review across the pack and the final closure
-  record remain open.
+  remains recorded. The final acceptance packet now assesses the whole pack;
+  human acceptance of that assessment and its coverage limits remains pending.
   Production subscription planner support is separate integration work.
   The external evaluation utility
   is not a production planner adapter or a proof of its token/admission limits.
   See [the production-path preparation](../evidence/06-cobbler-planning/live-path-preparation.md)
   for the pending subscription limit decision, explicit ephemeral execution
   option and required live admission/approval/execution/restart evidence.
-- **Verification commands:** `mix precommit`; focused deterministic-matrix
-  command and exact counts are in the acceptance audit. Historical package
-  commands remain in their evidence records.
+- **Verification commands:** `mix precommit`; the fresh closure result belongs
+  to the final acceptance packet. Focused deterministic-matrix commands and
+  historical package counts remain in their original evidence records.
 - **Demo result:** REPO-INSPECTION: composed hermetic CLI generation, dependency
   edit, approval, real-worker/worktree gates, quota continuation, restart and
   cyclic refusal are implemented. Goal creation/profile/capacity setup uses
@@ -387,6 +394,6 @@ they do not satisfy this semantic evaluation gate.
   CLI-based; configuration and usage visualization are a separate UI milestone.
   REPO-INSPECTION: small one-/two-task evaluation fixtures have limited
   complexity and cannot establish general planner quality or live handoff cost.
-- **Instructions for iteration 7:** REPO-INSPECTION: do not mark iteration 6
-  complete or unlock multi-Elf fan-out until the semantic evaluation and final
-  acceptance record are complete.
+- **Instructions for iteration 7:** REPO-INSPECTION: the final acceptance packet
+  includes preflight notes. Do not mark iteration 6 complete or unlock multi-Elf
+  fan-out until the user accepts its semantic assessment and retained limits.

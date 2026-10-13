@@ -1,5 +1,11 @@
 # Iteration 6 acceptance audit
 
+REPO-INSPECTION (2026-10-13): this is the historical deterministic audit. The
+new [final acceptance packet](final-acceptance.md) records subsequent model
+proposals, successful receipt execution, consolidated semantic assessment and
+the pending human closure decision. The original results and limits below are
+not rewritten as if those later observations occurred in this audit.
+
 REPO-INSPECTION: audit baseline is `a53aa1b40ce12e3dac20499f1cc35635ba5efd64`.
 The user's instruction to work on main without a PR overrides the standing
 isolation/PR workflow. Local `.github/hooks/` and `.pi/` are outside this change.

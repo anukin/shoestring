@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "implementation_base": "6700a732081e2220fa2a47991ac9f10b3ca7e884",
+  "date": "2026-10-13",
+  "command": "mix precommit",
+  "exit_status": 0,
+  "doctests": 4,
+  "tests": 1928,
+  "failures": 0,
+  "skipped": 1,
+  "excluded": 6,
+  "seed": 295321,
+  "seconds": 176.1,
+  "async_seconds": 9.1,
+  "sync_seconds": 167.0,
+  "wall_seconds": 179.654,
+  "timeout_seconds": 480,
+  "stdin": "closed",
+  "node_suites": [
+    {
+      "tests": 52,
+      "pass": 52,
+      "fail": 0,
+      "skipped": 0
+    },
+    {
+      "tests": 8,
+      "pass": 8,
+      "fail": 0,
+      "skipped": 0
+    }
+  ],
+  "changes": "documentation and closure evidence only",
+  "provider_calls": 0,
+  "note": "The initial sandboxed mix help precommit failed on Mix.PubSub socket permissions before any gate; help and the single full gate succeeded with local socket access."
+}

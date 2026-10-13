@@ -93,8 +93,10 @@ are available through `mix shoestring.plans`. It starts only the repository and
 does not dispatch work. See [the CLI plan review workflow](docs/cli-plan-review.md)
 for import/export, approval/rejection and stored planner quota display.
 
-Here `builder` is an example saved agent name. REPO-INSPECTION: executor
-integration, execution binding and amendment/replan remain iteration-6 work. See the
+Here `builder` is an example saved agent name. REPO-INSPECTION: sequential executor
+integration, saved-profile execution binding and bounded amendment/replan are
+implemented. Iteration 6 is awaiting human acceptance of its
+[closure packet](plans/evidence/06-cobbler-planning/final-acceptance.md). See the
 [configuration and usage UI milestone](plans/milestones/configuration-and-usage-ui.md)
 and [implementation evidence](plans/evidence/06-cobbler-planning/configuration-and-usage.md).
 
@@ -209,20 +211,19 @@ appear successful.
 
 ## Roadmap
 
-The next milestone adds the execution side of the control plane:
+REPO-INSPECTION: durable harness execution, quota-aware admission/continuation,
+approved sequential plans, worktree gates and bounded amendment are implemented.
+The [iteration-6 acceptance packet](plans/evidence/06-cobbler-planning/final-acceptance.md)
+separates deterministic checks, the successful live receipt run and retained limits.
 
-- runs and durable run ownership;
-- harness contracts and deterministic fakes;
-- bounded execution leases and checkpoints;
-- Oban-backed delivery and reconciliation;
-- capacity observations for supported providers;
-- Cobbler/Elf supervision and worktree coordination;
-- Claude Code and Codex integrations;
-- authenticated local UI sessions.
-
-Capacity, harness execution, provider integrations, model-generated summaries,
-embeddings, and distributed sequence allocation are deliberately outside the
-current trajectory slice.
+Planned follow-ups are concurrent isolated workers and shared reservations,
+bounded cross-provider review, and installable releases with diagnostics and
+optional forecasting/adapters. Production subscription planning is a separate
+integration gap: importing a saved subscription-model proposal does not establish
+admission/accounting for subscription planner inference. The older browser-terminal
+milestone needs reconciling with the agreed CLI work interface. Authentication
+also remains necessary before shared/non-loopback exposure. See the
+[current milestone record](plans/milestones/06-cobbler-planning.md).
 
 ## Production release
 
