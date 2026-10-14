@@ -5,6 +5,10 @@ service. It starts only the repository and a queue client. Use the same state
 directory as the service. The service owns Elves and their process groups;
 closing the CLI leaves their work running.
 
+REPO-INSPECTION: [reservation inspection and recovery](cli-reservations.md)
+shows configured ownership and queues explicit evidence-backed reconciliation
+or cancellation of provably never-started intent.
+
 ```sh
 mix shoestring.execution start "$GOAL" \
   --revision 1 --digest "$PLAN_DIGEST" --repo "$REPOSITORY" \

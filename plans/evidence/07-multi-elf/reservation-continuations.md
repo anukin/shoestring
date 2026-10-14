@@ -1,5 +1,10 @@
 # Reservation-backed continuations — 2026-10-13
 
+REPO-INSPECTION addendum: [CLI inspection and recovery](reservation-cli-recovery.md)
+subsequently added operator visibility and cancellation of provably never-started
+intent. Counts and remaining-work notes below describe this package's point in
+time; unknown-effect and lost-identity histories remain held.
+
 ## Scope
 
 VERIFIED (user direction): continue iteration 7 directly on main without a PR,

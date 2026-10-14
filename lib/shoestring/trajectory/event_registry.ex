@@ -20,6 +20,21 @@ defmodule Shoestring.Trajectory.EventRegistry do
   alias Shoestring.Trajectory.EventEnvelope
 
   @payload_schemas %{
+    "cobbler.reservation.operation.requested" => %{
+      1 => %{
+        required: [:operation_id, :reservation_id, :action, :requested_by],
+        optional: [],
+        uuid_fields: [:operation_id, :reservation_id]
+      }
+    },
+    "cobbler.reservation.operation.completed" => %{
+      1 => %{
+        required: [:operation_id, :reservation_id, :result],
+        optional: [],
+        uuid_fields: [:operation_id, :reservation_id],
+        types: %{result: :map}
+      }
+    },
     "cobbler.planner.amendment.requested" => %{
       1 => %{
         required: [:request_id, :request_key, :input_digest, :projection_json, :configuration],
@@ -860,7 +875,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
         |> Map.take(allowed_keys)
         |> sanitize_payload(type, version, opts)
 
-      with :ok <- validate_capacity_snapshot(type, version, validated, opts),
+      with :ok <- validate_reservation_operation(type, validated),
+           :ok <- validate_capacity_snapshot(type, version, validated, opts),
            :ok <- validate_admission_decision(type, version, validated, opts),
            :ok <- validate_handoff(type, version, validated, opts),
            :ok <- validate_plan(type, version, validated, opts),
@@ -977,6 +993,26 @@ defmodule Shoestring.Trajectory.EventRegistry do
       changeset
     end
   end
+
+  defp validate_reservation_operation("cobbler.reservation.operation.requested", payload) do
+    if payload["action"] in ["reconcile", "cancel-unstarted"] and
+         Regex.match?(@human_identity_pattern, payload["requested_by"]),
+       do: :ok,
+       else: Contract.invalid(:operation, "requires a supported action and human identity")
+  end
+
+  defp validate_reservation_operation("cobbler.reservation.operation.completed", payload) do
+    result = payload["result"]
+
+    if Enum.sort(Map.keys(result)) == ~w(disposition reason settlement_kind) and
+         result["disposition"] in ~w(released closed retained replayed) and
+         result["settlement_kind"] in [nil, "released", "consumed_closed"] and
+         is_binary(result["reason"]),
+       do: :ok,
+       else: Contract.invalid(:result, "invalid recovery result")
+  end
+
+  defp validate_reservation_operation(_, _), do: :ok
 
   defp validate_capacity_snapshot("capacity.snapshot_observed", 2, payload, opts) do
     case CapacitySnapshot.from_payload(payload, opts) do

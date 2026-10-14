@@ -21,3 +21,6 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
 - [Reservation continuations](reservation-continuations.md): fresh wake/handoff
   ownership, predecessor settlement, rollback, populated migration and real Fake
   quota restart proof; terminal owners reconcile during plan advancement.
+- [CLI inspection and recovery](reservation-cli-recovery.md): service-owned
+  operator requests, cancellation of provably never-started intent, late-effect
+  fences, immutable results, delivery repair and independent-connection race.

@@ -32,10 +32,16 @@ now provide fresh wake/handoff ownership and verified predecessor settlement;
 plan advancement reconciles terminal owners. Sequential claims remain enforced,
 initial activation remains opt-in, and no production parallel dispatch is enabled.
 
+REPO-INSPECTION: [CLI inspection and recovery](../evidence/07-multi-elf/reservation-cli-recovery.md)
+now exposes durable ownership and queues service-owned reconciliation or explicit
+never-started cancellation. Unknown effects/lost identity remain held; no elapsed
+deadline or operator assertion frees ambiguous consumption.
+
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
-- Next: ambiguous-intent reconciliation and CLI inspection; then isolated sibling
-  execution, independence checks, inbox/wakeups and failure recovery.
+- Next: independence/overlap decisions and isolated sibling execution, then
+  concurrent ownership, inbox/wakeups and partial-failure recovery. Preserve
+  uncertain owners until additional process evidence can resolve them.
 - Before fan-out: address canonical/generic goal status synchronization and
   worst-case global verification budget; retain full bounded public Claude output.
 

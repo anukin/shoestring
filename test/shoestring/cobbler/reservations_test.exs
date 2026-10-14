@@ -44,7 +44,8 @@ defmodule Shoestring.Cobbler.ReservationsTest do
     {20_261_007_024_346, Shoestring.Repo.Migrations.AddAgentProfiles},
     {20_261_013_225_751, Shoestring.Repo.Migrations.AddCobblerCapacityReservations},
     {20_261_013_232_327, Shoestring.Repo.Migrations.AddCobblerReservationSettlements},
-    {20_261_014_032_811, Shoestring.Repo.Migrations.AddReservationParentOwnership}
+    {20_261_014_032_811, Shoestring.Repo.Migrations.AddReservationParentOwnership},
+    {20_261_014_034_936, Shoestring.Repo.Migrations.AddReservationOperations}
   ]
 
   setup do
@@ -919,7 +920,7 @@ defmodule Shoestring.Cobbler.ReservationsTest do
       c.repo_opts |> Keyword.put(:pool_size, 1) |> Keyword.update!(:database, &(&1 <> ".upgrade"))
 
     start_supervised!({MigrationRepo, older_opts})
-    Ecto.Migrator.run(MigrationRepo, Enum.drop(@migrations, -1), :up, all: true, log: false)
+    Ecto.Migrator.run(MigrationRepo, Enum.drop(@migrations, -2), :up, all: true, log: false)
     goal = create_goal!(MigrationRepo)
     admission = candidate(goal)
 
