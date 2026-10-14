@@ -37,9 +37,14 @@ now exposes durable ownership and queues service-owned reconciliation or explici
 never-started cancellation. Unknown effects/lost identity remain held; no elapsed
 deadline or operator assertion frees ambiguous consumption.
 
+REPO-INSPECTION: [scope policy and CLI preflight](../evidence/07-multi-elf/scope-policy.md)
+now classify declared and actual scopes deterministically, refusing unknown,
+shared, symlink and overlapping surfaces. Actual-diff acceptance wiring remains
+pending; scope evidence does not enable dispatch.
+
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
-- Next: independence/overlap decisions and isolated sibling execution, then
+- Next: isolated sibling binding and actual-scope acceptance integration, then
   concurrent ownership, inbox/wakeups and partial-failure recovery. Preserve
   uncertain owners until additional process evidence can resolve them.
 - Before fan-out: address canonical/generic goal status synchronization and

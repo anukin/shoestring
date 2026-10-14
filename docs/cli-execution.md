@@ -16,8 +16,15 @@ mix shoestring.execution start "$GOAL" \
   --role Worker --by human:operator
 
 mix shoestring.execution status "$GOAL"
+mix shoestring.execution check-scopes "$GOAL"
 mix shoestring.execution continue "$GOAL" --execution-id "$EXECUTION_ID"
 ```
+
+REPO-INSPECTION: `check-scopes` records deterministic scope evidence for approved,
+dependency-ready unstarted tasks. Unknown/overlapping scopes, shared surfaces,
+symlinks and changed source state default to sequential execution. It starts no
+run and enables no parallel dispatch; its observation must be rechecked before
+future fan-out.
 
 REPO-INSPECTION: Start binds the exact approved plan, immutable saved agent role,
 provider, explicit model and repository directory. Repeating an identical start

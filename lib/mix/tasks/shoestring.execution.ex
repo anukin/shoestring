@@ -7,6 +7,7 @@ defmodule Mix.Tasks.Shoestring.Execution do
 
       mix shoestring.execution start GOAL --revision N --digest DIGEST --repo PATH --agent ID --agent-revision N --agent-digest DIGEST --role ROLE --by human:NAME
       mix shoestring.execution status GOAL
+      mix shoestring.execution check-scopes GOAL
       mix shoestring.execution continue GOAL --execution-id ID
       mix shoestring.execution confirm-capacity GOAL --execution-id ID --task-id TASK --attempt N --scope SCOPE --command-id ID --by human:NAME
       mix shoestring.execution handoff GOAL --execution-id ID --run-id ID --checkpoint-id ID --decision-ref ID --role ROLE --scope SCOPE --command-id ID --reason TEXT --by human:NAME [--confirm-capacity]
@@ -61,6 +62,9 @@ defmodule Mix.Tasks.Shoestring.Execution do
           case command do
             "status" ->
               ExecutionControl.status(goal_id)
+
+            "check-scopes" ->
+              Shoestring.Cobbler.PlanScopeCheck.record(goal_id)
 
             "confirm-capacity" ->
               case ExecutionControl.confirm_capacity(goal_id, %{
@@ -152,6 +156,7 @@ defmodule Mix.Tasks.Shoestring.Execution do
     required =
       case command do
         "status" -> []
+        "check-scopes" -> []
         "continue" -> [:execution_id]
         "confirm-capacity" -> [:execution_id, :task_id, :attempt, :scope, :command_id, :by]
         "start" -> [:revision, :digest, :repo, :agent, :agent_revision, :agent_digest, :role, :by]

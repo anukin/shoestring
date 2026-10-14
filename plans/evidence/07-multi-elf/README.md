@@ -24,3 +24,6 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
 - [CLI inspection and recovery](reservation-cli-recovery.md): service-owned
   operator requests, cancellation of provably never-started intent, late-effect
   fences, immutable results, delivery repair and independent-connection race.
+- [Scope policy](scope-policy.md): deterministic declared/actual overlap policy,
+  bounded Git evidence and canonical CLI preflight; dispatch/acceptance wiring
+  remains pending.
