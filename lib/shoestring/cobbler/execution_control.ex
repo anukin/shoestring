@@ -8,6 +8,9 @@ defmodule Shoestring.Cobbler.ExecutionControl do
   def confirm_capacity(goal_id, attrs),
     do: Shoestring.Cobbler.PlanCapacityConfirmation.confirm(goal_id, attrs)
 
+  def resolve_scope(goal_id, attrs),
+    do: Shoestring.Cobbler.PlanScopeResolution.resolve(goal_id, attrs)
+
   def status(goal_id) do
     with {:ok, status} <- PlanExecutor.status(goal_id) do
       decision =

@@ -10,6 +10,7 @@ defmodule Mix.Tasks.Shoestring.Execution do
       mix shoestring.execution check-scopes GOAL
       mix shoestring.execution continue GOAL --execution-id ID
       mix shoestring.execution confirm-capacity GOAL --execution-id ID --task-id TASK --attempt N --scope SCOPE --command-id ID --by human:NAME
+      mix shoestring.execution resolve-scope GOAL --execution-id ID --task-id TASK --attempt N --decision accept|reject --reason TEXT --command-id ID --by human:NAME
       mix shoestring.execution handoff GOAL --execution-id ID --run-id ID --checkpoint-id ID --decision-ref ID --role ROLE --scope SCOPE --command-id ID --reason TEXT --by human:NAME [--confirm-capacity]
 
   Start binds exact approved plan and saved-agent revisions. The service admits
@@ -22,6 +23,9 @@ defmodule Mix.Tasks.Shoestring.Execution do
   goal owner; hard stops remain blocked. No provider is started by this CLI.
   The confirm-capacity command records a human confirmation for one admission
   decision of one dependency-ready task attempt, never for future tasks/retries.
+  Resolve-scope decides one fan-out scope blocker: accept keeps the tested
+  commit and acknowledges exactly its recorded blockers; reject resolves the
+  attempt as failed within the plan's attempt limits. Neither merges branches.
   """
   @switches [
     revision: :integer,
@@ -41,6 +45,7 @@ defmodule Mix.Tasks.Shoestring.Execution do
     scope: :string,
     command_id: :string,
     reason: :string,
+    decision: :string,
     confirm_capacity: :boolean
   ]
 
@@ -65,6 +70,20 @@ defmodule Mix.Tasks.Shoestring.Execution do
 
             "check-scopes" ->
               Shoestring.Cobbler.PlanScopeCheck.record(goal_id)
+
+            "resolve-scope" ->
+              case ExecutionControl.resolve_scope(goal_id, %{
+                     execution_id: opts[:execution_id],
+                     task_id: opts[:task_id],
+                     attempt: opts[:attempt],
+                     decision: opts[:decision],
+                     reason: opts[:reason],
+                     command_id: opts[:command_id],
+                     requested_by: opts[:by]
+                   }) do
+                {:ok, event} -> {:ok, %{event_id: event.id, resolution: event.payload}}
+                error -> error
+              end
 
             "confirm-capacity" ->
               case ExecutionControl.confirm_capacity(goal_id, %{
@@ -155,12 +174,26 @@ defmodule Mix.Tasks.Shoestring.Execution do
   defp valid?(command, opts) do
     required =
       case command do
-        "status" -> []
-        "check-scopes" -> []
-        "continue" -> [:execution_id]
-        "confirm-capacity" -> [:execution_id, :task_id, :attempt, :scope, :command_id, :by]
-        "start" -> [:revision, :digest, :repo, :agent, :agent_revision, :agent_digest, :role, :by]
-        _ -> nil
+        "status" ->
+          []
+
+        "check-scopes" ->
+          []
+
+        "continue" ->
+          [:execution_id]
+
+        "confirm-capacity" ->
+          [:execution_id, :task_id, :attempt, :scope, :command_id, :by]
+
+        "resolve-scope" ->
+          [:execution_id, :task_id, :attempt, :decision, :reason, :command_id, :by]
+
+        "start" ->
+          [:revision, :digest, :repo, :agent, :agent_revision, :agent_digest, :role, :by]
+
+        _ ->
+          nil
       end
 
     is_list(required) and Enum.sort(Keyword.keys(opts)) == Enum.sort(required) and

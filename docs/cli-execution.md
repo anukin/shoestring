@@ -53,6 +53,22 @@ into inbox metadata. Startup repairs lost delivery from canonical history.
 This does not enable the production fan-out dispatcher. See the
 [inbox evidence](../plans/evidence/07-multi-elf/child-inbox-wakeups.md).
 
+REPO-INSPECTION: an operator resolves one fan-out scope blocker explicitly:
+
+```sh
+mix shoestring.execution resolve-scope "$GOAL" --execution-id "$EXECUTION_ID" \
+  --task-id north --attempt 1 --decision accept \
+  --reason "Reviewed the overlap; integrate manually" \
+  --command-id "$COMMAND_ID" --by human:operator
+```
+
+`accept` keeps the tested commit as the accepted result and acknowledges exactly
+the recorded blockers; any other overlap still blocks. `reject` resolves the
+attempt as failed with a bounded retry state. Neither merges branches. Dependents
+still require their inputs at an approved base, normally via an amendment after
+manual integration. See the
+[resolution evidence](../plans/evidence/07-multi-elf/scope-resolution.md).
+
 REPO-INSPECTION: a planned goal's generic row now follows canonical completion:
 `cobbler.plan.execution.completed` marks it `completed` in the same transaction,
 and a later execution request reopens it as `active`. Archived goals are never

@@ -718,6 +718,26 @@ defmodule Shoestring.Trajectory.EventRegistry do
         types: %{revision_number: :integer, attempt: :integer}
       }
     },
+    "cobbler.plan.task.scope_resolved" => %{
+      1 => %{
+        required: [
+          :resolution_id,
+          :execution_id,
+          :revision_number,
+          :plan_digest,
+          :plan_task_id,
+          :attempt,
+          :run_id,
+          :blocked_event_id,
+          :decision,
+          :resolved_by,
+          :reason
+        ],
+        optional: [:retry_state],
+        uuid_fields: [:resolution_id, :execution_id, :run_id, :blocked_event_id],
+        types: %{revision_number: :integer, attempt: :integer}
+      }
+    },
     "cobbler.plan.execution.requested" => %{
       1 => %{
         required: [:execution_id, :revision_number, :plan_digest, :ordered_task_ids],
@@ -1378,6 +1398,34 @@ defmodule Shoestring.Trajectory.EventRegistry do
           :source_event_id,
           "must bind an allowed child observation and plan revision"
         )
+    end
+  end
+
+  # A human decision for exactly one scope-blocked attempt. `accept` keeps its
+  # tested commit and acknowledges the recorded blockers; `reject` resolves the
+  # attempt as failed with a bounded retry state.
+  defp validate_plan_execution("cobbler.plan.task.scope_resolved", 1, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload),
+         true <- human_identity?(payload["resolved_by"]) || {:field, :resolved_by},
+         {:ok, _} <- Contract.text(payload["reason"], :reason, max: 2000),
+         true <-
+           ((payload["decision"] == "accept" and not Map.has_key?(payload, "retry_state")) or
+              (payload["decision"] == "reject" and
+                 payload["retry_state"] in ["retry", "escalate", "needs_user"])) ||
+             {:field, :decision} do
+      :ok
+    else
+      {:field, :resolved_by} ->
+        Contract.invalid(:resolved_by, "must be a human: identity")
+
+      {:field, :decision} ->
+        Contract.invalid(:decision, "must be accept, or reject with a retry state")
+
+      error ->
+        error
     end
   end
 

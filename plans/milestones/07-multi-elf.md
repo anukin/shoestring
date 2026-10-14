@@ -82,6 +82,10 @@ now keep generic goal rows synchronized with canonical completion, charge and
 reserve fan-out final-scope verification overhead, and retain full redacted
 public Claude output that fails rather than truncates when oversized.
 
+REPO-INSPECTION: [scope resolution](../evidence/07-multi-elf/scope-resolution.md)
+lets a human accept or reject one scope-blocked attempt by CLI; acceptance
+acknowledges exactly the recorded blockers and nothing merges.
+
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
 - Next: explicit conflict resolution and production coordinator activation,

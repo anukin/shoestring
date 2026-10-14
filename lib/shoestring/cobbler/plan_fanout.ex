@@ -269,6 +269,7 @@ defmodule Shoestring.Cobbler.PlanFanout do
 
       blockers = Enum.sort(Enum.uniq(declared["blockers"] ++ actual["blockers"] ++ outside))
       count = declared["blocker_count"] + actual["blocker_count"] + length(outside)
+      {blockers, count} = acknowledge(blockers, count, declared, actual, context)
       # An empty ready/child set is an idle coordinator, not unknown scope.
       decision =
         if tasks == [],
@@ -284,6 +285,26 @@ defmodule Shoestring.Cobbler.PlanFanout do
 
       decision = Map.put(decision, "observed_changes", changes)
       {:ok, %{decision: decision}}
+    end
+  end
+
+  # Human-accepted scope blockers are ignored by exact value. A recount is only
+  # trusted when every source listed all of its blockers; otherwise the
+  # original count stands and admission stays sequential.
+  defp acknowledge(blockers, count, declared, actual, context) do
+    case Map.get(context.status, :acknowledged_scope_blockers, []) do
+      [] ->
+        {blockers, count}
+
+      acknowledged ->
+        remaining = Enum.reject(blockers, &(&1 in acknowledged))
+
+        complete? =
+          declared["evidence_complete"] and actual["evidence_complete"] and
+            declared["blocker_count"] == length(declared["blockers"]) and
+            actual["blocker_count"] == length(actual["blockers"])
+
+        {remaining, if(complete?, do: length(remaining), else: count)}
     end
   end
 

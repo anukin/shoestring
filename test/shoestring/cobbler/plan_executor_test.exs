@@ -628,8 +628,9 @@ defmodule Shoestring.Cobbler.PlanExecutorTest do
       assert {:ok, %{planned?: false, completed?: false}} =
                Cobbler.plan_execution_status(goal.id)
 
-      assert PlanExecutor.event_types() |> length() == 8
+      assert PlanExecutor.event_types() |> length() == 9
       assert "cobbler.plan.task.scope_blocked" in PlanExecutor.event_types()
+      assert "cobbler.plan.task.scope_resolved" in PlanExecutor.event_types()
     end
   end
 end

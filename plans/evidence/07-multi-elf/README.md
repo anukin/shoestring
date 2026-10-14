@@ -49,3 +49,6 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
   synchronization with startup repair, charged and reserved final-scope
   verification overhead, and full redacted public Claude output that fails
   rather than truncates; conflict resolution and replacement remain pending.
+- [Scope resolution](scope-resolution.md): explicit human accept/reject of one
+  scope-blocked attempt, value-exact blocker acknowledgement, bounded retry
+  state and CLI; no merge and no concurrency override.

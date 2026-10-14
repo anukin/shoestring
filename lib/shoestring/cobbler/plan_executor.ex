@@ -78,6 +78,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     "cobbler.plan.task.dispatched",
     "cobbler.plan.task.accepted",
     "cobbler.plan.task.scope_blocked",
+    "cobbler.plan.task.scope_resolved",
     "cobbler.plan.task.gate_failed",
     "cobbler.plan.task.superseded",
     "cobbler.plan.execution.gate_failed",
@@ -491,6 +492,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              active_children: active_children,
              accepted_evidence: projection.accepted,
              scope_blockers: scope_blockers(projection, execution),
+             acknowledged_scope_blockers: acknowledged_scope_blockers(projection, execution),
              child_inbox:
                Shoestring.Cobbler.PlanChildInbox.summary(repo, goal_id, execution.execution_id),
              dispatch_mode: if(fanout?(projection, execution), do: :fanout_v1, else: :sequential),
@@ -608,8 +610,17 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         %TrajectoryEvent{type: "cobbler.plan.task.accepted", payload: payload}, acc ->
           %{acc | accepted: acc.accepted ++ [normalize_resolution(payload)]}
 
-        %TrajectoryEvent{type: "cobbler.plan.task.scope_blocked", payload: payload}, acc ->
-          %{acc | scope_blocked: acc.scope_blocked ++ [normalize_resolution(payload)]}
+        %TrajectoryEvent{type: "cobbler.plan.task.scope_blocked", payload: payload} = event,
+        acc ->
+          blocked =
+            payload
+            |> normalize_resolution()
+            |> Map.merge(%{event_id: event.id, human_resolution: nil})
+
+          %{acc | scope_blocked: acc.scope_blocked ++ [blocked]}
+
+        %TrajectoryEvent{type: "cobbler.plan.task.scope_resolved", payload: payload}, acc ->
+          apply_scope_resolution(acc, payload)
 
         %TrajectoryEvent{type: "cobbler.plan.task.gate_failed", payload: payload}, acc ->
           %{acc | gate_failed: acc.gate_failed ++ [normalize_resolution(payload)]}
@@ -631,6 +642,40 @@ defmodule Shoestring.Cobbler.PlanExecutor do
           acc
       end
     )
+  end
+
+  # A human resolution names the exact blocked event. Accepting keeps the
+  # blocked attempt's tested commit and gate evidence; rejecting resolves it as
+  # a failure without charging its already-recorded gate duration again.
+  defp apply_scope_resolution(acc, payload) do
+    case Enum.find_index(acc.scope_blocked, &(&1.event_id == payload["blocked_event_id"])) do
+      nil ->
+        acc
+
+      index ->
+        blocked = Enum.at(acc.scope_blocked, index)
+        resolved = %{blocked | human_resolution: payload}
+        acc = %{acc | scope_blocked: List.replace_at(acc.scope_blocked, index, resolved)}
+
+        case payload["decision"] do
+          "accept" ->
+            %{
+              acc
+              | accepted:
+                  acc.accepted ++ [Map.put(blocked, :resolution_id, payload["resolution_id"])]
+            }
+
+          "reject" ->
+            failure =
+              Map.merge(blocked, %{
+                retry_state: payload["retry_state"],
+                reason: "scope_rejected",
+                duration_ms: 0
+              })
+
+            %{acc | gate_failed: acc.gate_failed ++ [failure]}
+        end
+    end
   end
 
   defp normalize_dispatch(payload) do
@@ -727,7 +772,28 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   end
 
   defp scope_blockers(projection, execution),
-    do: Enum.filter(projection.scope_blocked, &(&1.execution_id == execution.execution_id))
+    do:
+      Enum.filter(
+        projection.scope_blocked,
+        &(&1.execution_id == execution.execution_id and is_nil(&1.human_resolution))
+      )
+
+  # Blockers a human explicitly accepted. Fan-out assessment may ignore exactly
+  # these (by value); any other overlap still blocks.
+  defp acknowledged_scope_blockers(projection, execution) do
+    projection.scope_blocked
+    |> Enum.filter(
+      &(&1.execution_id == execution.execution_id and
+          match?(%{"decision" => "accept"}, &1.human_resolution))
+    )
+    |> Enum.flat_map(fn blocked ->
+      case Shoestring.Cobbler.PlanIndependence.decode_event_decision(blocked.decision_json) do
+        {:ok, %{"blockers" => blockers}} -> blockers
+        _ -> []
+      end
+    end)
+    |> Enum.uniq()
+  end
 
   defp active_dispatch(projection, execution) do
     List.first(active_dispatches(projection, execution))
@@ -741,10 +807,13 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
     failure = Enum.find(Enum.reverse(projection.gate_failed), same_attempt)
 
+    blocked = Enum.find(projection.scope_blocked, same_attempt)
+
     resolution =
       cond do
         Enum.any?(projection.accepted, same_attempt) -> :accepted
-        Enum.any?(projection.scope_blocked, same_attempt) -> :scope_blocked
+        match?(%{human_resolution: %{"decision" => "reject"}}, blocked) -> :scope_rejected
+        blocked -> :scope_blocked
         failure -> :gate_failed
         dispatch_resolved?(projection, child) -> :superseded
         true -> nil
