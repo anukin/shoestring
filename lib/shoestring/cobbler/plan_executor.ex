@@ -81,6 +81,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     "cobbler.plan.execution.completed"
   ]
 
+  @doc false
+  def task_run_id(goal_id, task_id, attempt),
+    do: deterministic_uuid("plan-run:#{goal_id}:#{task_id}:#{attempt}")
+
   @doc "The trajectory event types this executor reads and writes."
   @spec event_types() :: [String.t()]
   def event_types, do: @event_types
@@ -798,7 +802,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   # run for the same attempt.
   defp recover_crashed_dispatch(repo, goal_id, execution, task_contract, attempt, opts) do
     task_id = task_contract["id"]
-    run_id = deterministic_uuid("plan-run:#{goal_id}:#{task_id}:#{attempt}")
+    run_id = task_run_id(goal_id, task_id, attempt)
 
     case repo.get(RunRecord, run_id) do
       nil ->
@@ -883,7 +887,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         execution_id: execution.execution_id,
         plan_task_id: task_id,
         attempt: attempt,
-        run_id: deterministic_uuid("plan-run:#{goal_id}:#{task_id}:#{attempt}"),
+        run_id: task_run_id(goal_id, task_id, attempt),
         admission_event_id: admission.id
       }
 
@@ -1036,7 +1040,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     if is_function(Keyword.get(gate_opts, :runner), 3) do
       {:ok, opts}
     else
-      run_id = deterministic_uuid("plan-run:#{goal_id}:#{task_id}:#{attempt}")
+      run_id = task_run_id(goal_id, task_id, attempt)
       accepted = projection.accepted
 
       base =
@@ -1096,7 +1100,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     lease_opts =
       [
         task_id: traj_task.id,
-        run_id: deterministic_uuid("plan-run:#{traj_task.goal_id}:#{task_id}:#{attempt}"),
+        run_id: task_run_id(traj_task.goal_id, task_id, attempt),
         dispatch_id:
           deterministic_uuid("plan-dispatch:#{traj_task.goal_id}:#{task_id}:#{attempt}"),
         prompt:

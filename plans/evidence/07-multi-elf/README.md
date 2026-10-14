@@ -27,3 +27,6 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
 - [Scope policy](scope-policy.md): deterministic declared/actual overlap policy,
   bounded Git evidence and canonical CLI preflight; dispatch/acceptance wiring
   remains pending.
+- [Sibling workspaces](sibling-workspaces.md): exact approved-base isolation,
+  immutable manifest/event binding and preservation of dirty/foreign work;
+  coordinator integration remains pending.

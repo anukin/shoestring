@@ -42,10 +42,15 @@ now classify declared and actual scopes deterministically, refusing unknown,
 shared, symlink and overlapping surfaces. Actual-diff acceptance wiring remains
 pending; scope evidence does not enable dispatch.
 
+REPO-INSPECTION: [sibling workspace binding](../evidence/07-multi-elf/sibling-workspaces.md)
+now allocates separate private Git stores from the exact accepted base and
+records immutable task lineage. Dirty unowned or foreign allocations are
+refused and retained. The coordinator has not enabled sibling execution yet.
+
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
-- Next: isolated sibling binding and actual-scope acceptance integration, then
-  concurrent ownership, inbox/wakeups and partial-failure recovery. Preserve
+- Next: concurrent ownership and sibling dispatch wiring, actual-scope acceptance,
+  inbox/wakeups and partial-failure recovery. Preserve
   uncertain owners until additional process evidence can resolve them.
 - Before fan-out: address canonical/generic goal status synchronization and
   worst-case global verification budget; retain full bounded public Claude output.

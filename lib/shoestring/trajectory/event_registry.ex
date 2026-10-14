@@ -20,6 +20,24 @@ defmodule Shoestring.Trajectory.EventRegistry do
   alias Shoestring.Trajectory.EventEnvelope
 
   @payload_schemas %{
+    "cobbler.plan.workspace.prepared" => %{
+      1 => %{
+        required: [
+          :execution_id,
+          :revision_number,
+          :plan_digest,
+          :plan_task_id,
+          :attempt,
+          :run_id,
+          :accepted_base,
+          :branch,
+          :workspace_ref
+        ],
+        optional: [],
+        uuid_fields: [:execution_id, :run_id],
+        types: %{revision_number: :integer, attempt: :integer}
+      }
+    },
     "cobbler.plan.independence.evaluated" => %{
       1 => %{
         required: [
