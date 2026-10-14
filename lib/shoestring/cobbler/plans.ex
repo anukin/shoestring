@@ -394,6 +394,7 @@ defmodule Shoestring.Cobbler.Plans do
             e.goal_id == ^goal_id and
               e.type in [
                 "cobbler.plan.task.accepted",
+                "cobbler.plan.task.scope_blocked",
                 "cobbler.plan.task.gate_failed",
                 "cobbler.plan.task.superseded"
               ],

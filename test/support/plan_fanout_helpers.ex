@@ -70,6 +70,7 @@ defmodule Shoestring.Test.PlanFanoutHelpers do
         goal_limit: 2,
         account_units: 2
       },
+      reconciliation_opts: Keyword.get(overrides, :reconciliation_opts, []),
       admission_fun: fn _, _, _, _ -> {:ok, admission!(goal).id} end
     ]
 
@@ -90,6 +91,37 @@ defmodule Shoestring.Test.PlanFanoutHelpers do
       plan: plan,
       opts: opts
     }
+  end
+
+  @doc "Records synthetic owned-process evidence; unit fixtures explicitly inject an absent-group probe."
+  def complete_child!(goal, run_id) do
+    assert {:ok, _} =
+             Shoestring.Trajectory.append(
+               goal.id,
+               %{
+                 "type" => "run.starting",
+                 "schema_version" => 1,
+                 "actor" => "test",
+                 "occurred_at" => PlanExecutorHelpers.now(),
+                 "payload" => %{"run_id" => run_id}
+               },
+               trusted: [run_id: run_id]
+             )
+
+    assert {:ok, _} =
+             Shoestring.Trajectory.append(
+               goal.id,
+               %{
+                 "type" => "run.running",
+                 "schema_version" => 1,
+                 "actor" => "test",
+                 "occurred_at" => PlanExecutorHelpers.now(),
+                 "payload" => %{"run_id" => run_id, "process_id" => "pgid:424242"}
+               },
+               trusted: [run_id: run_id]
+             )
+
+    PlanExecutorHelpers.complete_run!(goal, run_id)
   end
 
   def admission!(goal, changes \\ %{}) do

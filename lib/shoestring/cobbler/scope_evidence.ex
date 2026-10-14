@@ -50,6 +50,23 @@ defmodule Shoestring.Cobbler.ScopeEvidence do
     end
   end
 
+  @doc "Observes a clean, pinned final commit, including deletions and both sides of renames."
+  def final_changes(path, base, commit) do
+    with true <- is_binary(base) and Regex.match?(~r/\A[0-9a-f]{40,64}\z/, base),
+         {:ok, metadata} <- repository(path, commit),
+         {:ok, changed} <-
+           git(path, ["diff", "--no-renames", "--name-only", "-z", base, commit, "--"]),
+         paths = String.split(changed, "\0", trim: true),
+         true <- length(paths) <= 1024 and Enum.all?(paths, &PlanIndependence.valid_path?/1),
+         true <- Enum.all?(paths, &(&1 not in metadata.symlinks)),
+         {:ok, _} <- repository(path, commit) do
+      {:ok, Enum.sort(Enum.uniq(paths))}
+    else
+      false -> {:error, :changed_scope_invalid_or_oversized}
+      error -> error
+    end
+  end
+
   defp tree_entries(output) do
     entries = String.split(output, "\0", trim: true)
 

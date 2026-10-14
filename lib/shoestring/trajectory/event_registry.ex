@@ -739,13 +739,40 @@ defmodule Shoestring.Trajectory.EventRegistry do
           :commit,
           :evidence
         ],
-        optional: [:worktree_ref],
+        optional: [:worktree_ref, :scope_json],
         uuid_fields: [:execution_id, :run_id],
         types: %{
           revision_number: :integer,
           attempt: :integer,
           gate_argv: {:array, :string},
           evidence: :map
+        }
+      }
+    },
+    "cobbler.plan.task.scope_blocked" => %{
+      1 => %{
+        required: [
+          :execution_id,
+          :plan_task_id,
+          :revision_number,
+          :plan_digest,
+          :run_id,
+          :attempt,
+          :gate,
+          :gate_argv,
+          :commit,
+          :evidence,
+          :decision_json
+        ],
+        optional: [:scope_json, :reason],
+        uuid_fields: [:execution_id, :run_id],
+        types: %{
+          revision_number: :integer,
+          attempt: :integer,
+          gate_argv: {:array, :string},
+          evidence: :map,
+          scope_json: :string,
+          decision_json: :string
         }
       }
     },
@@ -1246,8 +1273,26 @@ defmodule Shoestring.Trajectory.EventRegistry do
          :ok <- plan_execution_attempt(payload),
          :ok <- plan_execution_task_id(payload),
          :ok <- plan_execution_gate(payload),
-         :ok <- plan_execution_commit(payload) do
+         :ok <- plan_execution_commit(payload),
+         :ok <- Shoestring.Cobbler.PlanFinalScope.validate_payload(payload) do
       :ok
+    end
+  end
+
+  defp validate_plan_execution("cobbler.plan.task.scope_blocked", 1, payload, opts) do
+    with :ok <- validate_plan_execution("cobbler.plan.task.accepted", 1, payload, opts),
+         {:ok, %{"disposition" => "sequential", "blocker_count" => count} = decision}
+         when count > 0 <-
+           Shoestring.Cobbler.PlanIndependence.decode_event_decision(payload["decision_json"]),
+         true <-
+           Map.has_key?(payload, "scope_json") or
+             (decision["evidence_complete"] == false and
+                Enum.any?(decision["blockers"], &(&1["reason"] == "final_scope_unavailable")) and
+                is_binary(payload["reason"])),
+         :ok <- validate_scope_reason(payload) do
+      :ok
+    else
+      _ -> Contract.invalid(:decision_json, "must bind a bounded blocking scope decision")
     end
   end
 
@@ -1284,6 +1329,15 @@ defmodule Shoestring.Trajectory.EventRegistry do
   end
 
   defp validate_plan_execution(_type, _version, _payload, _opts), do: :ok
+
+  defp validate_scope_reason(%{"reason" => reason}) do
+    case Contract.text(reason, :reason, max: 2000) do
+      {:ok, _} -> :ok
+      error -> error
+    end
+  end
+
+  defp validate_scope_reason(_), do: :ok
 
   defp plan_execution_digest(payload) do
     case Map.get(payload, "plan_digest") do

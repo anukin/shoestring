@@ -76,6 +76,7 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
     Enum.any?(events, fn event ->
       event.type in [
         "cobbler.plan.task.accepted",
+        "cobbler.plan.task.scope_blocked",
         "cobbler.plan.task.gate_failed",
         "cobbler.plan.task.superseded"
       ] and
@@ -88,7 +89,13 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
   end
 
   defp events(repo, goal_id) do
-    types = @types ++ ["cobbler.plan.task.accepted", "cobbler.plan.task.gate_failed"]
+    types =
+      @types ++
+        [
+          "cobbler.plan.task.accepted",
+          "cobbler.plan.task.scope_blocked",
+          "cobbler.plan.task.gate_failed"
+        ]
 
     repo.all(
       from e in TrajectoryEvent,
@@ -132,6 +139,7 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
         Enum.any?(events, fn resolution ->
           resolution.type in [
             "cobbler.plan.task.accepted",
+            "cobbler.plan.task.scope_blocked",
             "cobbler.plan.task.gate_failed",
             "cobbler.plan.task.superseded"
           ] and

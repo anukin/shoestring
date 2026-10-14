@@ -39,8 +39,8 @@ deadline or operator assertion frees ambiguous consumption.
 
 REPO-INSPECTION: [scope policy and CLI preflight](../evidence/07-multi-elf/scope-policy.md)
 now classify declared and actual scopes deterministically, refusing unknown,
-shared, symlink and overlapping surfaces. Actual-diff acceptance wiring remains
-pending; scope evidence does not enable dispatch.
+shared, symlink and overlapping surfaces. Its final acceptance integration is
+recorded below; CLI preflight alone does not enable dispatch.
 
 REPO-INSPECTION: [sibling workspace binding](../evidence/07-multi-elf/sibling-workspaces.md)
 now allocates separate private Git stores from the exact accepted base and
@@ -58,12 +58,19 @@ providers, reconstructs every child and reserves duration for held children and
 global gate command timeouts. An isolated production-worker/Fake lifecycle proves
 two concurrent supervised children, independent acceptance, restart-safe intent,
 dependency admission and never-started cancellation without affecting a sibling.
-Production worker activation, final conflict acceptance and remaining lifecycle
+Production worker activation and remaining lifecycle
 recovery are still pending; ordinary advancement is fenced for fan-out executions.
+
+REPO-INSPECTION: [final scope acceptance](../evidence/07-multi-elf/final-scope-acceptance.md)
+now binds changed files to tested commits after verified process settlement.
+Unexpected overlap, shared surfaces, scope escape and unavailable final evidence
+record durable blockers with passed gates retained. Unaffected siblings can still
+be accepted; blockers stop subsequent admission and survive replay/restart.
+Human conflict resolution and production activation remain pending.
 
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
-- Next: actual-scope acceptance and production coordinator activation,
+- Next: explicit conflict resolution and production coordinator activation,
   inbox/wakeups and partial-failure recovery. Preserve
   uncertain owners until additional process evidence can resolve them.
 - Before fan-out: address canonical/generic goal status synchronization and

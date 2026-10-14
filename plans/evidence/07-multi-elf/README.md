@@ -37,3 +37,7 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
   sibling dispatch, multi-child projection/restart, duration allowance, scope
   recording fixes and concurrent supervised Fake proof; production activation
   and remaining lifecycle/conflict work stay pending.
+- [Final scope acceptance](final-scope-acceptance.md): immutable tested-commit
+  file sets, process-settlement acceptance fence, durable conflict/uncertainty
+  blockers and retained sibling gates; explicit resolution and production
+  activation remain pending.

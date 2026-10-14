@@ -33,6 +33,7 @@ defmodule Shoestring.Cobbler.Planner.Amendment do
           &(&1.type in [
               "checkpoint.created",
               "cobbler.plan.task.accepted",
+              "cobbler.plan.task.scope_blocked",
               "cobbler.plan.task.gate_failed"
             ])
         )

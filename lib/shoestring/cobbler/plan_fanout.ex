@@ -29,6 +29,7 @@ defmodule Shoestring.Cobbler.PlanFanout do
              )
            ),
          {:ok, context} <- context(goal_id, opts),
+         :ok <- no_scope_conflicts(context),
          {:ok, assessment} <- assess(context, opts),
          {:ok, _} <- record(context, assessment, opts) do
       if assessment.decision["disposition"] != "eligible" do
@@ -77,6 +78,7 @@ defmodule Shoestring.Cobbler.PlanFanout do
     with true <- repo.in_transaction?() || {:error, :reservation_transaction_required},
          :ok <- configuration(opts),
          {:ok, context} <- context(goal_id, opts),
+         :ok <- no_scope_conflicts(context),
          task when not is_nil(task) <- Enum.find(context.ready, &(&1["id"] == task_id)),
          :ok <- inputs_at_base(context, task),
          {:ok, assessment} <- assess(context, opts),
@@ -98,6 +100,94 @@ defmodule Shoestring.Cobbler.PlanFanout do
       false -> {:error, :independence_unverified}
       error -> error
     end
+  end
+
+  @doc false
+  def require_quiescent(goal_id, child, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with :ok <-
+           Reservations.reconcile_terminals(
+             goal_id,
+             Keyword.merge(Keyword.get(opts, :reconciliation_opts, []),
+               repo: repo,
+               now: now(opts)
+             )
+           ),
+         %ReservationRecord{} = owner <- repo.get_by(ReservationRecord, run_id: child.run_id),
+         %{kind: "consumed_closed"} <-
+           repo.get(Shoestring.Cobbler.ReservationSettlementRecord, owner.id) do
+      :ok
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :fanout_child_not_quiescent}
+    end
+  end
+
+  @doc false
+  def final_scope(goal_id, execution, child, evidences, opts) do
+    commit = hd(evidences).commit
+
+    with true <- Enum.all?(evidences, &(&1.commit == commit)),
+         {:ok, context} <- context(goal_id, opts),
+         true <- context.status.execution == execution,
+         {:ok, tree} <- Worktrees.get(child.root_run_id, opts),
+         {:ok, files} <- ScopeEvidence.final_changes(tree.path, context.base, commit),
+         {:ok, scope_json} <-
+           Shoestring.Cobbler.PlanFinalScope.encode(
+             context.base,
+             commit,
+             child.root_run_id,
+             files
+           ),
+         {:ok, assessment} <- assess(context, opts),
+         # The assessment itself must not race movement of the tested child.
+         {:ok, ^files} <- ScopeEvidence.final_changes(tree.path, context.base, commit) do
+      decision = final_decision(assessment.decision, child.plan_task_id)
+
+      # A bounded file set can still exceed the event JSON byte bound when its
+      # paths are long. Preserve gate evidence as an explicit unverified result
+      # rather than discovering that overflow while appending the final event.
+      with {:ok, _} <-
+             PlanIndependence.decode_event_decision(PlanContract.canonical_json(decision)) do
+        {:ok, scope_json, decision}
+      end
+    else
+      false -> {:error, :fanout_final_snapshot_changed}
+      error -> error
+    end
+  end
+
+  defp final_decision(decision, task_id) do
+    # A complete decision lets an unaffected child retain its own acceptance.
+    # Truncated evidence cannot establish that the omitted blockers are unrelated.
+    if decision["evidence_complete"] do
+      blockers =
+        Enum.filter(decision["blockers"], fn blocker ->
+          case {blocker["task_id"], blocker["task_ids"]} do
+            {nil, nil} -> true
+            {^task_id, _} -> true
+            {_, ids} when is_list(ids) -> task_id in ids
+            _ -> false
+          end
+        end)
+
+      %{
+        decision
+        | "source" => "actual",
+          "blockers" => blockers,
+          "blocker_count" => length(blockers),
+          "disposition" => if(blockers == [], do: "eligible", else: "sequential")
+      }
+    else
+      Map.put(decision, "source", "actual")
+    end
+  end
+
+  defp no_scope_conflicts(context) do
+    if context.status.scope_blockers == [],
+      do: :ok,
+      else: {:error, :fanout_scope_resolution_required}
   end
 
   defp configuration(opts) do
@@ -221,12 +311,29 @@ defmodule Shoestring.Cobbler.PlanFanout do
            {:ok, tree} <- Worktrees.get(child.root_run_id, opts),
            true <-
              PlanSiblingWorkspace.bound?(tree, child.root_run_id, context.base, metadata, opts),
-           {:ok, files} <- ScopeEvidence.changes(tree.path, context.base) do
+           {:ok, files} <- child_changes(context, child, tree, opts) do
         {:cont, {:ok, Map.put(acc, child.plan_task_id, files)}}
       else
         _ -> {:halt, {:error, :fanout_child_scope_unavailable}}
       end
     end)
+  end
+
+  defp child_changes(context, child, tree, _opts) do
+    accepted =
+      Enum.find(context.status.accepted_evidence, fn evidence ->
+        evidence.execution_id == child.execution_id and
+          evidence.plan_task_id == child.plan_task_id and
+          evidence.attempt == child.attempt
+      end)
+
+    if accepted do
+      # Even historical accepted children without final scope JSON must stay at
+      # their tested commit. A mutable branch cannot rewrite accepted evidence.
+      ScopeEvidence.final_changes(tree.path, context.base, accepted.commit)
+    else
+      ScopeEvidence.changes(tree.path, context.base)
+    end
   end
 
   defp child_ownership(context, child, opts) do

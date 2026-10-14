@@ -33,6 +33,16 @@ per-child resolution/retry state. An operator blocker is visible while another
 child remains active. These read views do not enable parallel workers; the
 internal fan-out coordinator is not selected by this CLI yet.
 
+REPO-INSPECTION: internal fan-out completion now records final changed-file
+evidence at the exact tested commit. Status includes `scope_blockers` and a
+`scope_blocked` child resolution, separate from gate failure. Unexpected overlap,
+shared surfaces, edits outside declared hints or unavailable final scope block
+further admission. Passed gate evidence and sibling acceptances remain recorded;
+replaying completion does not clear the blocker. A new approved resolution is
+required; there is no automatic merge or conflict retry. Missing process-stop
+evidence holds acceptance and ownership before gates run. See the
+[final-scope evidence](../plans/evidence/07-multi-elf/final-scope-acceptance.md).
+
 REPO-INSPECTION: Start binds the exact approved plan, immutable saved agent role,
 provider, explicit model and repository directory. Repeating an identical start
 returns the same intent and live delivery job. Changing the approved digest,

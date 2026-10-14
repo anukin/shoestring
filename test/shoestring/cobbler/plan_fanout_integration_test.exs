@@ -67,10 +67,30 @@ defmodule Shoestring.Cobbler.PlanFanoutIntegrationTest do
       {:ok, south_tree} = Worktrees.get(south.run_id)
       assert north_tree.path != south_tree.path and north_tree.repo_path != south_tree.repo_path
 
+      assert :ok =
+               Phoenix.PubSub.subscribe(Shoestring.PubSub, Shoestring.Trajectory.topic(c.goal.id))
+
       finish!(right)
 
       assert {:ok, %{reason: :fanout_coordinator_required}} =
                PlanExecutor.resume(c.goal.id, c.opts)
+
+      assert_receive {:trajectory_event_committed,
+                      %{type: "cobbler.plan.task.accepted", id: event_id, payload: payload}},
+                     5_000
+
+      assert Repo.get!(Shoestring.Trajectory.TrajectoryEvent, event_id).payload == payload
+
+      assert {:ok, %{"root_run_id" => root}} =
+               Shoestring.Cobbler.PlanFinalScope.decode(payload["scope_json"])
+
+      assert root == south.run_id
+
+      assert :ok =
+               Phoenix.PubSub.unsubscribe(
+                 Shoestring.PubSub,
+                 Shoestring.Trajectory.topic(c.goal.id)
+               )
 
       assert {:ok, %{accepted: ["south"], active_run_id: id}} =
                PlanExecutor.status(c.goal.id, c.opts)
@@ -110,6 +130,57 @@ defmodule Shoestring.Cobbler.PlanFanoutIntegrationTest do
       # Global acceptance and worker activation are deliberately still fenced.
       assert {:ok, %{disposition: :blocked, reason: :fanout_coordinator_required}} =
                PlanExecutor.advance(c.goal.id, c.opts)
+    end
+
+    test "a terminal scope conflict preserves a still-running sibling and its later acceptance" do
+      c = fixture(independent_only: true, worktrees_dir: Shoestring.State.path(:worktrees))
+      assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
+      [north, south] = result.dispatched
+
+      Application.put_env(:shoestring, :elf_dispatch_opts,
+        adapter: FanoutBarrierFake,
+        clock: PlanHandoffClock,
+        command: ["sleep", "30"],
+        adapter_opts: %{
+          scenario: Fake.Scenario.normal_completion(now: PlanExecutorHelpers.now()),
+          barrier_parent: self()
+        },
+        runner_opts: [kill_grace_ms: 100, reap_timeout_ms: 1000]
+      )
+
+      left = start_worker!(north.run_id)
+      right = start_worker!(south.run_id)
+      {:ok, tree} = Worktrees.get(north.run_id)
+      File.write!(Path.join(tree.path, "lib/unplanned.ex"), "defmodule Unplanned do\nend\n")
+      git!(tree.path, ["add", "."])
+      git!(tree.path, ["commit", "-m", "Retained conflicting child output"])
+      finish!(left)
+
+      assert {:ok, %{disposition: :scope_blocked}} =
+               PlanExecutor.complete_task_run(c.goal.id, north.run_id, c.opts)
+
+      assert Elves.whereis(south.run_id) == right
+      assert Enum.map(Reservations.outstanding(), & &1.run_id) == [south.run_id]
+
+      assert {:error, :fanout_scope_resolution_required} =
+               PlanFanout.dispatch_ready(c.goal.id, c.opts)
+
+      finish!(right)
+
+      assert {:ok, %{disposition: :accepted}} =
+               PlanExecutor.complete_task_run(c.goal.id, south.run_id, c.opts)
+
+      restart!()
+
+      assert {:ok,
+              %{accepted: ["south"], needs_user?: true, scope_blockers: [_], active_children: []}} =
+               PlanExecutor.status(c.goal.id, c.opts)
+
+      assert Reservations.outstanding() == []
+      assert File.exists?(Path.join(tree.path, "lib/unplanned.ex"))
+      assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^c.goal.id), :count) == 2
+      assert git!(c.source, ["status", "--porcelain"]) == ""
+      assert git!(c.source, ["rev-parse", "HEAD"]) |> String.trim() == c.base
     end
 
     test "competing coordinators converge and explicit cancellation of one unstarted child preserves the other" do
@@ -219,7 +290,7 @@ defmodule Shoestring.Cobbler.PlanFanoutIntegrationTest do
         )
 
       assert status == 0, output
-      assert output =~ "2 tests, 0 failures"
+      assert output =~ "3 tests, 0 failures"
     end
   end
 end

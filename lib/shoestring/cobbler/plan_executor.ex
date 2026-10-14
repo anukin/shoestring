@@ -61,6 +61,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
   import Bitwise
   import Ecto.Query
+  require Logger
 
   alias Shoestring.Cobbler.{Dispatcher, PlanBudget, PlanContract, PlanGateRunner, Plans}
   alias Shoestring.Cobbler.{AdmissionDecision, Commands, PlanRevisionRecord}
@@ -76,6 +77,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     "cobbler.plan.execution.requested",
     "cobbler.plan.task.dispatched",
     "cobbler.plan.task.accepted",
+    "cobbler.plan.task.scope_blocked",
     "cobbler.plan.task.gate_failed",
     "cobbler.plan.task.superseded",
     "cobbler.plan.execution.gate_failed",
@@ -376,6 +378,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       outcome =
         if terminal.type == "run.completed" do
           with {:ok, gate_opts} <- Shoestring.Cobbler.PlanWorkspace.gate_opts(repo, context, opts),
+               :ok <- require_fanout_quiescence(goal_id, dispatched, opts),
                {:ok, usage} <- PlanBudget.usage(repo, goal_id, now(opts)) do
             case PlanBudget.remaining(usage, contract, task_contract) do
               {:ok, remaining} ->
@@ -428,6 +431,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       end
     end
   end
+
+  defp require_fanout_quiescence(goal_id, %{dispatch_mode: "fanout_v1"} = child, opts),
+    do: Shoestring.Cobbler.PlanFanout.require_quiescent(goal_id, child, opts)
+
+  defp require_fanout_quiescence(_goal_id, _child, _opts), do: :ok
 
   # ----------------------------------------------------------------------------
   # Read-only projection
@@ -482,10 +490,12 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              children: Enum.map(children, &child_view(projection, &1)),
              active_children: active_children,
              accepted_evidence: projection.accepted,
+             scope_blockers: scope_blockers(projection, execution),
              dispatch_mode: if(fanout?(projection, execution), do: :fanout_v1, else: :sequential),
              needs_user?:
                (duration_blocks? and is_nil(completed_event(projection))) or
                  not is_nil(projection.global_failed) or
+                 scope_blockers(projection, execution) != [] or
                  Enum.any?(required, fn id ->
                    not MapSet.member?(accepted, id) and
                      not retryable?(projection, execution, id)
@@ -568,6 +578,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         execution: nil,
         dispatched: [],
         accepted: [],
+        scope_blocked: [],
         superseded: [],
         gate_failed: [],
         completed: nil,
@@ -593,6 +604,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
         %TrajectoryEvent{type: "cobbler.plan.task.accepted", payload: payload}, acc ->
           %{acc | accepted: acc.accepted ++ [normalize_resolution(payload)]}
+
+        %TrajectoryEvent{type: "cobbler.plan.task.scope_blocked", payload: payload}, acc ->
+          %{acc | scope_blocked: acc.scope_blocked ++ [normalize_resolution(payload)]}
 
         %TrajectoryEvent{type: "cobbler.plan.task.gate_failed", payload: payload}, acc ->
           %{acc | gate_failed: acc.gate_failed ++ [normalize_resolution(payload)]}
@@ -641,6 +655,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       attempt: payload["attempt"],
       retry_state: payload["retry_state"],
       commit: payload["commit"],
+      scope_json: payload["scope_json"],
+      decision_json: payload["decision_json"],
+      reason: payload["reason"],
       duration_ms: payload["duration_ms"] || evidence_duration_ms(payload["evidence"])
     }
   end
@@ -692,6 +709,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       &(&1.execution_id == execution_id and &1.plan_task_id == task_id and &1.attempt == attempt)
     ) or
       Enum.any?(
+        projection.scope_blocked,
+        &(&1.execution_id == execution_id and &1.plan_task_id == task_id and &1.attempt == attempt)
+      ) or
+      Enum.any?(
         projection.gate_failed,
         &(&1.execution_id == execution_id and &1.plan_task_id == task_id and &1.attempt == attempt)
       ) or
@@ -701,6 +722,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
             &1["attempt"] == attempt)
       )
   end
+
+  defp scope_blockers(projection, execution),
+    do: Enum.filter(projection.scope_blocked, &(&1.execution_id == execution.execution_id))
 
   defp active_dispatch(projection, execution) do
     List.first(active_dispatches(projection, execution))
@@ -717,6 +741,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     resolution =
       cond do
         Enum.any?(projection.accepted, same_attempt) -> :accepted
+        Enum.any?(projection.scope_blocked, same_attempt) -> :scope_blocked
         failure -> :gate_failed
         dispatch_resolved?(projection, child) -> :superseded
         true -> nil
@@ -1479,6 +1504,110 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   end
 
   defp record_acceptance(repo, goal_id, execution, dispatched, gate_evidences, opts) do
+    if dispatched.dispatch_mode == "fanout_v1" do
+      nested? = repo.in_transaction?()
+
+      {scope_json, decision, reason} =
+        case Shoestring.Cobbler.PlanFanout.final_scope(
+               goal_id,
+               execution,
+               dispatched,
+               gate_evidences,
+               opts
+             ) do
+          {:ok, scope_json, decision} ->
+            {scope_json, decision, nil}
+
+          {:error, reason} ->
+            {nil,
+             %{
+               "version" => 1,
+               "source" => "actual",
+               "disposition" => "sequential",
+               "task_ids" => [dispatched.plan_task_id],
+               "blocker_count" => 1,
+               "blockers" => [
+                 %{"task_id" => dispatched.plan_task_id, "reason" => "final_scope_unavailable"}
+               ],
+               "evidence_complete" => false
+             },
+             if(is_atom(reason), do: Atom.to_string(reason), else: "final_snapshot_unverified")}
+        end
+
+      result =
+        Shoestring.Cobbler.ReservationWriter.run(repo, fn ->
+          repo.transaction(
+            fn ->
+              {:ok, projection} = project(repo, goal_id)
+
+              if dispatch_resolved?(projection, dispatched) do
+                %{
+                  disposition: :replayed,
+                  plan_task_id: dispatched.plan_task_id,
+                  attempt: dispatched.attempt,
+                  run_id: dispatched.run_id
+                }
+              else
+                writer_opts =
+                  Keyword.put(Keyword.get(opts, :writer_opts, []), :transaction_repo, repo)
+
+                case persist_acceptance(
+                       repo,
+                       goal_id,
+                       execution,
+                       dispatched,
+                       gate_evidences,
+                       Keyword.put(opts, :writer_opts, writer_opts),
+                       {scope_json, decision, reason}
+                     ) do
+                  {:ok, result} -> result
+                  {:error, reason} -> repo.rollback(reason)
+                end
+              end
+            end,
+            mode: :immediate
+          )
+        end)
+
+      case result do
+        {:ok, %{event_id: event_id}} ->
+          unless nested?, do: publish_completion(repo.get!(TrajectoryEvent, event_id), opts)
+          result
+
+        _ ->
+          result
+      end
+    else
+      persist_acceptance(repo, goal_id, execution, dispatched, gate_evidences, opts)
+    end
+  end
+
+  defp publish_completion(event, opts) do
+    publish =
+      Keyword.get(opts, :publish_fun, fn event ->
+        Phoenix.PubSub.broadcast(
+          Shoestring.PubSub,
+          Trajectory.topic(event.goal_id),
+          {:trajectory_event_committed, event}
+        )
+      end)
+
+    publish.(event)
+  rescue
+    _ -> Logger.warning("plan completion committed; event notification failed")
+  catch
+    _, _ -> Logger.warning("plan completion committed; event notification failed")
+  end
+
+  defp persist_acceptance(
+         repo,
+         goal_id,
+         execution,
+         dispatched,
+         gate_evidences,
+         opts,
+         final_scope \\ nil
+       ) do
     first = hd(gate_evidences)
     commit = first.commit
 
@@ -1504,18 +1633,36 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       "evidence" => evidence
     }
 
-    with {:ok, _event} <-
+    {type, disposition, key, payload} =
+      case final_scope do
+        {scope_json, %{"disposition" => "eligible"}, nil} ->
+          {"cobbler.plan.task.accepted", :accepted, "plan-task-accepted",
+           Map.put(payload, "scope_json", scope_json)}
+
+        {scope_json, decision, reason} ->
+          {"cobbler.plan.task.scope_blocked", :scope_blocked, "plan-task-scope-blocked",
+           payload
+           |> maybe_put("scope_json", scope_json)
+           |> maybe_put("reason", reason)
+           |> Map.put("decision_json", PlanContract.canonical_json(decision))}
+
+        nil ->
+          {"cobbler.plan.task.accepted", :accepted, "plan-task-accepted", payload}
+      end
+
+    with {:ok, event} <-
            append_executor_event(
              repo,
              goal_id,
-             "cobbler.plan.task.accepted",
+             type,
              payload,
-             "plan-task-accepted:#{dispatched.plan_task_id}:#{dispatched.attempt}",
+             "#{key}:#{dispatched.plan_task_id}:#{dispatched.attempt}",
              opts
            ) do
       {:ok,
        %{
-         disposition: :accepted,
+         disposition: disposition,
+         event_id: event.id,
          plan_task_id: dispatched.plan_task_id,
          attempt: dispatched.attempt,
          run_id: dispatched.run_id,

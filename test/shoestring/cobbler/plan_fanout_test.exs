@@ -18,7 +18,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   alias Shoestring.Worktrees
 
   test "two ready roots persist isolated owned intents and reconstruct all active children" do
-    c = fixture()
+    c = unit_fixture()
     assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
     assert Enum.map(result.dispatched, & &1.plan_task_id) == ["north", "south"]
     assert result.blocked == []
@@ -59,7 +59,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
           %{"files" => [], "symbols" => []}
         ] do
       c =
-        fixture(
+        unit_fixture(
           transform_tasks: fn [north, south, join] ->
             [north, Map.put(south, "hints", hints), join]
           end
@@ -75,7 +75,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "configured provider cap holds the second task without duplicate or unowned intent" do
-    c = fixture()
+    c = unit_fixture()
 
     opts =
       Keyword.put(c.opts, :reservation_policy, %{
@@ -100,7 +100,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "blocked first provider does not prevent an otherwise safe second task" do
-    c = fixture()
+    c = unit_fixture()
     other = CobblerHelpers.create_goal!()
     admission = admission!(other)
 
@@ -151,7 +151,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "duration allowance preserves space for the worst-case global gate" do
-    c = fixture(independent_only: true, task_seconds: 600, goal_seconds: 1200)
+    c = unit_fixture(independent_only: true, task_seconds: 600, goal_seconds: 1200)
     assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
     assert [%{plan_task_id: "north"}] = result.dispatched
 
@@ -163,7 +163,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "admitted lease bounds cannot exceed the task's duration contract" do
-    c = fixture(independent_only: true, task_seconds: 60)
+    c = unit_fixture(independent_only: true, task_seconds: 60)
     assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
     assert result.dispatched == []
     assert length(result.blocked) == 2
@@ -173,7 +173,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "an unresolved owner past its task duration never becomes free future allowance" do
-    c = fixture(independent_only: true, task_seconds: 600, goal_seconds: 1200)
+    c = unit_fixture(independent_only: true, task_seconds: 600, goal_seconds: 1200)
     assert {:ok, %{dispatched: [north]}} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
 
     for type <- ~w(run.starting run.running) do
@@ -220,7 +220,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "untracked source changes refuse further intent" do
-    c = fixture()
+    c = unit_fixture()
     File.write!(Path.join(c.source, "unexpected.txt"), "retain source change\n")
 
     assert {:error, :repository_base_or_state_changed} =
@@ -231,7 +231,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "approval changed by admission after selection creates no sibling intent" do
-    c = fixture()
+    c = unit_fixture()
 
     admit = fn _, _, task, _ ->
       if task["id"] == "north" do
@@ -275,10 +275,10 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "one unavailable completion workspace does not hide a successful sibling" do
-    c = fixture()
+    c = unit_fixture()
     assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
     [north, south] = result.dispatched
-    for child <- result.dispatched, do: PlanExecutorHelpers.complete_run!(c.goal, child.run_id)
+    for child <- result.dispatched, do: complete_child!(c.goal, child.run_id)
 
     Repo.get!(RunRecord, north.run_id)
     |> Ecto.Changeset.change(workspace_ref: "foreign-workspace")
@@ -292,7 +292,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "runtime opt-in and explicit policy are required" do
-    c = fixture()
+    c = unit_fixture()
 
     assert {:error, :fanout_configuration_required} =
              PlanFanout.dispatch_ready(c.goal.id, Keyword.delete(c.opts, :fanout_enabled))
@@ -305,7 +305,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "generic executor options cannot switch to reservation-owned sibling dispatch" do
-    c = fixture()
+    c = unit_fixture()
 
     assert {:ok, result} =
              PlanExecutor.advance(c.goal.id, Keyword.put(c.opts, :reserved_sibling, true))
@@ -320,7 +320,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "observed out-of-scope or conflicting sibling work blocks new admission and is retained" do
-    c = fixture()
+    c = unit_fixture()
     assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
     [north, _] = result.dispatched
     {:ok, tree} = Worktrees.get(north.run_id, c.opts)
@@ -344,7 +344,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "foreign child ownership cannot be treated as accounted-for parallel work" do
-    c = fixture()
+    c = unit_fixture()
     assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
     [north, _] = result.dispatched
     run = Repo.get!(RunRecord, north.run_id)
@@ -368,10 +368,10 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "a later completed sibling is accepted while the earlier child is still unresolved" do
-    c = fixture()
+    c = unit_fixture()
     assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
     [north, south] = result.dispatched
-    PlanExecutorHelpers.complete_run!(c.goal, south.run_id)
+    complete_child!(c.goal, south.run_id)
     assert {:ok, %{reason: :fanout_coordinator_required}} = PlanExecutor.resume(c.goal.id, c.opts)
     assert {:ok, status} = PlanExecutor.status(c.goal.id, c.opts)
     assert status.accepted == ["south"]
@@ -382,7 +382,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
 
   test "an exhausted sibling stays visible while another child remains active" do
     c =
-      fixture(
+      unit_fixture(
         transform_tasks: fn [north, south, join] ->
           north = put_in(north, ["execution", "max_attempts"], 1)
           [north, south, join]
@@ -420,7 +420,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "dependent tasks require both acceptance gates and the approved input base" do
-    c = fixture()
+    c = unit_fixture()
     assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
 
     for child <- result.dispatched do
@@ -433,7 +433,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
 
       git!(tree.path, ["add", "."])
       git!(tree.path, ["commit", "-m", "Retained sibling output"])
-      PlanExecutorHelpers.complete_run!(c.goal, child.run_id)
+      complete_child!(c.goal, child.run_id)
 
       assert {:ok, %{disposition: :accepted}} =
                PlanExecutor.complete_task_run(c.goal.id, child.run_id, c.opts)
@@ -501,7 +501,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "failure of one intent transaction does not roll back an earlier sibling" do
-    c = fixture()
+    c = unit_fixture()
 
     Ecto.Adapters.SQL.query!(
       Repo,
@@ -519,7 +519,7 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
   end
 
   test "late effect admission still rechecks approval and reserved ownership" do
-    c = fixture()
+    c = unit_fixture()
     assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
     [north, south] = result.dispatched
     assert {:ok, _} = Projector.project(c.goal.id)
@@ -537,5 +537,9 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
              from(e in TrajectoryEvent, where: e.type == "cobbler.plan.task.dispatched"),
              :count
            ) == 2
+  end
+
+  defp unit_fixture(opts \\ []) do
+    fixture(Keyword.put(opts, :reconciliation_opts, group_probe: fn _ -> :absent end))
   end
 end

@@ -114,6 +114,9 @@ defmodule Shoestring.Cobbler.Planner.Projection do
   defp summary_fields("cobbler.plan.task.accepted"),
     do: ~w(plan_task_id revision_number plan_digest run_id attempt commit)
 
+  defp summary_fields("cobbler.plan.task.scope_blocked"),
+    do: ~w(plan_task_id revision_number plan_digest run_id attempt commit)
+
   defp summary_fields("cobbler.plan.task.gate_failed"),
     do: ~w(plan_task_id revision_number plan_digest run_id attempt gate retry_state)
 
