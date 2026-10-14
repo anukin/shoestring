@@ -491,6 +491,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              active_children: active_children,
              accepted_evidence: projection.accepted,
              scope_blockers: scope_blockers(projection, execution),
+             child_inbox:
+               Shoestring.Cobbler.PlanChildInbox.summary(repo, goal_id, execution.execution_id),
              dispatch_mode: if(fanout?(projection, execution), do: :fanout_v1, else: :sequential),
              needs_user?:
                (duration_blocks? and is_nil(completed_event(projection))) or

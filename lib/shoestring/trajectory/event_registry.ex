@@ -20,6 +20,33 @@ defmodule Shoestring.Trajectory.EventRegistry do
   alias Shoestring.Trajectory.EventEnvelope
 
   @payload_schemas %{
+    "cobbler.plan.child.observed" => %{
+      1 => %{
+        required: [
+          :source_event_id,
+          :source_sequence,
+          :source_type,
+          :message_kind,
+          :execution_id,
+          :plan_task_id,
+          :revision_number,
+          :plan_digest,
+          :attempt,
+          :root_run_id,
+          :run_id,
+          :outcome
+        ],
+        optional: [:resolution_event_id],
+        uuid_fields: [
+          :source_event_id,
+          :execution_id,
+          :root_run_id,
+          :run_id,
+          :resolution_event_id
+        ],
+        types: %{source_sequence: :integer, revision_number: :integer, attempt: :integer}
+      }
+    },
     "cobbler.plan.workspace.prepared" => %{
       1 => %{
         required: [
@@ -1325,6 +1352,29 @@ defmodule Shoestring.Trajectory.EventRegistry do
     else
       {:error, _} = error -> error
       _ -> Contract.invalid(:duration_ms, "must be nonnegative")
+    end
+  end
+
+  defp validate_plan_execution("cobbler.plan.child.observed", 1, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload),
+         true <- is_integer(payload["source_sequence"]) and payload["source_sequence"] > 0,
+         true <-
+           Shoestring.Cobbler.PlanChildInbox.valid_kind?(
+             payload["source_type"],
+             payload["message_kind"]
+           ),
+         true <-
+           payload["outcome"] in ~w(observed accepted gate_failed scope_blocked replayed prior_attempt prior_execution) do
+      :ok
+    else
+      _ ->
+        Contract.invalid(
+          :source_event_id,
+          "must bind an allowed child observation and plan revision"
+        )
     end
   end
 

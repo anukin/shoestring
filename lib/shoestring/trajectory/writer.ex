@@ -305,8 +305,12 @@ defmodule Shoestring.Trajectory.Writer do
   defp transaction_attempt(input, references, state) do
     existing_event(state, input.idempotency_key)
     |> case do
-      %TrajectoryEvent{} = event -> {:ok, :duplicate, event}
-      nil -> insert_new_event(input, references, state)
+      %TrajectoryEvent{} = event ->
+        :ok = Shoestring.Cobbler.PlanChildInbox.capture(state.repo, event)
+        {:ok, :duplicate, event}
+
+      nil ->
+        insert_new_event(input, references, state)
     end
   end
 
@@ -343,6 +347,7 @@ defmodule Shoestring.Trajectory.Writer do
 
         case state.repo.insert(changeset) do
           {:ok, event} ->
+            :ok = Shoestring.Cobbler.PlanChildInbox.capture(state.repo, event)
             {:ok, :inserted, event}
 
           {:error, changeset} ->

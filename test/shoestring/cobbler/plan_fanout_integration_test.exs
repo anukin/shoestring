@@ -4,7 +4,17 @@ defmodule Shoestring.Cobbler.PlanFanoutIntegrationTest do
   if System.get_env("SHOESTRING_FANOUT_CHILD") == "1" do
     import Ecto.Query
     import Shoestring.Test.PlanFanoutHelpers
-    alias Shoestring.Cobbler.{PlanExecutor, PlanFanout, ReservationRecovery, Reservations}
+
+    alias Shoestring.Cobbler.{
+      PlanChildInboxReconciler,
+      PlanChildMessage,
+      PlanChildWorker,
+      PlanExecutor,
+      PlanFanout,
+      ReservationRecovery,
+      Reservations
+    }
+
     alias Shoestring.Harness.{DispatchRecord, DispatchWorker, Fake, Projector, RunRecord}
     alias Shoestring.Test.{FanoutBarrierFake, PlanExecutorHelpers, PlanHandoffClock}
     alias Shoestring.{Elves, Repo, Worktrees}
@@ -71,9 +81,7 @@ defmodule Shoestring.Cobbler.PlanFanoutIntegrationTest do
                Phoenix.PubSub.subscribe(Shoestring.PubSub, Shoestring.Trajectory.topic(c.goal.id))
 
       finish!(right)
-
-      assert {:ok, %{reason: :fanout_coordinator_required}} =
-               PlanExecutor.resume(c.goal.id, c.opts)
+      observe_terminal!(c, south.run_id)
 
       assert_receive {:trajectory_event_committed,
                       %{type: "cobbler.plan.task.accepted", id: event_id, payload: payload}},
@@ -102,9 +110,7 @@ defmodule Shoestring.Cobbler.PlanFanoutIntegrationTest do
       assert {:ok, %{dispatched: []}} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
 
       finish!(left)
-
-      assert {:ok, %{reason: :fanout_coordinator_required}} =
-               PlanExecutor.resume(c.goal.id, c.opts)
+      observe_terminal!(c, north.run_id)
 
       assert Reservations.outstanding() == []
       assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
@@ -113,9 +119,7 @@ defmodule Shoestring.Cobbler.PlanFanoutIntegrationTest do
       assert join_tree.base_commit == c.base
       join_pid = start_worker!(join.run_id)
       finish!(join_pid)
-
-      assert {:ok, %{reason: :fanout_coordinator_required}} =
-               PlanExecutor.resume(c.goal.id, c.opts)
+      observe_terminal!(c, join.run_id)
 
       restart!()
 
@@ -130,6 +134,72 @@ defmodule Shoestring.Cobbler.PlanFanoutIntegrationTest do
       # Global acceptance and worker activation are deliberately still fenced.
       assert {:ok, %{disposition: :blocked, reason: :fanout_coordinator_required}} =
                PlanExecutor.advance(c.goal.id, c.opts)
+    end
+
+    test "startup repairs discarded child delivery and accepts it without restarting its sibling" do
+      c = fixture(independent_only: true, worktrees_dir: Shoestring.State.path(:worktrees))
+      assert {:ok, result} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
+      [north, south] = result.dispatched
+
+      Application.put_env(:shoestring, :elf_dispatch_opts,
+        adapter: FanoutBarrierFake,
+        clock: PlanHandoffClock,
+        command: ["sleep", "30"],
+        adapter_opts: %{
+          scenario: Fake.Scenario.normal_completion(now: PlanExecutorHelpers.now()),
+          barrier_parent: self()
+        },
+        runner_opts: [kill_grace_ms: 100, reap_timeout_ms: 1000]
+      )
+
+      pid = start_worker!(south.run_id)
+      finish!(pid)
+
+      event =
+        Repo.get_by!(Shoestring.Trajectory.TrajectoryEvent,
+          type: "run.completed",
+          run_id: south.run_id
+        )
+
+      row = Repo.get!(PlanChildMessage, event.id)
+
+      Repo.get!(Oban.Job, row.job_id)
+      |> Ecto.Changeset.change(state: "discarded")
+      |> Repo.update!()
+
+      previous = Application.get_env(:shoestring, :plan_child_inbox_reconciler)
+      on_exit(fn -> Application.put_env(:shoestring, :plan_child_inbox_reconciler, previous) end)
+      Application.put_env(:shoestring, :plan_child_inbox_reconciler, true)
+      restart!()
+      _ = :sys.get_state(PlanChildInboxReconciler)
+      repaired = Repo.get!(PlanChildMessage, event.id)
+      assert repaired.job_id != row.job_id
+      assert Repo.get!(Oban.Job, row.job_id).state == "discarded"
+      observe_terminal!(c, south.run_id)
+
+      assert {:ok, %{accepted: ["south"], active_run_id: id, total_attempts: 2}} =
+               PlanExecutor.status(c.goal.id, c.opts)
+
+      assert id == north.run_id and Repo.get!(RunRecord, north.run_id).status == "requested"
+      assert Enum.map(Reservations.outstanding(), & &1.run_id) == [north.run_id]
+      assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^c.goal.id), :count) == 2
+      assert git!(c.source, ["status", "--porcelain"]) == ""
+      # Targeted cancellation also delivers a durable child message and must
+      # retain the already accepted sibling.
+      [owner] = Enum.filter(Reservations.outstanding(), &(&1.goal_id == c.goal.id))
+      assert {:ok, %{settlement: %{kind: "released"}}} = cancel_unstarted(owner)
+
+      cancelled =
+        Repo.get_by!(Shoestring.Trajectory.TrajectoryEvent,
+          type: "run.cancelled",
+          run_id: north.run_id
+        )
+
+      message = Repo.get!(PlanChildMessage, cancelled.id)
+      assert message.message_kind == "cancelled"
+      assert :ok = PlanChildWorker.perform(Repo.get!(Oban.Job, message.job_id))
+      assert Repo.get!(PlanChildMessage, cancelled.id).status == "observed"
+      assert {:ok, %{accepted: ["south"]}} = PlanExecutor.status(c.goal.id, c.opts)
     end
 
     test "a terminal scope conflict preserves a still-running sibling and its later acceptance" do
@@ -259,6 +329,16 @@ defmodule Shoestring.Cobbler.PlanFanoutIntegrationTest do
       pid
     end
 
+    defp observe_terminal!(c, run_id) do
+      event =
+        Repo.get_by!(Shoestring.Trajectory.TrajectoryEvent, type: "run.completed", run_id: run_id)
+
+      row = Repo.get!(PlanChildMessage, event.id)
+      Application.put_env(:shoestring, :plan_child_inbox_opts, c.opts)
+      assert :ok = PlanChildWorker.perform(Repo.get!(Oban.Job, row.job_id))
+      assert Repo.get!(PlanChildMessage, event.id).status == "observed"
+    end
+
     defp finish!(pid) do
       ref = Process.monitor(pid)
       send(pid, :release_stream)
@@ -290,7 +370,7 @@ defmodule Shoestring.Cobbler.PlanFanoutIntegrationTest do
         )
 
       assert status == 0, output
-      assert output =~ "3 tests, 0 failures"
+      assert output =~ "4 tests, 0 failures"
     end
   end
 end

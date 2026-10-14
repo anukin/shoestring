@@ -28,6 +28,7 @@ defmodule Shoestring.Application do
         elves_children() ++
         plan_execution_reconciler_children() ++
         reservation_control_reconciler_children() ++
+        plan_child_inbox_reconciler_children() ++
         [
           {DNSCluster, query: Application.get_env(:shoestring, :dns_cluster_query) || :ignore},
           ShoestringWeb.Endpoint
@@ -126,6 +127,12 @@ defmodule Shoestring.Application do
   defp reservation_control_reconciler_children do
     if Application.get_env(:shoestring, :reservation_control_reconciler, true),
       do: [Shoestring.Cobbler.ReservationControlReconciler],
+      else: []
+  end
+
+  defp plan_child_inbox_reconciler_children do
+    if Application.get_env(:shoestring, :plan_child_inbox_reconciler, true),
+      do: [Shoestring.Cobbler.PlanChildInboxReconciler],
       else: []
   end
 end

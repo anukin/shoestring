@@ -43,6 +43,16 @@ required; there is no automatic merge or conflict retry. Missing process-stop
 evidence holds acceptance and ownership before gates run. See the
 [final-scope evidence](../plans/evidence/07-multi-elf/final-scope-acceptance.md).
 
+REPO-INSPECTION: fan-out status now includes `child_inbox`: pending and observed
+message counts, up to 128 pending source references, and an explicit completeness
+flag. A pending completion may show `awaiting_quiescence` while owned-process
+evidence remains uncertain. The service records observations and verifies stopped
+children independently; it does not dispatch, replace, resume or cancel an Elf
+from an inbox notification. Source progress/checkpoint payloads are not copied
+into inbox metadata. Startup repairs lost delivery from canonical history.
+This does not enable the production fan-out dispatcher. See the
+[inbox evidence](../plans/evidence/07-multi-elf/child-inbox-wakeups.md).
+
 REPO-INSPECTION: Start binds the exact approved plan, immutable saved agent role,
 provider, explicit model and repository directory. Repeating an identical start
 returns the same intent and live delivery job. Changing the approved digest,

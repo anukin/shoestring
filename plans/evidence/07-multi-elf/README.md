@@ -41,3 +41,7 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
   file sets, process-settlement acceptance fence, durable conflict/uncertainty
   blockers and retained sibling gates; explicit resolution and production
   activation remain pending.
+- [Child inbox and wakeups](child-inbox-wakeups.md): atomic source/receipt/job
+  capture, pinned parent identity, independent terminal verification, canonical
+  observation deduplication and startup delivery repair; dispatch activation
+  and replacement policy remain pending.

@@ -68,10 +68,19 @@ record durable blockers with passed gates retained. Unaffected siblings can stil
 be accepted; blockers stop subsequent admission and survive replay/restart.
 Human conflict resolution and production activation remain pending.
 
+REPO-INSPECTION: [the durable child inbox](../evidence/07-multi-elf/child-inbox-wakeups.md)
+now captures progress, checkpoint, stop and verification notifications with their
+pinned parent/task/attempt identity. Source events, inbox receipts and service
+delivery jobs commit together; canonical observations deduplicate processing.
+Terminal delivery verifies siblings independently without advancing dispatch.
+Startup replay repairs missing/discarded delivery and status exposes pending
+messages. Production fan-out, explicit conflict resolution and replacement
+policy remain pending.
+
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
 - Next: explicit conflict resolution and production coordinator activation,
-  inbox/wakeups and partial-failure recovery. Preserve
+  bounded replacement and partial-failure recovery. Preserve
   uncertain owners until additional process evidence can resolve them.
 - Before fan-out: address canonical/generic goal status synchronization and
   worst-case global verification budget; retain full bounded public Claude output.
