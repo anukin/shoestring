@@ -80,7 +80,15 @@ defmodule Shoestring.Cobbler.PlanBudget do
   def authorize_continuation(repo, run) do
     binding = run.extensions["shoestring.plan:binding"]
 
-    with %{} = authority <- Shoestring.Cobbler.Plans.authority(run.goal_id, repo: repo),
+    with :ok <-
+           not_cancelled(
+             Shoestring.Cobbler.PlanCancellation.goal_cancelled?(
+               repo,
+               run.goal_id,
+               binding["execution_id"]
+             )
+           ),
+         %{} = authority <- Shoestring.Cobbler.Plans.authority(run.goal_id, repo: repo),
          {:ok, contract} <- Shoestring.Cobbler.PlanContract.new(authority.revision.content),
          %{} = task <-
            Enum.find(contract.content["tasks"], &(&1["id"] == binding["plan_task_id"])),
@@ -125,4 +133,7 @@ defmodule Shoestring.Cobbler.PlanBudget do
       get_in(event.payload, ["evidence", "gates"])
       |> List.wrap()
       |> Enum.reduce(0, fn gate, acc -> acc + max(0, gate["duration_ms"] || 0) end)
+
+  defp not_cancelled(true), do: {:error, :execution_cancelled}
+  defp not_cancelled(false), do: :ok
 end

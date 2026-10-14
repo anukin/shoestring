@@ -50,7 +50,8 @@ config :shoestring, Oban,
     handoff: 5,
     plan_execution: 1,
     reservation_control: 1,
-    plan_child_inbox: 2
+    plan_child_inbox: 2,
+    plan_cancellation: 1
   ],
   plugins: [
     # An abandoned executing job must become runnable again; DispatchRecord remains the effect claim.

@@ -21,7 +21,16 @@ defmodule Shoestring.Test.FanoutBarrierFake do
 
   @impl true
   def stream(identity, opts) do
-    Kernel.send(opts.barrier_parent, {:fanout_stream_ready, self(), identity.run_id})
+    identity_run_id = identity.run_id
+    Kernel.send(opts.barrier_parent, {:fanout_stream_ready, self(), identity_run_id})
+
+    # Optional per-dispatch scenarios let siblings stop differently; the
+    # default scenario applies to any dispatch not named.
+    opts =
+      case Map.get(opts, :scenarios, %{}) do
+        %{^identity_run_id => scenario} -> Map.put(opts, :scenario, scenario)
+        _ -> opts
+      end
 
     receive do
       :release_stream -> Fake.stream(identity, opts)

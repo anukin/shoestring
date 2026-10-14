@@ -27,6 +27,9 @@ defmodule Shoestring.Cobbler.PlanExecutionWorker do
       {:error, :execution_request_mismatch} ->
         {:cancel, :execution_request_mismatch}
 
+      {:error, :execution_cancelled} ->
+        {:cancel, :execution_cancelled}
+
       {:error, {:authority_mismatch, _}} ->
         {:cancel, :plan_authority_changed}
 

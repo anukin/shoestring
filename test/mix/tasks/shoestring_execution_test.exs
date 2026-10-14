@@ -159,4 +159,36 @@ defmodule Mix.Tasks.Shoestring.ExecutionTest do
     assert_raise Mix.Error, fn -> cli(request ++ ["--attempt", "1"]) end
     assert_raise Mix.Error, fn -> cli(List.replace_at(request, 5, "beta")) end
   end
+
+  test "CLI cancel queues one durable service-owned goal cancellation", c do
+    result = cli(args(c))
+    command_id = Ecto.UUID.generate()
+
+    request = [
+      "cancel",
+      c.goal.id,
+      "--execution-id",
+      result["execution"]["execution_id"],
+      "--reason",
+      "Stop this goal.",
+      "--command-id",
+      command_id,
+      "--by",
+      "human:operator"
+    ]
+
+    cancellation = cli(request)
+    assert cancellation["cancellation_id"] == command_id
+    assert cancellation["scope"] == "goal"
+    assert cancellation["completed?"] == false
+    assert cli(request)["event_id"] == cancellation["event_id"]
+
+    assert Repo.get!(Oban.Job, cancellation["job_id"]).worker ==
+             "Shoestring.Cobbler.PlanCancellationWorker"
+
+    assert run_count(c.goal.id) == 0
+    assert_raise Mix.Error, fn -> cli(List.replace_at(request, 5, "Different reason.")) end
+    assert_raise Mix.Error, fn -> cli(request ++ ["--run-id", "not-a-uuid"]) end
+    assert_raise Mix.Error, fn -> cli(List.delete_at(request, 4) |> List.delete_at(4)) end
+  end
 end

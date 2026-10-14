@@ -80,6 +80,9 @@ defmodule Shoestring.Cobbler.PlanFanout do
          {:ok, context} <- context(goal_id, opts),
          :ok <- no_scope_conflicts(context),
          task when not is_nil(task) <- Enum.find(context.ready, &(&1["id"] == task_id)),
+         attempt = Map.fetch!(context.attempts, task_id),
+         true <- Keyword.get(opts, :attempt, 1) == attempt || {:error, :fanout_attempt_mismatch},
+         :ok <- previous_settled(context, task, attempt, opts),
          :ok <- inputs_at_base(context, task),
          {:ok, assessment} <- assess(context, opts),
          true <- assessment.decision["disposition"] == "eligible",
@@ -89,7 +92,7 @@ defmodule Shoestring.Cobbler.PlanFanout do
              goal_id,
              context.status.execution,
              task_id,
-             1,
+             attempt,
              Keyword.put(opts, :repository_path, context.source)
            ),
          true <- prepared.worktree.workspace_ref == Keyword.get(opts, :workspace_ref),
@@ -210,6 +213,7 @@ defmodule Shoestring.Cobbler.PlanFanout do
 
     with {:ok, %{execution: execution, completed?: false, global_failure: nil} = status} <-
            PlanExecutor.status(goal_id, opts),
+         :ok <- not_cancelled(status.cancelled?),
          %{revision: revision} <- Plans.authority(goal_id, repo: repo),
          true <-
            revision.digest == execution.plan_digest and
@@ -223,13 +227,15 @@ defmodule Shoestring.Cobbler.PlanFanout do
              Path.expand(source) == Path.expand(Keyword.fetch!(opts, :repository_path)) do
       by_id = Map.new(contract.content["tasks"], &{&1["id"], &1})
 
-      ready =
-        PlanContract.required_task_ids(contract)
-        |> Enum.map(&Map.fetch!(by_id, &1))
-        |> Enum.filter(fn task ->
+      required = Enum.map(PlanContract.required_task_ids(contract), &Map.fetch!(by_id, &1))
+
+      initial =
+        Enum.filter(required, fn task ->
           Map.get(status.attempts, task["id"], 0) == 0 and task["id"] not in status.accepted and
             Enum.all?(task["depends_on"], &(&1 in status.accepted))
         end)
+
+      ready = initial ++ Enum.filter(required, &replacement?(status, &1))
 
       {:ok,
        %{
@@ -237,6 +243,7 @@ defmodule Shoestring.Cobbler.PlanFanout do
          status: status,
          contract: contract,
          ready: ready,
+         attempts: Map.new(ready, &{&1["id"], Map.get(status.attempts, &1["id"], 0) + 1}),
          source: source,
          base: get_in(contract.content, ["goal", "repository", "base_revision"]),
          by_id: by_id
@@ -244,6 +251,59 @@ defmodule Shoestring.Cobbler.PlanFanout do
     else
       {:error, _} = error -> error
       _ -> {:error, :fanout_execution_authority_required}
+    end
+  end
+
+  # Bounded replacement: only a fully resolved task whose latest attempt failed
+  # with retry state `retry` is redispatched. The executor computed that state
+  # from task/total attempt and duration limits; quota stops, interruption and
+  # cancellation never reach it, so they are never replaced automatically.
+  defp replacement?(status, task) do
+    children = Enum.filter(status.children, &(&1.plan_task_id == task["id"]))
+    latest = Enum.max_by(children, & &1.attempt, fn -> nil end)
+
+    children != [] and Enum.all?(children, & &1.resolved?) and
+      task["id"] not in status.accepted and
+      Enum.all?(task["depends_on"], &(&1 in status.accepted)) and
+      latest.resolution in [:gate_failed, :scope_rejected] and latest.retry_state == "retry"
+  end
+
+  defp previous_child(context, task, attempt) do
+    Enum.find(
+      context.status.children,
+      &(&1.plan_task_id == task["id"] and &1.attempt == attempt - 1)
+    )
+  end
+
+  # A replacement never overlaps the failed attempt's process: its owners must
+  # have verified settlement first. Missing evidence keeps the task held.
+  defp previous_quiescent(_context, _task, 1, _opts), do: :ok
+
+  defp previous_quiescent(context, task, attempt, opts) do
+    case previous_child(context, task, attempt) do
+      nil -> {:error, :fanout_previous_attempt_unknown}
+      child -> require_quiescent(context.goal_id, child, opts)
+    end
+  end
+
+  defp previous_settled(_context, _task, 1, _opts), do: :ok
+
+  defp previous_settled(context, task, attempt, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with %{} = child <- previous_child(context, task, attempt),
+         true <-
+           Enum.all?(Enum.uniq([child.root_run_id, child.run_id]), fn run_id ->
+             with %ReservationRecord{} = owner <- repo.get_by(ReservationRecord, run_id: run_id),
+                  %{} <- repo.get(Shoestring.Cobbler.ReservationSettlementRecord, owner.id) do
+               true
+             else
+               _ -> false
+             end
+           end) do
+      :ok
+    else
+      _ -> {:error, :fanout_child_not_quiescent}
     end
   end
 
@@ -401,28 +461,32 @@ defmodule Shoestring.Cobbler.PlanFanout do
   end
 
   defp dispatch_one(context, task, policy, opts) do
+    attempt = Map.fetch!(context.attempts, task["id"])
+
     with :ok <- inputs_at_base(context, task),
+         :ok <- previous_quiescent(context, task, attempt, opts),
          {:ok, admission_id} <-
            Keyword.fetch!(opts, :admission_fun).(
              context.goal_id,
              context.status.execution,
              task,
-             1
+             attempt
            ) do
-      run_id = PlanExecutor.task_run_id(context.goal_id, task["id"], 1)
+      run_id = PlanExecutor.task_run_id(context.goal_id, task["id"], attempt)
 
       attrs = %{
-        id: PlanExecutor.task_reservation_id(context.goal_id, task["id"], 1),
+        id: PlanExecutor.task_reservation_id(context.goal_id, task["id"], attempt),
         goal_id: context.goal_id,
         execution_id: context.status.execution.execution_id,
         plan_task_id: task["id"],
-        attempt: 1,
+        attempt: attempt,
         run_id: run_id,
         admission_event_id: admission_id
       }
 
       opts =
         Keyword.merge(opts,
+          attempt: attempt,
           reservation_policy: policy,
           admission_event_id: admission_id,
           workspace_ref: "run-#{run_id}",
@@ -544,4 +608,7 @@ defmodule Shoestring.Cobbler.PlanFanout do
   end
 
   defp now(opts), do: Keyword.get(opts, :now, DateTime.utc_now())
+
+  defp not_cancelled(true), do: {:error, :execution_cancelled}
+  defp not_cancelled(false), do: :ok
 end

@@ -69,6 +69,24 @@ still require their inputs at an approved base, normally via an amendment after
 manual integration. See the
 [resolution evidence](../plans/evidence/07-multi-elf/scope-resolution.md).
 
+REPO-INSPECTION: explicit cancellation is queued for the service:
+
+```sh
+mix shoestring.execution cancel "$GOAL" --execution-id "$EXECUTION_ID" \
+  --run-id "$RUN_ID" --reason "Stop north" \
+  --command-id "$COMMAND_ID" --by human:operator
+```
+
+With `--run-id` it stops one unresolved child; its siblings continue. Without it,
+every unresolved child stops and the execution accepts no further dispatch,
+advancement or continuation. Started runs have their owned process groups
+terminated; never-started intents are fenced. Status shows `cancellations`,
+`cancelled?` and each child's `stop_class`. A task failure with attempts left is
+replaced automatically through normal admission, carrying only its own failed
+attempt's checkpoint. Quota sleep, interruption and cancellation are never
+replaced automatically. See the
+[recovery evidence](../plans/evidence/07-multi-elf/partial-failure-recovery.md).
+
 REPO-INSPECTION: a planned goal's generic row now follows canonical completion:
 `cobbler.plan.execution.completed` marks it `completed` in the same transaction,
 and a later execution request reopens it as `active`. Archived goals are never

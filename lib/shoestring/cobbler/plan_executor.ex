@@ -98,10 +98,14 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   # This reuses the ordinary task intent path and never launches an Elf.
   def dispatch_sibling(goal_id, task_id, opts) do
     repo = Keyword.get(opts, :repo, Repo)
+    attempt = Keyword.get(opts, :attempt, 1)
 
     with true <- repo.in_transaction?() || {:error, :reservation_transaction_required},
          {:ok, projection} <- project(repo, goal_id),
          {:ok, execution} <- require_execution(projection),
+         true <-
+           attempt == Map.get(attempt_counts(projection, execution), task_id, 0) + 1 ||
+             {:error, :fanout_attempt_mismatch},
          {:ok, authority} <- live_authority(repo, goal_id),
          :ok <- bind_authority(authority, execution.revision_number, execution.plan_digest),
          {:ok, contract} <- PlanContract.new(authority.revision.content),
@@ -121,12 +125,73 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         execution,
         contract,
         task,
-        1,
+        attempt,
         admission,
-        opts,
+        Keyword.put(
+          opts,
+          :replacement_prompt,
+          replacement_prompt(repo, goal_id, projection, execution, task_id, attempt)
+        ),
         :sibling
       )
     end
+  end
+
+  # A fan-out replacement sees only its own task's previous attempt: the
+  # recorded failure and that attempt's latest checkpoint content. Sibling
+  # runs and provider transcripts never enter the prompt.
+  defp replacement_prompt(_repo, _goal_id, _projection, _execution, _task_id, 1), do: nil
+
+  defp replacement_prompt(repo, goal_id, projection, execution, task_id, attempt) do
+    previous =
+      Enum.find(
+        dispatches_for(projection, execution),
+        &(&1.plan_task_id == task_id and &1.attempt == attempt - 1)
+      )
+
+    failure =
+      Enum.find(
+        Enum.reverse(projection.gate_failed),
+        &(&1.execution_id == execution.execution_id and &1.plan_task_id == task_id and
+            &1.attempt == attempt - 1)
+      )
+
+    checkpoint =
+      previous &&
+        previous.run_ids
+        |> Enum.reverse()
+        |> Enum.find_value(fn run_id ->
+          case Shoestring.Harness.Continuation.latest_checkpoint(repo, goal_id,
+                 run_id: run_id,
+                 allow_goal_fallback: false
+               ) do
+            {:ok, record} -> record
+            _ -> nil
+          end
+        end)
+
+    failure_text =
+      if failure,
+        do:
+          "Previous attempt #{attempt - 1} failed at #{failure.gate || "run"}: #{failure.reason}.",
+        else: "Previous attempt #{attempt - 1} did not produce an accepted result."
+
+    checkpoint_text =
+      if checkpoint,
+        do:
+          "\n" <>
+            Shoestring.Harness.Continuation.compose_handoff_prompt(
+              %{
+                checkpoint_id: checkpoint.id,
+                next_action: checkpoint.next_action,
+                decision_refs: []
+              },
+              checkpoint_record: checkpoint,
+              constraints: "fresh replacement attempt from the approved base; no prior transcript"
+            ),
+        else: ""
+
+    "\nReplacement context (own task only):\n" <> failure_text <> checkpoint_text
   end
 
   @doc "The trajectory event types this executor reads and writes."
@@ -239,6 +304,14 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          :ok <- ensure_goal(repo, goal_id),
          {:ok, projection} <- project(repo, goal_id),
          {:ok, execution} <- require_execution(projection),
+         :ok <-
+           not_cancelled(
+             Shoestring.Cobbler.PlanCancellation.goal_cancelled?(
+               repo,
+               goal_id,
+               execution.execution_id
+             )
+           ),
          {:ok, authority} <- live_authority(repo, goal_id),
          :ok <- bind_authority(authority, execution.revision_number, execution.plan_digest),
          {:ok, contract} <- PlanContract.new(authority.revision.content),
@@ -488,13 +561,25 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              active_run_id: active && active.run_id,
              active_attempt: active && active.attempt,
              active_run_ids: Enum.flat_map(active_children, & &1.run_ids),
-             children: Enum.map(children, &child_view(projection, &1)),
+             children:
+               Enum.map(children, fn child ->
+                 view = child_view(projection, child)
+                 Map.put(view, :stop_class, stop_class(repo, goal_id, view))
+               end),
              active_children: active_children,
              accepted_evidence: projection.accepted,
              scope_blockers: scope_blockers(projection, execution),
              acknowledged_scope_blockers: acknowledged_scope_blockers(projection, execution),
              child_inbox:
                Shoestring.Cobbler.PlanChildInbox.summary(repo, goal_id, execution.execution_id),
+             cancelled?:
+               Shoestring.Cobbler.PlanCancellation.goal_cancelled?(
+                 repo,
+                 goal_id,
+                 execution.execution_id
+               ),
+             cancellations:
+               Shoestring.Cobbler.PlanCancellation.summary(repo, goal_id, execution.execution_id),
              dispatch_mode: if(fanout?(projection, execution), do: :fanout_v1, else: :sequential),
              needs_user?:
                (duration_blocks? and is_nil(completed_event(projection))) or
@@ -702,6 +787,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       run_id: payload["run_id"],
       attempt: payload["attempt"],
       retry_state: payload["retry_state"],
+      gate: payload["gate"],
       commit: payload["commit"],
       scope_json: payload["scope_json"],
       decision_json: payload["decision_json"],
@@ -824,6 +910,65 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       resolution: resolution,
       retry_state: failure && failure.retry_state
     })
+  end
+
+  @adapter_categories ~w(transport schema_incompatible authentication_required unsupported_capability)
+
+  # Separate, deterministic classes for partial-failure handling. Only
+  # `task_failure`/`adapter_failure` with retry state `retry` (and a rejected
+  # conflict) can be replaced automatically; quota sleep, interruption and
+  # cancellation keep their own continuation or operator paths.
+  defp stop_class(repo, goal_id, child) do
+    case child.resolution do
+      :accepted ->
+        :accepted
+
+      resolution when resolution in [:scope_blocked, :scope_rejected] ->
+        :conflict
+
+      :superseded ->
+        :superseded
+
+      :gate_failed ->
+        case latest_stop(repo, goal_id, child.run_id) do
+          %{type: "run.failed", payload: %{"error_category" => category}}
+          when category in @adapter_categories ->
+            :adapter_failure
+
+          _ ->
+            :task_failure
+        end
+
+      nil ->
+        case latest_stop(repo, goal_id, child.run_id) do
+          nil -> :running
+          %{type: type} when type in ["run.starting", "run.running"] -> :running
+          %{type: "run.suspended"} -> :quota_sleep
+          %{type: "run.failed", payload: %{"error_category" => "quota_refused"}} -> :quota_sleep
+          %{type: "run.interrupted"} -> :interrupted
+          %{type: "run.cancelled"} -> :cancelled
+          _ -> :awaiting_verification
+        end
+    end
+  end
+
+  defp latest_stop(repo, goal_id, run_id) do
+    repo.one(
+      from event in TrajectoryEvent,
+        where:
+          event.goal_id == ^goal_id and event.run_id == ^run_id and
+            event.type in [
+              "run.starting",
+              "run.running",
+              "run.completed",
+              "run.failed",
+              "run.interrupted",
+              "run.cancelled",
+              "run.suspended"
+            ],
+        order_by: [desc: event.sequence],
+        limit: 1
+    )
   end
 
   defp active_dispatches(projection, execution) do
@@ -1345,7 +1490,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
               "goal" => contract.content["goal"],
               "revision_number" => execution.revision_number,
               "plan_digest" => execution.plan_digest
-            }) <> profile_instructions(execution[:agent_profile]),
+            }) <>
+            profile_instructions(execution[:agent_profile]) <>
+            (Keyword.get(opts, :replacement_prompt) || ""),
         extensions:
           %{
             Shoestring.Cobbler.PlanBinding.key() => %{
@@ -2268,4 +2415,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp not_cancelled(true), do: {:error, :execution_cancelled}
+  defp not_cancelled(false), do: :ok
 end

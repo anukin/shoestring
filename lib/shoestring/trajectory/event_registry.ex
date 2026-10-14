@@ -718,6 +718,30 @@ defmodule Shoestring.Trajectory.EventRegistry do
         types: %{revision_number: :integer, attempt: :integer}
       }
     },
+    "cobbler.plan.cancellation.requested" => %{
+      1 => %{
+        required: [
+          :cancellation_id,
+          :execution_id,
+          :revision_number,
+          :plan_digest,
+          :scope,
+          :requested_by,
+          :reason
+        ],
+        optional: [:run_id],
+        uuid_fields: [:cancellation_id, :execution_id, :run_id],
+        types: %{revision_number: :integer}
+      }
+    },
+    "cobbler.plan.cancellation.completed" => %{
+      1 => %{
+        required: [:cancellation_id, :execution_id, :outcomes, :outcomes_complete],
+        optional: [],
+        uuid_fields: [:cancellation_id, :execution_id],
+        types: %{outcomes: {:array, :map}, outcomes_complete: :boolean}
+      }
+    },
     "cobbler.plan.task.scope_resolved" => %{
       1 => %{
         required: [
@@ -1399,6 +1423,38 @@ defmodule Shoestring.Trajectory.EventRegistry do
           "must bind an allowed child observation and plan revision"
         )
     end
+  end
+
+  # Child scope names exactly one run; goal scope names none and stops every
+  # unresolved child of the execution.
+  defp validate_plan_execution("cobbler.plan.cancellation.requested", 1, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         true <- human_identity?(payload["requested_by"]) || {:field, :requested_by},
+         {:ok, _} <- Contract.text(payload["reason"], :reason, max: 2000),
+         true <-
+           ((payload["scope"] == "child" and is_binary(payload["run_id"])) or
+              (payload["scope"] == "goal" and not Map.has_key?(payload, "run_id"))) ||
+             {:field, :scope} do
+      :ok
+    else
+      {:field, :requested_by} -> Contract.invalid(:requested_by, "must be a human: identity")
+      {:field, :scope} -> Contract.invalid(:scope, "must be child with a run or goal without")
+      error -> error
+    end
+  end
+
+  defp validate_plan_execution("cobbler.plan.cancellation.completed", 1, payload, _opts) do
+    outcomes = payload["outcomes"]
+
+    if length(outcomes) <= 64 and
+         Enum.all?(outcomes, fn outcome ->
+           Enum.sort(Map.keys(outcome)) == ["outcome", "run_id"] and
+             match?({:ok, _}, Ecto.UUID.cast(outcome["run_id"])) and
+             outcome["outcome"] in ["cancelled", "already_terminal", "fenced_unstarted"]
+         end),
+       do: :ok,
+       else: Contract.invalid(:outcomes, "must list at most 64 stopped runs")
   end
 
   # A human decision for exactly one scope-blocked attempt. `accept` keeps its

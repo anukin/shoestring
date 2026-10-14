@@ -2,9 +2,10 @@ defmodule Shoestring.Cobbler.PlanExecutionReconciler do
   @moduledoc """
   One startup repair pass for approved execution delivery; never cancels runs.
 
-  It first re-derives planned goal rows from canonical completion facts, then
-  repairs execution delivery. A failure in either pass is logged without
-  preventing the other.
+  It re-derives planned goal rows from canonical completion facts, repairs
+  execution delivery, then re-queues explicit cancellations whose completion
+  was never recorded. A failure in one pass is logged without preventing the
+  others.
   """
   use GenServer
   require Logger
@@ -26,6 +27,11 @@ defmodule Shoestring.Cobbler.PlanExecutionReconciler do
     case safely(fn -> Shoestring.Cobbler.ExecutionControl.reconcile(opts) end) do
       {:ok, %{failures: []}} -> :ok
       _ -> Logger.error("approved plan execution delivery repair failed")
+    end
+
+    case safely(fn -> Shoestring.Cobbler.PlanCancellation.repair(opts) end) do
+      {:ok, %{failures: []}} -> :ok
+      _ -> Logger.error("plan cancellation delivery repair failed")
     end
 
     {:noreply, opts}

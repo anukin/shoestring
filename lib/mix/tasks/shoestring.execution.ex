@@ -10,6 +10,7 @@ defmodule Mix.Tasks.Shoestring.Execution do
       mix shoestring.execution check-scopes GOAL
       mix shoestring.execution continue GOAL --execution-id ID
       mix shoestring.execution confirm-capacity GOAL --execution-id ID --task-id TASK --attempt N --scope SCOPE --command-id ID --by human:NAME
+      mix shoestring.execution cancel GOAL --execution-id ID [--run-id RUN] --reason TEXT --command-id ID --by human:NAME
       mix shoestring.execution resolve-scope GOAL --execution-id ID --task-id TASK --attempt N --decision accept|reject --reason TEXT --command-id ID --by human:NAME
       mix shoestring.execution handoff GOAL --execution-id ID --run-id ID --checkpoint-id ID --decision-ref ID --role ROLE --scope SCOPE --command-id ID --reason TEXT --by human:NAME [--confirm-capacity]
 
@@ -26,6 +27,9 @@ defmodule Mix.Tasks.Shoestring.Execution do
   Resolve-scope decides one fan-out scope blocker: accept keeps the tested
   commit and acknowledges exactly its recorded blockers; reject resolves the
   attempt as failed within the plan's attempt limits. Neither merges branches.
+  Cancel queues explicit service-owned cancellation: with --run-id it stops one
+  unresolved child; without it, every unresolved child of the execution, and no
+  further work is dispatched or continued for that execution.
   """
   @switches [
     revision: :integer,
@@ -136,6 +140,20 @@ defmodule Mix.Tasks.Shoestring.Execution do
     )
   end
 
+  defp execute("cancel", goal_id, opts, client) do
+    ExecutionControl.cancel(
+      goal_id,
+      %{
+        execution_id: opts[:execution_id],
+        run_id: opts[:run_id],
+        reason: opts[:reason],
+        command_id: opts[:command_id],
+        requested_by: opts[:by]
+      },
+      oban: client
+    )
+  end
+
   defp execute("continue", goal_id, opts, client),
     do: ExecutionControl.continue(goal_id, opts[:execution_id], oban: client)
 
@@ -188,6 +206,11 @@ defmodule Mix.Tasks.Shoestring.Execution do
 
         "resolve-scope" ->
           [:execution_id, :task_id, :attempt, :decision, :reason, :command_id, :by]
+
+        "cancel" ->
+          if Keyword.has_key?(opts, :run_id),
+            do: [:execution_id, :run_id, :reason, :command_id, :by],
+            else: [:execution_id, :reason, :command_id, :by]
 
         "start" ->
           [:revision, :digest, :repo, :agent, :agent_revision, :agent_digest, :role, :by]

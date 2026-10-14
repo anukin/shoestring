@@ -86,6 +86,11 @@ REPO-INSPECTION: [scope resolution](../evidence/07-multi-elf/scope-resolution.md
 lets a human accept or reject one scope-blocked attempt by CLI; acceptance
 acknowledges exactly the recorded blockers and nothing merges.
 
+REPO-INSPECTION: [partial-failure recovery](../evidence/07-multi-elf/partial-failure-recovery.md)
+classifies every child's stop, replaces bounded task/adapter failures with
+their own checkpoint through normal admission, and cancels one child or the
+whole goal by stopping owned process groups.
+
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
 - Next: explicit conflict resolution and production coordinator activation,

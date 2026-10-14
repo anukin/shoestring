@@ -52,3 +52,6 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
 - [Scope resolution](scope-resolution.md): explicit human accept/reject of one
   scope-blocked attempt, value-exact blocker acknowledgement, bounded retry
   state and CLI; no merge and no concurrency override.
+- [Partial failure and recovery](partial-failure-recovery.md): per-child stop
+  classes, bounded checkpoint-carrying replacement through normal admission,
+  and explicit child/goal cancellation that stops live process groups.
