@@ -307,6 +307,7 @@ defmodule Shoestring.Trajectory.Writer do
     |> case do
       %TrajectoryEvent{} = event ->
         :ok = Shoestring.Cobbler.PlanChildInbox.capture(state.repo, event)
+        :ok = Shoestring.Cobbler.PlanGoalStatus.capture(state.repo, event, :duplicate)
         {:ok, :duplicate, event}
 
       nil ->
@@ -348,6 +349,7 @@ defmodule Shoestring.Trajectory.Writer do
         case state.repo.insert(changeset) do
           {:ok, event} ->
             :ok = Shoestring.Cobbler.PlanChildInbox.capture(state.repo, event)
+            :ok = Shoestring.Cobbler.PlanGoalStatus.capture(state.repo, event, :inserted)
             {:ok, :inserted, event}
 
           {:error, changeset} ->

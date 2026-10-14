@@ -77,13 +77,18 @@ Startup replay repairs missing/discarded delivery and status exposes pending
 messages. Production fan-out, explicit conflict resolution and replacement
 policy remain pending.
 
+REPO-INSPECTION: [pre-fan-out prerequisites](../evidence/07-multi-elf/pre-fanout-prerequisites.md)
+now keep generic goal rows synchronized with canonical completion, charge and
+reserve fan-out final-scope verification overhead, and retain full redacted
+public Claude output that fails rather than truncates when oversized.
+
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
 - Next: explicit conflict resolution and production coordinator activation,
   bounded replacement and partial-failure recovery. Preserve
   uncertain owners until additional process evidence can resolve them.
-- Before fan-out: address canonical/generic goal status synchronization and
-  worst-case global verification budget; retain full bounded public Claude output.
+- Before fan-out (done): canonical/generic goal status synchronization,
+  worst-case verification budget and full bounded public Claude output.
 
 The user authorized work directly on main without a PR; this overrides the
 standing worktree/PR workflow for this implementation.

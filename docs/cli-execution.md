@@ -53,6 +53,17 @@ into inbox metadata. Startup repairs lost delivery from canonical history.
 This does not enable the production fan-out dispatcher. See the
 [inbox evidence](../plans/evidence/07-multi-elf/child-inbox-wakeups.md).
 
+REPO-INSPECTION: a planned goal's generic row now follows canonical completion:
+`cobbler.plan.execution.completed` marks it `completed` in the same transaction,
+and a later execution request reopens it as `active`. Archived goals are never
+moved. A completion for a superseded execution is refused. Startup re-derives
+rows written before this change. Fan-out acceptance records measured final-scope
+Git verification as `verification_overhead_ms`; status reports
+`total_verification_overhead_ms`, included in `total_duration_ms` but never in
+a task's own allowance. Fan-out admission also reserves worst-case final-scope
+verification for each held child. See the
+[prerequisite evidence](../plans/evidence/07-multi-elf/pre-fanout-prerequisites.md).
+
 REPO-INSPECTION: Start binds the exact approved plan, immutable saved agent role,
 provider, explicit model and repository directory. Repeating an identical start
 returns the same intent and live delivery job. Changing the approved digest,

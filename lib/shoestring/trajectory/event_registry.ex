@@ -766,13 +766,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
           :commit,
           :evidence
         ],
-        optional: [:worktree_ref, :scope_json],
+        optional: [:worktree_ref, :scope_json, :verification_overhead_ms],
         uuid_fields: [:execution_id, :run_id],
         types: %{
           revision_number: :integer,
           attempt: :integer,
           gate_argv: {:array, :string},
-          evidence: :map
+          evidence: :map,
+          verification_overhead_ms: :integer
         }
       }
     },
@@ -791,7 +792,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
           :evidence,
           :decision_json
         ],
-        optional: [:scope_json, :reason],
+        optional: [:scope_json, :reason, :verification_overhead_ms],
         uuid_fields: [:execution_id, :run_id],
         types: %{
           revision_number: :integer,
@@ -799,7 +800,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
           gate_argv: {:array, :string},
           evidence: :map,
           scope_json: :string,
-          decision_json: :string
+          decision_json: :string,
+          verification_overhead_ms: :integer
         }
       }
     },
@@ -1301,6 +1303,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
          :ok <- plan_execution_task_id(payload),
          :ok <- plan_execution_gate(payload),
          :ok <- plan_execution_commit(payload),
+         :ok <- verification_overhead(payload),
          :ok <- Shoestring.Cobbler.PlanFinalScope.validate_payload(payload) do
       :ok
     end
@@ -1379,6 +1382,13 @@ defmodule Shoestring.Trajectory.EventRegistry do
   end
 
   defp validate_plan_execution(_type, _version, _payload, _opts), do: :ok
+
+  # Measured final-scope verification time; charged to the goal duration budget.
+  defp verification_overhead(%{"verification_overhead_ms" => ms})
+       when not is_integer(ms) or ms < 0 or ms > 86_400_000,
+       do: Contract.invalid(:verification_overhead_ms, "must be a bounded non-negative integer")
+
+  defp verification_overhead(_payload), do: :ok
 
   defp validate_scope_reason(%{"reason" => reason}) do
     case Contract.text(reason, :reason, max: 2000) do

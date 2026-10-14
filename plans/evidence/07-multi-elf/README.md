@@ -45,3 +45,7 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
   capture, pinned parent identity, independent terminal verification, canonical
   observation deduplication and startup delivery repair; dispatch activation
   and replacement policy remain pending.
+- [Pre-fan-out prerequisites](pre-fanout-prerequisites.md): canonical goal-row
+  synchronization with startup repair, charged and reserved final-scope
+  verification overhead, and full redacted public Claude output that fails
+  rather than truncates; conflict resolution and replacement remain pending.

@@ -34,7 +34,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
   owning session (adapter-isolation requirement).
   """
 
-  alias Shoestring.Harness.{Error, HarnessEvent}
+  alias Shoestring.Harness.{Error, HarnessEvent, Security}
 
   @secret_patterns [
     {~r/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i, "[REDACTED_BEARER]"},
@@ -45,6 +45,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
   ]
 
   @max_message_chars 500
+  # Public assistant text is retained in full up to the default transport
+  # frame cap. A larger block fails the run; it is never silently truncated.
+  @max_output_bytes 262_144
 
   @doc """
   Normalizes one decoded stream-json frame map into zero or more
@@ -122,35 +125,19 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
         case assistant_block_extensions(block, frame, message_id, request_id) do
           {:command, ext} -> {[{:command, idx, ext} | acc], idx + 1}
           {:output, ext} -> {[{:output, idx, ext} | acc], idx + 1}
+          {:oversized, bytes} -> {[{:oversized, idx, bytes} | acc], idx + 1}
           :skip -> {acc, idx}
         end
       end)
 
-    case Enum.reverse(ext_list) do
-      [] ->
-        {:skip, :no_emittable_content}
+    tagged = Enum.reverse(ext_list)
 
-      tagged ->
-        events =
-          tagged
-          |> Enum.with_index()
-          |> Enum.map(fn {{kind, _idx, ext}, offset} ->
-            source = source_id(frame, "claude-assistant-#{offset}-#{ordinal}")
+    case Enum.find(tagged, &match?({:oversized, _, _}, &1)) do
+      {:oversized, _idx, bytes} ->
+        oversized_output(frame, run_id, ordinal, occurred_at, proc_id, sess_id, bytes)
 
-            build_event(
-              run_id: run_id,
-              ordinal: ordinal + offset,
-              source_event_id: source,
-              occurred_at: occurred_at,
-              kind: kind,
-              process_id: proc_id,
-              provider_session_id: sess_id,
-              extensions: ext
-            )
-          end)
-          |> collect_events()
-
-        {:ok, events}
+      nil ->
+        build_assistant_events(tagged, frame, run_id, ordinal, occurred_at, proc_id, sess_id)
     end
   end
 
@@ -165,16 +152,20 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
         case user_block_extensions(block, tool_use_result) do
           {:command, ext} -> [{:command, ext} | acc]
           {:output, ext} -> [{:output, ext} | acc]
+          {:oversized, bytes} -> [{:oversized, bytes} | acc]
           :skip -> acc
         end
       end)
       |> Enum.reverse()
 
-    case tagged do
-      [] ->
+    case {tagged, Enum.find(tagged, &match?({:oversized, _}, &1))} do
+      {_, {:oversized, bytes}} ->
+        oversized_output(frame, run_id, ordinal, occurred_at, proc_id, sess_id, bytes)
+
+      {[], nil} ->
         {:skip, :no_emittable_content}
 
-      _ ->
+      {_, nil} ->
         events =
           tagged
           |> Enum.with_index()
@@ -301,6 +292,35 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
     {:skip, :unhandled_frame}
   end
 
+  defp build_assistant_events(tagged, frame, run_id, ordinal, occurred_at, proc_id, sess_id) do
+    case tagged do
+      [] ->
+        {:skip, :no_emittable_content}
+
+      tagged ->
+        events =
+          tagged
+          |> Enum.with_index()
+          |> Enum.map(fn {{kind, _idx, ext}, offset} ->
+            source = source_id(frame, "claude-assistant-#{offset}-#{ordinal}")
+
+            build_event(
+              run_id: run_id,
+              ordinal: ordinal + offset,
+              source_event_id: source,
+              occurred_at: occurred_at,
+              kind: kind,
+              process_id: proc_id,
+              provider_session_id: sess_id,
+              extensions: ext
+            )
+          end)
+          |> collect_events()
+
+        {:ok, events}
+    end
+  end
+
   # --- Content blocks ---
 
   # START boundary: assistant tool_use block. Correlate by toolu_ id only.
@@ -323,7 +343,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
 
   defp assistant_block_extensions(%{"type" => "text", "text" => text}, _frame, _mid, _rid)
        when is_binary(text) and text != "" do
-    {:output, %{"claude-headless:output_text" => truncate(sanitize_string(text))}}
+    public_output(text)
   end
 
   # Reasoning-adjacent blocks are never persisted (Codex parity).
@@ -345,18 +365,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
         "claude-headless:is_error" => is_error,
         "claude-headless:status" => if(is_error, do: "failed", else: "completed")
       }
-      |> maybe_put(
-        "claude-headless:tool_result_text",
-        truncate(sanitize_string(block_text(block)))
-      )
-      |> maybe_put(
-        "claude-headless:tool_stdout",
-        truncate(sanitize_string(tool_use_result["stdout"]))
-      )
-      |> maybe_put(
-        "claude-headless:tool_stderr",
-        truncate(sanitize_string(tool_use_result["stderr"]))
-      )
+      |> put_preview("tool_result_text", block_text(block))
+      |> put_preview("tool_stdout", tool_use_result["stdout"])
+      |> put_preview("tool_stderr", tool_use_result["stderr"])
       |> maybe_put_bool("claude-headless:interrupted", tool_use_result["interrupted"])
 
     {:command, ext}
@@ -364,7 +375,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
 
   defp user_block_extensions(%{"type" => "text", "text" => text}, _result)
        when is_binary(text) and text != "" do
-    {:output, %{"claude-headless:output_text" => truncate(sanitize_string(text))}}
+    public_output(text)
   end
 
   defp user_block_extensions(_block, _result), do: :skip
@@ -506,6 +517,60 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
   end
 
   def sanitize_string(val), do: to_string(val)
+
+  # Public assistant text: retained whole and redacted for storage.
+  defp public_output(text) do
+    retained = text |> sanitize_string() |> Security.redact_retained()
+
+    if byte_size(retained) > @max_output_bytes,
+      do: {:oversized, byte_size(retained)},
+      else: {:output, %{"claude-headless:output_text" => retained}}
+  end
+
+  # Tool stdio is a diagnostic preview. Truncation is recorded explicitly,
+  # with the retained byte count of the full value.
+  defp put_preview(map, _field, value) when not is_binary(value) or value == "", do: map
+
+  defp put_preview(map, field, value) do
+    retained = value |> sanitize_string() |> Security.redact_retained()
+    preview = truncate(retained)
+    map = Map.put(map, "claude-headless:#{field}", preview)
+
+    if preview == retained,
+      do: map,
+      else:
+        map
+        |> Map.put("claude-headless:#{field}_truncated", true)
+        |> Map.put("claude-headless:#{field}_bytes", byte_size(retained))
+  end
+
+  defp oversized_output(frame, run_id, ordinal, occurred_at, proc_id, sess_id, bytes) do
+    error =
+      Error.new(
+        :task_failed,
+        "output_oversized",
+        "Claude public output block exceeded #{@max_output_bytes} bytes",
+        details: %{"claude-headless:code" => "output_oversized"}
+      )
+
+    case build_event(
+           run_id: run_id,
+           ordinal: ordinal,
+           source_event_id: source_id(frame, "claude-oversized-#{ordinal}"),
+           occurred_at: occurred_at,
+           kind: :error,
+           process_id: proc_id,
+           provider_session_id: sess_id,
+           error: error,
+           extensions: %{
+             "claude-headless:frame_type" => sanitize_string(frame["type"]),
+             "claude-headless:output_bytes" => bytes
+           }
+         ) do
+      {:ok, event} -> {:ok, [mark_terminal(event)]}
+      {:error, _} = err -> err
+    end
+  end
 
   defp truncate(nil), do: nil
 

@@ -506,6 +506,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              attempts: attempt_counts(projection, execution),
              total_attempts: total_attempts(projection, execution),
              total_gate_duration_ms: usage.total_gate_duration_ms,
+             total_verification_overhead_ms: usage.total_verification_overhead_ms,
              total_run_duration_ms: usage.total_run_duration_ms,
              total_duration_ms: usage.total_duration_ms,
              task_duration_ms: usage.task_duration_ms,
@@ -1508,6 +1509,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   defp record_acceptance(repo, goal_id, execution, dispatched, gate_evidences, opts) do
     if dispatched.dispatch_mode == "fanout_v1" do
       nested? = repo.in_transaction?()
+      started = monotonic_ms(opts)
 
       {scope_json, decision, reason} =
         case Shoestring.Cobbler.PlanFanout.final_scope(
@@ -1536,6 +1538,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              if(is_atom(reason), do: Atom.to_string(reason), else: "final_snapshot_unverified")}
         end
 
+      # Measured before the write transaction: the charge is the observation
+      # work itself, not time spent waiting for the serialized writer.
+      overhead_ms = max(0, monotonic_ms(opts) - started)
+
       result =
         Shoestring.Cobbler.ReservationWriter.run(repo, fn ->
           repo.transaction(
@@ -1560,7 +1566,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
                        dispatched,
                        gate_evidences,
                        Keyword.put(opts, :writer_opts, writer_opts),
-                       {scope_json, decision, reason}
+                       {scope_json, decision, reason, overhead_ms}
                      ) do
                   {:ok, result} -> result
                   {:error, reason} -> repo.rollback(reason)
@@ -1637,16 +1643,19 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
     {type, disposition, key, payload} =
       case final_scope do
-        {scope_json, %{"disposition" => "eligible"}, nil} ->
+        {scope_json, %{"disposition" => "eligible"}, nil, overhead_ms} ->
           {"cobbler.plan.task.accepted", :accepted, "plan-task-accepted",
-           Map.put(payload, "scope_json", scope_json)}
+           payload
+           |> Map.put("scope_json", scope_json)
+           |> Map.put("verification_overhead_ms", overhead_ms)}
 
-        {scope_json, decision, reason} ->
+        {scope_json, decision, reason, overhead_ms} ->
           {"cobbler.plan.task.scope_blocked", :scope_blocked, "plan-task-scope-blocked",
            payload
            |> maybe_put("scope_json", scope_json)
            |> maybe_put("reason", reason)
-           |> Map.put("decision_json", PlanContract.canonical_json(decision))}
+           |> Map.put("decision_json", PlanContract.canonical_json(decision))
+           |> Map.put("verification_overhead_ms", overhead_ms)}
 
         nil ->
           {"cobbler.plan.task.accepted", :accepted, "plan-task-accepted", payload}
@@ -2113,6 +2122,13 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          ) do
       {:ok, event} -> {:ok, event}
       {:error, reason} -> {:error, {:executor_append_failed, type, reason}}
+    end
+  end
+
+  defp monotonic_ms(opts) do
+    case Keyword.get(opts, :monotonic_ms_fun) do
+      fun when is_function(fun, 0) -> fun.()
+      _ -> System.monotonic_time(:millisecond)
     end
   end
 

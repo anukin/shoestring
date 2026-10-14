@@ -39,12 +39,16 @@ defmodule Shoestring.Cobbler.PlanBudget do
 
       run_ms = task_runs |> Map.values() |> Enum.sum()
       gate_ms = gate_events |> Enum.map(&gate_duration/1) |> Enum.sum()
+      # Final-scope verification is goal-level overhead: it never consumes a
+      # task's own allowance, but every measured millisecond counts once.
+      overhead_ms = gate_events |> Enum.map(&verification_overhead/1) |> Enum.sum()
 
       {:ok,
        %{
          total_run_duration_ms: run_ms,
          total_gate_duration_ms: gate_ms,
-         total_duration_ms: run_ms + gate_ms,
+         total_verification_overhead_ms: overhead_ms,
+         total_duration_ms: run_ms + gate_ms + overhead_ms,
          task_duration_ms: Map.merge(task_runs, task_gates, fn _, run, gate -> run + gate end)
        }}
     end
@@ -107,6 +111,12 @@ defmodule Shoestring.Cobbler.PlanBudget do
         )
     end
   end
+
+  defp verification_overhead(%{payload: %{"verification_overhead_ms" => ms}})
+       when is_integer(ms) and ms >= 0,
+       do: ms
+
+  defp verification_overhead(_event), do: 0
 
   defp gate_duration(%{payload: %{"duration_ms" => ms}}) when is_integer(ms) and ms >= 0, do: ms
 

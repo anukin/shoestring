@@ -467,7 +467,14 @@ defmodule Shoestring.Cobbler.PlanFanout do
             Map.get(usage.task_duration_ms, owner.plan_task_id, 0)
         end)
 
-      verification = length(context.contract.content["goal"]["acceptance"]["gates"]) * timeout
+      # Worst-case verification still owed: every global gate at its command
+      # timeout, plus one bounded final-scope observation per held owner. The
+      # child count cannot exceed the plan's lifetime attempt limit.
+      children = context.contract.content["budget"]["max_total_attempts"]
+
+      verification =
+        length(context.contract.content["goal"]["acceptance"]["gates"]) * timeout +
+          length(owners) * ScopeEvidence.final_scope_bound_ms(children)
 
       cond do
         Enum.any?(allowances, &(&1 <= 0)) ->

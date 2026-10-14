@@ -371,6 +371,32 @@ defmodule Shoestring.Harness.Security do
 
   def redact(text) when is_binary(text) do
     text
+    |> redact_patterns()
+    |> String.trim()
+    |> String.slice(0, @max_diagnostic_length)
+  end
+
+  @doc """
+  Redacts text that is retained in full rather than as a diagnostic preview.
+
+  It applies every `redact/1` pattern without trimming or length limits, then
+  replaces each remaining credential marker together with its value, so the
+  result never trips `secret_value?/1` and can be stored as a contract value.
+  """
+  @spec redact_retained(String.t() | nil) :: String.t()
+  def redact_retained(nil), do: ""
+
+  def redact_retained(text) when is_binary(text) do
+    text
+    |> redact_patterns()
+    |> String.replace(
+      ~r/\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret|cookie|authorization)\s*[:=][ \t]*(?:["'][^"'\r\n]*["']|[^\s,;]+)?/i,
+      "[REDACTED]"
+    )
+  end
+
+  defp redact_patterns(text) do
+    text
     |> String.replace(~r/\bsk-[A-Za-z0-9_-]{12,}/, "[REDACTED_API_KEY]")
     # Redact AWS access key IDs
     |> String.replace(~r/\b(?:AKIA|ASIA|AKIB)[0-9A-Z]{16}\b/, "[REDACTED_API_KEY]")
@@ -418,7 +444,5 @@ defmodule Shoestring.Harness.Security do
     # Redact user filesystem paths
     |> String.replace(~r/\/Users\/[A-Za-z0-9_.-]+/, "/Users/[REDACTED]")
     |> String.replace(~r/\/home\/[A-Za-z0-9_.-]+/, "/home/[REDACTED]")
-    |> String.trim()
-    |> String.slice(0, @max_diagnostic_length)
   end
 end

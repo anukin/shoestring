@@ -57,6 +57,13 @@ defmodule Shoestring.Trajectory.ProjectorTransition do
         # Admission decisions drive Cobbler evaluation, not goal/task rows.
         {:ok, %{goal: goal, task: task, task_action: :none}}
 
+      type
+      when type in ["cobbler.plan.execution.requested", "cobbler.plan.execution.completed"] ->
+        # Canonical planned-goal completion owns the generic goal status;
+        # the same rule runs inside the writer transaction.
+        status = Shoestring.Cobbler.PlanGoalStatus.status_after(goal.status, event)
+        {:ok, %{goal: %{goal | status: status}, task: task, task_action: :none}}
+
       "cobbler." <> _rest ->
         # Command and claim outcomes are projected by
         # Shoestring.Cobbler.Commands.rebuild/2, not by goal/task rows.

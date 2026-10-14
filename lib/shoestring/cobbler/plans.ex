@@ -1250,7 +1250,8 @@ defmodule Shoestring.Cobbler.Plans do
              EventRegistry.validate_payload(input["type"], @schema_version, input["payload"],
                now: now
              ),
-           {:ok, event} <- insert_event(repo, goal_id, input, payload, sequence, now) do
+           {:ok, event} <- insert_event(repo, goal_id, input, payload, sequence, now),
+           :ok <- Shoestring.Cobbler.PlanGoalStatus.capture(repo, event, :inserted) do
         event
       else
         {:error, reason} -> repo.rollback({:event_append_failed, input["type"], reason})

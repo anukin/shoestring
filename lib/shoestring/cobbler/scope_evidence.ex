@@ -4,6 +4,17 @@ defmodule Shoestring.Cobbler.ScopeEvidence do
   @timeout 5_000
   @max_bytes 1_048_576
 
+  @doc """
+  Worst-case wall time of one fan-out final-scope verification.
+
+  `PlanFanout.final_scope/5` observes the tested commit twice (7 commands
+  each), the source base once (3) and at most 7 commands per known child.
+  Each command is bounded by the same per-command timeout.
+  """
+  @spec final_scope_bound_ms(non_neg_integer()) :: pos_integer()
+  def final_scope_bound_ms(children) when is_integer(children) and children >= 0,
+    do: (17 + 7 * children) * @timeout
+
   def repository(path, accepted_base) do
     with true <-
            is_binary(path) and is_binary(accepted_base) and
