@@ -194,7 +194,15 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          {:ok, authority} <- live_authority(repo, goal_id),
          :ok <- bind_authority(authority, execution.revision_number, execution.plan_digest),
          {:ok, contract} <- PlanContract.new(authority.revision.content),
-         :ok <- check_contract_digest(authority, contract) do
+         :ok <- check_contract_digest(authority, contract),
+         :ok <-
+           Shoestring.Cobbler.Reservations.reconcile_terminals(
+             goal_id,
+             Keyword.merge(Keyword.get(opts, :reconciliation_opts, []),
+               repo: repo,
+               now: now(opts)
+             )
+           ) do
       case completed_event(projection) do
         %{} = completed ->
           {:ok, %{disposition: :completed, execution: execution, completed: completed}}

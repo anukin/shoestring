@@ -17,4 +17,7 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
   runtime completion/cancellation checks; parallel dispatch remains pending.
 - [Atomic plan dispatch](atomic-plan-dispatch.md): opt-in reservation/claim/run/
   lease/delivery transaction, rollback and restart proof; sequential claims stay
-  enforced and continuation integration remains pending.
+  enforced; subsequent continuation integration is recorded below.
+- [Reservation continuations](reservation-continuations.md): fresh wake/handoff
+  ownership, predecessor settlement, rollback, populated migration and real Fake
+  quota restart proof; terminal owners reconcile during plan advancement.

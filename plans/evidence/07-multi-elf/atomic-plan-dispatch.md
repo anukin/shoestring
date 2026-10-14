@@ -1,5 +1,10 @@
 # Atomic plan dispatch — 2026-10-13
 
+REPO-INSPECTION addendum: [reservation continuations](reservation-continuations.md)
+subsequently connected fresh wake/handoff ownership and terminal reconciliation
+at plan advancement. Counts and limitations below describe this package's
+implementation point; initial activation remains opt-in.
+
 ## Scope and activation
 
 VERIFIED (user direction): continue iteration 7 directly on main without a PR,

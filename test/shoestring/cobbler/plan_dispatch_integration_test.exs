@@ -106,9 +106,8 @@ defmodule Shoestring.Cobbler.PlanDispatchIntegrationTest do
       assert {:ok, %{disposition: :accepted, commit: ^base}} =
                PlanExecutor.complete_task_run(goal.id, first.run_id, opts)
 
-      assert {:ok, %{disposition: :closed}} = Reservations.reconcile(first.reservation_id)
       restart!()
-      assert Reservations.outstanding() == []
+      assert Enum.any?(Reservations.outstanding(), &(&1.run_id == first.run_id))
       next_admission = admission!(goal)
 
       assert {:ok, second} =
@@ -126,7 +125,6 @@ defmodule Shoestring.Cobbler.PlanDispatchIntegrationTest do
       assert {:ok, %{disposition: :accepted}} =
                PlanExecutor.complete_task_run(goal.id, second.run_id, opts)
 
-      assert {:ok, %{disposition: :closed}} = Reservations.reconcile(second.reservation_id)
       assert {:ok, %{disposition: :completed}} = PlanExecutor.advance(goal.id, opts)
 
       assert {:ok, %{completed?: true, accepted: ["alpha", "beta"]}} =
@@ -137,6 +135,133 @@ defmodule Shoestring.Cobbler.PlanDispatchIntegrationTest do
       assert Reservations.outstanding() == []
       assert git!(source, ["status", "--porcelain"]) == ""
       assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
+    end
+
+    test "a real quota wake acquires fresh ownership across restart and automatically settles at advance" do
+      source = Path.join(Shoestring.State.root(), "quota-source")
+      File.mkdir_p!(source)
+      File.write!(Path.join(source, ".formatter.exs"), "[inputs: [\"*.ex\"]]\n")
+      File.write!(Path.join(source, "fixture.ex"), "defmodule Fixture do\nend\n")
+      git!(source, ["init"])
+      git!(source, ["config", "user.name", "Fixture"])
+      git!(source, ["config", "user.email", "fixture@example.invalid"])
+      git!(source, ["add", "."])
+      git!(source, ["commit", "-m", "Quota fixture base"])
+      base = git!(source, ["rev-parse", "HEAD"]) |> String.trim()
+      gate = %{"gate" => "mix_format_check"}
+
+      plan =
+        PlanExecutorHelpers.chain_plan(%{
+          "goal" =>
+            PlanFixtures.goal(%{
+              "repository" => %{"base_revision" => base},
+              "acceptance" => %{"gates" => [gate], "evidence" => ["Format passes."]}
+            }),
+          "tasks" => [
+            PlanFixtures.task("alpha", "First", [], %{"gates" => [gate]}),
+            PlanFixtures.task("beta", "Second", ["alpha"], %{"gates" => [gate]})
+          ]
+        })
+
+      goal = CobblerHelpers.create_goal!()
+      revision = PlanExecutorHelpers.propose_and_approve!(goal, plan)
+      admission = admission!(goal)
+      now = HermeticLifecycleClock.now()
+      healthy = Fake.Scenario.normal_completion(now: now).capacity
+
+      healthy = %{
+        healthy
+        | snapshot_id: Ecto.UUID.generate(),
+          scope: "account:codex",
+          source: %{healthy.source | provider_id: "fake"}
+      }
+
+      healthy = %{healthy | windows: healthy.windows ++ [%{hd(healthy.windows) | kind: "weekly"}]}
+
+      quota = %{
+        Fake.Scenario.sudden_quota_refusal(now: now)
+        | capacity: %{healthy | windows: Enum.map(healthy.windows, &%{&1 | used_percent: 100.0})}
+      }
+
+      Application.put_env(:shoestring, :elf_dispatch_opts,
+        clock: HermeticLifecycleClock,
+        scenario: quota
+      )
+
+      opts = [
+        now: now,
+        clock: HermeticLifecycleClock,
+        repository_path: source,
+        admission_event_id: admission.id
+      ]
+
+      assert {:ok, _} =
+               PlanExecutor.request_execution(
+                 goal.id,
+                 Map.put(revision, :admission_event_id, admission.id),
+                 opts
+               )
+
+      assert {:ok, first} = PlanExecutor.advance(goal.id, opts)
+      finish_worker!(first.run_id, "failed")
+      wake = Repo.get_by!(Shoestring.Cobbler.WakeupRecord, run_id: first.run_id)
+      wake_job = Repo.one!(from j in Oban.Job, where: j.args["wakeup_id"] == ^wake.id)
+      restart!()
+      now = HermeticLifecycleClock.advance(61)
+
+      fresh = %{
+        healthy
+        | snapshot_id: Ecto.UUID.generate(),
+          observed_at: now,
+          expires_at: DateTime.add(now, 300)
+      }
+
+      Application.put_env(:shoestring, :wakeup_observe, fn scoping ->
+        assert scoping.provider_id == "fake"
+        assert scoping.scope == "account:codex"
+        {:ok, fresh}
+      end)
+
+      Application.put_env(:shoestring, :elf_dispatch_opts,
+        clock: HermeticLifecycleClock,
+        scenario: %{Fake.Scenario.normal_completion(now: now) | capacity: fresh}
+      )
+
+      assert :ok = Shoestring.Cobbler.WakeupWorker.perform(wake_job)
+      child = Repo.get!(RunRecord, wake.id)
+      owner = Repo.get_by!(ReservationRecord, run_id: child.id)
+      assert owner.parent_id == first.reservation_id
+      assert owner.admission_event_id != admission.id
+      assert owner.attempt == 1
+
+      assert Repo.get!(Shoestring.Cobbler.ReservationSettlementRecord, first.reservation_id).kind ==
+               "consumed_closed"
+
+      assert Reservations.outstanding() == [owner]
+      assert child.extensions[Reservations.key()] == owner.id
+
+      assert child.extensions["shoestring.plan:binding"] ==
+               Repo.get!(RunRecord, first.run_id).extensions["shoestring.plan:binding"]
+
+      restart!()
+      finish_worker!(child.id)
+      assert :ok = Shoestring.Cobbler.WakeupWorker.perform(wake_job)
+      next_admission = admission!(goal)
+      opts = opts |> Keyword.put(:now, now) |> Keyword.put(:admission_event_id, next_admission.id)
+      assert {:ok, second} = PlanExecutor.resume(goal.id, opts)
+      assert second.plan_task_id == "beta"
+      assert Enum.map(Reservations.outstanding(), & &1.run_id) == [second.run_id]
+      finish_worker!(second.run_id)
+      assert {:ok, %{disposition: :completed}} = PlanExecutor.resume(goal.id, opts)
+      assert Reservations.outstanding() == []
+
+      assert {:ok, %{total_attempts: 2, accepted: ["alpha", "beta"]}} =
+               PlanExecutor.status(goal.id)
+
+      assert Repo.aggregate(from(r in ReservationRecord, where: r.goal_id == ^goal.id), :count) ==
+               3
+
+      assert git!(source, ["status", "--porcelain"]) == ""
     end
 
     test "concurrent sequential coordinators converge on one atomic delivery" do
@@ -231,7 +356,7 @@ defmodule Shoestring.Cobbler.PlanDispatchIntegrationTest do
       CobblerHelpers.append_admission_event!(goal.id, payload)
     end
 
-    defp finish_worker!(run_id) do
+    defp finish_worker!(run_id, expected \\ "completed") do
       dispatch = Repo.get_by!(DispatchRecord, run_id: run_id)
       assert :ok = Shoestring.Harness.DispatchWorker.perform(Repo.get!(Oban.Job, dispatch.job_id))
 
@@ -244,7 +369,7 @@ defmodule Shoestring.Cobbler.PlanDispatchIntegrationTest do
           assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 15_000
       end
 
-      assert Repo.get!(RunRecord, run_id).status == "completed"
+      assert Repo.get!(RunRecord, run_id).status == expected
     end
 
     defp restart! do
@@ -278,7 +403,7 @@ defmodule Shoestring.Cobbler.PlanDispatchIntegrationTest do
         )
 
       assert status == 0, output
-      assert output =~ "2 tests, 0 failures"
+      assert output =~ "3 tests, 0 failures"
     end
   end
 end

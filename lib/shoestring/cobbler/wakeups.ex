@@ -1092,10 +1092,44 @@ defmodule Shoestring.Cobbler.Wakeups do
   end
 
   defp admit_branch(repo, wakeup, goal, run, lease, snapshot, decision_event, decision, now, opts) do
+    Shoestring.Cobbler.ReservationContinuation.run(
+      run,
+      wakeup.id,
+      decision_event,
+      Keyword.put(opts, :now, now),
+      fn transactional_opts ->
+        persist_admit_branch(
+          repo,
+          wakeup,
+          goal,
+          run,
+          lease,
+          snapshot,
+          decision_event,
+          decision,
+          now,
+          transactional_opts
+        )
+      end
+    )
+  end
+
+  defp persist_admit_branch(
+         repo,
+         wakeup,
+         goal,
+         run,
+         lease,
+         snapshot,
+         decision_event,
+         decision,
+         now,
+         opts
+       ) do
     with {:ok, :evaluating} <- GoalLifecycle.transition(:sleeping, :recheck_due),
          {:ok, :queued} <- GoalLifecycle.apply_decision(:evaluating, :admit),
-         {:ok, lease_state} <- renew_lease(repo, goal, lease, snapshot, opts),
-         {:ok, run_state} <- resume_run(repo, goal, run, wakeup, now, opts),
+         {:ok, lease_state} <- continuation_parent_lease(repo, goal, lease, snapshot, opts),
+         {:ok, run_state} <- continuation_parent_state(repo, goal, run, wakeup, now, opts),
          {:ok, dispatch_state} <-
            dispatch_continuation(
              repo,
@@ -1121,6 +1155,18 @@ defmodule Shoestring.Cobbler.Wakeups do
          dispatch: dispatch_state
        }}
     end
+  end
+
+  defp continuation_parent_lease(repo, goal, lease, snapshot, opts) do
+    if Keyword.has_key?(opts, :reservation_child_run_id),
+      do: {:ok, :closed},
+      else: renew_lease(repo, goal, lease, snapshot, opts)
+  end
+
+  defp continuation_parent_state(repo, goal, run, wakeup, now, opts) do
+    if Keyword.has_key?(opts, :reservation_child_run_id),
+      do: {:ok, :continued},
+      else: resume_run(repo, goal, run, wakeup, now, opts)
   end
 
   # A renewed lease rests at `:renewed` chained to the fresh snapshot: no
@@ -1301,10 +1347,11 @@ defmodule Shoestring.Cobbler.Wakeups do
          snapshot,
          opts
        ) do
-    new_run_id = Ecto.UUID.generate()
+    new_run_id = Keyword.get_lazy(opts, :reservation_child_run_id, &Ecto.UUID.generate/0)
 
     with {:ok, continuation} <- ensure_continuation(repo, goal, run, wakeup, decision, opts),
          {:ok, request} <- continuation_request(run, wakeup, continuation),
+         request = Shoestring.Cobbler.ReservationContinuation.bind(request, opts),
          {:ok, identity} <- resolve_identity(run, opts),
          :ok <- authorize_claim(goal, opts),
          {:ok, new_run} <- request_run(repo, request, identity, new_run_id, opts),

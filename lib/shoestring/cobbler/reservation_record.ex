@@ -12,6 +12,7 @@ defmodule Shoestring.Cobbler.ReservationRecord do
     field :execution_id, :binary_id
     field :plan_task_id, :string
     field :attempt, :integer
+    belongs_to :parent, __MODULE__
     # Reserved before a run exists; deliberately not a run foreign key.
     field :run_id, :binary_id
     field :provider_id, :string
@@ -50,6 +51,8 @@ defmodule Shoestring.Cobbler.ReservationRecord do
     ])
     |> foreign_key_constraint(:goal_id)
     |> foreign_key_constraint(:admission_event_id)
+    |> foreign_key_constraint(:parent_id)
+    |> unique_constraint(:parent_id)
     |> unique_constraint(:id, name: "cobbler_capacity_reservations_pkey")
     |> unique_constraint(:run_id)
     |> unique_constraint(:admission_event_id)

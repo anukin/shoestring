@@ -60,7 +60,8 @@ defmodule Shoestring.Cobbler.PlanDispatch do
               |> Keyword.put(:publish_fun, fn _ -> :ok end)
               |> Keyword.put(:reservation_id, attrs.id)
 
-            with {:ok, reservation} <-
+            with :ok <- settle_parent(attrs, repo, opts),
+                 {:ok, reservation} <-
                    Reservations.hold(attrs, policy, repo: repo, now: Keyword.fetch!(opts, :now)),
                  {:ok, dispatched} <- persist.(transactional_opts) do
               events =
@@ -72,6 +73,7 @@ defmodule Shoestring.Cobbler.PlanDispatch do
 
               Map.merge(dispatched, %{reservation_id: reservation.id, dispatch_events: events})
             else
+              {:error, {:reservation_parent_unsettled, _} = reason} -> {:blocked, reason}
               {:error, reason} -> repo.rollback(reason)
             end
           end,
@@ -83,6 +85,9 @@ defmodule Shoestring.Cobbler.PlanDispatch do
     # Returned events are durable input for their eventual notification; no
     # subscriber may observe an event while an outer transaction can roll back.
     case result do
+      {:ok, {:blocked, reason}} ->
+        {:error, reason}
+
       {:ok, dispatched} ->
         unless nested?, do: Enum.each(dispatched.dispatch_events, &publish(&1, opts))
         {:ok, dispatched}
@@ -91,6 +96,20 @@ defmodule Shoestring.Cobbler.PlanDispatch do
         error
     end
   end
+
+  defp settle_parent(%{parent_id: parent_id}, repo, opts) when not is_nil(parent_id) do
+    probe_opts =
+      Keyword.get(opts, :reconciliation_opts, [])
+      |> Keyword.merge(repo: repo, now: Keyword.fetch!(opts, :now))
+
+    case Reservations.reconcile(parent_id, probe_opts) do
+      {:ok, %{settlement: %{kind: "consumed_closed"}}} -> :ok
+      {:ok, %{reason: reason}} -> {:error, {:reservation_parent_unsettled, reason}}
+      error -> error
+    end
+  end
+
+  defp settle_parent(_, _, _), do: :ok
 
   defp publish(event, opts) do
     publish =

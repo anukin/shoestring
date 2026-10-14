@@ -57,7 +57,13 @@ defmodule Shoestring.Cobbler.PlanHandoff do
           | id: command.id,
             dispatch_id: command.id,
             provider_id: identity.adapter_id,
-            extensions: extensions(sender, command.result, command.id),
+            # A hypothetical receiver has not acquired its fresh owner yet.
+            # Delivery later binds that owner inside the atomic transaction.
+            extensions:
+              Map.delete(
+                extensions(sender, command.result, command.id),
+                Shoestring.Cobbler.Reservations.key()
+              ),
             continuation: %{"checkpoint_id" => command.result["checkpoint_id"]}
         }
 

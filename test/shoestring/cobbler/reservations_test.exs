@@ -43,7 +43,8 @@ defmodule Shoestring.Cobbler.ReservationsTest do
     {20_261_004_192_021, Shoestring.Repo.Migrations.AddPlannerRequests},
     {20_261_007_024_346, Shoestring.Repo.Migrations.AddAgentProfiles},
     {20_261_013_225_751, Shoestring.Repo.Migrations.AddCobblerCapacityReservations},
-    {20_261_013_232_327, Shoestring.Repo.Migrations.AddCobblerReservationSettlements}
+    {20_261_013_232_327, Shoestring.Repo.Migrations.AddCobblerReservationSettlements},
+    {20_261_014_032_811, Shoestring.Repo.Migrations.AddReservationParentOwnership}
   ]
 
   setup do
@@ -807,6 +808,158 @@ defmodule Shoestring.Cobbler.ReservationsTest do
     }
     |> TrajectoryEvent.changeset(%{})
     |> MigrationRepo.insert!()
+  end
+
+  test "one closed predecessor admits at most one successor while keeping its original attempt",
+       c do
+    policy =
+      policy(%{global_limit: 4, provider_account_limit: 4, goal_limit: 4, account_units: 4})
+
+    attrs = candidate(c.goal)
+    assert {:ok, parent} = Reservations.hold(attrs, policy, c.opts)
+    run = intent!(c, attrs)
+    run_event!(run, "run.running", %{"process_id" => "pgid:123456"})
+    run_event!(run, "run.interrupted", %{})
+
+    assert {:ok, %{disposition: :closed}} =
+             Reservations.reconcile(
+               parent.id,
+               Keyword.put(c.opts, :group_probe, fn _ -> :absent end)
+             )
+
+    successors =
+      for _ <- 1..2 do
+        candidate(
+          c.goal,
+          %{
+            parent_id: parent.id,
+            execution_id: parent.execution_id,
+            plan_task_id: parent.plan_task_id,
+            attempt: parent.attempt
+          },
+          %{"run_id" => parent.run_id}
+        )
+      end
+
+    results = race(successors, policy, c.opts)
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(results, &match?({:error, {:reservation_conflict, _}}, &1)) == 1
+    assert [child] = Reservations.outstanding(c.opts)
+    assert child.parent_id == parent.id
+    assert child.attempt == parent.attempt
+    assert MigrationRepo.aggregate(ReservationRecord, :count) == 2
+    assert MigrationRepo.get!(ReservationRecord, parent.id) == parent
+  end
+
+  test "a successor cannot change its predecessor goal, execution, task or attempt", c do
+    attrs = candidate(c.goal)
+    assert {:ok, parent} = Reservations.hold(attrs, policy(), c.opts)
+    run = intent!(c, attrs)
+    run_event!(run, "run.running", %{"process_id" => "pgid:123456"})
+    run_event!(run, "run.interrupted", %{})
+
+    assert {:ok, %{disposition: :closed}} =
+             Reservations.reconcile(
+               parent.id,
+               Keyword.put(c.opts, :group_probe, fn _ -> :absent end)
+             )
+
+    for changes <- [
+          %{execution_id: Ecto.UUID.generate()},
+          %{plan_task_id: "foreign"},
+          %{attempt: 2}
+        ] do
+      identity =
+        Map.merge(
+          %{
+            parent_id: parent.id,
+            execution_id: parent.execution_id,
+            plan_task_id: parent.plan_task_id,
+            attempt: parent.attempt
+          },
+          changes
+        )
+
+      assert {:error, :reservation_admission_mismatch} =
+               Reservations.hold(
+                 candidate(c.goal, identity, %{"run_id" => parent.run_id}),
+                 policy(),
+                 c.opts
+               )
+    end
+
+    other = create_goal!(MigrationRepo)
+
+    assert {:error, :reservation_admission_mismatch} =
+             Reservations.hold(
+               candidate(
+                 other,
+                 %{
+                   parent_id: parent.id,
+                   execution_id: parent.execution_id,
+                   plan_task_id: parent.plan_task_id,
+                   attempt: parent.attempt
+                 },
+                 %{"run_id" => parent.run_id}
+               ),
+               policy(),
+               c.opts
+             )
+
+    assert Reservations.outstanding(c.opts) == []
+    assert MigrationRepo.aggregate(ReservationRecord, :count) == 1
+  end
+
+  test "upgrading a populated reservation table preserves every existing value", c do
+    attrs = candidate(c.goal)
+    assert {:ok, held} = Reservations.hold(attrs, policy(), c.opts)
+    stop_supervised!(MigrationRepo)
+
+    older_opts =
+      c.repo_opts |> Keyword.put(:pool_size, 1) |> Keyword.update!(:database, &(&1 <> ".upgrade"))
+
+    start_supervised!({MigrationRepo, older_opts})
+    Ecto.Migrator.run(MigrationRepo, Enum.drop(@migrations, -1), :up, all: true, log: false)
+    goal = create_goal!(MigrationRepo)
+    admission = candidate(goal)
+
+    values =
+      held
+      |> Map.from_struct()
+      |> Map.take(ReservationRecord.__schema__(:fields))
+      |> Map.delete(:parent_id)
+
+    values =
+      Map.merge(values, %{goal_id: goal.id, admission_event_id: admission.admission_event_id})
+
+    assert {1, nil} = MigrationRepo.insert_all(ReservationRecord, [values])
+
+    before =
+      Ecto.Adapters.SQL.query!(MigrationRepo, "SELECT * FROM cobbler_capacity_reservations")
+
+    Ecto.Migrator.run(MigrationRepo, @migrations, :up, all: true, log: false)
+    columns = Enum.map_join(before.columns, ",", &~s("#{&1}"))
+
+    after_upgrade =
+      Ecto.Adapters.SQL.query!(
+        MigrationRepo,
+        "SELECT #{columns} FROM cobbler_capacity_reservations"
+      )
+
+    assert after_upgrade.rows == before.rows
+    assert MigrationRepo.get!(ReservationRecord, held.id).parent_id == nil
+
+    assert {:ok, replay} =
+             Reservations.hold(
+               Map.merge(attrs, %{
+                 goal_id: goal.id,
+                 admission_event_id: admission.admission_event_id
+               }),
+               policy(),
+               c.opts
+             )
+
+    assert replay.id == held.id
   end
 
   defp race(candidates, policy, opts) do

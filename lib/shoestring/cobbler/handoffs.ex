@@ -1345,7 +1345,46 @@ defmodule Shoestring.Cobbler.Handoffs do
          handoff_id,
          opts
        ) do
+    Shoestring.Cobbler.ReservationContinuation.run(
+      sender,
+      handoff_id,
+      decision_event,
+      opts,
+      fn transactional_opts ->
+        persist_dispatch(
+          repo,
+          goal,
+          sender,
+          intent,
+          checkpoint,
+          continuation,
+          snapshot,
+          decision_event,
+          decision,
+          identity,
+          handoff_id,
+          transactional_opts
+        )
+      end
+    )
+  end
+
+  defp persist_dispatch(
+         repo,
+         goal,
+         sender,
+         intent,
+         checkpoint,
+         continuation,
+         snapshot,
+         decision_event,
+         decision,
+         identity,
+         handoff_id,
+         opts
+       ) do
     with {:ok, request} <- receiver_request(sender, intent, continuation, checkpoint, handoff_id),
+         request = Shoestring.Cobbler.ReservationContinuation.bind(request, opts),
          # N4 re-validation. The guards above ran before the observation and
          # admission round-trip, which is not instantaneous. Both are re-read
          # here, immediately before the first irreversible step (the receiver

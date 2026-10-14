@@ -28,7 +28,16 @@ defmodule Shoestring.Cobbler.Reservations do
   alias Shoestring.Repo
   alias Shoestring.Trajectory.TrajectoryEvent
 
-  @identity [:id, :goal_id, :execution_id, :plan_task_id, :attempt, :run_id, :admission_event_id]
+  @identity [
+    :id,
+    :goal_id,
+    :execution_id,
+    :plan_task_id,
+    :attempt,
+    :run_id,
+    :admission_event_id,
+    :parent_id
+  ]
   @key "shoestring.reservation:id"
   def key, do: @key
 
@@ -38,15 +47,17 @@ defmodule Shoestring.Cobbler.Reservations do
 
     with {:ok, identity} <- identity(attrs),
          {:ok, policy} <- ReservationPolicy.new(ReservationPolicy.to_map(policy)) do
-      repo.transaction(
-        fn ->
-          case repo.get(ReservationRecord, identity.id) do
-            nil -> acquire(repo, identity, policy, now)
-            row -> replay(repo, row, identity, policy)
-          end
-        end,
-        mode: :immediate
-      )
+      Shoestring.Cobbler.ReservationWriter.run(repo, fn ->
+        repo.transaction(
+          fn ->
+            case repo.get(ReservationRecord, identity.id) do
+              nil -> acquire(repo, identity, policy, now)
+              row -> replay(repo, row, identity, policy)
+            end
+          end,
+          mode: :immediate
+        )
+      end)
     end
   end
 
@@ -64,6 +75,30 @@ defmodule Shoestring.Cobbler.Reservations do
   end
 
   def reconcile(id, opts \\ []), do: ReservationReconciler.reconcile(id, opts)
+
+  @doc "Reconciles this goal's terminal owners at an explicit executor boundary."
+  def reconcile_terminals(goal_id, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    terminal_ids =
+      repo.all(
+        from e in TrajectoryEvent,
+          where:
+            e.goal_id == ^goal_id and
+              e.type in ~w(run.completed run.failed run.cancelled run.interrupted),
+          select: e.run_id
+      )
+      |> MapSet.new()
+
+    outstanding(repo: repo)
+    |> Enum.filter(&(&1.goal_id == goal_id and MapSet.member?(terminal_ids, &1.run_id)))
+    |> Enum.reduce_while(:ok, fn owner, :ok ->
+      case reconcile(owner.id, opts) do
+        {:ok, _} -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
 
   @doc false
   # Called inside intent/effect write transactions. Lookup by run ID also fences
@@ -163,7 +198,7 @@ defmodule Shoestring.Cobbler.Reservations do
   end
 
   defp identity(attrs) when is_map(attrs) do
-    identity = Map.take(attrs, @identity)
+    identity = attrs |> Map.take(@identity) |> Map.put_new(:parent_id, nil)
 
     uuids =
       Enum.reduce_while(
@@ -177,7 +212,9 @@ defmodule Shoestring.Cobbler.Reservations do
         end
       )
 
-    if is_map(uuids) and is_binary(attrs[:plan_task_id]) and
+    if is_map(uuids) and
+         (is_nil(uuids.parent_id) or match?({:ok, _}, Ecto.UUID.cast(uuids.parent_id))) and
+         is_binary(attrs[:plan_task_id]) and
          Regex.match?(~r/\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\z/, attrs.plan_task_id) and
          is_integer(attrs[:attempt]) and attrs.attempt > 0 do
       {:ok, uuids}
@@ -210,7 +247,7 @@ defmodule Shoestring.Cobbler.Reservations do
          {:ok, decision} <- AdmissionDecision.from_payload(event.payload),
          true <-
            decision.result == :admit and decision.requested_capability == "supervised_execution",
-         true <- is_nil(decision.run_id) or decision.run_id == identity.run_id,
+         :ok <- parent_admission(repo, identity, decision),
          {:ok, snapshot_id} <- Ecto.UUID.cast(decision.observation["snapshot_id"]),
          true <- String.trim(decision.candidate.provider_id) != "",
          version when is_integer(version) and version > 0 <- decision.policy["version"],
@@ -243,6 +280,27 @@ defmodule Shoestring.Cobbler.Reservations do
       end
     else
       _ -> repo.rollback(:reservation_admission_mismatch)
+    end
+  end
+
+  defp parent_admission(_repo, %{parent_id: nil} = identity, decision) do
+    if is_nil(decision.run_id) or decision.run_id == identity.run_id,
+      do: :ok,
+      else: {:error, :reservation_admission_mismatch}
+  end
+
+  defp parent_admission(repo, identity, decision) do
+    with %ReservationRecord{} = parent <- repo.get(ReservationRecord, identity.parent_id),
+         true <-
+           Map.take(parent, [:goal_id, :execution_id, :plan_task_id, :attempt]) ==
+             Map.take(identity, [:goal_id, :execution_id, :plan_task_id, :attempt]),
+         %ReservationSettlementRecord{kind: "consumed_closed"} <-
+           repo.get(ReservationSettlementRecord, parent.id),
+         true <- decision.run_id == parent.run_id,
+         true <- identity.run_id != parent.run_id do
+      :ok
+    else
+      _ -> {:error, :reservation_parent_mismatch}
     end
   end
 

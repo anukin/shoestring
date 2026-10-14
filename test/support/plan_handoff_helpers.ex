@@ -6,7 +6,7 @@ defmodule Shoestring.Test.PlanHandoffHelpers do
   alias Shoestring.Harness.{CheckpointFallback, Checkpoints, Continuation, RunRecord}
   alias Shoestring.Test.{CobblerHelpers, PlanFixtures}
 
-  def fixture(stop \\ :quota) do
+  def fixture(stop \\ :quota, dispatch_extra \\ []) do
     assert {:ok, _} =
              AgentProfiles.save_settings(AgentProfiles.settings(), %{
                "codex_models" => "fixture-worker",
@@ -44,7 +44,10 @@ defmodule Shoestring.Test.PlanHandoffHelpers do
              )
 
     assert {:ok, dispatched} =
-             Cobbler.advance_plan_execution(goal.id, exec_opts(admission_event_id: admission.id))
+             Cobbler.advance_plan_execution(
+               goal.id,
+               exec_opts(Keyword.put(dispatch_extra, :admission_event_id, admission.id))
+             )
 
     run = Repo.get!(RunRecord, dispatched.run_id)
 
@@ -77,6 +80,21 @@ defmodule Shoestring.Test.PlanHandoffHelpers do
 
     assert {:ok, _} = Checkpoints.record(goal.id, checkpoint, now: now())
 
+    if stop != :suspended and Keyword.has_key?(dispatch_extra, :reservation_policy) do
+      assert {:ok, _} =
+               Trajectory.append(
+                 goal.id,
+                 %{
+                   "type" => "run.running",
+                   "schema_version" => 1,
+                   "actor" => "fixture",
+                   "occurred_at" => now(),
+                   "payload" => %{"run_id" => run.id, "process_id" => "pgid:2000000001"}
+                 },
+                 trusted: [run_id: run.id, task_id: run.task_id]
+               )
+    end
+
     if stop == :suspended do
       for type <- ["run.running", "run.pausing"] do
         assert {:ok, _} =
@@ -87,7 +105,13 @@ defmodule Shoestring.Test.PlanHandoffHelpers do
                      "schema_version" => 1,
                      "actor" => "fixture",
                      "occurred_at" => now(),
-                     "payload" => %{"run_id" => run.id}
+                     "payload" =>
+                       if(
+                         type == "run.running" and
+                           Keyword.has_key?(dispatch_extra, :reservation_policy),
+                         do: %{"run_id" => run.id, "process_id" => "pgid:2000000001"},
+                         else: %{"run_id" => run.id}
+                       )
                    },
                    trusted: [run_id: run.id, task_id: run.task_id]
                  )
