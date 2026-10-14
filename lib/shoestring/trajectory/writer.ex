@@ -37,6 +37,23 @@ defmodule Shoestring.Trajectory.Writer do
 
   @default_max_retries 2
 
+  @doc false
+  # Explicit coordinator path: the caller owns an immediate write transaction
+  # and publishes only after commit. Reuse the ordinary writer's validation,
+  # ownership, idempotency and sequence assignment; never start another writer.
+  def append_in_transaction(repo, goal_id, input, references) do
+    if repo.in_transaction?() do
+      with {:ok, input} <- validate_input(input) do
+        case transaction_attempt(input, references, %__MODULE__{repo: repo, goal_id: goal_id}) do
+          {:ok, _outcome, event} -> {:ok, event}
+          error -> error
+        end
+      end
+    else
+      {:error, :trajectory_transaction_required}
+    end
+  end
+
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     goal_id = Keyword.fetch!(opts, :goal_id)

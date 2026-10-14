@@ -1,5 +1,10 @@
 # Reservation settlement and late-intent fences — 2026-10-13
 
+REPO-INSPECTION addendum: [atomic initial-attempt dispatch](atomic-plan-dispatch.md)
+subsequently connected this ownership boundary to opt-in sequential dispatch.
+The counts and remaining-work list below describe this settlement package's
+implementation point; continuation/default activation remains pending.
+
 ## Scope
 
 VERIFIED (user direction): continue iteration 7 directly on main without a PR,

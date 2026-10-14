@@ -12,6 +12,12 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
   ## Properties
 
+  - **Opt-in atomic capacity ownership.** A trusted `reservation_policy:`
+    option (or `:plan_reservation_policy` application configuration) persists
+    reservation, claim, run, lease events, delivery job and task dispatch in
+    one immediate transaction. The default remains the sequential legacy
+    path until continuation/reconciliation integration is complete.
+
   - **Atomic dispatch binding.** Every dispatch re-reads the live plan
     authority at the dispatch boundary and binds the revision number AND
     the content digest. A proposed, rejected, invalid, cyclic, or
@@ -854,8 +860,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
        ) do
     task_id = task_contract["id"]
 
-    with {:ok, traj_task} <- ensure_trajectory_task(repo, goal_id, task_id, task_contract),
-         {:ok, admission} <-
+    with {:ok, admission} <-
            task_admission(repo, goal_id, execution, task_contract, attempt, opts),
          :ok <-
            Shoestring.Cobbler.ExecutionProfile.admission(
@@ -863,8 +868,56 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              admission.payload
            ),
          :ok <- refuse_bound_admission(repo, goal_id, admission),
-         {:ok, opts} <-
-           prepare_workspace(goal_id, projection, contract, task_id, attempt, opts),
+         {:ok, opts} <- prepare_workspace(goal_id, projection, contract, task_id, attempt, opts) do
+      attrs = %{
+        id: deterministic_uuid("plan-reservation:#{goal_id}:#{task_id}:#{attempt}"),
+        goal_id: goal_id,
+        execution_id: execution.execution_id,
+        plan_task_id: task_id,
+        attempt: attempt,
+        run_id: deterministic_uuid("plan-run:#{goal_id}:#{task_id}:#{attempt}"),
+        admission_event_id: admission.id
+      }
+
+      opts = Keyword.put_new(opts, :now, now(opts))
+
+      case Shoestring.Cobbler.PlanDispatch.run(attrs, opts, fn transactional_opts ->
+             persist_dispatch(
+               repo,
+               goal_id,
+               execution,
+               contract,
+               task_contract,
+               attempt,
+               admission,
+               transactional_opts
+             )
+           end) do
+        {:ok, result} ->
+          {:ok, result}
+
+        {:error, reason} ->
+          converge_or_error(repo, goal_id, projection, execution, task_id, attempt, reason)
+      end
+    else
+      {:error, reason} ->
+        converge_or_error(repo, goal_id, projection, execution, task_id, attempt, reason)
+    end
+  end
+
+  defp persist_dispatch(
+         repo,
+         goal_id,
+         execution,
+         contract,
+         task_contract,
+         attempt,
+         admission,
+         opts
+       ) do
+    task_id = task_contract["id"]
+
+    with {:ok, traj_task} <- ensure_trajectory_task(repo, goal_id, task_id, task_contract),
          :ok <- release_own_claim(repo, goal_id, task_id, attempt, opts),
          {:ok, command_attrs} <- claim_attrs(admission, task_id, attempt),
          {:ok, gated} <-
@@ -915,14 +968,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          plan_digest: execution.plan_digest
        }}
     else
-      {:error, {:lease_refused, _detail}} = error ->
-        error
-
-      {:ok, {:replayed, result}} ->
-        {:ok, result}
-
-      {:error, reason} ->
-        converge_or_error(repo, goal_id, projection, execution, task_id, attempt, reason)
+      {:ok, {:replayed, result}} -> {:ok, result}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -1062,13 +1109,15 @@ defmodule Shoestring.Cobbler.PlanExecutor do
               "attempt" => attempt
             }
           }
-          |> maybe_put(Shoestring.Cobbler.ExecutionProfile.key(), execution[:agent_profile]),
+          |> maybe_put(Shoestring.Cobbler.ExecutionProfile.key(), execution[:agent_profile])
+          |> maybe_put(Shoestring.Cobbler.Reservations.key(), Keyword.get(opts, :reservation_id)),
         workspace_ref: Keyword.get(opts, :workspace_ref, "cobbler/plan-task"),
         clock: clock,
         now: now,
         repo: repo
       ]
       |> then(fn fixed -> Keyword.merge(Keyword.get(opts, :grant_lease_extra, []), fixed) end)
+      |> Keyword.merge(Keyword.take(opts, [:writer_opts]))
       |> then(fn fixed ->
         case execution[:agent_profile] do
           nil ->
@@ -1080,7 +1129,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       end)
 
     [grant_lease: lease_opts, repo: repo, now: now, clock: clock]
-    |> Keyword.merge(Keyword.take(opts, [:writer_opts]))
+    |> Keyword.merge(Keyword.take(opts, [:writer_opts, :publish_fun]))
   end
 
   defp profile_instructions(nil), do: ""
@@ -1160,7 +1209,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
             "command_id" => "plan-release-#{task_id}-#{attempt}",
             "payload" => %{"reason" => "plan sequential advance to #{task_id}"}
           },
-          Keyword.take(opts, [:repo, :now, :writer_opts])
+          Keyword.take(opts, [:repo, :now, :writer_opts, :publish_fun])
         )
         |> case do
           {:ok, _} -> :ok

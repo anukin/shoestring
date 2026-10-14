@@ -15,3 +15,6 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
 - [Reservation settlement](reservation-settlement.md): evidence-backed terminal
   closure, no-intent orphan release, late-intent/resume fences and real Fake
   runtime completion/cancellation checks; parallel dispatch remains pending.
+- [Atomic plan dispatch](atomic-plan-dispatch.md): opt-in reservation/claim/run/
+  lease/delivery transaction, rollback and restart proof; sequential claims stay
+  enforced and continuation integration remains pending.

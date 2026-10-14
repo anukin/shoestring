@@ -23,9 +23,22 @@ defmodule Shoestring.Trajectory do
     with {:ok, normalized_goal_id} <- cast_goal_id(goal_id),
          {:ok, input} <- AppendInput.cast(attrs),
          {:ok, references} <- TrustedEventReferences.cast(Keyword.get(opts, :trusted)),
-         :ok <- validate_registered_input(input),
-         {:ok, pid} <- WriterSupervisor.ensure_started(normalized_goal_id, writer_opts(opts)) do
-      dispatch_append(normalized_goal_id, input, references, pid, opts, 0)
+         :ok <- validate_registered_input(input) do
+      case Keyword.fetch(writer_opts(opts), :transaction_repo) do
+        {:ok, repo} ->
+          Shoestring.Trajectory.Writer.append_in_transaction(
+            repo,
+            normalized_goal_id,
+            input,
+            references
+          )
+
+        :error ->
+          with {:ok, pid} <-
+                 WriterSupervisor.ensure_started(normalized_goal_id, writer_opts(opts)) do
+            dispatch_append(normalized_goal_id, input, references, pid, opts, 0)
+          end
+      end
     end
   end
 

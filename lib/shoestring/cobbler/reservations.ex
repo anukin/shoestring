@@ -29,6 +29,8 @@ defmodule Shoestring.Cobbler.Reservations do
   alias Shoestring.Trajectory.TrajectoryEvent
 
   @identity [:id, :goal_id, :execution_id, :plan_task_id, :attempt, :run_id, :admission_event_id]
+  @key "shoestring.reservation:id"
+  def key, do: @key
 
   def hold(attrs, %ReservationPolicy{} = policy, opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
@@ -69,13 +71,18 @@ defmodule Shoestring.Cobbler.Reservations do
   def authorize(repo, run) do
     case repo.get_by(ReservationRecord, run_id: run.id) do
       nil ->
-        :ok
+        if Map.has_key?(run.extensions || %{}, @key),
+          do: {:error, :reservation_missing},
+          else: :ok
 
       %{goal_id: goal_id} when goal_id != run.goal_id ->
         {:error, :reservation_owner_mismatch}
 
       row ->
         cond do
+          not binding_matches?(row, run) ->
+            {:error, :reservation_binding_mismatch}
+
           repo.get(ReservationSettlementRecord, row.id) != nil ->
             {:error, :reservation_settled}
 
@@ -89,6 +96,22 @@ defmodule Shoestring.Cobbler.Reservations do
               do: :ok,
               else: {:error, :reservation_provider_mismatch}
         end
+    end
+  end
+
+  defp binding_matches?(row, run) do
+    extensions = run.extensions || %{}
+
+    if Map.has_key?(extensions, @key) or is_map(extensions[Shoestring.Cobbler.PlanBinding.key()]) do
+      binding = extensions[Shoestring.Cobbler.PlanBinding.key()] || %{}
+
+      (not Map.has_key?(extensions, @key) or extensions[@key] == row.id) and
+        binding["execution_id"] == row.execution_id and
+        binding["plan_task_id"] == row.plan_task_id and binding["attempt"] == row.attempt
+    else
+      # Earlier explicit reservations may be unplanned; lookup by run ID still
+      # enforces owner, settlement and provider fences for those callers.
+      true
     end
   end
 
