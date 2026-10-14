@@ -1,9 +1,11 @@
 defmodule Shoestring.Cobbler.PlanDispatch do
   @moduledoc """
-  Opt-in atomic reservation, claim, lease and delivery for sequential plans.
+  Opt-in atomic reservation, command, lease and delivery boundary.
 
   Only trusted runtime options/configuration select the reservation policy.
-  No model output enables this boundary. Parallel claims remain disabled.
+  No model output enables this boundary. The sequential executor retains its
+  exclusive claim; internal sibling callers can use reservation-owned commands.
+  Production fan-out remains disabled until coordinator/lifecycle integration.
   The callback must only persist intent, never launch an external effect.
   """
   import Ecto.Query

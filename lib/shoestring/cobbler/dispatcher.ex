@@ -15,7 +15,10 @@ defmodule Shoestring.Cobbler.Dispatcher do
   The Oban `DispatchWorker` performs the effect after
   `Dispatches.prepare_for_effect/2` claims it; the one-Elf invariant is the
   SQLite-enforced exclusive claim (a second concurrent dispatch is refused by
-  the claim, visibly, with no second enforcement mechanism).
+  the claim, visibly). The internal `claim_reserved_and_gate/4` path instead
+  consumes a specific unresolved reservation inside the caller's atomic intent
+  transaction. It records no global claim and grants no goal-wide permission.
+  Production coordinator fan-out is not enabled by this boundary.
 
   Opt-in lease issuance: pass `grant_lease: [...]` (see
   `Shoestring.Cobbler.Leases.issue_for_claim/6`; requires `:task_id`) to
@@ -116,6 +119,51 @@ defmodule Shoestring.Cobbler.Dispatcher do
     end
   end
 
+  @doc false
+  # Caller owns reservation + command + run + grant + delivery commit. This
+  # internal path never acquires or broadens a goal-wide legacy claim.
+  def claim_reserved_and_gate(goal_id, attrs, reservation_id, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    if repo.in_transaction?() do
+      writer_opts = Keyword.put(Keyword.get(opts, :writer_opts, []), :transaction_repo, repo)
+
+      opts =
+        opts
+        |> Keyword.put(:writer_opts, writer_opts)
+        |> Keyword.put(:publish_fun, fn _ -> :ok end)
+
+      opts =
+        Keyword.update(opts, :grant_lease, nil, fn lease_opts ->
+          if is_list(lease_opts),
+            do: Keyword.merge(lease_opts, repo: repo, writer_opts: writer_opts),
+            else: lease_opts
+        end)
+
+      with {:ok, %{command: row, outcome: outcome}} <-
+             Commands.submit_reserved(goal_id, attrs, reservation_id, opts),
+           {:ok, command} <- rebuild_command(row),
+           {:ok, owner} <-
+             Shoestring.Cobbler.ReservationClaims.gate(
+               repo,
+               row,
+               command,
+               reservation_id,
+               Keyword.get(opts, :grant_lease)
+             ) do
+        case maybe_grant_lease(row, command, owner, outcome, opts) do
+          {:ok, leased} ->
+            {:ok, leased |> Map.delete(:claim_id) |> Map.put(:reservation_id, owner.id)}
+
+          error ->
+            error
+        end
+      end
+    else
+      {:error, :reservation_transaction_required}
+    end
+  end
+
   @doc """
   Gates dispatch for an already-recorded command row.
 
@@ -165,6 +213,8 @@ defmodule Shoestring.Cobbler.Dispatcher do
 
     with {:ok, command} <- rebuild_command(row),
          {:ok, _decision} <- admission_reference(repo, row, command),
+         :ok <-
+           Shoestring.Cobbler.ReservationClaims.legacy_authority(repo, row.goal_id, command, opts),
          {:ok, claim} <- live_owned_claim(repo, row) do
       maybe_grant_lease(row, command, claim, outcome, opts)
     end

@@ -30,6 +30,9 @@ defmodule Shoestring.Cobbler.Commands do
     by a partial unique index on `scope` over active claims inside an
     immediate write transaction. SQLite rejects the second concurrent
     writer on that index; commands never count claims first.
+    Internal `submit_reserved/4` records a specific reservation-owned command
+    instead, only within the coordinator's intent transaction. It acquires no
+    global claim. Legacy claims and unresolved reservations are interlocked.
   - **No timed release.** An active claim is released only by an explicit
     release command against the owning goal. There is no expiry, no
     staleness trigger, and no release on ambiguous restart.
@@ -94,13 +97,34 @@ defmodule Shoestring.Cobbler.Commands do
   @spec submit(Ecto.UUID.t(), map(), keyword()) ::
           {:ok, submit_result()} | {:error, term()}
   def submit(goal_id, attrs, opts \\ []) do
+    submit_with_owner(goal_id, attrs, :legacy, opts)
+  end
+
+  @doc false
+  # Only the coordinator's atomic intent boundary selects reservation ownership.
+  # A command payload or generic submit option cannot enable this path.
+  def submit_reserved(goal_id, attrs, reservation_id, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    if repo.in_transaction?(),
+      do:
+        submit_with_owner(
+          goal_id,
+          attrs,
+          {:reserved, reservation_id},
+          Keyword.put(opts, :publish_fun, fn _ -> :ok end)
+        ),
+      else: {:error, :reservation_transaction_required}
+  end
+
+  defp submit_with_owner(goal_id, attrs, owner, opts) do
     repo = Keyword.get(opts, :repo, Repo)
 
     with {:ok, normalized_goal_id} <- cast_goal_id(goal_id),
          {:ok, %Command{} = command} <- Command.new(attrs),
          true <- repo_exists?(repo, normalized_goal_id) || {:error, :goal_not_found} do
       run_transaction(repo, fn ->
-        accept_transaction(normalized_goal_id, command, repo, now(opts))
+        accept_transaction(normalized_goal_id, command, repo, now(opts), owner, opts)
       end)
       |> case do
         {:ok, %{command: command_row, outcome: outcome, events: events}} ->
@@ -116,7 +140,7 @@ defmodule Shoestring.Cobbler.Commands do
     end
   end
 
-  defp accept_transaction(goal_id, command, repo, now) do
+  defp accept_transaction(goal_id, command, repo, now, owner, opts) do
     case existing_command(repo, goal_id, command.command_id) do
       %CommandRecord{digest: digest} = existing when digest == command.digest ->
         %{command: existing, outcome: :replayed, events: []}
@@ -132,12 +156,14 @@ defmodule Shoestring.Cobbler.Commands do
         )
 
       nil ->
-        record_new_command(goal_id, command, repo, now)
+        record_new_command(goal_id, command, repo, now, owner, opts)
     end
   end
 
-  defp record_new_command(goal_id, command, repo, now) do
-    {status, result, extra_events, claim_id} = evaluate(command, repo, goal_id, now)
+  defp record_new_command(goal_id, command, repo, now, owner, opts) do
+    {status, result, extra_events, claim_id} =
+      evaluate_owned(command, repo, goal_id, now, owner, opts)
+
     record_id = Ecto.UUID.generate()
 
     result =
@@ -176,6 +202,23 @@ defmodule Shoestring.Cobbler.Commands do
   # ----------------------------------------------------------------------------
   # Command handlers
   # ----------------------------------------------------------------------------
+
+  defp evaluate_owned(command, repo, goal_id, _now, {:reserved, id}, _opts) do
+    case Shoestring.Cobbler.ReservationClaims.claim(repo, goal_id, command, id) do
+      {:ok, result} -> {:resolved, result, [], nil}
+      {:error, reason} -> repo.rollback(reason)
+    end
+  end
+
+  defp evaluate_owned(%Command{type: "task.claim"} = command, repo, goal_id, now, :legacy, opts) do
+    case Shoestring.Cobbler.ReservationClaims.legacy_authority(repo, goal_id, command, opts) do
+      :ok -> evaluate(command, repo, goal_id, now)
+      {:error, reason} -> {:rejected, rejected_result(Atom.to_string(reason), command), [], nil}
+    end
+  end
+
+  defp evaluate_owned(command, repo, goal_id, now, :legacy, _opts),
+    do: evaluate(command, repo, goal_id, now)
 
   defp evaluate(%Command{type: "task.claim"} = command, repo, goal_id, now) do
     case do_active_claim(repo) do
@@ -1199,7 +1242,12 @@ defmodule Shoestring.Cobbler.Commands do
   # ----------------------------------------------------------------------------
 
   defp run_transaction(repo, fun) do
-    repo.transaction(fun, transaction_opts())
+    # Claims and reservations share the local write queue. Otherwise a competing
+    # native SQLite busy wait can starve the active reservation transaction's
+    # evidence reads. SQLite remains authoritative, including outside this VM.
+    Shoestring.Cobbler.ReservationWriter.run(repo, fn ->
+      repo.transaction(fun, transaction_opts())
+    end)
   end
 
   defp existing_command(repo, goal_id, command_id) do

@@ -47,9 +47,15 @@ now allocates separate private Git stores from the exact accepted base and
 records immutable task lineage. Dirty unowned or foreign allocations are
 refused and retained. The coordinator has not enabled sibling execution yet.
 
+REPO-INSPECTION: [reservation-owned dispatch](../evidence/07-multi-elf/reservation-dispatch-ownership.md)
+now persists per-child command/run/lease/delivery intent without a global task
+claim. Legacy claims and outstanding reservations cannot bypass each other's
+ownership checks. Production coordinator and concurrent lifecycle integration
+remain pending.
+
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
-- Next: concurrent ownership and sibling dispatch wiring, actual-scope acceptance,
+- Next: sibling dispatch coordinator wiring, actual-scope acceptance,
   inbox/wakeups and partial-failure recovery. Preserve
   uncertain owners until additional process evidence can resolve them.
 - Before fan-out: address canonical/generic goal status synchronization and

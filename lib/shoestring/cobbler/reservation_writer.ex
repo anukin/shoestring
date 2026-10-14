@@ -1,6 +1,6 @@
 defmodule Shoestring.Cobbler.ReservationWriter do
   @moduledoc """
-  Local FIFO delivery for reconciliation and atomic plan intent, without retries.
+  Local FIFO delivery for commands, reconciliation and atomic plan intent, without retries.
 
   Keeps competing native SQLite busy waits from starving a reconciliation
   transaction that needs several evidence reads. SQLite transactions and

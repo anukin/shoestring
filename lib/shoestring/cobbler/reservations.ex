@@ -305,6 +305,16 @@ defmodule Shoestring.Cobbler.Reservations do
   end
 
   defp enforce_limits(repo, held, identity, decision, policy) do
+    # The previous sequential claim may be released later in this same atomic
+    # plan dispatch. A foreign legacy owner must never disappear from accounting.
+    case Shoestring.Cobbler.Commands.active_claim(repo: repo) do
+      %{goal_id: goal_id} when goal_id != identity.goal_id ->
+        repo.rollback({:reservation_blocked, :legacy_claim})
+
+      _ ->
+        :ok
+    end
+
     account =
       Enum.filter(
         held,

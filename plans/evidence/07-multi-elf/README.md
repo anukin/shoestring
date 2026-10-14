@@ -30,3 +30,6 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
 - [Sibling workspaces](sibling-workspaces.md): exact approved-base isolation,
   immutable manifest/event binding and preservation of dirty/foreign work;
   coordinator integration remains pending.
+- [Reservation-owned dispatch](reservation-dispatch-ownership.md): per-child
+  command/lease/delivery authority, legacy interlocks, canonical replay and
+  atomic rollback; production fan-out and lifecycle integration remain pending.

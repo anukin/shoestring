@@ -969,6 +969,39 @@ defmodule Shoestring.Cobbler.ReservationsTest do
     )
   end
 
+  test "independent writers cannot commit both foreign legacy and reserved ownership", c do
+    other = create_goal!(MigrationRepo)
+    attrs = candidate(c.goal)
+    legacy = candidate(other)
+    admission = MigrationRepo.get!(TrajectoryEvent, legacy.admission_event_id)
+    command = Shoestring.Test.CobblerHelpers.claim_command(admission)
+
+    [held, claimed] =
+      race_calls([
+        fn -> Reservations.hold(attrs, policy(), c.opts) end,
+        fn -> Shoestring.Cobbler.Commands.submit(other.id, command, c.opts) end
+      ])
+
+    case held do
+      {:ok, owner} ->
+        assert {:ok,
+                %{
+                  command: %{
+                    status: "rejected",
+                    result: %{"reason" => "reservation_ownership_held"}
+                  }
+                }} = claimed
+
+        assert Shoestring.Cobbler.Commands.active_claim(repo: MigrationRepo) == nil
+        assert Reservations.outstanding(c.opts) == [owner]
+
+      {:error, {:reservation_blocked, :legacy_claim}} ->
+        assert {:ok, %{command: %{status: "resolved", result: %{"kind" => "claimed"}}}} = claimed
+        assert Shoestring.Cobbler.Commands.active_claim(repo: MigrationRepo).goal_id == other.id
+        assert Reservations.outstanding(c.opts) == []
+    end
+  end
+
   defp race_calls(calls) do
     supervisor = start_supervised!(Task.Supervisor)
     parent = self()

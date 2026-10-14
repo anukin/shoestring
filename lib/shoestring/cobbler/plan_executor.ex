@@ -1141,7 +1141,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       end)
 
     [grant_lease: lease_opts, repo: repo, now: now, clock: clock]
-    |> Keyword.merge(Keyword.take(opts, [:writer_opts, :publish_fun]))
+    |> Keyword.merge(Keyword.take(opts, [:writer_opts, :publish_fun, :reservation_id]))
   end
 
   defp profile_instructions(nil), do: ""
@@ -1212,7 +1212,15 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   defp refuse_replayed_lease(_leased, _admission), do: :ok
 
   defp release_own_claim(repo, goal_id, task_id, attempt, opts) do
+    command_id = "plan-#{task_id}-#{attempt}"
+
     case Commands.active_claim(repo: repo) do
+      %{goal_id: ^goal_id, command_id: ^command_id} ->
+        # A duplicate kickoff may arrive after this attempt acquired its claim
+        # but before it granted a lease. Releasing that claim strands both
+        # callers: the immutable claim command replays its now-released owner.
+        :ok
+
       %{goal_id: ^goal_id} ->
         Commands.submit(
           goal_id,
