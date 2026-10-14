@@ -80,20 +80,26 @@ defmodule Shoestring.Cobbler.PlanScopeCheck do
                    ]),
                  do: repo.rollback(:execution_scope_state_changed)
 
+          stored_payload =
+            case PlanIndependence.event_payload(payload) do
+              {:ok, stored} -> stored
+              {:error, reason} -> repo.rollback(reason)
+            end
+
           case Trajectory.append(
                  goal_id,
                  %{
                    "type" => "cobbler.plan.independence.evaluated",
-                   "schema_version" => 1,
+                   "schema_version" => 2,
                    "actor" => "cobbler",
                    "occurred_at" => Keyword.get(opts, :now, DateTime.utc_now()),
-                   "idempotency_key" => "plan-independence:#{digest}",
-                   "payload" => payload
+                   "idempotency_key" => "plan-independence-v2:#{digest}",
+                   "payload" => stored_payload
                  },
                  writer_opts: [transaction_repo: repo]
                ) do
             {:ok, event} ->
-              %{event_id: event.id, evidence: event.payload, parallel_dispatch_enabled: false}
+              %{event_id: event.id, evidence: payload, parallel_dispatch_enabled: false}
 
             {:error, reason} ->
               repo.rollback(reason)

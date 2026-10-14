@@ -33,3 +33,7 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
 - [Reservation-owned dispatch](reservation-dispatch-ownership.md): per-child
   command/lease/delivery authority, legacy interlocks, canonical replay and
   atomic rollback; production fan-out and lifecycle integration remain pending.
+- [Internal coordinator](internal-fanout-coordinator.md): independent initial
+  sibling dispatch, multi-child projection/restart, duration allowance, scope
+  recording fixes and concurrent supervised Fake proof; production activation
+  and remaining lifecycle/conflict work stay pending.

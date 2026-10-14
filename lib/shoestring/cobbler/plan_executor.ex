@@ -25,9 +25,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     is refused. Duplicate delivery or concurrent kickoff converges on one
     dispatch (deterministic command/run/dispatch ids plus idempotent
     executor events), never two.
-  - **One active plan task per goal.** Even dependency-independent nodes
-    run sequentially: while a dispatched task has no acceptance or
-    terminal gate outcome, the goal awaits it.
+  - **Sequential worker default.** Normal advancement runs one task at a time.
+    The internal `PlanFanout` coordinator can record independent siblings;
+    status and restart processing retain every child. Ordinary advancement is
+    fenced once an execution records fan-out, preventing accidental sequential
+    continuation from one sibling's branch. Production fan-out is not enabled.
   - **Deterministic order.** The next task is the first unaccepted
     dependency-ready task in `PlanGraph` declared order — a pure function
     of the plan content.
@@ -39,9 +41,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     returns `:no_authority` / `planned?: false` and writes nothing.
   - **Restart and quota preservation.** Accepted tasks and counters survive
     restart without a planning call. A quota-refused run remains unresolved,
-    preserving its task/run/attempt for the existing wake lifecycle. Plan-level
-    wake/handoff completion remains pending; this module does not yet bind a
-    continuation run back to the active plan attempt.
+    preserving its task/run/attempt for the existing wake lifecycle. Canonical
+    continuation chains bind wake/handoff runs back to their root attempt.
   - **Bounded amendments.** One new approved execution revision may replace an
     inactive execution. Accepted task contracts/evidence and lifetime counters
     carry forward; unresolved work cannot be replaced. Approval and activation
@@ -84,6 +85,46 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   @doc false
   def task_run_id(goal_id, task_id, attempt),
     do: deterministic_uuid("plan-run:#{goal_id}:#{task_id}:#{attempt}")
+
+  @doc false
+  def task_reservation_id(goal_id, task_id, attempt),
+    do: deterministic_uuid("plan-reservation:#{goal_id}:#{task_id}:#{attempt}")
+
+  @doc false
+  # The internal fan-out coordinator owns the enclosing reservation transaction.
+  # This reuses the ordinary task intent path and never launches an Elf.
+  def dispatch_sibling(goal_id, task_id, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with true <- repo.in_transaction?() || {:error, :reservation_transaction_required},
+         {:ok, projection} <- project(repo, goal_id),
+         {:ok, execution} <- require_execution(projection),
+         {:ok, authority} <- live_authority(repo, goal_id),
+         :ok <- bind_authority(authority, execution.revision_number, execution.plan_digest),
+         {:ok, contract} <- PlanContract.new(authority.revision.content),
+         {:ok, task} <- plan_task(contract, task_id),
+         :ok <- Shoestring.Cobbler.PlanFanout.authorize(goal_id, task_id, opts),
+         :ok <- check_budgets(contract, task, projection, execution, repo, goal_id, opts),
+         {:ok, admission} <- resolve_admission(repo, goal_id, %{}, opts),
+         :ok <-
+           Shoestring.Cobbler.ExecutionProfile.admission(
+             execution[:agent_profile],
+             admission.payload
+           ),
+         :ok <- refuse_bound_admission(repo, goal_id, admission) do
+      persist_dispatch(
+        repo,
+        goal_id,
+        execution,
+        contract,
+        task,
+        1,
+        admission,
+        opts,
+        :sibling
+      )
+    end
+  end
 
   @doc "The trajectory event types this executor reads and writes."
   @spec event_types() :: [String.t()]
@@ -261,11 +302,15 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   defp maybe_complete_active(goal_id, projection, opts) do
     repo = Keyword.get(opts, :repo, Repo)
 
-    with {:ok, execution} <- require_execution(projection),
-         %{} = active <- active_dispatch(projection, execution),
-         true <- run_resolvable?(repo, goal_id, active.run_id),
-         false <- dispatch_resolved?(projection, active) do
-      complete_task_run(goal_id, active.run_id, opts)
+    with {:ok, execution} <- require_execution(projection) do
+      projection
+      |> active_dispatches(execution)
+      |> Enum.filter(&run_resolvable?(repo, goal_id, &1.run_id))
+      |> Enum.map(fn active -> complete_task_run(goal_id, active.run_id, opts) end)
+      |> then(fn results ->
+        Enum.find(results, &match?({:error, _}, &1)) || List.last(results) ||
+          {:ok, :no_terminal_active}
+      end)
     else
       _other -> {:ok, :no_terminal_active}
     end
@@ -407,7 +452,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
         execution ->
           accepted = accepted_task_ids(projection, execution)
-          active = active_dispatch(projection, execution)
+          children = dispatches_for(projection, execution)
+          active_children = active_dispatches(projection, execution)
+          active = List.first(active_children)
           budget = duration_status(repo, goal_id, projection, execution, usage, active)
           revision = Plans.get_revision(goal_id, execution.revision_number, repo: repo)
           retirements = if revision, do: Map.get(revision.content, "retirements", []), else: []
@@ -431,15 +478,18 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              active_task: active && active.plan_task_id,
              active_run_id: active && active.run_id,
              active_attempt: active && active.attempt,
-             active_run_ids: if(active, do: active.run_ids, else: []),
+             active_run_ids: Enum.flat_map(active_children, & &1.run_ids),
+             children: Enum.map(children, &child_view(projection, &1)),
+             active_children: active_children,
+             accepted_evidence: projection.accepted,
+             dispatch_mode: if(fanout?(projection, execution), do: :fanout_v1, else: :sequential),
              needs_user?:
                (duration_blocks? and is_nil(completed_event(projection))) or
                  not is_nil(projection.global_failed) or
-                 (is_nil(active) and
-                    Enum.any?(required, fn id ->
-                      not MapSet.member?(accepted, id) and
-                        not retryable?(projection, execution, id)
-                    end)),
+                 Enum.any?(required, fn id ->
+                   not MapSet.member?(accepted, id) and
+                     not retryable?(projection, execution, id)
+                 end),
              global_failure: projection.global_failed,
              attempts: attempt_counts(projection, execution),
              total_attempts: total_attempts(projection, execution),
@@ -576,7 +626,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       run_id: payload["run_id"],
       attempt: payload["attempt"],
       command_id: payload["command_id"],
-      grant_id: payload["grant_id"]
+      grant_id: payload["grant_id"],
+      dispatch_mode: payload["dispatch_mode"]
     }
   end
 
@@ -652,11 +703,41 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   end
 
   defp active_dispatch(projection, execution) do
+    List.first(active_dispatches(projection, execution))
+  end
+
+  defp child_view(projection, child) do
+    same_attempt = fn evidence ->
+      evidence.execution_id == child.execution_id and
+        evidence.plan_task_id == child.plan_task_id and evidence.attempt == child.attempt
+    end
+
+    failure = Enum.find(Enum.reverse(projection.gate_failed), same_attempt)
+
+    resolution =
+      cond do
+        Enum.any?(projection.accepted, same_attempt) -> :accepted
+        failure -> :gate_failed
+        dispatch_resolved?(projection, child) -> :superseded
+        true -> nil
+      end
+
+    Map.merge(child, %{
+      resolved?: dispatch_resolved?(projection, child),
+      resolution: resolution,
+      retry_state: failure && failure.retry_state
+    })
+  end
+
+  defp active_dispatches(projection, execution) do
     projection
     |> dispatches_for(execution)
     |> Enum.sort_by(& &1.attempt)
-    |> Enum.find(fn dispatch -> not dispatch_resolved?(projection, dispatch) end)
+    |> Enum.reject(&dispatch_resolved?(projection, &1))
   end
+
+  defp fanout?(projection, execution),
+    do: Enum.any?(dispatches_for(projection, execution), &(&1.dispatch_mode == "fanout_v1"))
 
   defp attempt_counts(projection, _execution) do
     projection.dispatched
@@ -674,45 +755,57 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     ordered = PlanContract.required_task_ids(contract)
     accepted = accepted_task_ids(projection, execution)
 
-    case active_dispatch(projection, execution) do
-      %{} = active ->
-        with :ok <- paused_duration_budget(repo, goal_id, active, contract, opts) do
-          {:ok,
-           %{
-             disposition: :awaiting_task,
-             execution: execution,
-             active_task: active.plan_task_id,
-             active_run_id: active.run_id,
-             active_attempt: active.attempt
-           }}
-        end
+    if fanout?(projection, execution) do
+      {:ok, %{disposition: :blocked, reason: :fanout_coordinator_required, execution: execution}}
+    else
+      case active_dispatch(projection, execution) do
+        %{} = active ->
+          with :ok <- paused_duration_budget(repo, goal_id, active, contract, opts) do
+            {:ok,
+             %{
+               disposition: :awaiting_task,
+               execution: execution,
+               active_task: active.plan_task_id,
+               active_run_id: active.run_id,
+               active_attempt: active.attempt
+             }}
+          end
 
-      nil ->
-        case next_ready_task(contract, ordered, accepted, projection, execution) do
-          nil ->
-            if MapSet.size(accepted) == length(ordered) do
-              complete_execution(repo, goal_id, projection, execution, authority, contract, opts)
-            else
-              {:ok,
-               %{
-                 disposition: :blocked,
-                 execution: execution,
-                 accepted: accepted |> MapSet.to_list() |> Enum.sort()
-               }}
-            end
+        nil ->
+          case next_ready_task(contract, ordered, accepted, projection, execution) do
+            nil ->
+              if MapSet.size(accepted) == length(ordered) do
+                complete_execution(
+                  repo,
+                  goal_id,
+                  projection,
+                  execution,
+                  authority,
+                  contract,
+                  opts
+                )
+              else
+                {:ok,
+                 %{
+                   disposition: :blocked,
+                   execution: execution,
+                   accepted: accepted |> MapSet.to_list() |> Enum.sort()
+                 }}
+              end
 
-          next_task_id ->
-            dispatch_task(
-              repo,
-              goal_id,
-              projection,
-              execution,
-              authority,
-              contract,
-              next_task_id,
-              opts
-            )
-        end
+            next_task_id ->
+              dispatch_task(
+                repo,
+                goal_id,
+                projection,
+                execution,
+                authority,
+                contract,
+                next_task_id,
+                opts
+              )
+          end
+      end
     end
   end
 
@@ -824,6 +917,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
             "command_id" => command_id
           }
           |> maybe_put("grant_id", grant_id)
+          |> maybe_put(
+            "dispatch_mode",
+            if(run.extensions["shoestring.fanout:version"] == 1, do: "fanout_v1")
+          )
 
         case append_executor_event(
                repo,
@@ -882,7 +979,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          :ok <- refuse_bound_admission(repo, goal_id, admission),
          {:ok, opts} <- prepare_workspace(goal_id, projection, contract, task_id, attempt, opts) do
       attrs = %{
-        id: deterministic_uuid("plan-reservation:#{goal_id}:#{task_id}:#{attempt}"),
+        id: task_reservation_id(goal_id, task_id, attempt),
         goal_id: goal_id,
         execution_id: execution.execution_id,
         plan_task_id: task_id,
@@ -925,15 +1022,17 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          task_contract,
          attempt,
          admission,
-         opts
+         opts,
+         ownership \\ :legacy
        ) do
+    opts = Keyword.put(opts, :reserved_sibling, ownership == :sibling)
     task_id = task_contract["id"]
 
     with {:ok, traj_task} <- ensure_trajectory_task(repo, goal_id, task_id, task_contract),
-         :ok <- release_own_claim(repo, goal_id, task_id, attempt, opts),
+         :ok <- maybe_release_claim(repo, goal_id, task_id, attempt, opts),
          {:ok, command_attrs} <- claim_attrs(admission, task_id, attempt),
          {:ok, gated} <-
-           Dispatcher.claim_and_gate(
+           dispatch_claim(
              goal_id,
              command_attrs,
              dispatch_opts(
@@ -964,7 +1063,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
                "attempt" => attempt,
                "command_id" => command_attrs["command_id"]
              }
-             |> maybe_put("grant_id", leased.grant_id),
+             |> maybe_put("grant_id", leased.grant_id)
+             |> maybe_put(
+               "dispatch_mode",
+               if(Keyword.get(opts, :reserved_sibling), do: "fanout_v1")
+             ),
              "plan-task-dispatched:#{task_id}:#{attempt}",
              opts
            ) do
@@ -983,6 +1086,24 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       {:ok, {:replayed, result}} -> {:ok, result}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp maybe_release_claim(repo, goal_id, task_id, attempt, opts) do
+    if Keyword.get(opts, :reserved_sibling),
+      do: :ok,
+      else: release_own_claim(repo, goal_id, task_id, attempt, opts)
+  end
+
+  defp dispatch_claim(goal_id, attrs, opts) do
+    if Keyword.get(opts, :reserved_sibling),
+      do:
+        Dispatcher.claim_reserved_and_gate(
+          goal_id,
+          attrs,
+          Keyword.fetch!(opts, :reservation_id),
+          opts
+        ),
+      else: Dispatcher.claim_and_gate(goal_id, attrs, opts)
   end
 
   # A dispatch that failed after a concurrent winner recorded the same
@@ -1067,21 +1188,38 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         dispatch.plan_task_id == last.plan_task_id and dispatch.attempt == last.attempt
       end)
 
-    case Shoestring.Worktrees.get(if(owner, do: owner.run_id, else: last.run_id)) do
-      {:ok, worktree} -> {:ok, Keyword.put(opts, :repository_path, worktree.path)}
-      error -> error
+    case Shoestring.Worktrees.get(if(owner, do: owner.run_id, else: last.run_id), opts) do
+      {:ok, worktree} ->
+        with :ok <-
+               Shoestring.Cobbler.PlanWorkspace.require_integrated(
+                 worktree.path,
+                 projection.accepted,
+                 last.commit
+               ),
+             do: {:ok, Keyword.put(opts, :repository_path, worktree.path)}
+
+      error ->
+        error
     end
   end
 
   defp execution_worktree(run_id, base, opts) do
-    case Shoestring.Worktrees.get(run_id) do
+    case Shoestring.Worktrees.get(run_id, opts) do
+      {:ok, %{metadata: %{"shoestring.fanout:version" => 1}}} ->
+        {:error, :fanout_workspace_requires_coordinator}
+
       {:ok, worktree} ->
         {:ok, worktree}
 
       {:error, :not_found} ->
         case Keyword.get(opts, :repository_path) do
           path when is_binary(path) ->
-            Shoestring.Worktrees.create(path, run_id, base, private_git: true)
+            Shoestring.Worktrees.create(
+              path,
+              run_id,
+              base,
+              Keyword.put(Keyword.take(opts, [:worktrees_dir]), :private_git, true)
+            )
 
           _ ->
             {:error, :plan_repository_required}
@@ -1122,6 +1260,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
             }
           }
           |> maybe_put(Shoestring.Cobbler.ExecutionProfile.key(), execution[:agent_profile])
+          |> maybe_put(
+            "shoestring.fanout:version",
+            if(Keyword.get(opts, :reserved_sibling), do: 1)
+          )
           |> maybe_put(Shoestring.Cobbler.Reservations.key(), Keyword.get(opts, :reservation_id)),
         workspace_ref: Keyword.get(opts, :workspace_ref, "cobbler/plan-task"),
         clock: clock,
@@ -1141,7 +1283,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       end)
 
     [grant_lease: lease_opts, repo: repo, now: now, clock: clock]
-    |> Keyword.merge(Keyword.take(opts, [:writer_opts, :publish_fun, :reservation_id]))
+    |> Keyword.merge(
+      Keyword.take(opts, [:writer_opts, :publish_fun, :reservation_id, :reserved_sibling])
+    )
   end
 
   defp profile_instructions(nil), do: ""

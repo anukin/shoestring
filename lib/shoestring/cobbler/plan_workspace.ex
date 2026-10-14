@@ -13,21 +13,25 @@ defmodule Shoestring.Cobbler.PlanWorkspace do
       else
         path = Keyword.fetch!(gate_opts, :worktree_path)
 
-        Enum.reduce_while(accepted, {:ok, gate_opts}, fn evidence, acc ->
-          case Shoestring.Cobbler.GateProcess.run(
-                 ["git", "merge-base", "--is-ancestor", evidence.commit, "HEAD"],
-                 path,
-                 15_000,
-                 1024
-               ) do
-            {:ok, %{exit_status: 0}} -> {:cont, acc}
-            _ -> {:halt, {:error, :accepted_commit_not_integrated}}
-          end
-        end)
+        with :ok <- require_integrated(path, accepted), do: {:ok, gate_opts}
       end
     else
       _ -> {:error, :global_plan_worktree_missing}
     end
+  end
+
+  def require_integrated(path, accepted, revision \\ "HEAD") do
+    Enum.reduce_while(accepted, :ok, fn evidence, :ok ->
+      case Shoestring.Cobbler.GateProcess.run(
+             ["git", "merge-base", "--is-ancestor", evidence.commit, revision],
+             path,
+             15_000,
+             1024
+           ) do
+        {:ok, %{exit_status: 0}} -> {:cont, :ok}
+        _ -> {:halt, {:error, :accepted_commit_not_integrated}}
+      end
+    end)
   end
 
   def gate_opts(repo, context, opts) do
@@ -69,7 +73,7 @@ defmodule Shoestring.Cobbler.PlanWorkspace do
   end
 
   defp attempt_worktree(run, opts) do
-    case Worktrees.get(run.id) do
+    case Worktrees.get(run.id, opts) do
       {:ok, worktree} ->
         {:ok, worktree}
 
@@ -80,7 +84,7 @@ defmodule Shoestring.Cobbler.PlanWorkspace do
                  run.goal_id
                ),
              {root, _ids} <- Enum.find(chains, fn {_root, ids} -> run.id in ids end) do
-          Worktrees.get(root)
+          Worktrees.get(root, opts)
         else
           _ -> {:error, :plan_attempt_worktree_missing}
         end

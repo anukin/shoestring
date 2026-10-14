@@ -6,6 +6,78 @@ defmodule Shoestring.Cobbler.PlanIndependence do
 
   def version, do: @version
 
+  @doc false
+  # Version 2 events preserve decisions as bounded JSON, like plan contracts,
+  # without weakening the trajectory's depth/list guards.
+  def event_payload(%{"decision" => decision} = payload) do
+    json = Shoestring.Cobbler.PlanContract.canonical_json(decision)
+
+    with {:ok, _} <- decode_event_decision(json),
+         do: {:ok, payload |> Map.delete("decision") |> Map.put("decision_json", json)}
+  end
+
+  @doc false
+  def decode_event_decision(json) when is_binary(json) and byte_size(json) <= 65_536 do
+    with {:ok, decision} when is_map(decision) <- Jason.decode(json),
+         true <-
+           Map.keys(decision) --
+             ~w(version source disposition task_ids blocker_count blockers evidence_complete execution_blocked observed_changes) ==
+             [],
+         true <- decision["version"] == 1 and decision["source"] in ~w(declared actual),
+         true <- decision["disposition"] in ~w(eligible sequential),
+         ids when is_list(ids) and length(ids) <= 64 <- decision["task_ids"],
+         true <- Enum.all?(ids, &safe_leaf?/1),
+         count when is_integer(count) and count >= 0 <- decision["blocker_count"],
+         blockers when is_list(blockers) and length(blockers) <= 128 <- decision["blockers"],
+         true <- count >= length(blockers) and Enum.all?(blockers, &safe_blocker?/1),
+         true <- is_boolean(decision["evidence_complete"]),
+         true <-
+           not Map.has_key?(decision, "execution_blocked") or
+             is_boolean(decision["execution_blocked"]),
+         true <- safe_changes?(Map.get(decision, "observed_changes", %{})) do
+      {:ok, decision}
+    else
+      _ -> {:error, :invalid_scope_evidence}
+    end
+  end
+
+  def decode_event_decision(json) when is_binary(json), do: {:error, :scope_evidence_oversized}
+  def decode_event_decision(_), do: {:error, :invalid_scope_evidence}
+
+  defp safe_blocker?(blocker) when is_map(blocker) do
+    Map.keys(blocker) -- ~w(task_id task_ids reason path paths symbol) == [] and
+      is_binary(blocker["reason"]) and
+      Enum.all?(blocker, fn
+        {_key, value} when is_binary(value) ->
+          safe_leaf?(value)
+
+        {_key, values} when is_list(values) and length(values) <= 2 ->
+          Enum.all?(values, &safe_leaf?/1)
+
+        _ ->
+          false
+      end)
+  end
+
+  defp safe_blocker?(_), do: false
+
+  defp safe_changes?(changes) when is_map(changes) and map_size(changes) <= 64 do
+    Enum.all?(changes, fn
+      {id, files} when is_list(files) and length(files) <= 1024 ->
+        safe_leaf?(id) and Enum.all?(files, &(valid_path?(&1) and safe_leaf?(&1)))
+
+      _ ->
+        false
+    end)
+  end
+
+  defp safe_changes?(_), do: false
+
+  defp safe_leaf?(value),
+    do:
+      is_binary(value) and byte_size(value) <= 4096 and
+        Shoestring.Harness.Contract.safe_term?(value)
+
   def declared([], _metadata), do: invalid(:declared, "no_ready_tasks")
 
   def declared(tasks, _metadata) when is_list(tasks) and length(tasks) > 64,

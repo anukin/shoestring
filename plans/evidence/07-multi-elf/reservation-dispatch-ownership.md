@@ -145,6 +145,11 @@ subsequent formatting/tests succeeded with the required sandbox escalation.
 
 ## Remaining integration
 
+REPO-INSPECTION: follow-up [internal coordinator evidence](internal-fanout-coordinator.md)
+records initial sibling dispatch integration and concurrent supervised Fake
+proof. The remaining statements below describe this boundary's original
+checkpoint; production activation and full lifecycle/conflict work remain pending.
+
 UNVERIFIED: production fan-out remains disabled. The coordinator must select
 safe ready candidates, bind prepared sibling workspaces, apply lifetime budgets
 across all children, record task dispatch lineage and preserve successful sibling

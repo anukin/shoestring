@@ -39,6 +39,19 @@ defmodule Shoestring.Trajectory.EventRegistry do
       }
     },
     "cobbler.plan.independence.evaluated" => %{
+      2 => %{
+        required: [
+          :execution_id,
+          :revision_number,
+          :plan_digest,
+          :accepted_base,
+          :repository_observation,
+          :decision_json
+        ],
+        optional: [],
+        uuid_fields: [:execution_id],
+        types: %{revision_number: :integer, decision_json: :string}
+      },
       1 => %{
         required: [
           :execution_id,
@@ -704,7 +717,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
           :attempt,
           :command_id
         ],
-        optional: [:grant_id],
+        optional: [:grant_id, :dispatch_mode],
         uuid_fields: [:execution_id, :trajectory_task_id, :run_id, :grant_id],
         types: %{
           revision_number: :integer,
@@ -1203,12 +1216,27 @@ defmodule Shoestring.Trajectory.EventRegistry do
     end
   end
 
+  defp validate_plan_execution("cobbler.plan.independence.evaluated", 2, payload, _opts) do
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         {:ok, _} <-
+           Shoestring.Cobbler.PlanIndependence.decode_event_decision(payload["decision_json"]) do
+      :ok
+    else
+      _ -> Contract.invalid(:decision_json, "must encode a bounded version-1 scope decision")
+    end
+  end
+
   defp validate_plan_execution("cobbler.plan.task.dispatched", 1, payload, _opts) do
     with :ok <- plan_execution_digest(payload),
          :ok <- plan_execution_revision(payload),
          :ok <- plan_execution_attempt(payload),
-         :ok <- plan_execution_task_id(payload) do
+         :ok <- plan_execution_task_id(payload),
+         true <- payload["dispatch_mode"] in [nil, "fanout_v1"] do
       :ok
+    else
+      false -> Contract.invalid(:dispatch_mode, "must be fanout_v1 when present")
+      error -> error
     end
   end
 

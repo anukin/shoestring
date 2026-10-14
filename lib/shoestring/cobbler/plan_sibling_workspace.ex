@@ -56,15 +56,7 @@ defmodule Shoestring.Cobbler.PlanSiblingWorkspace do
   defp allocate(repo, source, run_id, base, metadata, opts) do
     case Worktrees.get(run_id, opts) do
       {:ok, worktree} ->
-        root =
-          Keyword.get(opts, :worktrees_dir, Shoestring.State.path(:worktrees)) |> Path.expand()
-
-        private = Shoestring.Worktrees.PrivateGit.path(root, run_id)
-
-        if worktree.metadata == metadata and worktree.base_commit == base and
-             Path.expand(worktree.repo_path) == private and
-             Path.expand(worktree.path) == Path.join(root, "run-#{run_id}") and
-             worktree.branch == "shoestring/run-#{run_id}" do
+        if bound?(worktree, run_id, base, metadata, opts) do
           case repo.get(RunRecord, run_id) do
             nil ->
               with {:ok, _} <- ScopeEvidence.repository(source, base),
@@ -95,6 +87,16 @@ defmodule Shoestring.Cobbler.PlanSiblingWorkspace do
       error ->
         error
     end
+  end
+
+  @doc false
+  def bound?(worktree, run_id, base, metadata, opts) do
+    root = Keyword.get(opts, :worktrees_dir, Shoestring.State.path(:worktrees)) |> Path.expand()
+
+    worktree.run_id == run_id and worktree.metadata == metadata and worktree.base_commit == base and
+      Path.expand(worktree.repo_path) == Shoestring.Worktrees.PrivateGit.path(root, run_id) and
+      Path.expand(worktree.path) == Path.join(root, "run-#{run_id}") and
+      worktree.branch == "shoestring/run-#{run_id}"
   end
 
   defp record(repo, goal_id, binding, worktree, base, opts) do

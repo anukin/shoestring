@@ -50,12 +50,20 @@ refused and retained. The coordinator has not enabled sibling execution yet.
 REPO-INSPECTION: [reservation-owned dispatch](../evidence/07-multi-elf/reservation-dispatch-ownership.md)
 now persists per-child command/run/lease/delivery intent without a global task
 claim. Legacy claims and outstanding reservations cannot bypass each other's
-ownership checks. Production coordinator and concurrent lifecycle integration
-remain pending.
+ownership checks. Its initial coordinator integration is recorded below.
+
+REPO-INSPECTION: [the internal coordinator](../evidence/07-multi-elf/internal-fanout-coordinator.md)
+now dispatches independent initial tasks into pinned private stores, skips blocked
+providers, reconstructs every child and reserves duration for held children and
+global gate command timeouts. An isolated production-worker/Fake lifecycle proves
+two concurrent supervised children, independent acceptance, restart-safe intent,
+dependency admission and never-started cancellation without affecting a sibling.
+Production worker activation, final conflict acceptance and remaining lifecycle
+recovery are still pending; ordinary advancement is fenced for fan-out executions.
 
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
-- Next: sibling dispatch coordinator wiring, actual-scope acceptance,
+- Next: actual-scope acceptance and production coordinator activation,
   inbox/wakeups and partial-failure recovery. Preserve
   uncertain owners until additional process evidence can resolve them.
 - Before fan-out: address canonical/generic goal status synchronization and

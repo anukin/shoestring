@@ -26,6 +26,13 @@ symlinks and changed source state default to sequential execution. It starts no
 run and enables no parallel dispatch; its observation must be rechecked before
 future fan-out.
 
+REPO-INSPECTION: scope events retain decoded evidence in CLI responses; version 2
+stores bounded canonical decision JSON so nested overlap blockers remain
+recordable. Execution status also includes `children`, `active_children` and
+per-child resolution/retry state. An operator blocker is visible while another
+child remains active. These read views do not enable parallel workers; the
+internal fan-out coordinator is not selected by this CLI yet.
+
 REPO-INSPECTION: Start binds the exact approved plan, immutable saved agent role,
 provider, explicit model and repository directory. Repeating an identical start
 returns the same intent and live delivery job. Changing the approved digest,
