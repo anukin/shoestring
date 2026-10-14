@@ -381,6 +381,7 @@ defmodule Shoestring.Elves do
     repo = Keyword.get(opts, :repo, Repo)
 
     with {:ok, run} <- fetch_run(run_id, repo),
+         :ok <- Shoestring.Cobbler.Reservations.authorize_direct_resume(repo, run),
          {:ok, fresh_record} <-
            Continuation.latest_checkpoint(repo, run.goal_id, run_id: run.id),
          fresh_refs <- Continuation.decision_refs(repo, run.goal_id),

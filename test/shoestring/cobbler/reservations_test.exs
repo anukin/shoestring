@@ -7,7 +7,16 @@ defmodule Shoestring.Cobbler.ReservationsTest do
   use ExUnit.Case, async: false
   import Ecto.Query
   import Shoestring.Test.CobblerHelpers, only: [create_goal!: 1, admission_payload: 1]
-  alias Shoestring.Cobbler.{ReservationPolicy, ReservationRecord, Reservations}
+
+  alias Shoestring.Cobbler.{
+    ReservationPolicy,
+    ReservationRecord,
+    Reservations,
+    ReservationReconciler,
+    ReservationSettlementRecord
+  }
+
+  alias Shoestring.Harness.{Dispatches, DispatchRecord, Fake, Identity, RunRecord, Runs}
   alias Shoestring.Test.MigrationRepo
   alias Shoestring.Trajectory.{EventRegistry, TrajectoryEvent}
 
@@ -33,7 +42,8 @@ defmodule Shoestring.Cobbler.ReservationsTest do
     {20_261_001_014_010, Shoestring.Repo.Migrations.AddCobblerPlanRevisions},
     {20_261_004_192_021, Shoestring.Repo.Migrations.AddPlannerRequests},
     {20_261_007_024_346, Shoestring.Repo.Migrations.AddAgentProfiles},
-    {20_261_013_225_751, Shoestring.Repo.Migrations.AddCobblerCapacityReservations}
+    {20_261_013_225_751, Shoestring.Repo.Migrations.AddCobblerCapacityReservations},
+    {20_261_013_232_327, Shoestring.Repo.Migrations.AddCobblerReservationSettlements}
   ]
 
   setup do
@@ -410,17 +420,412 @@ defmodule Shoestring.Cobbler.ReservationsTest do
     assert MigrationRepo.aggregate(ReservationRecord, :count) == 1
   end
 
+  test "no-intent orphan release is durable, frees allowance and cannot be revived", c do
+    attrs = candidate(c.goal)
+    assert {:ok, held} = Reservations.hold(attrs, policy(), c.opts)
+
+    assert {:ok, %{disposition: :released, settlement: settlement}} =
+             Reservations.reconcile(attrs.id, c.opts)
+
+    assert settlement.kind == "released"
+    assert settlement.evidence["basis"] == "no_run_intent_or_activity"
+    assert Reservations.outstanding(c.opts) == []
+    assert MigrationRepo.get!(ReservationRecord, held.id) == held
+    stop_supervised!(MigrationRepo)
+    start_supervised!({MigrationRepo, c.repo_opts})
+
+    assert {:ok, %{disposition: :replayed, settlement: ^settlement}} =
+             Reservations.reconcile(attrs.id, c.opts)
+
+    assert {:error, :reservation_settled} = Reservations.hold(attrs, policy(), c.opts)
+
+    assert {:error, :reservation_settled} =
+             Reservations.require_reconciliation(attrs.id, "late probe", c.opts)
+
+    {request, identity} = request(c, attrs)
+
+    assert {:error, :reservation_settled} =
+             Runs.request(request, identity, Keyword.put(c.opts, :run_id, attrs.run_id))
+
+    assert MigrationRepo.get(RunRecord, attrs.run_id) == nil
+
+    assert {:error, :reservation_settled} =
+             Dispatches.enqueue(request, identity, Keyword.put(c.opts, :run_id, attrs.run_id))
+
+    assert MigrationRepo.get(RunRecord, attrs.run_id) == nil
+    assert {:ok, _} = Reservations.hold(candidate(create_goal!(MigrationRepo)), policy(), c.opts)
+  end
+
+  test "all canonical terminal classes close only after absence evidence", c do
+    open = policy(%{global_limit: 8, provider_account_limit: 8, goal_limit: 8, account_units: 8})
+
+    for type <- ~w(run.completed run.failed run.cancelled run.interrupted) do
+      attrs = candidate(c.goal)
+      assert {:ok, held} = Reservations.hold(attrs, open, c.opts)
+      run = intent!(c, attrs)
+      running = run_event!(run, "run.running", %{"process_id" => "pgid:123456"})
+
+      fields =
+        if type == "run.failed",
+          do: %{"error_category" => "transport", "error_code" => "supervisor_crash"},
+          else: %{}
+
+      terminal = run_event!(run, type, fields)
+      opts = Keyword.put(c.opts, :group_probe, fn [123_456] -> :absent end)
+
+      assert {:ok, %{disposition: :closed, settlement: settlement}} =
+               Reservations.reconcile(attrs.id, opts)
+
+      assert settlement.kind == "consumed_closed"
+      assert settlement.evidence["terminal_event_id"] == terminal.id
+      assert settlement.evidence["running_event_ids"] == [running.id]
+      refute Map.has_key?(settlement.evidence, "pgid")
+      assert MigrationRepo.get!(ReservationRecord, held.id) == held
+      assert {:error, :reservation_settled} = Reservations.authorize(MigrationRepo, run)
+
+      assert {:error, :reserved_run_requires_coordinator} =
+               Shoestring.Elves.resume_run(run.id, c.opts)
+
+      assert {:ok, %{disposition: :replayed, settlement: ^settlement}} =
+               Reservations.reconcile(
+                 attrs.id,
+                 Keyword.put(c.opts, :group_probe, fn _ -> flunk("replay must not probe") end)
+               )
+    end
+
+    assert Reservations.outstanding(c.opts) == []
+    assert MigrationRepo.aggregate(ReservationSettlementRecord, :count) == 4
+  end
+
+  test "live Elf, live group and unknown probes retain consumption and never cancel work", c do
+    attrs = candidate(c.goal)
+    assert {:ok, _} = Reservations.hold(attrs, policy(), c.opts)
+    run = intent!(c, attrs)
+    run_event!(run, "run.running", %{"process_id" => "123456"})
+
+    run_event!(run, "run.failed", %{
+      "error_category" => "transport",
+      "error_code" => "supervisor_crash"
+    })
+
+    assert {:ok, %{disposition: :retained, reason: :elf_running}} =
+             Reservations.reconcile(
+               attrs.id,
+               Keyword.put(c.opts, :elf_lookup, fn _ -> self() end)
+             )
+
+    for {probe, reason} <- [
+          {fn _ -> :alive end, :process_group_alive},
+          {fn _ -> :unknown end, :process_group_unknown},
+          {fn _ -> raise "probe failed" end, :process_group_unknown}
+        ] do
+      assert {:ok, %{disposition: :retained, reason: ^reason}} =
+               Reservations.reconcile(attrs.id, Keyword.put(c.opts, :group_probe, probe))
+
+      assert length(Reservations.outstanding(c.opts)) == 1
+      assert MigrationRepo.aggregate(ReservationSettlementRecord, :count) == 0
+    end
+
+    uncertain = MigrationRepo.get!(ReservationRecord, attrs.id)
+    assert uncertain.reconciliation_reason == "process_group_alive"
+
+    assert {:error, {:reservation_blocked, :global_limit}} =
+             Reservations.hold(candidate(create_goal!(MigrationRepo)), policy(), c.opts)
+
+    assert {:ok, %{disposition: :closed}} =
+             Reservations.reconcile(
+               attrs.id,
+               Keyword.put(c.opts, :group_probe, fn _ -> :absent end)
+             )
+  end
+
+  test "delivered and cancelled jobs are not run termination evidence", c do
+    attrs = candidate(c.goal)
+    assert {:ok, _} = Reservations.hold(attrs, policy(), c.opts)
+    run = intent!(c, attrs)
+
+    for status <- ["effect_completed", "effect_unknown", "cancelled"] do
+      dispatch =
+        MigrationRepo.get(DispatchRecord, run.dispatch_id) ||
+          %DispatchRecord{
+            dispatch_id: run.dispatch_id,
+            goal_id: run.goal_id,
+            task_id: run.task_id,
+            run_id: run.id,
+            request_version: 1
+          }
+
+      dispatch |> Ecto.Changeset.change(status: status) |> MigrationRepo.insert_or_update!()
+
+      assert {:ok, %{disposition: :retained, reason: :run_not_terminal}} =
+               Reservations.reconcile(attrs.id, c.opts)
+    end
+
+    assert length(Reservations.outstanding(c.opts)) == 1
+    assert MigrationRepo.get!(RunRecord, run.id).status == "requested"
+    assert MigrationRepo.aggregate(ReservationSettlementRecord, :count) == 0
+  end
+
+  test "missing, malformed and post-terminal process identities fail closed", c do
+    open = policy(%{global_limit: 8, provider_account_limit: 8, goal_limit: 8, account_units: 8})
+
+    for {process_id, reason} <- [
+          {nil, :process_identity_invalid},
+          {"pgid:123abc", :process_identity_invalid},
+          {"pgid:1", :process_identity_invalid},
+          {"missing", :process_identity_missing},
+          {"after", :activity_after_terminal}
+        ] do
+      attrs = candidate(c.goal)
+      assert {:ok, _} = Reservations.hold(attrs, open, c.opts)
+      run = intent!(c, attrs)
+
+      unless process_id in ["missing", "after"],
+        do: run_event!(run, "run.running", %{"process_id" => process_id})
+
+      run_event!(run, "run.completed", %{})
+
+      if process_id == "after",
+        do: run_event!(run, "run.running", %{"process_id" => "pgid:123456"})
+
+      assert {:ok, %{disposition: :retained, reason: ^reason}} =
+               Reservations.reconcile(
+                 attrs.id,
+                 Keyword.put(c.opts, :group_probe, fn _ ->
+                   flunk("invalid identity must never be probed")
+                 end)
+               )
+    end
+
+    assert length(Reservations.outstanding(c.opts)) == 5
+  end
+
+  test "every recorded group is probed, with a bounded fail-closed history", c do
+    attrs = candidate(c.goal)
+    assert {:ok, _} = Reservations.hold(attrs, policy(), c.opts)
+    run = intent!(c, attrs)
+    run_event!(run, "run.running", %{"process_id" => "pgid:123456"})
+    run_event!(run, "run.running", %{"process_id" => "pgid:123457"})
+    run_event!(run, "run.completed", %{})
+
+    assert {:ok, %{disposition: :retained}} =
+             Reservations.reconcile(
+               attrs.id,
+               Keyword.put(c.opts, :group_probe, fn ids ->
+                 assert Enum.sort(ids) == [123_456, 123_457]
+                 :alive
+               end)
+             )
+
+    assert {:ok, %{disposition: :closed}} =
+             Reservations.reconcile(
+               attrs.id,
+               Keyword.put(c.opts, :group_probe, fn ids ->
+                 assert Enum.sort(ids) == [123_456, 123_457]
+                 :absent
+               end)
+             )
+
+    next = candidate(c.goal)
+    assert {:ok, _} = Reservations.hold(next, policy(), c.opts)
+    next_run = intent!(c, next)
+
+    Enum.each(1..65, fn _ ->
+      run_event!(next_run, "run.running", %{"process_id" => "pgid:123456"})
+    end)
+
+    run_event!(next_run, "run.completed", %{})
+
+    assert {:ok, %{disposition: :retained, reason: :process_identity_bound_exceeded}} =
+             Reservations.reconcile(next.id, c.opts)
+  end
+
+  test "orphan activity or unavailable Elf ownership is uncertainty, never release", c do
+    attrs = candidate(c.goal)
+    assert {:ok, _} = Reservations.hold(attrs, policy(), c.opts)
+
+    assert {:ok, %{disposition: :retained, reason: :elf_ownership_unknown}} =
+             Reservations.reconcile(
+               attrs.id,
+               Keyword.put(c.opts, :elf_lookup, fn _ -> raise "registry unavailable" end)
+             )
+
+    run_event!(%{id: attrs.run_id, goal_id: c.goal.id, task_id: nil}, "run.starting", %{})
+
+    assert {:ok, %{disposition: :retained, reason: :orphan_has_activity}} =
+             Reservations.reconcile(attrs.id, c.opts)
+
+    assert length(Reservations.outstanding(c.opts)) == 1
+    assert MigrationRepo.aggregate(ReservationSettlementRecord, :count) == 0
+    assert {:error, :reservation_not_found} = Reservations.reconcile(Ecto.UUID.generate(), c.opts)
+    assert {:error, :invalid_reservation_identity} = Reservations.reconcile("invalid", c.opts)
+  end
+
+  test "reservation must precede intent and is bound to goal and admitted adapter", c do
+    attrs = candidate(c.goal)
+    assert {:ok, _} = Reservations.hold(attrs, policy(), c.opts)
+    run = intent!(c, attrs)
+    assert :ok = Reservations.authorize(MigrationRepo, run)
+
+    assert {:error, :reservation_owner_mismatch} =
+             Reservations.authorize(MigrationRepo, %{run | goal_id: Ecto.UUID.generate()})
+
+    assert {:error, :reservation_provider_mismatch} =
+             Reservations.authorize(MigrationRepo, %{run | provider_id: "other"})
+
+    assert :ok = Reservations.authorize(MigrationRepo, %{run | id: Ecto.UUID.generate()})
+
+    assert {:error, :reservation_run_already_exists} =
+             Reservations.hold(candidate(c.goal, %{run_id: run.id}), policy(), c.opts)
+
+    assert {:error, :reserved_run_requires_coordinator} =
+             Shoestring.Elves.resume_run(run.id, c.opts)
+
+    assert :ok =
+             Reservations.authorize_direct_resume(MigrationRepo, %{run | id: Ecto.UUID.generate()})
+
+    assert {:ok, _} = Reservations.require_reconciliation(attrs.id, "owner uncertain", c.opts)
+
+    assert {:error, :reservation_requires_reconciliation} =
+             Reservations.authorize(MigrationRepo, run)
+  end
+
+  test "concurrent orphan reconciliation creates exactly one append-only settlement", c do
+    attrs = candidate(c.goal)
+    assert {:ok, _} = Reservations.hold(attrs, policy(), c.opts)
+
+    results =
+      race_calls(Enum.map(1..8, fn _ -> fn -> Reservations.reconcile(attrs.id, c.opts) end end))
+
+    assert Enum.count(results, &match?({:ok, %{disposition: :released}}, &1)) == 1
+    assert Enum.count(results, &match?({:ok, %{disposition: :replayed}}, &1)) == 7
+    assert MigrationRepo.aggregate(ReservationSettlementRecord, :count) == 1
+  end
+
+  test "concurrent intent creation and orphan release cannot both win", c do
+    attrs = candidate(c.goal)
+    assert {:ok, _} = Reservations.hold(attrs, policy(), c.opts)
+    {request, identity} = request(c, attrs)
+
+    {:ok, changeset} =
+      Runs.build_intent_changeset(request, identity, Keyword.put(c.opts, :run_id, attrs.run_id))
+
+    [intent, reconciliation] =
+      race_calls([
+        fn -> Runs.insert_or_recover(MigrationRepo, changeset) end,
+        fn -> Reservations.reconcile(attrs.id, c.opts) end
+      ])
+
+    case intent do
+      {:ok, run} ->
+        assert run.id == attrs.run_id
+        assert {:ok, %{disposition: :retained, reason: :run_not_terminal}} = reconciliation
+        assert MigrationRepo.get(ReservationSettlementRecord, attrs.id) == nil
+
+      {:error, :reservation_settled} ->
+        assert {:ok, %{disposition: :released}} = reconciliation
+        assert MigrationRepo.get(RunRecord, attrs.run_id) == nil
+    end
+  end
+
+  test "production probe distinguishes a live local group from its verified exit" do
+    assert ReservationReconciler.probe_groups([]) == :unknown
+    assert ReservationReconciler.probe_groups([1]) == :unknown
+    assert ReservationReconciler.probe_groups(["123"]) == :unknown
+    {:ok, runner} = Shoestring.Elves.PortRunner.spawn(["sleep", "30"])
+
+    try do
+      assert ReservationReconciler.probe_groups([runner.pgid]) == :alive
+
+      assert {:ok, _} =
+               Shoestring.Elves.PortRunner.terminate(runner,
+                 kill_grace_ms: 100,
+                 reap_timeout_ms: 1000
+               )
+
+      assert ReservationReconciler.probe_groups([runner.pgid]) == :absent
+    after
+      Shoestring.Elves.PortRunner.terminate(runner, kill_grace_ms: 100, reap_timeout_ms: 1000)
+      Shoestring.Elves.PortRunner.close(runner)
+    end
+  end
+
+  defp request(c, attrs) do
+    task =
+      %Shoestring.Trajectory.Task{goal_id: c.goal.id, title: "Fixture task"}
+      |> Ecto.Changeset.change()
+      |> MigrationRepo.insert!()
+
+    request = Shoestring.Test.ElvesHelpers.run_request(c.goal, task)
+    candidate = MigrationRepo.get!(TrajectoryEvent, attrs.admission_event_id).payload["candidate"]
+
+    %Identity{} = fake = Fake.identity()
+
+    identity = %Identity{
+      fake
+      | provider: candidate["provider_id"],
+        adapter_id: candidate["adapter_id"]
+    }
+
+    {request, identity}
+  end
+
+  defp intent!(c, attrs) do
+    {request, identity} = request(c, attrs)
+
+    assert {:ok, changeset} =
+             Runs.build_intent_changeset(
+               request,
+               identity,
+               Keyword.put(c.opts, :run_id, attrs.run_id)
+             )
+
+    assert {:ok, run} = Runs.insert_or_recover(MigrationRepo, changeset)
+    run
+  end
+
+  defp run_event!(run, type, fields) do
+    payload = Map.put(fields, "run_id", run.id)
+    assert {:ok, payload} = EventRegistry.validate_payload(type, 1, payload, now: @now)
+
+    sequence =
+      (MigrationRepo.one(
+         from e in TrajectoryEvent, where: e.goal_id == ^run.goal_id, select: max(e.sequence)
+       ) || 0) + 1
+
+    %TrajectoryEvent{
+      id: Ecto.UUID.generate(),
+      goal_id: run.goal_id,
+      task_id: run.task_id,
+      run_id: run.id,
+      sequence: sequence,
+      type: type,
+      actor: "elf",
+      schema_version: 1,
+      occurred_at: @now,
+      payload: payload
+    }
+    |> TrajectoryEvent.changeset(%{})
+    |> MigrationRepo.insert!()
+  end
+
   defp race(candidates, policy, opts) do
+    race_calls(
+      Enum.map(candidates, fn attrs -> fn -> Reservations.hold(attrs, policy, opts) end end)
+    )
+  end
+
+  defp race_calls(calls) do
     supervisor = start_supervised!(Task.Supervisor)
     parent = self()
 
     tasks =
-      Enum.map(candidates, fn attrs ->
+      Enum.map(calls, fn call ->
         Task.Supervisor.async_nolink(supervisor, fn ->
           send(parent, {:ready, self()})
 
           receive do
-            :go -> Reservations.hold(attrs, policy, opts)
+            :go -> call.()
           after
             10_000 -> raise "reservation race start timed out"
           end

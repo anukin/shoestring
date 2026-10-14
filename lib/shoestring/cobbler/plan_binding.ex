@@ -8,7 +8,8 @@ defmodule Shoestring.Cobbler.PlanBinding do
   # Called inside the dispatch write transaction. Existing unplanned runs retain
   # their lifecycle; plan runs carry an immutable revision/digest binding.
   def authorize(repo, run) do
-    with :ok <- Shoestring.Cobbler.ExecutionProfile.run_authority(repo, run) do
+    with :ok <- Shoestring.Cobbler.Reservations.authorize(repo, run),
+         :ok <- Shoestring.Cobbler.ExecutionProfile.run_authority(repo, run) do
       with :ok <- authorize_plan(repo, run),
            do: Shoestring.Cobbler.PlanRunLineage.authorize(repo, run)
     end

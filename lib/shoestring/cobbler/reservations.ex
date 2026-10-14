@@ -10,11 +10,21 @@ defmodule Shoestring.Cobbler.Reservations do
 
   Identity is immutable across retries. Every held or reconciliation-required
   row counts. Deadlines only flag uncertainty; this module intentionally has no
-  timer, release, replacement or cleanup path. Terminal/orphan reconciliation
-  and atomic dispatch-intent wiring must land before production fan-out.
+  timer, replacement or cleanup path. Explicit reconciliation may settle verified
+  terminal owners or no-intent orphans; atomic dispatch wiring remains required
+  before production fan-out.
   """
   import Ecto.Query
-  alias Shoestring.Cobbler.{AdmissionDecision, ReservationPolicy, ReservationRecord}
+
+  alias Shoestring.Cobbler.{
+    AdmissionDecision,
+    ReservationPolicy,
+    ReservationRecord,
+    ReservationReconciler,
+    ReservationSettlementRecord
+  }
+
+  alias Shoestring.Harness.RunRecord
   alias Shoestring.Repo
   alias Shoestring.Trajectory.TrajectoryEvent
 
@@ -41,7 +51,54 @@ defmodule Shoestring.Cobbler.Reservations do
   @doc "Reads durable owners, including overdue and explicitly uncertain owners."
   def outstanding(opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
-    repo.all(from r in ReservationRecord, order_by: [asc: r.inserted_at, asc: r.id])
+
+    repo.all(
+      from r in ReservationRecord,
+        left_join: s in ReservationSettlementRecord,
+        on: s.reservation_id == r.id,
+        where: is_nil(s.reservation_id),
+        order_by: [asc: r.inserted_at, asc: r.id]
+    )
+  end
+
+  def reconcile(id, opts \\ []), do: ReservationReconciler.reconcile(id, opts)
+
+  @doc false
+  # Called inside intent/effect write transactions. Lookup by run ID also fences
+  # callers that omit a reservation extension. Legacy unreserved runs are unchanged.
+  def authorize(repo, run) do
+    case repo.get_by(ReservationRecord, run_id: run.id) do
+      nil ->
+        :ok
+
+      %{goal_id: goal_id} when goal_id != run.goal_id ->
+        {:error, :reservation_owner_mismatch}
+
+      row ->
+        cond do
+          repo.get(ReservationSettlementRecord, row.id) != nil ->
+            {:error, :reservation_settled}
+
+          row.status != "held" ->
+            {:error, :reservation_requires_reconciliation}
+
+          true ->
+            event = repo.get!(TrajectoryEvent, row.admission_event_id)
+
+            if event.payload["candidate"]["adapter_id"] == run.provider_id,
+              do: :ok,
+              else: {:error, :reservation_provider_mismatch}
+        end
+    end
+  end
+
+  @doc false
+  # Reserved runs must use coordinator-owned continuation admission. Direct adapter
+  # resume cannot race terminal settlement or revive consumption after release.
+  def authorize_direct_resume(repo, run) do
+    if repo.get_by(ReservationRecord, run_id: run.id),
+      do: {:error, :reserved_run_requires_coordinator},
+      else: :ok
   end
 
   @doc "Records uncertainty without releasing a slot or allowance. Idempotent for the same reason."
@@ -53,6 +110,8 @@ defmodule Shoestring.Cobbler.Reservations do
          true <- is_binary(reason) and String.trim(reason) != "" and byte_size(reason) <= 256 do
       repo.transaction(
         fn ->
+          if repo.get(ReservationSettlementRecord, id), do: repo.rollback(:reservation_settled)
+
           case repo.get(ReservationRecord, id) do
             nil ->
               repo.rollback(:reservation_not_found)
@@ -107,11 +166,16 @@ defmodule Shoestring.Cobbler.Reservations do
   defp identity(_), do: {:error, :invalid_reservation_identity}
 
   defp replay(repo, row, identity, policy) do
-    if Map.take(row, @identity) == identity and
-         row.concurrency_policy == ReservationPolicy.to_map(policy) do
-      row
-    else
-      repo.rollback(:reservation_identity_mismatch)
+    cond do
+      Map.take(row, @identity) != identity or
+          row.concurrency_policy != ReservationPolicy.to_map(policy) ->
+        repo.rollback(:reservation_identity_mismatch)
+
+      repo.get(ReservationSettlementRecord, row.id) != nil ->
+        repo.rollback(:reservation_settled)
+
+      true ->
+        row
     end
   end
 
@@ -132,6 +196,7 @@ defmodule Shoestring.Cobbler.Reservations do
            DateTime.compare(deadline, now) == :gt and
              DateTime.compare(decision.evaluated_at, now) != :gt do
       held = outstanding(repo: repo)
+      if repo.get(RunRecord, identity.run_id), do: repo.rollback(:reservation_run_already_exists)
       enforce_limits(repo, held, identity, decision, policy)
 
       attrs =

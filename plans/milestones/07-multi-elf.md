@@ -22,12 +22,15 @@ reconciliation and independence checks are integrated and proven together.
 REPO-INSPECTION (2026-10-13): package B's initial acquisition boundary is
 implemented; see [the foundation evidence](../evidence/07-multi-elf/reservation-foundation.md).
 It records ownership and enforces configured limits with replay/restart checks.
-Release/reconciliation completion and coordinator wiring remain pending; no
-production parallel dispatch is enabled.
+The [settlement package](../evidence/07-multi-elf/reservation-settlement.md) now
+closes verified terminal ownership and releases no-intent orphans, with durable
+late-intent/resume fences and real Fake lifecycle checks. Existing ambiguous
+intents still retain capacity. Coordinator wiring remains pending; no production
+parallel dispatch is enabled.
 
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
-- Next: terminal/orphan reconciliation and coordinator wiring, then isolated
+- Next: atomic coordinator wiring and remaining ambiguous-intent reconciliation, then isolated
   sibling execution, independence checks, inbox/wakeups and failure recovery.
 - Before fan-out: address canonical/generic goal status synchronization and
   worst-case global verification budget; retain full bounded public Claude output.

@@ -1,5 +1,9 @@
 # Configured reservation foundation — 2026-10-13
 
+REPO-INSPECTION: this is the original acquisition-package record. The subsequent
+[settlement package](reservation-settlement.md) adds explicit reconciliation and
+fences; historical test counts and limitations below describe this first change.
+
 ## Scope and authorization
 
 VERIFIED (conversation): the user accepted iteration 6 and authorized starting

@@ -12,3 +12,6 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
 - [Reservation foundation](reservation-foundation.md): package B's initial
   durable ownership boundary, concurrency checks, restart/replay checks and
   explicit remaining integration work.
+- [Reservation settlement](reservation-settlement.md): evidence-backed terminal
+  closure, no-intent orphan release, late-intent/resume fences and real Fake
+  runtime completion/cancellation checks; parallel dispatch remains pending.

@@ -62,17 +62,13 @@ defmodule Shoestring.Harness.Runs do
     # Serialize authority with new intent creation. A newer approval cannot
     # commit between the binding check and the intent, including the lease path
     # before dispatch delivery. Identical existing intents remain recoverable.
-    extensions = Ecto.Changeset.get_field(changeset, :extensions) || %{}
-
-    if Map.has_key?(extensions, Shoestring.Cobbler.PlanBinding.key()) do
-      case repo.transaction(fn -> insert_authorized_or_recover(repo, changeset) end,
-             mode: :immediate
-           ) do
-        {:ok, result} -> result
-        {:error, reason} -> {:error, reason}
-      end
-    else
-      insert_authorized_or_recover(repo, changeset)
+    # Reservation fences also apply without a plan extension. Always serialize
+    # the authority check and insert with orphan settlement's write transaction.
+    case repo.transaction(fn -> insert_authorized_or_recover(repo, changeset) end,
+           mode: :immediate
+         ) do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
     end
   end
 

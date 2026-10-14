@@ -86,6 +86,7 @@ defmodule Shoestring.Cobbler.HandoffCrashWindowTest do
     defdelegate get(schema, id, opts), to: Repo
     defdelegate get_by(schema, clauses), to: Repo
     defdelegate exists?(queryable), to: Repo
+    defdelegate transaction(fun, opts), to: Repo
 
     def insert(%Ecto.Changeset{data: %RunRecord{}}) do
       raise "simulated crash after admission, before the handoff pointer"
