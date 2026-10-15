@@ -114,7 +114,12 @@ defmodule Shoestring.Cobbler.PlanSiblingWorkspace do
                       "type" => "cobbler.plan.workspace.prepared",
                       "schema_version" => 1,
                       "actor" => "cobbler",
-                      "occurred_at" => Keyword.get(opts, :now, DateTime.utc_now()),
+                      "occurred_at" =>
+                        Keyword.get_lazy(opts, :now, fn ->
+                          Shoestring.Harness.Clock.now(
+                            Keyword.get(opts, :clock, Shoestring.Harness.SystemClock)
+                          )
+                        end),
                       "idempotency_key" => "plan-sibling-workspace:#{worktree.run_id}",
                       "payload" =>
                         Map.merge(binding, %{

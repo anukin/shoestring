@@ -614,7 +614,11 @@ defmodule Shoestring.Cobbler.PlanFanout do
     end
   end
 
-  defp now(opts), do: Keyword.get(opts, :now, DateTime.utc_now())
+  defp now(opts) do
+    Keyword.get_lazy(opts, :now, fn ->
+      Shoestring.Harness.Clock.now(Keyword.get(opts, :clock, Shoestring.Harness.SystemClock))
+    end)
+  end
 
   defp not_cancelled(true), do: {:error, :execution_cancelled}
   defp not_cancelled(false), do: :ok

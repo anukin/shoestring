@@ -2554,8 +2554,14 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
   defp now(opts) do
     case Keyword.get(opts, :now) do
-      %DateTime{} = now -> DateTime.truncate(now, :microsecond)
-      _other -> DateTime.truncate(DateTime.utc_now(), :microsecond)
+      %DateTime{} = now ->
+        DateTime.truncate(now, :microsecond)
+
+      _other ->
+        opts
+        |> Keyword.get(:clock, Shoestring.Harness.SystemClock)
+        |> Shoestring.Harness.Clock.now()
+        |> DateTime.truncate(:microsecond)
     end
   end
 

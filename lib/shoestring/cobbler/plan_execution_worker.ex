@@ -70,9 +70,11 @@ defmodule Shoestring.Cobbler.PlanExecutionWorker do
 
     admission = Keyword.get(runtime, :admission_fun, &ExecutionAdmission.admit/4)
 
+    # The step carries the clock, not a pinned instant: admission evaluates on
+    # the live clock, and each reservation must be taken at or after that
+    # evaluation. A `now` captured before admission refuses every dispatch.
     runtime
     |> Keyword.put_new(:clock, clock)
-    |> Keyword.put_new(:now, Shoestring.Harness.Clock.now(clock))
     |> Keyword.merge(repository_path: request["repository_path"], admission_fun: admission)
   end
 end
