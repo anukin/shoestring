@@ -20,6 +20,59 @@ defmodule Shoestring.Cobbler.PlanWorkspace do
     end
   end
 
+  @doc false
+  # Global verification after human integration: a private store copied from
+  # the source repository at the approved base, reused for the same execution.
+  # Every accepted commit must be an ancestor of that base (a merge preserves
+  # this; a cherry-pick does not). The user's source checkout is only read.
+  def integration_gate_opts(_repo, execution, base, accepted, opts) do
+    gate_opts = Keyword.get(opts, :gate_runner_opts, [])
+
+    if is_function(Keyword.get(gate_opts, :runner), 3) do
+      {:ok, gate_opts}
+    else
+      source = execution[:repository_path] || Keyword.get(opts, :repository_path)
+      id = Shoestring.Cobbler.PlanExecutor.integration_workspace_id(execution.execution_id, base)
+
+      metadata = %{
+        "shoestring.plan:integration" => %{
+          "execution_id" => execution.execution_id,
+          "revision_number" => execution.revision_number,
+          "plan_digest" => execution.plan_digest,
+          "base" => base
+        }
+      }
+
+      with true <- is_binary(source) || {:error, :global_plan_worktree_missing},
+           {:ok, worktree} <- integration_worktree(source, id, base, metadata, opts),
+           :ok <- require_integrated(worktree.path, accepted, base) do
+        {:ok, Keyword.put(gate_opts, :worktree_path, worktree.path)}
+      end
+    end
+  end
+
+  defp integration_worktree(source, id, base, metadata, opts) do
+    storage = Keyword.take(opts, [:worktrees_dir])
+
+    case Worktrees.get(id, storage) do
+      {:ok, worktree} ->
+        if worktree.base_commit == base and worktree.metadata == metadata,
+          do: {:ok, worktree},
+          else: {:error, :integration_worktree_mismatch}
+
+      {:error, _} ->
+        case Worktrees.create(
+               source,
+               id,
+               base,
+               Keyword.merge(storage, private_git: true, metadata: metadata)
+             ) do
+          {:ok, worktree} -> {:ok, worktree}
+          {:error, _} -> {:error, :accepted_commit_not_integrated}
+        end
+    end
+  end
+
   def require_integrated(path, accepted, revision \\ "HEAD") do
     Enum.reduce_while(accepted, :ok, fn evidence, :ok ->
       case Shoestring.Cobbler.GateProcess.run(

@@ -71,6 +71,13 @@ defmodule Shoestring.Cobbler.PlanFanout do
     end
   end
 
+  @doc "Read-only: ready first or replacement attempts, without Git observation or admission."
+  def ready(goal_id, opts \\ []) do
+    with {:ok, context} <- context(goal_id, opts) do
+      {:ok, Enum.map(context.ready, &{&1["id"], Map.fetch!(context.attempts, &1["id"])})}
+    end
+  end
+
   @doc false
   def authorize(goal_id, task_id, opts) do
     repo = Keyword.get(opts, :repo, Repo)

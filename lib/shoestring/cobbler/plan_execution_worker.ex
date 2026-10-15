@@ -1,5 +1,10 @@
 defmodule Shoestring.Cobbler.PlanExecutionWorker do
-  @moduledoc "Drive one authorized sequential plan through ordinary durable dispatch workers."
+  @moduledoc """
+  Drive one authorized plan through ordinary durable dispatch workers.
+
+  Sequential by default; `Shoestring.Cobbler.PlanFanoutDriver` selects the
+  fan-out coordinator only when trusted configuration enables it.
+  """
   use Oban.Worker,
     queue: :plan_execution,
     max_attempts: 5,
@@ -9,12 +14,12 @@ defmodule Shoestring.Cobbler.PlanExecutionWorker do
       states: [:available, :scheduled, :executing, :retryable]
     ]
 
-  alias Shoestring.Cobbler.{ExecutionAdmission, ExecutionControl, PlanExecutor}
+  alias Shoestring.Cobbler.{ExecutionAdmission, ExecutionControl, PlanExecutor, PlanFanoutDriver}
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"goal_id" => goal_id, "execution_id" => execution_id}}) do
     with {:ok, request} <- ExecutionControl.request(goal_id, execution_id),
-         {:ok, result} <- PlanExecutor.resume(goal_id, options(request)) do
+         {:ok, result} <- drive(goal_id, options(request)) do
       case result.disposition do
         :completed -> :ok
         :blocked -> {:cancel, :plan_needs_user}
@@ -45,6 +50,13 @@ defmodule Shoestring.Cobbler.PlanExecutionWorker do
   end
 
   def perform(_), do: {:cancel, :invalid_execution_job}
+
+  @doc false
+  def drive(goal_id, opts) do
+    if PlanFanoutDriver.enabled?(),
+      do: PlanFanoutDriver.step(goal_id, opts),
+      else: PlanExecutor.resume(goal_id, opts)
+  end
 
   defp options(request) do
     runtime = Application.get_env(:shoestring, :plan_execution_opts, [])

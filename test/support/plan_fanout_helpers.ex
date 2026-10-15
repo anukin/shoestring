@@ -77,8 +77,10 @@ defmodule Shoestring.Test.PlanFanoutHelpers do
     assert {:ok, %{execution: execution}} =
              PlanExecutor.request_execution(
                goal.id,
-               Map.put(revision, :admission_event_id, admission.id),
-               opts
+               revision
+               |> Map.merge(%{admission_event_id: admission.id, repository_path: source})
+               |> Map.merge(Keyword.get(overrides, :request_attrs, %{})),
+               Keyword.merge(opts, Keyword.get(overrides, :request_opts, []))
              )
 
     %{

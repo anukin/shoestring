@@ -11,6 +11,9 @@ defmodule Shoestring.Cobbler.ExecutionControl do
   def cancel(goal_id, attrs, opts \\ []),
     do: Shoestring.Cobbler.PlanCancellation.request(goal_id, attrs, opts)
 
+  def integrate(goal_id, attrs),
+    do: Shoestring.Cobbler.PlanIntegration.record(goal_id, attrs)
+
   def resolve_scope(goal_id, attrs),
     do: Shoestring.Cobbler.PlanScopeResolution.resolve(goal_id, attrs)
 

@@ -41,6 +41,11 @@ config :shoestring, :capacity_monitors,
   claude: [enabled: true, auto_ingest_initial: true],
   codex: [enabled: true]
 
+# Fan-out is an explicit operator decision. When enabled, concurrency follows
+# `:plan_reservation_policy`, whose global, provider-account and goal limits
+# and configured units all default to one.
+config :shoestring, :plan_fanout, enabled: false
+
 config :shoestring, Oban,
   engine: Oban.Engines.Lite,
   repo: Shoestring.Repo,

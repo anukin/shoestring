@@ -11,6 +11,7 @@ defmodule Mix.Tasks.Shoestring.Execution do
       mix shoestring.execution continue GOAL --execution-id ID
       mix shoestring.execution confirm-capacity GOAL --execution-id ID --task-id TASK --attempt N --scope SCOPE --command-id ID --by human:NAME
       mix shoestring.execution cancel GOAL --execution-id ID [--run-id RUN] --reason TEXT --command-id ID --by human:NAME
+      mix shoestring.execution integrate GOAL --execution-id ID --commit SHA --reason TEXT --command-id ID --by human:NAME
       mix shoestring.execution resolve-scope GOAL --execution-id ID --task-id TASK --attempt N --decision accept|reject --reason TEXT --command-id ID --by human:NAME
       mix shoestring.execution handoff GOAL --execution-id ID --run-id ID --checkpoint-id ID --decision-ref ID --role ROLE --scope SCOPE --command-id ID --reason TEXT --by human:NAME [--confirm-capacity]
 
@@ -27,6 +28,9 @@ defmodule Mix.Tasks.Shoestring.Execution do
   Resolve-scope decides one fan-out scope blocker: accept keeps the tested
   commit and acknowledges exactly its recorded blockers; reject resolves the
   attempt as failed within the plan's attempt limits. Neither merges branches.
+  Integrate records a commit you made by merging accepted branches yourself;
+  it must contain the approved base and every accepted commit. Shoestring only
+  reads your repository and never merges. Remaining dependents continue from it.
   Cancel queues explicit service-owned cancellation: with --run-id it stops one
   unresolved child; without it, every unresolved child of the execution, and no
   further work is dispatched or continued for that execution.
@@ -50,6 +54,7 @@ defmodule Mix.Tasks.Shoestring.Execution do
     command_id: :string,
     reason: :string,
     decision: :string,
+    commit: :string,
     confirm_capacity: :boolean
   ]
 
@@ -74,6 +79,18 @@ defmodule Mix.Tasks.Shoestring.Execution do
 
             "check-scopes" ->
               Shoestring.Cobbler.PlanScopeCheck.record(goal_id)
+
+            "integrate" ->
+              case ExecutionControl.integrate(goal_id, %{
+                     execution_id: opts[:execution_id],
+                     commit: opts[:commit],
+                     reason: opts[:reason],
+                     command_id: opts[:command_id],
+                     requested_by: opts[:by]
+                   }) do
+                {:ok, event} -> {:ok, %{event_id: event.id, integration: event.payload}}
+                error -> error
+              end
 
             "resolve-scope" ->
               case ExecutionControl.resolve_scope(goal_id, %{
@@ -206,6 +223,9 @@ defmodule Mix.Tasks.Shoestring.Execution do
 
         "resolve-scope" ->
           [:execution_id, :task_id, :attempt, :decision, :reason, :command_id, :by]
+
+        "integrate" ->
+          [:execution_id, :commit, :reason, :command_id, :by]
 
         "cancel" ->
           if Keyword.has_key?(opts, :run_id),

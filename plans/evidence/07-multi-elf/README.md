@@ -55,3 +55,6 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
 - [Partial failure and recovery](partial-failure-recovery.md): per-child stop
   classes, bounded checkpoint-carrying replacement through normal admission,
   and explicit child/goal cancellation that stops live process groups.
+- [Production activation](production-activation.md): default-off configured
+  fan-out driver with deterministic sequential fallback, fan-out completion,
+  and read-only verified human integration that unlocks dependents.

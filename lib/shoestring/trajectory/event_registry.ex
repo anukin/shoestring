@@ -718,6 +718,23 @@ defmodule Shoestring.Trajectory.EventRegistry do
         types: %{revision_number: :integer, attempt: :integer}
       }
     },
+    "cobbler.plan.integration.recorded" => %{
+      1 => %{
+        required: [
+          :integration_id,
+          :execution_id,
+          :revision_number,
+          :plan_digest,
+          :commit,
+          :accepted_commits,
+          :recorded_by,
+          :reason
+        ],
+        optional: [],
+        uuid_fields: [:integration_id, :execution_id],
+        types: %{revision_number: :integer, accepted_commits: {:array, :string}}
+      }
+    },
     "cobbler.plan.cancellation.requested" => %{
       1 => %{
         required: [
@@ -1422,6 +1439,27 @@ defmodule Shoestring.Trajectory.EventRegistry do
           :source_event_id,
           "must bind an allowed child observation and plan revision"
         )
+    end
+  end
+
+  # A human-made integration commit containing every accepted result.
+  defp validate_plan_execution("cobbler.plan.integration.recorded", 1, payload, _opts) do
+    full = &(is_binary(&1) and Regex.match?(~r/\A[0-9a-f]{40,64}\z/, &1))
+    commits = payload["accepted_commits"]
+
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         true <- human_identity?(payload["recorded_by"]) || {:field, :recorded_by},
+         {:ok, _} <- Contract.text(payload["reason"], :reason, max: 2000),
+         true <- full.(payload["commit"]) || {:field, :commit},
+         true <-
+           (commits != [] and length(commits) <= 64 and Enum.all?(commits, full) and
+              commits == Enum.sort(Enum.uniq(commits))) || {:field, :accepted_commits} do
+      :ok
+    else
+      {:field, :recorded_by} -> Contract.invalid(:recorded_by, "must be a human: identity")
+      {:field, field} -> Contract.invalid(field, "must name full commits")
+      error -> error
     end
   end
 

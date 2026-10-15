@@ -79,6 +79,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     "cobbler.plan.task.accepted",
     "cobbler.plan.task.scope_blocked",
     "cobbler.plan.task.scope_resolved",
+    "cobbler.plan.integration.recorded",
     "cobbler.plan.task.gate_failed",
     "cobbler.plan.task.superseded",
     "cobbler.plan.execution.gate_failed",
@@ -88,6 +89,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   @doc false
   def task_run_id(goal_id, task_id, attempt),
     do: deterministic_uuid("plan-run:#{goal_id}:#{task_id}:#{attempt}")
+
+  @doc false
+  def integration_workspace_id(execution_id, base),
+    do: deterministic_uuid("plan-integration:#{execution_id}:#{base}")
 
   @doc false
   def task_reservation_id(goal_id, task_id, attempt),
@@ -570,6 +575,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              accepted_evidence: projection.accepted,
              scope_blockers: scope_blockers(projection, execution),
              acknowledged_scope_blockers: acknowledged_scope_blockers(projection, execution),
+             integration:
+               case covering_integration(projection, execution) do
+                 nil -> nil
+                 integration -> %{commit: integration["commit"], covers?: true}
+               end,
              child_inbox:
                Shoestring.Cobbler.PlanChildInbox.summary(repo, goal_id, execution.execution_id),
              cancelled?:
@@ -671,6 +681,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         scope_blocked: [],
         superseded: [],
         gate_failed: [],
+        integrations: [],
         completed: nil,
         global_failed: nil
       },
@@ -706,6 +717,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
         %TrajectoryEvent{type: "cobbler.plan.task.scope_resolved", payload: payload}, acc ->
           apply_scope_resolution(acc, payload)
+
+        %TrajectoryEvent{type: "cobbler.plan.integration.recorded", payload: payload}, acc ->
+          %{acc | integrations: acc.integrations ++ [payload]}
 
         %TrajectoryEvent{type: "cobbler.plan.task.gate_failed", payload: payload}, acc ->
           %{acc | gate_failed: acc.gate_failed ++ [normalize_resolution(payload)]}
@@ -978,6 +992,33 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     |> Enum.reject(&dispatch_resolved?(projection, &1))
   end
 
+  # The latest human integration that contains every accepted fan-out result,
+  # while no fan-out child remains unresolved. Sequential work after it builds
+  # on the integration commit, so its own results need not be listed.
+  defp covering_integration(projection, execution) do
+    fanout_commits =
+      projection.accepted
+      |> Enum.filter(fn accepted ->
+        Enum.any?(
+          dispatches_for(projection, execution),
+          &(&1.plan_task_id == accepted.plan_task_id and &1.attempt == accepted.attempt and
+              &1.dispatch_mode == "fanout_v1")
+        )
+      end)
+      |> Enum.map(& &1.commit)
+
+    unresolved_fanout? =
+      Enum.any?(active_dispatches(projection, execution), &(&1.dispatch_mode == "fanout_v1"))
+
+    projection.integrations
+    |> Enum.filter(&(&1["execution_id"] == execution.execution_id))
+    |> Enum.reverse()
+    |> Enum.find(fn integration ->
+      not unresolved_fanout? and
+        Enum.all?(fanout_commits, &(&1 in integration["accepted_commits"]))
+    end)
+  end
+
   defp fanout?(projection, execution),
     do: Enum.any?(dispatches_for(projection, execution), &(&1.dispatch_mode == "fanout_v1"))
 
@@ -997,7 +1038,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     ordered = PlanContract.required_task_ids(contract)
     accepted = accepted_task_ids(projection, execution)
 
-    if fanout?(projection, execution) do
+    if fanout?(projection, execution) and is_nil(covering_integration(projection, execution)) do
       {:ok, %{disposition: :blocked, reason: :fanout_coordinator_required, execution: execution}}
     else
       case active_dispatch(projection, execution) do
@@ -1405,14 +1446,40 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     else
       run_id = task_run_id(goal_id, task_id, attempt)
       accepted = projection.accepted
+      execution = projection.execution
+      integration = execution && covering_integration(projection, execution)
 
-      base =
-        case List.last(accepted) do
-          nil -> get_in(contract.content, ["goal", "repository", "base_revision"])
-          last -> last.commit
+      {base, repository} =
+        case {List.last(accepted), integration} do
+          {nil, _} ->
+            {get_in(contract.content, ["goal", "repository", "base_revision"]), :accepted}
+
+          # The first successor after human integration starts from that commit
+          # in the source repository; later successors chain as usual.
+          {last, %{"commit" => commit} = recorded} ->
+            if last.commit in recorded["accepted_commits"],
+              do: {commit, :source},
+              else: {last.commit, :accepted}
+
+          {last, nil} ->
+            {last.commit, :accepted}
         end
 
-      with {:ok, workspace_opts} <- accepted_repository(List.last(accepted), projection, opts),
+      workspace_result =
+        case repository do
+          :source ->
+            {:ok,
+             Keyword.put(
+               opts,
+               :repository_path,
+               execution[:repository_path] || opts[:repository_path]
+             )}
+
+          :accepted ->
+            accepted_repository(List.last(accepted), projection, opts)
+        end
+
+      with {:ok, workspace_opts} <- workspace_result,
            {:ok, worktree} <- execution_worktree(run_id, base, workspace_opts),
            true <-
              String.starts_with?(worktree.base_commit, base) ||
@@ -1976,7 +2043,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     accepted = projection.accepted
 
     with {:ok, gate_opts} <-
-           Shoestring.Cobbler.PlanWorkspace.global_gate_opts(repo, accepted, opts),
+           global_gate_opts(repo, projection, execution, contract, accepted, opts),
          {:ok, usage} <- PlanBudget.usage(repo, goal_id, now(opts)),
          {:ok, global_evidences} <-
            run_global_gates(
@@ -2030,6 +2097,85 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # The last accepted worktree verifies a sequential chain. Fan-out siblings,
+  # or work integrated by a human and approved as a new base, verify in a
+  # private store at the approved base instead.
+  defp global_gate_opts(repo, projection, execution, contract, accepted, opts) do
+    case Shoestring.Cobbler.PlanWorkspace.global_gate_opts(repo, accepted, opts) do
+      {:error, reason}
+      when reason in [:accepted_commit_not_integrated, :global_plan_worktree_missing] ->
+        base =
+          case covering_integration(projection, execution) do
+            %{"commit" => commit} -> commit
+            nil -> get_in(contract.content, ["goal", "repository", "base_revision"])
+          end
+
+        Shoestring.Cobbler.PlanWorkspace.integration_gate_opts(
+          repo,
+          execution,
+          base,
+          accepted,
+          opts
+        )
+
+      result ->
+        result
+    end
+  end
+
+  @doc """
+  Completes a fan-out execution once every required task is accepted and no
+  child remains unresolved. Global gates run at an integrated revision only;
+  without human integration this reports `:integration_required` and merges
+  nothing.
+  """
+  def complete_fanout(goal_id, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with {:ok, goal_id} <- cast_goal_id(goal_id),
+         {:ok, projection} <- project(repo, goal_id),
+         {:ok, execution} <- require_execution(projection),
+         :ok <-
+           not_cancelled(
+             Shoestring.Cobbler.PlanCancellation.goal_cancelled?(
+               repo,
+               goal_id,
+               execution.execution_id
+             )
+           ),
+         {:ok, authority} <- live_authority(repo, goal_id),
+         :ok <- bind_authority(authority, execution.revision_number, execution.plan_digest),
+         {:ok, contract} <- PlanContract.new(authority.revision.content) do
+      accepted = accepted_task_ids(projection, execution)
+      required = PlanContract.required_task_ids(contract)
+
+      cond do
+        completed_event(projection) ->
+          {:ok, %{disposition: :completed, execution: execution}}
+
+        projection.global_failed ->
+          {:error, {:global_gate_failed, projection.global_failed}}
+
+        not fanout?(projection, execution) ->
+          {:error, :fanout_execution_required}
+
+        active_dispatches(projection, execution) != [] or
+          scope_blockers(projection, execution) != [] or
+            not Enum.all?(required, &MapSet.member?(accepted, &1)) ->
+          {:ok, %{disposition: :blocked, reason: :fanout_work_outstanding, execution: execution}}
+
+        true ->
+          case complete_execution(repo, goal_id, projection, execution, authority, contract, opts) do
+            {:error, :accepted_commit_not_integrated} ->
+              {:ok, %{disposition: :blocked, reason: :integration_required, execution: execution}}
+
+            result ->
+              result
+          end
+      end
     end
   end
 

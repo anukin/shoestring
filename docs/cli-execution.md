@@ -87,6 +87,31 @@ attempt's checkpoint. Quota sleep, interruption and cancellation are never
 replaced automatically. See the
 [recovery evidence](../plans/evidence/07-multi-elf/partial-failure-recovery.md).
 
+REPO-INSPECTION: fan-out is off unless the service configuration enables it:
+
+```elixir
+config :shoestring, :plan_fanout, enabled: true
+config :shoestring, :plan_reservation_policy,
+  %{global_limit: 2, provider_account_limit: 2, goal_limit: 2, account_units: 2}
+```
+
+The worker then fans out only when at least two independent first tasks are
+ready and their scopes are verified disjoint; otherwise it runs sequentially.
+Shoestring never merges. When siblings change files, merge their retained
+branches in your own repository and record the result:
+
+```sh
+mix shoestring.execution integrate "$GOAL" --execution-id "$EXECUTION_ID" \
+  --commit "$MERGED_SHA" --reason "Merged north and south" \
+  --command-id "$COMMAND_ID" --by human:operator
+mix shoestring.execution continue "$GOAL" --execution-id "$EXECUTION_ID"
+```
+
+The commit must contain the approved base and every accepted commit (a merge,
+not a cherry-pick). Dependents then continue sequentially from it, and global
+gates run in a private copy. See the
+[activation evidence](../plans/evidence/07-multi-elf/production-activation.md).
+
 REPO-INSPECTION: a planned goal's generic row now follows canonical completion:
 `cobbler.plan.execution.completed` marks it `completed` in the same transaction,
 and a later execution request reopens it as `active`. Archived goals are never

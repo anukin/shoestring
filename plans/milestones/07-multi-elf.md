@@ -91,6 +91,11 @@ classifies every child's stop, replaces bounded task/adapter failures with
 their own checkpoint through normal admission, and cancels one child or the
 whole goal by stopping owned process groups.
 
+REPO-INSPECTION: [production activation](../evidence/07-multi-elf/production-activation.md)
+routes the execution worker through a default-off fan-out driver with a
+deterministic sequential fallback, completes fan-out executions, and unlocks
+dependents only after a read-only verified human integration.
+
 - First: configured global/provider-account/goal limits, shared weighted units,
   immutable admission provenance and replay-safe durable reservation identity.
 - Next: explicit conflict resolution and production coordinator activation,
