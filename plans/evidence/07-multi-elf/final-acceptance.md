@@ -20,6 +20,7 @@ packet does not treat that as acceptance of the iteration.
 | E inbox/wakeups | [child inbox](child-inbox-wakeups.md) |
 | F partial failure | [recovery and cancellation](partial-failure-recovery.md), [goal cancellation status](goal-cancellation-status.md) |
 | Pre-fan-out prerequisites | [goal rows, verification budget, Claude output](pre-fanout-prerequisites.md) |
+| Live verification (after the packet) | [live Claude fan-out registration, rehearsal and worker clock fix](live-claude-fanout.md) |
 
 ## Acceptance gate
 
@@ -103,7 +104,15 @@ afterwards.
 
 - UNVERIFIED: no live Codex/Claude fan-out, provider concurrency, account
   discovery or real capacity delta. Reservation units are conservative
-  configured allowances, not forecasts.
+  configured allowances, not forecasts. After the packet, a Fake rehearsal
+  of the registered live run through the production worker found that every
+  reservation-owned dispatch was refused (`reservation_admission_mismatch`,
+  worker `now` pinned before admission); fixed in `ebf8b26`
+  ([live Claude fan-out](live-claude-fanout.md)). The live run itself is
+  pending.
+- Concurrent dispatch deliveries can hit SQLite `Database busy` (2 s timeout)
+  while recording an effect outcome. The run proceeds; the dispatch row
+  records a misleading `effect_unknown`. The lock holder was not identified.
 - Production fan-out ships default-off. Enabling it is an operator
   configuration decision.
 - Automatic merging remains out of scope. Committed siblings need a human merge
