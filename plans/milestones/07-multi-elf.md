@@ -318,7 +318,9 @@ queue policy and record its version.
   admissions, leaks or unrelated waits; 10/12 tasks accepted with zero
   regressions. Capacity delta is unavailable with Fake.
 - **Verification commands:** `mix precommit` → 4 doctests, 2161 tests,
-  0 failures, 1 skipped, 6 excluded; JavaScript 52/52 and 8/8.
+  0 failures, 1 skipped, 6 excluded; JavaScript 52/52 and 8/8. After the goal
+  cancellation status fix: 4 doctests, 2165 tests, 0 failures, 1 skipped,
+  6 excluded.
 - **Demo result:** VERIFIED on an isolated node with live Fake Elves through the
   production driver ([transcript](../evidence/07-multi-elf/demo/transcript.json)).
 - **Deviations and remaining risks:** integration happens through a

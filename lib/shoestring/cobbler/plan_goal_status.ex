@@ -3,7 +3,11 @@ defmodule Shoestring.Cobbler.PlanGoalStatus do
   Keeps the generic goal row in step with canonical planned-goal completion.
 
   `cobbler.plan.execution.completed` is the only fact that completes a planned
-  goal; a later `cobbler.plan.execution.requested` reopens it. The row is a
+  goal, and a goal-scope `cobbler.plan.cancellation.requested` is the only fact
+  that cancels it; a later `cobbler.plan.execution.requested` reopens it. The
+  row moves at the request, when the execution is fenced, not when the last
+  child has stopped; status reports that progress separately. A child-scope
+  cancellation never changes the row. The row is a
   derived cache of those facts: it is written in the same transaction as the
   source event, repaired from canonical history at startup, and never moves an
   `archived` or protected goal. A completion naming any execution other than
@@ -17,7 +21,8 @@ defmodule Shoestring.Cobbler.PlanGoalStatus do
 
   @requested "cobbler.plan.execution.requested"
   @completed "cobbler.plan.execution.completed"
-  @types [@requested, @completed]
+  @cancelled "cobbler.plan.cancellation.requested"
+  @types [@requested, @completed, @cancelled]
   @page 128
 
   @spec event_types() :: [String.t()]
@@ -28,6 +33,7 @@ defmodule Shoestring.Cobbler.PlanGoalStatus do
   def status_after(status, _event) when status in ["archived", "protected"], do: status
   def status_after(_status, %{type: @requested}), do: "active"
   def status_after(_status, %{type: @completed}), do: "completed"
+  def status_after(_status, %{type: @cancelled, payload: %{"scope" => "goal"}}), do: "cancelled"
   def status_after(status, _event), do: status
 
   @doc "Called by the trajectory writer inside its append transaction."

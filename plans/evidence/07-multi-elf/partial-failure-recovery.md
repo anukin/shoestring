@@ -129,5 +129,6 @@ JavaScript passed **52/52** and **8/8**.
 
 UNVERIFIED: no live provider cancellation; Claude/Codex group termination uses
 the same Elf path, verified here only with Fake. A goal cancellation does not
-change the generic goal row: it stays `active`. Replacement attempts still need
+change the generic goal row: it stays `active` (closed later by
+[goal cancellation status](goal-cancellation-status.md)). Replacement attempts still need
 production activation, which is the next package.

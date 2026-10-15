@@ -45,7 +45,7 @@ defmodule Shoestring.Trajectory.Goal do
       |> cast(attrs, [:title, :description, :status])
       |> validate_required([:title])
       |> validate_length(:title, min: 1, max: 500)
-      |> validate_inclusion(:status, ["active", "completed", "archived"])
+      |> validate_inclusion(:status, ["active", "completed", "cancelled", "archived"])
       |> validate_not_observatory_identity()
     end
   end

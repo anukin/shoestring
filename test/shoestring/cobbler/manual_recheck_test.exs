@@ -60,21 +60,23 @@ defmodule Shoestring.Cobbler.ManualRecheckTest do
     assert wakeup_count(goal.id) == 0
   end
 
-  test "a terminal goal is rejected", %{goal: goal} do
-    append_admission_event!(goal.id)
+  for status <- ["completed", "cancelled"] do
+    test "a #{status} goal is rejected as terminal", %{goal: goal} do
+      append_admission_event!(goal.id)
 
-    goal
-    |> Ecto.Changeset.change(%{status: "completed"})
-    |> Repo.update!()
+      goal
+      |> Ecto.Changeset.change(%{status: unquote(status)})
+      |> Repo.update!()
 
-    assert {:error, {:wakeup_rejected, :goal_terminal}} =
-             Wakeups.request_recheck(goal.id,
-               operator_identity: "operator:alice",
-               now: @t0,
-               clock: ManualClock
-             )
+      assert {:error, {:wakeup_rejected, :goal_terminal}} =
+               Wakeups.request_recheck(goal.id,
+                 operator_identity: "operator:alice",
+                 now: @t0,
+                 clock: ManualClock
+               )
 
-    assert wakeup_count(goal.id) == 0
+      assert wakeup_count(goal.id) == 0
+    end
   end
 
   test "an unknown derivation fails closed", %{goal: goal} do

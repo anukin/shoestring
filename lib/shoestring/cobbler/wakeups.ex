@@ -107,7 +107,7 @@ defmodule Shoestring.Cobbler.Wakeups do
   @actor "cobbler"
   @schema_version 1
   @live_job_states ["available", "scheduled", "executing", "retryable", "suspended"]
-  @terminal_goal_statuses ["completed", "archived"]
+  @terminal_goal_statuses ["completed", "cancelled", "archived"]
   @renewable_lease_statuses ["active", "renewal_due"]
 
   @type schedule_result :: %{

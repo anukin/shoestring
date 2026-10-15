@@ -18,7 +18,7 @@ packet does not treat that as acceptance of the iteration.
 | C worktrees | [sibling workspaces](sibling-workspaces.md) |
 | D independence/overlap | [scope policy](scope-policy.md), [final scope](final-scope-acceptance.md), [scope resolution](scope-resolution.md) |
 | E inbox/wakeups | [child inbox](child-inbox-wakeups.md) |
-| F partial failure | [recovery and cancellation](partial-failure-recovery.md) |
+| F partial failure | [recovery and cancellation](partial-failure-recovery.md), [goal cancellation status](goal-cancellation-status.md) |
 | Pre-fan-out prerequisites | [goal rows, verification budget, Claude output](pre-fanout-prerequisites.md) |
 
 ## Acceptance gate
@@ -114,7 +114,8 @@ afterwards.
 - Scope evidence is file-level and does not prove semantic independence.
 - Large-history throughput, populated on-disk upgrades and live
   provider-session continuation of fan-out children were not verified.
-- A goal cancellation leaves the generic goal row `active`.
+- Closed after the packet: a goal cancellation now moves the generic goal row
+  to `cancelled` ([goal cancellation status](goal-cancellation-status.md)).
 
 ## Requested decision
 

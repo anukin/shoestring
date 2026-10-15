@@ -27,6 +27,17 @@ defmodule Shoestring.Cobbler.PlanGoalStatusTest do
             "plan_digest" => @digest,
             "commit" => String.duplicate("b", 40)
           }
+
+        "cobbler.plan.cancellation.requested" ->
+          %{
+            "cancellation_id" => Ecto.UUID.generate(),
+            "execution_id" => execution_id,
+            "revision_number" => 1,
+            "plan_digest" => @digest,
+            "scope" => "goal",
+            "requested_by" => "human:operator",
+            "reason" => "Stop the goal."
+          }
       end
 
     Trajectory.append(goal.id, %{
@@ -74,12 +85,53 @@ defmodule Shoestring.Cobbler.PlanGoalStatusTest do
            )
   end
 
+  test "a goal-scope cancellation cancels the row; a later execution request reopens it" do
+    goal = CobblerHelpers.create_goal!()
+    [first, second] = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+    assert {:ok, _} = append(goal, "cobbler.plan.execution.requested", first)
+    assert {:ok, _} = append(goal, "cobbler.plan.cancellation.requested", first)
+    assert status(goal) == "cancelled"
+    assert {:ok, :unchanged} = PlanGoalStatus.sync(goal.id)
+
+    assert {:ok, _} = append(goal, "cobbler.plan.execution.requested", second)
+    assert status(goal) == "active"
+  end
+
+  test "a child-scope cancellation leaves the row active" do
+    goal = CobblerHelpers.create_goal!()
+    execution_id = Ecto.UUID.generate()
+    assert {:ok, _} = append(goal, "cobbler.plan.execution.requested", execution_id)
+
+    assert {:ok, _} =
+             Trajectory.append(goal.id, %{
+               "type" => "cobbler.plan.cancellation.requested",
+               "schema_version" => 1,
+               "actor" => "human",
+               "occurred_at" => @now,
+               "idempotency_key" => "child-cancel",
+               "payload" => %{
+                 "cancellation_id" => Ecto.UUID.generate(),
+                 "execution_id" => execution_id,
+                 "revision_number" => 1,
+                 "plan_digest" => @digest,
+                 "scope" => "child",
+                 "run_id" => Ecto.UUID.generate(),
+                 "requested_by" => "human:operator",
+                 "reason" => "Stop one child."
+               }
+             })
+
+    assert status(goal) == "active"
+    assert {:ok, :unchanged} = PlanGoalStatus.sync(goal.id)
+  end
+
   test "archived goals are never moved by plan facts" do
     goal = CobblerHelpers.create_goal!()
     Repo.update!(Ecto.Changeset.change(goal, status: "archived"))
     execution_id = Ecto.UUID.generate()
     assert {:ok, _} = append(goal, "cobbler.plan.execution.requested", execution_id)
     assert {:ok, _} = append(goal, "cobbler.plan.execution.completed", execution_id)
+    assert {:ok, _} = append(goal, "cobbler.plan.cancellation.requested", execution_id)
     assert status(goal) == "archived"
     assert {:ok, :unchanged} = PlanGoalStatus.sync(goal.id)
   end
@@ -88,22 +140,26 @@ defmodule Shoestring.Cobbler.PlanGoalStatusTest do
     unplanned = CobblerHelpers.create_goal!()
     completed = CobblerHelpers.create_goal!()
     reopened = CobblerHelpers.create_goal!()
-    [a, b, c] = [Ecto.UUID.generate(), Ecto.UUID.generate(), Ecto.UUID.generate()]
+    cancelled = CobblerHelpers.create_goal!()
+    [a, b, c, d] = for _ <- 1..4, do: Ecto.UUID.generate()
     assert {:ok, _} = append(completed, "cobbler.plan.execution.requested", a)
     assert {:ok, _} = append(completed, "cobbler.plan.execution.completed", a)
     assert {:ok, _} = append(reopened, "cobbler.plan.execution.requested", b)
     assert {:ok, _} = append(reopened, "cobbler.plan.execution.completed", b)
     assert {:ok, _} = append(reopened, "cobbler.plan.execution.requested", c)
+    assert {:ok, _} = append(cancelled, "cobbler.plan.execution.requested", d)
+    assert {:ok, _} = append(cancelled, "cobbler.plan.cancellation.requested", d)
 
     # Simulate rows written before synchronization existed.
     Repo.update_all(from(g in Goal, where: g.id == ^completed.id), set: [status: "active"])
     Repo.update_all(from(g in Goal, where: g.id == ^reopened.id), set: [status: "completed"])
+    Repo.update_all(from(g in Goal, where: g.id == ^cancelled.id), set: [status: "active"])
 
-    assert {:ok, %{checked_count: 2, repaired_count: 2, failure_count: 0, failures: []}} =
+    assert {:ok, %{checked_count: 3, repaired_count: 3, failure_count: 0, failures: []}} =
              PlanGoalStatus.reconcile()
 
-    assert {status(unplanned), status(completed), status(reopened)} ==
-             {"active", "completed", "active"}
+    assert {status(unplanned), status(completed), status(reopened), status(cancelled)} ==
+             {"active", "completed", "active", "cancelled"}
 
     assert {:ok, %{repaired_count: 0}} = PlanGoalStatus.reconcile()
     assert {:ok, :unplanned} = PlanGoalStatus.sync(unplanned.id)
@@ -133,5 +189,31 @@ defmodule Shoestring.Cobbler.PlanGoalStatusTest do
       Repo.all(from e in TrajectoryEvent, where: e.goal_id == ^goal.id, order_by: e.sequence)
 
     assert {:ok, %{goal: %Goal{status: "completed"}}} = Projector.replay_events(goal, events)
+  end
+
+  test "the projector rebuild derives a goal cancellation like the writer" do
+    goal = CobblerHelpers.create_goal!()
+
+    {:ok, _} =
+      Trajectory.append(goal.id, %{
+        "type" => "goal.created",
+        "schema_version" => 1,
+        "actor" => "test",
+        "occurred_at" => @now,
+        "payload" => %{"title" => goal.title}
+      })
+
+    execution_id = Ecto.UUID.generate()
+    assert {:ok, _} = append(goal, "cobbler.plan.execution.requested", execution_id)
+    assert {:ok, _} = append(goal, "cobbler.plan.cancellation.requested", execution_id)
+    assert status(goal) == "cancelled"
+
+    assert {:ok, _} = Projector.rebuild(goal.id)
+    assert status(goal) == "cancelled"
+
+    events =
+      Repo.all(from e in TrajectoryEvent, where: e.goal_id == ^goal.id, order_by: e.sequence)
+
+    assert {:ok, %{goal: %Goal{status: "cancelled"}}} = Projector.replay_events(goal, events)
   end
 end

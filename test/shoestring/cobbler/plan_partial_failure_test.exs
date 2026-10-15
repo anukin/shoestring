@@ -18,7 +18,7 @@ defmodule Shoestring.Cobbler.PlanPartialFailureTest do
   alias Shoestring.Harness.{Projector, RunRecord}
   alias Shoestring.Test.{PlanExecutorHelpers, PlanHandoffClock}
   alias Shoestring.Trajectory
-  alias Shoestring.Trajectory.{EventRegistry, TrajectoryEvent}
+  alias Shoestring.Trajectory.{EventRegistry, Goal, TrajectoryEvent}
   alias Shoestring.Worktrees
 
   defp unit(overrides) do
@@ -209,6 +209,7 @@ defmodule Shoestring.Cobbler.PlanPartialFailureTest do
     refute status.cancelled?
     assert %{stop_class: :cancelled} = Enum.find(status.children, &(&1.run_id == north.run_id))
     assert [%{scope: "child", completed?: true}] = status.cancellations
+    assert Repo.get!(Goal, c.goal.id).status == "active"
     assert {:ok, %{dispatched: []}} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
     assert {:ok, %{outcome: :replayed}} = perform!(c, request.cancellation_id)
   end
@@ -217,7 +218,11 @@ defmodule Shoestring.Cobbler.PlanPartialFailureTest do
     c = unit(independent_only: true)
     assert {:ok, %{dispatched: [_north, _south]}} = PlanFanout.dispatch_ready(c.goal.id, c.opts)
     attrs = %{command_id: Ecto.UUID.generate()}
+    assert Repo.get!(Goal, c.goal.id).status == "active"
     assert {:ok, %{scope: "goal"} = request} = cancel(c, attrs)
+    # The generic goal row follows the canonical cancellation; the baseline
+    # left it `active`.
+    assert Repo.get!(Goal, c.goal.id).status == "cancelled"
     assert {:ok, %{cancellation_id: id}} = cancel(c, attrs)
     assert id == request.cancellation_id
     assert {:error, :cancellation_conflict} = cancel(c, Map.put(attrs, :reason, "Different."))

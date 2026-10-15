@@ -7,10 +7,15 @@ defmodule Shoestring.Cobbler.PlanFanoutActivationRegressionTest do
 
   setup do
     keys = [:plan_fanout, :plan_reservation_policy, :plan_execution_opts]
-    previous = Map.new(keys, &{&1, Application.get_env(:shoestring, &1)})
+    previous = Map.new(keys, &{&1, Application.fetch_env(:shoestring, &1)})
 
+    # An unset key must be deleted, not stored as nil: readers default only
+    # absent keys, so a leaked nil breaks later tests in the run.
     on_exit(fn ->
-      Enum.each(previous, fn {k, v} -> Application.put_env(:shoestring, k, v) end)
+      Enum.each(previous, fn
+        {k, {:ok, v}} -> Application.put_env(:shoestring, k, v)
+        {k, :error} -> Application.delete_env(:shoestring, k)
+      end)
     end)
 
     assert {:ok, _} =
