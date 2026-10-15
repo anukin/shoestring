@@ -44,7 +44,8 @@ defmodule Shoestring.Trajectory.Projector do
   @spec rebuild(Ecto.UUID.t(), keyword()) :: {:ok, ProjectorPosition.t()} | {:error, term()}
   def rebuild(goal_id, opts \\ []) do
     with {:ok, normalized_goal_id} <- cast_goal_id(goal_id),
-         {:ok, _reset} <- Repo.transaction(fn -> reset_derived_state(normalized_goal_id) end) do
+         {:ok, _reset} <-
+           Repo.transaction(fn -> reset_derived_state(normalized_goal_id) end, mode: :immediate) do
       project(normalized_goal_id, opts)
     end
   end
@@ -103,7 +104,7 @@ defmodule Shoestring.Trajectory.Projector do
   end
 
   defp apply_next(goal_id) do
-    case Repo.transaction(fn -> apply_next_in_transaction(goal_id) end) do
+    case Repo.transaction(fn -> apply_next_in_transaction(goal_id) end, mode: :immediate) do
       {:ok, {:done, position}} -> {:ok, :done, position}
       {:ok, {:applied, event, position}} -> {:ok, :applied, event, position}
       {:ok, {:failed, failure, _position}} -> {:error, failure}

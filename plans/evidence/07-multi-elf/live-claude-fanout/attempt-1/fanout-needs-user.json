@@ -1,0 +1,18 @@
+{
+  "children": [
+    {
+      "attempt": 1,
+      "plan_task_id": "north",
+      "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4",
+      "stop_class": "task_failure"
+    },
+    {
+      "attempt": 1,
+      "plan_task_id": "south",
+      "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+      "stop_class": "running"
+    }
+  ],
+  "accepted": [],
+  "scope_blockers": []
+}

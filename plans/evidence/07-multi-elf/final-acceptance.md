@@ -108,11 +108,20 @@ afterwards.
   of the registered live run through the production worker found that every
   reservation-owned dispatch was refused (`reservation_admission_mismatch`,
   worker `now` pinned before admission); fixed in `ebf8b26`
-  ([live Claude fan-out](live-claude-fanout.md)). The live run itself is
-  pending.
-- Concurrent dispatch deliveries can hit SQLite `Database busy` (2 s timeout)
-  while recording an effect outcome. The run proceeds; the dispatch row
-  records a misleading `effect_unknown`. The lock holder was not identified.
+  ([live Claude fan-out](live-claude-fanout.md)). Live attempt 1 ran north
+  and south concurrently through Claude Code (2 provider runs) but accepted
+  nothing: the launcher's sandbox denied Git its global config, so neither
+  Elf could commit. The driver now gives the Elf a home-free Git
+  configuration, with a model-free sandboxed preflight. A second attempt needs
+  a new bound from the user.
+- The common `Database busy` on dispatch completion was a deferred
+  read-then-write transaction failing at once on a stale WAL snapshot. It is
+  fixed with `mode: :immediate` and regression-locked; the projectors got the
+  same change without a lock. Waited busy errors (full 2 s timeout, matching
+  the Exqlite 0.40 statement-destructor stall) remain in 3 of 5 rehearsals
+  after the fix. They can crash an Oban ack or producer, leave an `executing`
+  row until Lifeline (5 min), or record a misleading `effect_unknown`. No
+  duplicate run was observed.
 - Production fan-out ships default-off. Enabling it is an operator
   configuration decision.
 - Automatic merging remains out of scope. Committed siblings need a human merge

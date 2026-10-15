@@ -1,0 +1,93 @@
+[
+  {
+    "command": "cat south.py test/test_south.py; git status --short",
+    "task": "south",
+    "ordinal": 2,
+    "boundary": "start"
+  },
+  {
+    "command": "cat north.py test/test_north.py",
+    "task": "north",
+    "ordinal": 2,
+    "boundary": "start"
+  },
+  {
+    "status": "failed",
+    "task": "south",
+    "ordinal": 4,
+    "boundary": "end",
+    "is_error": true
+  },
+  {
+    "status": "completed",
+    "task": "north",
+    "ordinal": 4,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "cat > north.py <<'EOF'\ndef north_total(items):\n    \"\"\"Return the total quantity across items.\"\"\"\n    return sum(item[\"quantity\"] for item in items)\nEOF\npython3 -B -m unittest test/test_north.py && git add north.py && git commit -q -m \"Implement north_total to sum item quantities\" && git log --oneline -1 && git status --short",
+    "task": "north",
+    "ordinal": 5,
+    "boundary": "start"
+  },
+  {
+    "status": "failed",
+    "task": "north",
+    "ordinal": 7,
+    "boundary": "end",
+    "is_error": true
+  },
+  {
+    "command": "cat > south.py <<'EOF'\ndef south_label(name):\n    \"\"\"Return the display label for an item name.\"\"\"\n    trimmed = name.strip()\n    return \"Item: \" + (trimmed.upper() if trimmed else \"(unnamed)\")\nEOF\npython3 -B -m unittest test/test_south.py; export GIT_CONFIG_GLOBAL=/dev/null; git config user.name; git config user.email; git status --short",
+    "task": "south",
+    "ordinal": 7,
+    "boundary": "start"
+  },
+  {
+    "status": "failed",
+    "task": "south",
+    "ordinal": 9,
+    "boundary": "end",
+    "is_error": true
+  },
+  {
+    "command": "export GIT_CONFIG_GLOBAL=/dev/null; git config user.name; git config user.email; git add north.py && git commit -q -m \"Implement north_total to sum item quantities\" && git log --oneline -1 --format='%H %an <%ae> %s' && git status --short",
+    "task": "north",
+    "ordinal": 11,
+    "boundary": "start"
+  },
+  {
+    "status": "failed",
+    "task": "north",
+    "ordinal": 13,
+    "boundary": "end",
+    "is_error": true
+  },
+  {
+    "command": "cat > south.py <<'EOF'\ndef south_label(name):\n    \"\"\"Return the display label for an item name.\"\"\"\n    trimmed = name.strip()\n    return \"Item: \" + (trimmed.upper() if trimmed else \"(unnamed)\")\nEOF\npython3 -B -m unittest test/test_south.py",
+    "task": "south",
+    "ordinal": 11,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "south",
+    "ordinal": 12,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "git add south.py && git commit -q -m \"Implement south_label\" && git log -1 --format='%H %an <%ae>' && git status --short",
+    "task": "south",
+    "ordinal": 13,
+    "boundary": "start"
+  },
+  {
+    "status": "failed",
+    "task": "south",
+    "ordinal": 14,
+    "boundary": "end",
+    "is_error": true
+  }
+]

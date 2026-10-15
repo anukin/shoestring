@@ -320,13 +320,22 @@ queue policy and record its version.
 - **Verification commands:** `mix precommit` → 4 doctests, 2161 tests,
   0 failures, 1 skipped, 6 excluded; JavaScript 52/52 and 8/8. After the goal
   cancellation status fix: 4 doctests, 2165 tests, 0 failures, 1 skipped,
+  6 excluded. After the worker clock fix: 2167 tests, 0 failures. After the
+  first live attempt's fixes: 4 doctests, 2169 tests, 0 failures, 1 skipped,
   6 excluded.
 - **Demo result:** VERIFIED on an isolated node with live Fake Elves through the
   production driver ([transcript](../evidence/07-multi-elf/demo/transcript.json)).
 - **Deviations and remaining risks:** integration happens through a
   human-recorded merge commit, because iteration 6 forbids amending an accepted
   repository contract. Dependents after integration run sequentially. Fan-out
-  ships default-off. No live provider fan-out was run.
+  ships default-off. The first live Claude fan-out
+  ([evidence](../evidence/07-multi-elf/live-claude-fanout.md)) ran north and
+  south concurrently, but neither Elf could commit inside the launcher's
+  sandbox, so no task was accepted. The fixes made after it: the worker
+  reserves after admission, dispatch completion takes the SQLite write lock
+  first, and the driver gives the Elf a home-free Git configuration. A second
+  live attempt needs a new bound from the user. Waited SQLite busy errors
+  (Exqlite statement-destructor stall) remain.
 - **Instructions for iteration 8:** verify fan-out children with
   independent/cross-provider review using the retained private branches and
   final-scope evidence. Keep integration human-recorded. Reuse

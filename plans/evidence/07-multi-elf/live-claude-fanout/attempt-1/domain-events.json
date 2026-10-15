@@ -1,0 +1,495 @@
+[
+  {
+    "type": "cobbler.plan.revision.created",
+    "payload": {
+      "author_kind": "human",
+      "authored_by": "human:user",
+      "ordered_task_ids": [
+        "north",
+        "south",
+        "join"
+      ],
+      "plan_content": "{\"budget\":{\"max_total_attempts\":3,\"max_total_duration_seconds\":1500},\"goal\":{\"acceptance\":{\"evidence\":[\"All three named test files pass at the integrated commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_north.py\",\"test/test_south.py\",\"test/test_join.py\"]}]},\"constraints\":[\"Each task changes only its own module; never edit tests.\",\"Use only the Python standard library; no network or packages.\"],\"non_goals\":[\"Persistence, UI, packaging and changes to other modules.\"],\"repository\":{\"base_revision\":\"98f7c38f83bdcda91c63d9001fa694124fe07d9d\"},\"statement\":\"Implement north_total and south_label independently, then summary from both.\"},\"tasks\":[{\"acceptance_criteria\":[\"Preserve the north_total(items) signature.\",\"Change only north.py.\"],\"checkpoint\":{\"condition\":\"test/test_north.py passes.\",\"evidence\":[\"test/test_north.py passes.\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":1,\"max_duration_seconds\":300},\"expected_artifacts\":[\"Updated north.py.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_north.py\"]}],\"hints\":{\"files\":[\"north.py\",\"test/test_north.py\"],\"symbols\":[\"north_total\"]},\"id\":\"north\",\"inputs\":[\"north.py currently raises NotImplementedError.\",\"test/test_north.py specifies it.\"],\"outcome\":\"north_total(items) returns the sum of each item's quantity, 0 when empty.\",\"risks\":[\"Changing other files would break the declared independent scope.\"],\"title\":\"Total item quantities\"},{\"acceptance_criteria\":[\"Preserve the south_label(name) signature.\",\"Change only south.py.\"],\"checkpoint\":{\"condition\":\"test/test_south.py passes.\",\"evidence\":[\"test/test_south.py passes.\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":1,\"max_duration_seconds\":300},\"expected_artifacts\":[\"Updated south.py.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_south.py\"]}],\"hints\":{\"files\":[\"south.py\",\"test/test_south.py\"],\"symbols\":[\"south_label\"]},\"id\":\"south\",\"inputs\":[\"south.py currently raises NotImplementedError.\",\"test/test_south.py specifies it.\"],\"outcome\":\"south_label(name) returns Item: plus the trimmed upper-case name, or (unnamed).\",\"risks\":[\"Changing other files would break the declared independent scope.\"],\"title\":\"Render item labels\"},{\"acceptance_criteria\":[\"Preserve the summary(name, items) signature.\",\"Use north_total and south_label.\",\"Change only join.py.\"],\"checkpoint\":{\"condition\":\"test/test_join.py passes.\",\"evidence\":[\"test/test_join.py passes.\"]},\"depends_on\":[\"north\",\"south\"],\"execution\":{\"max_attempts\":1,\"max_duration_seconds\":300},\"expected_artifacts\":[\"Updated join.py.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_join.py\"]}],\"hints\":{\"files\":[\"join.py\",\"test/test_join.py\"],\"symbols\":[\"summary\"]},\"id\":\"join\",\"inputs\":[\"join.py currently raises NotImplementedError.\",\"test/test_join.py specifies it.\"],\"outcome\":\"summary(name, items) returns south_label(name) followed by x and north_total(items).\",\"risks\":[\"Changing other files would break the declared independent scope.\"],\"title\":\"Summarize an order\"}],\"version\":1}",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "plan_revision_id": "a33e56e8-17b7-4d24-945a-03b543cefd0d",
+      "plan_version": 1,
+      "proposal_id": "iter7-fanout-live",
+      "revision_number": 1,
+      "task_count": 3
+    },
+    "run_id": null,
+    "sequence": 1,
+    "occurred_at": "2026-10-15T05:13:58.601148Z"
+  },
+  {
+    "type": "cobbler.plan.approved",
+    "payload": {
+      "decided_at": "2026-10-15T05:13:58.609459Z",
+      "decided_by": "human:user",
+      "decision_id": "iter7-fanout-live-approval",
+      "note": "User authorized the iteration 7 live fan-out verification. Registered bound: one attempt per task, three attempts and 1500 seconds per goal, 300 seconds per task, no replacement.",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "plan_revision_id": "a33e56e8-17b7-4d24-945a-03b543cefd0d",
+      "revision_number": 1
+    },
+    "run_id": null,
+    "sequence": 2,
+    "occurred_at": "2026-10-15T05:13:58.609459Z"
+  },
+  {
+    "type": "cobbler.plan.execution.requested",
+    "payload": {
+      "agent_profile": {
+        "adapter_id": "claude_headless_stream_json",
+        "digest": "715e0dac51b454d1b4497dc0022fad6d12b93f982996703fe2e5b6a8b4941a06",
+        "instructions": "Implement only the current approved task in its assigned worktree. Read the task's module and its named test. Change only the module the task names, preserve signatures, and never edit tests. Do not implement other tasks. Run the named Python gate using python3 -B -m unittest. Commit the change using the configured Git identity, with no authorship or contributor trailers; leave the worktree clean. Do not push, install packages, use network tools, create other agents, delete files or perform cleanup. Report the commit and gate result.",
+        "model": "opus",
+        "profile_id": "39fa841f-8bbe-4ac0-ad5c-8de41ce1360a",
+        "provider": "claude",
+        "revision": 1,
+        "role": "Worker"
+      },
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "ordered_task_ids": [
+        "north",
+        "south",
+        "join"
+      ],
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "repository_path": "$EVALUATION/repos/source",
+      "requested_by": "human:user",
+      "revision_number": 1
+    },
+    "run_id": null,
+    "sequence": 3,
+    "occurred_at": "2026-10-15T05:13:59.870340Z"
+  },
+  {
+    "type": "cobbler.plan.capacity.confirmed",
+    "payload": {
+      "adapter_id": "claude_headless_stream_json",
+      "attempt": 1,
+      "confirmation_id": "9756fc24-df47-4785-b018-5b8bfe67e380",
+      "confirmed_by": "human:user",
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "plan_task_id": "north",
+      "provider_id": "claude",
+      "revision_number": 1,
+      "scope": "subscription"
+    },
+    "run_id": null,
+    "sequence": 4,
+    "occurred_at": "2026-10-15T05:13:59.901613Z"
+  },
+  {
+    "type": "cobbler.plan.capacity.confirmed",
+    "payload": {
+      "adapter_id": "claude_headless_stream_json",
+      "attempt": 1,
+      "confirmation_id": "602138c5-2cd8-42f4-bd05-2bd036c471b7",
+      "confirmed_by": "human:user",
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "plan_task_id": "south",
+      "provider_id": "claude",
+      "revision_number": 1,
+      "scope": "subscription"
+    },
+    "run_id": null,
+    "sequence": 5,
+    "occurred_at": "2026-10-15T05:13:59.911423Z"
+  },
+  {
+    "type": "cobbler.plan.independence.evaluated",
+    "payload": {
+      "accepted_base": "98f7c38f83bdcda91c63d9001fa694124fe07d9d",
+      "decision_json": "{\"blocker_count\":0,\"blockers\":[],\"disposition\":\"eligible\",\"evidence_complete\":true,\"observed_changes\":{},\"source\":\"declared\",\"task_ids\":[\"north\",\"south\"],\"version\":1}",
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "repository_observation": "verified_accepted_base",
+      "revision_number": 1
+    },
+    "run_id": null,
+    "sequence": 6,
+    "occurred_at": "2026-10-15T05:14:00.034349Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "claude_headless_stream_json",
+        "compatibility_state": "degraded",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "5001ac07-758e-40bc-957e-3f82ede92160",
+      "evaluated_at": "2026-10-15T05:14:00.037147Z",
+      "explanation": "Admitted via attributable single-decision confirmation by 'human:user' (intent: 'supervised_execution'); not automatically safe (Candidate support tier 'conservative_partial' requires attributable single-decision confirmation)",
+      "extensions": {
+        "shoestring.plan:capacity_confirmation_id": "5001ac07-758e-40bc-957e-3f82ede92160"
+      },
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "a47cc8e1-2ed0-5d44-9b31-1e98f25e73ee",
+        "windows": []
+      },
+      "override": {
+        "confirmed_at": "2026-10-15T05:13:59.901613Z",
+        "confirmed_by": "human:user",
+        "intent": "supervised_execution",
+        "reason": "valid",
+        "target_provider_id": "claude",
+        "target_scope": "subscription",
+        "valid": true
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-15T05:19:00.037147Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confirmed_support_tier_conservative_partial",
+      "reobservation_required": false,
+      "requested_capability": "supervised_execution",
+      "result": "admit",
+      "scope": "subscription"
+    },
+    "run_id": null,
+    "sequence": 8,
+    "occurred_at": "2026-10-15T05:14:00.037147Z"
+  },
+  {
+    "type": "cobbler.plan.workspace.prepared",
+    "payload": {
+      "accepted_base": "98f7c38f83bdcda91c63d9001fa694124fe07d9d",
+      "attempt": 1,
+      "branch": "shoestring/run-2901949e-c36f-548a-82dc-119145bcc5e4",
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "plan_task_id": "north",
+      "revision_number": 1,
+      "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4",
+      "workspace_ref": "run-2901949e-c36f-548a-82dc-119145bcc5e4"
+    },
+    "run_id": null,
+    "sequence": 9,
+    "occurred_at": "2026-10-15T05:14:00.062897Z"
+  },
+  {
+    "type": "cobbler.plan.task.dispatched",
+    "payload": {
+      "attempt": 1,
+      "command_id": "plan-north-1",
+      "dispatch_mode": "fanout_v1",
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "grant_id": "a6f62725-a945-4879-8c89-876b66e4fab5",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "plan_task_id": "north",
+      "revision_number": 1,
+      "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4",
+      "trajectory_task_id": "1cc4571f-daad-5a0b-9207-4a74a4a7a071"
+    },
+    "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4",
+    "sequence": 16,
+    "occurred_at": "2026-10-15T05:14:00.062897Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "claude_headless_stream_json",
+        "compatibility_state": "degraded",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "402a5444-305c-4b3c-9278-e37fc211809e",
+      "evaluated_at": "2026-10-15T05:14:00.621353Z",
+      "explanation": "Admitted via attributable single-decision confirmation by 'human:user' (intent: 'supervised_execution'); not automatically safe (Candidate support tier 'conservative_partial' requires attributable single-decision confirmation)",
+      "extensions": {
+        "shoestring.plan:capacity_confirmation_id": "402a5444-305c-4b3c-9278-e37fc211809e"
+      },
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "650e2108-43c3-554c-abe6-48532979a40f",
+        "windows": []
+      },
+      "override": {
+        "confirmed_at": "2026-10-15T05:13:59.911423Z",
+        "confirmed_by": "human:user",
+        "intent": "supervised_execution",
+        "reason": "valid",
+        "target_provider_id": "claude",
+        "target_scope": "subscription",
+        "valid": true
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-15T05:19:00.621353Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confirmed_support_tier_conservative_partial",
+      "reobservation_required": false,
+      "requested_capability": "supervised_execution",
+      "result": "admit",
+      "scope": "subscription"
+    },
+    "run_id": null,
+    "sequence": 18,
+    "occurred_at": "2026-10-15T05:14:00.621353Z"
+  },
+  {
+    "type": "cobbler.plan.workspace.prepared",
+    "payload": {
+      "accepted_base": "98f7c38f83bdcda91c63d9001fa694124fe07d9d",
+      "attempt": 1,
+      "branch": "shoestring/run-06ad21d2-6b92-5f43-977c-59b688465f6d",
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "plan_task_id": "south",
+      "revision_number": 1,
+      "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+      "workspace_ref": "run-06ad21d2-6b92-5f43-977c-59b688465f6d"
+    },
+    "run_id": null,
+    "sequence": 19,
+    "occurred_at": "2026-10-15T05:14:00.627832Z"
+  },
+  {
+    "type": "cobbler.plan.independence.evaluated",
+    "payload": {
+      "accepted_base": "98f7c38f83bdcda91c63d9001fa694124fe07d9d",
+      "decision_json": "{\"blocker_count\":0,\"blockers\":[],\"disposition\":\"eligible\",\"evidence_complete\":true,\"observed_changes\":{\"north\":[]},\"source\":\"declared\",\"task_ids\":[\"north\",\"south\"],\"version\":1}",
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "repository_observation": "verified_accepted_base",
+      "revision_number": 1
+    },
+    "run_id": null,
+    "sequence": 20,
+    "occurred_at": "2026-10-15T05:14:00.627832Z"
+  },
+  {
+    "type": "cobbler.plan.task.dispatched",
+    "payload": {
+      "attempt": 1,
+      "command_id": "plan-south-1",
+      "dispatch_mode": "fanout_v1",
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "grant_id": "929f92c2-7218-4156-b1d1-fbbdb4fd0aaa",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "plan_task_id": "south",
+      "revision_number": 1,
+      "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+      "trajectory_task_id": "57854c5a-933b-5b97-a29c-cb5c2c16a3d7"
+    },
+    "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+    "sequence": 27,
+    "occurred_at": "2026-10-15T05:14:00.627832Z"
+  },
+  {
+    "type": "run.running",
+    "payload": {
+      "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4"
+    },
+    "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4",
+    "sequence": 30,
+    "occurred_at": "2026-10-15T05:14:02.308095Z"
+  },
+  {
+    "type": "run.running",
+    "payload": {
+      "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d"
+    },
+    "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+    "sequence": 31,
+    "occurred_at": "2026-10-15T05:14:02.308243Z"
+  },
+  {
+    "type": "cobbler.plan.independence.evaluated",
+    "payload": {
+      "accepted_base": "98f7c38f83bdcda91c63d9001fa694124fe07d9d",
+      "decision_json": "{\"blocker_count\":0,\"blockers\":[],\"disposition\":\"eligible\",\"evidence_complete\":true,\"observed_changes\":{\"north\":[],\"south\":[]},\"source\":\"declared\",\"task_ids\":[\"north\",\"south\"],\"version\":1}",
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "repository_observation": "verified_accepted_base",
+      "revision_number": 1
+    },
+    "run_id": null,
+    "sequence": 52,
+    "occurred_at": "2026-10-15T05:14:07.038389Z"
+  },
+  {
+    "type": "cobbler.plan.independence.evaluated",
+    "payload": {
+      "accepted_base": "98f7c38f83bdcda91c63d9001fa694124fe07d9d",
+      "decision_json": "{\"blocker_count\":0,\"blockers\":[],\"disposition\":\"eligible\",\"evidence_complete\":true,\"observed_changes\":{\"north\":[\"north.py\"],\"south\":[]},\"source\":\"declared\",\"task_ids\":[\"north\",\"south\"],\"version\":1}",
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "repository_observation": "verified_accepted_base",
+      "revision_number": 1
+    },
+    "run_id": null,
+    "sequence": 84,
+    "occurred_at": "2026-10-15T05:14:13.037254Z"
+  },
+  {
+    "type": "lease.expired",
+    "payload": {
+      "grant_id": "a6f62725-a945-4879-8c89-876b66e4fab5"
+    },
+    "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4",
+    "sequence": 95,
+    "occurred_at": "2026-10-15T05:14:17.289993Z"
+  },
+  {
+    "type": "run.completed",
+    "payload": {
+      "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4"
+    },
+    "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4",
+    "sequence": 98,
+    "occurred_at": "2026-10-15T05:14:17.475588Z"
+  },
+  {
+    "type": "cobbler.plan.task.gate_failed",
+    "payload": {
+      "attempt": 1,
+      "duration_ms": 85,
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "gate": "python_unittest",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "plan_task_id": "north",
+      "reason": "{:gate_worktree_dirty, \"$EVALUATION/worktrees/run-2901949e-c36f-548a-82dc-119145bcc5e4\"}",
+      "retry_state": "escalate",
+      "revision_number": 1,
+      "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4"
+    },
+    "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4",
+    "sequence": 102,
+    "occurred_at": "2026-10-15T05:14:17.961690Z"
+  },
+  {
+    "type": "cobbler.plan.independence.evaluated",
+    "payload": {
+      "accepted_base": "98f7c38f83bdcda91c63d9001fa694124fe07d9d",
+      "decision_json": "{\"blocker_count\":0,\"blockers\":[],\"disposition\":\"eligible\",\"evidence_complete\":true,\"observed_changes\":{\"north\":[\"north.py\"],\"south\":[\"south.py\"]},\"source\":\"declared\",\"task_ids\":[\"north\",\"south\"],\"version\":1}",
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "repository_observation": "verified_accepted_base",
+      "revision_number": 1
+    },
+    "run_id": null,
+    "sequence": 107,
+    "occurred_at": "2026-10-15T05:14:19.084614Z"
+  },
+  {
+    "type": "dispatch.effect_unknown",
+    "payload": {
+      "dispatch_id": "71e7d775-830a-5aa3-aee8-675996c5e89e",
+      "error_code": "effect_unknown",
+      "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d"
+    },
+    "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+    "sequence": 108,
+    "occurred_at": "2026-10-15T05:14:19.781131Z"
+  },
+  {
+    "type": "dispatch.effect_unknown",
+    "payload": {
+      "dispatch_id": "1d7689da-1a0a-5da1-8d27-9da4a2dc2477",
+      "error_code": "effect_unknown",
+      "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4"
+    },
+    "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4",
+    "sequence": 109,
+    "occurred_at": "2026-10-15T05:14:20.780528Z"
+  },
+  {
+    "type": "lease.expired",
+    "payload": {
+      "grant_id": "929f92c2-7218-4156-b1d1-fbbdb4fd0aaa"
+    },
+    "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+    "sequence": 114,
+    "occurred_at": "2026-10-15T05:14:23.713914Z"
+  },
+  {
+    "type": "run.completed",
+    "payload": {
+      "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d"
+    },
+    "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+    "sequence": 120,
+    "occurred_at": "2026-10-15T05:14:23.859073Z"
+  }
+]

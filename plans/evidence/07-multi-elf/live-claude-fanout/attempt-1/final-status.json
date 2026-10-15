@@ -1,0 +1,160 @@
+{
+  "children": [
+    {
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "attempt": 1,
+      "command_id": "plan-north-1",
+      "revision_number": 1,
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "dispatch_mode": "fanout_v1",
+      "plan_task_id": "north",
+      "run_id": "2901949e-c36f-548a-82dc-119145bcc5e4",
+      "stop_class": "task_failure",
+      "grant_id": "a6f62725-a945-4879-8c89-876b66e4fab5",
+      "root_run_id": "2901949e-c36f-548a-82dc-119145bcc5e4",
+      "retry_state": "escalate",
+      "resolution": "gate_failed",
+      "resolved?": true,
+      "trajectory_task_id": "1cc4571f-daad-5a0b-9207-4a74a4a7a071",
+      "run_ids": [
+        "2901949e-c36f-548a-82dc-119145bcc5e4"
+      ]
+    },
+    {
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "attempt": 1,
+      "command_id": "plan-south-1",
+      "revision_number": 1,
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "dispatch_mode": "fanout_v1",
+      "plan_task_id": "south",
+      "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+      "stop_class": "awaiting_verification",
+      "grant_id": "929f92c2-7218-4156-b1d1-fbbdb4fd0aaa",
+      "root_run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+      "retry_state": null,
+      "resolution": null,
+      "resolved?": false,
+      "trajectory_task_id": "57854c5a-933b-5b97-a29c-cb5c2c16a3d7",
+      "run_ids": [
+        "06ad21d2-6b92-5f43-977c-59b688465f6d"
+      ]
+    }
+  ],
+  "execution": {
+    "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+    "requested_by": "human:user",
+    "revision_number": 1,
+    "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+    "ordered_task_ids": [
+      "north",
+      "south",
+      "join"
+    ],
+    "repository_path": "$EVALUATION/repos/source",
+    "agent_profile": {
+      "adapter_id": "claude_headless_stream_json",
+      "digest": "715e0dac51b454d1b4497dc0022fad6d12b93f982996703fe2e5b6a8b4941a06",
+      "instructions": "Implement only the current approved task in its assigned worktree. Read the task's module and its named test. Change only the module the task names, preserve signatures, and never edit tests. Do not implement other tasks. Run the named Python gate using python3 -B -m unittest. Commit the change using the configured Git identity, with no authorship or contributor trailers; leave the worktree clean. Do not push, install packages, use network tools, create other agents, delete files or perform cleanup. Report the commit and gate result.",
+      "model": "opus",
+      "profile_id": "39fa841f-8bbe-4ac0-ad5c-8de41ce1360a",
+      "provider": "claude",
+      "revision": 1,
+      "role": "Worker"
+    }
+  },
+  "dispatch_mode": "fanout_v1",
+  "accepted": [],
+  "integration": null,
+  "needs_user?": true,
+  "scope_blockers": [],
+  "accepted_evidence": [],
+  "completed?": false,
+  "total_attempts": 2,
+  "total_duration_ms": 37823,
+  "total_run_duration_ms": 37738,
+  "total_gate_duration_ms": 85,
+  "total_verification_overhead_ms": 0,
+  "active_run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+  "acknowledged_scope_blockers": [],
+  "active_attempt": 1,
+  "active_task": "south",
+  "accepted_count": 0,
+  "task_duration_ms": {
+    "north": 15765,
+    "south": 22058
+  },
+  "active_children": [
+    {
+      "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+      "attempt": 1,
+      "command_id": "plan-south-1",
+      "revision_number": 1,
+      "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+      "dispatch_mode": "fanout_v1",
+      "plan_task_id": "south",
+      "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+      "grant_id": "929f92c2-7218-4156-b1d1-fbbdb4fd0aaa",
+      "root_run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+      "trajectory_task_id": "57854c5a-933b-5b97-a29c-cb5c2c16a3d7",
+      "run_ids": [
+        "06ad21d2-6b92-5f43-977c-59b688465f6d"
+      ]
+    }
+  ],
+  "active_run_ids": [
+    "06ad21d2-6b92-5f43-977c-59b688465f6d"
+  ],
+  "attempts": {
+    "north": 1,
+    "south": 1
+  },
+  "cancellations": [],
+  "cancelled?": false,
+  "child_inbox": {
+    "pending": [
+      {
+        "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+        "attempt": 1,
+        "event_id": "d77ff74e-b7e5-46fb-9a66-b70f8e9dfcd3",
+        "revision_number": 1,
+        "goal_id": "56f4b46d-f7fb-4151-a1ac-49dc2c770564",
+        "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+        "plan_task_id": "south",
+        "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+        "source_sequence": 119,
+        "message_kind": "checkpoint",
+        "root_run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+        "source_type": "checkpoint.created",
+        "last_reason": null
+      },
+      {
+        "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+        "attempt": 1,
+        "event_id": "77e3b492-4825-4760-b86d-eb56f0671f25",
+        "revision_number": 1,
+        "goal_id": "56f4b46d-f7fb-4151-a1ac-49dc2c770564",
+        "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+        "plan_task_id": "south",
+        "run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+        "source_sequence": 120,
+        "message_kind": "completed",
+        "root_run_id": "06ad21d2-6b92-5f43-977c-59b688465f6d",
+        "source_type": "run.completed",
+        "last_reason": null
+      }
+    ],
+    "observed_count": 40,
+    "pending_complete?": true,
+    "pending_count": 2
+  },
+  "duration_budget": {
+    "reason": null,
+    "remaining_goal_ms": 1462177
+  },
+  "global_failure": null,
+  "planned?": true,
+  "retirements": [],
+  "superseded_attempts": [],
+  "total_tasks": 3
+}

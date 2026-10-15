@@ -1,0 +1,50 @@
+[
+  {
+    "task": "south",
+    "ordinal": 3,
+    "five_hour_utilization": 0.33,
+    "rate_limit_status": "allowed",
+    "rate_limit_type": "five_hour",
+    "seven_day_utilization": 0.56
+  },
+  {
+    "task": "north",
+    "ordinal": 3,
+    "five_hour_utilization": 0.33,
+    "rate_limit_status": "allowed",
+    "rate_limit_type": "five_hour",
+    "seven_day_utilization": 0.56
+  },
+  {
+    "task": "north",
+    "ordinal": 6,
+    "five_hour_utilization": 0.34,
+    "rate_limit_status": "allowed",
+    "rate_limit_type": "five_hour",
+    "seven_day_utilization": 0.56
+  },
+  {
+    "task": "south",
+    "ordinal": 10,
+    "five_hour_utilization": 0.34,
+    "rate_limit_status": "allowed",
+    "rate_limit_type": "five_hour",
+    "seven_day_utilization": 0.56
+  },
+  {
+    "task": "north",
+    "ordinal": 15,
+    "duration_ms": 14959,
+    "num_turns": 4,
+    "terminal_reason": "completed",
+    "total_cost_usd": 0.0848216
+  },
+  {
+    "task": "south",
+    "ordinal": 18,
+    "duration_ms": 21399,
+    "num_turns": 5,
+    "terminal_reason": "completed",
+    "total_cost_usd": 0.093777
+  }
+]

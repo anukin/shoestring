@@ -171,3 +171,167 @@ VERIFIED: `mix precommit` on the fix exited 0: **4 doctests, 2167 tests,
 
 UNVERIFIED (at registration commit time): the live run is pending. Results
 follow below once it has run.
+
+## Live attempt 1: failed, no task accepted
+
+VERIFIED: the user ran the six phases themselves on 2026-10-15 (the
+permission classifier had stopped the assistant's own invocation) under the
+bound above. Redacted evidence is in
+[live-claude-fanout/attempt-1](live-claude-fanout/attempt-1/): phase records,
+the export phase (run afterwards, model-free) and the two launch settings with
+`$EVALUATION`/`$USER_HOME` substituted. Message text is byte-identical to the
+stored events.
+
+| Check | Result |
+| --- | --- |
+| Provider runs | **2 of the 3 registered**: north and south, `claude-opus-5-5`, CLI 2.1.300, Bash only, `dontAsk` |
+| Concurrency | both admitted after per-task confirmation, `dispatch_mode: fanout_v1`, both `run.running` within 1 ms of each other |
+| Work | each Elf changed only its own module, and its named gate passed inside the sandbox (2 tests each) |
+| Commit | **failed in both**: `fatal: unable to access '$HOME/.gitconfig': Operation not permitted` |
+| Outcome | north `gate_failed` with `gate_worktree_dirty` (`task_failure`); the execution needs the user; south's run completed after the driver stopped the phase, so it stayed `awaiting_verification` |
+| Source | fixture repository untouched (`98f7c38`, clean) |
+| Usage | Claude-reported cost 0.085 and 0.094 USD (subscription), 15.0 s and 21.4 s; five-hour utilization 0.33→0.34, seven-day 0.56 |
+| Diagnostics | both dispatches recorded `dispatch.effect_unknown` (see below) |
+
+North then tried `GIT_CONFIG_GLOBAL=/dev/null`, and the `dontAsk` permission
+mode denied the command. Neither Elf tried any other way round the sandbox.
+The task brief asked for a clean committed worktree, so the gate was right to
+refuse.
+
+The user's second invocation of the phases on the same root failed at setup by
+design (`identity.json` already existed); it made no provider call.
+
+### Cause: Git cannot read its global config inside the sandbox
+
+VERIFIED: the launcher denies reads under the home directory. Git exits 128
+when its global config there is unreadable (not merely absent). A Seatbelt
+profile that denies reads under the home directory reproduces the exact
+message with `/usr/bin/git` 2.50.1 and no model call. With
+`GIT_CONFIG_GLOBAL=/dev/null` alone, `git status` still warns that the default
+excludes file is unreadable. Also pointing `core.excludesFile` and
+`core.attributesFile` at `/dev/null` makes the commit succeed with no output.
+
+UNVERIFIED: why iteration 6 committed under identical sandbox settings. That
+run used Claude Code 2.1.296; this one used 2.1.300.
+
+Fix (driver only; the reviewed launcher is unchanged):
+
+- The Elf environment carries `GIT_CONFIG_GLOBAL=/dev/null` and, through
+  `GIT_CONFIG_COUNT`, `core.excludesFile`/`core.attributesFile=/dev/null`.
+  The private store already carries the fixture identity in its own config.
+- The `preflight` phase commits in a throwaway repository under the same
+  home-deny Seatbelt profile with that environment, before any provider call.
+  Any Git warning or failure stops it. With the environment removed, the
+  preflight fails at that check.
+
+UNVERIFIED until a live run: that Claude Code's sandboxed Bash passes the
+environment through to `git`.
+
+### Dispatch completion lost to SQLite snapshot conflicts
+
+The busy finding registered above is now root-caused for its common form.
+
+VERIFIED: transaction telemetry on Fake rehearsals (diagnostic copy of the
+driver, not committed) showed most `Database busy` errors returning after
+**0 ms**, with no busy wait. The cause:
+
+- `Dispatches.complete_effect/2` and `record_effect_outcome/3` opened
+  *deferred* transactions that read the dispatch and then updated it.
+- Under WAL, a writer committing between the read and the update makes SQLite
+  fail the update at once (a stale read snapshot cannot be upgraded), and
+  `busy_timeout` does not apply.
+- With two Elves streaming events, that is likely. The launched run's
+  completion raised, the job retried, the retry found `effect_started` and
+  recorded `dispatch.effect_unknown`.
+
+VERIFIED: in live attempt 1 both dispatch jobs carry exactly this error,
+`Database busy` on `UPDATE harness_dispatches`, before `effect_unknown`.
+
+The Cobbler stores already open their read-then-write transactions with
+`mode: :immediate`. This fix does the same for both dispatch functions and for
+the harness and trajectory projectors' apply/rebuild transactions, which showed
+the same 0 ms busy on `projector_positions`. `PlanGoalStatus.sync/2` has the
+same read-then-write shape and is unchanged; it runs only in startup repair and
+explicit sync.
+
+VERIFIED: `test/shoestring/harness/dispatch_effect_snapshot_regression_test.exs`
+uses an independent WAL database with real pooled connections (no SQL
+sandbox, which would turn the transaction into a savepoint). A telemetry hook
+commits a second writer right after the transaction's read. In an archive of
+`53a07ba` (the pre-fix commit), the user's checkout untouched, it failed
+**2 tests, 2 failures**: both functions raised `Exqlite.Error` "Database busy"
+on the `UPDATE`, in 0.1 s against a 5 s busy timeout. On the fix it passed
+**2 tests, 0 failures** on seeds 1–6. The projector change is not
+regression-locked: the projectors use the sandboxed application repository,
+where no real second connection exists.
+
+### Oban on SQLite: remaining busy and queue restarts
+
+VERIFIED (rehearsals, Fake adapter, no provider call; counted from each
+node's `oban_jobs.errors` and, where enabled, the diagnostic transaction log):
+
+| Busy form | Before the fix (8 nodes) | After the fix (5 nodes: rehearsals 5, 6, 8, 9, 10) |
+| --- | --- | --- |
+| Instant `UPDATE harness_dispatches` busy (the fixed defect) | 5 (rehearsals 2, 3 and three diagnostic runs) | 0 |
+| Waited busy: Oban ack `UPDATE oban_jobs`, or `database is locked` at `BEGIN IMMEDIATE` | 4 | 3 (rehearsals 5, 9, 10) |
+| `dispatch.effect_unknown` recorded | 2 | 1 (rehearsal 9, two dispatches) |
+
+Three pre-fix nodes stalled the driver to its deadline. One of them recorded
+no busy error at all, only a restarted dispatch queue with orphaned rows; a
+crashed producer's reason is not persisted. The fix removes the instant form
+and does not reduce the waited form. The waited errors come after the full 2 s
+busy timeout. Earlier telemetry showed a 2.1 s transaction whose plain
+`SELECT` took 2.1 s. This matches the Exqlite 0.40 statement-destructor stall
+diagnosed in iteration 6 (a write-lock holder blocks on another connection's
+mutex while that connection busy-waits). The upstream fix belongs in Exqlite.
+
+REPO-INSPECTION: two Oban 2.24 behaviours turn such a busy into a stall in
+this driver:
+
+- `Backoff.with_retry/1` retries `DBConnection.ConnectionError`,
+  `Postgrex.Error` and `MyXQL.Error`, not `Exqlite.Error`. A busy during a job
+  ack crashes the ack, and its fallback in the producer's `DOWN` handler is
+  unprotected too. The row can stay `executing` with no process.
+  Production's Lifeline rescues such rows after 5 minutes; the driver runs with
+  `plugins: []`.
+- A producer that crashes restarts with its configured pause state. The driver
+  boots every queue paused so that each phase decides when work begins, so a
+  restarted queue stayed paused.
+
+Driver changes:
+
+- Each wait poll resumes any phase queue found paused, and records it.
+- `quiesce!` waits on the jobs actually running in the node, not on
+  `executing` rows.
+- Orphaned `executing` rows and queue restarts are exported in the `fanout`
+  and `result` records.
+
+VERIFIED: with these changes rehearsals 8, 9 and 10 passed end to end
+(3 of 3); rehearsal 9 recorded one `plan_child_inbox` restart and two orphaned
+rows. Rehearsal 6, before these driver changes, also passed. Rehearsal 5 failed
+on a defect in the first version of the restart check (`check_queue/1` returns
+`nil` while a producer restarts), which is itself evidence of a restart.
+
+UNVERIFIED: the effect of the remaining busy on a live run, beyond misleading
+`effect_unknown` diagnostics. No duplicate run was observed in any rehearsal.
+
+### Unrelated stderr noise
+
+REPO-INSPECTION: the `spawn: Could not cd to <checkout>/<run id>` lines in the
+user's terminal come from Erlang's port spawner. `Worktrees.get/2` falls back
+to treating a run ID with no record as a relative path and asks Git about a
+directory that does not exist. The result is `:not_found`, which is correct.
+The same lines appear in earlier gate logs. Nothing is created in the checkout.
+
+### Verification after attempt 1
+
+VERIFIED: `mix precommit` exited 0: **4 doctests, 2169 tests, 0 failures,
+1 skipped (6 excluded)**, seed 940704, 442.0 s (9.5 s async, 432.4 s sync).
+JavaScript passed **52/52** and **8/8**.
+
+## Live attempt 2: needs a new bound
+
+UNVERIFIED: not run. Attempt 1 used 2 of the 3 registered provider runs, and
+the registration forbids a second live attempt without asking the user again.
+A full attempt needs three runs (north, south, join), so it needs a new bound
+from the user. Use a fresh evaluation root.

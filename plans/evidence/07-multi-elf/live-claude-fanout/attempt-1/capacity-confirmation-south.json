@@ -1,0 +1,15 @@
+{
+  "payload": {
+    "adapter_id": "claude_headless_stream_json",
+    "attempt": 1,
+    "confirmation_id": "602138c5-2cd8-42f4-bd05-2bd036c471b7",
+    "confirmed_by": "human:user",
+    "execution_id": "2c5f5786-3557-5539-8206-cef91e0adab5",
+    "plan_digest": "8f53bf2650b4b7357e25500ef9e1c63fee544b48927d684476485faaed4f0d91",
+    "plan_task_id": "south",
+    "provider_id": "claude",
+    "revision_number": 1,
+    "scope": "subscription"
+  },
+  "event_id": "402a5444-305c-4b3c-9278-e37fc211809e"
+}

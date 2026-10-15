@@ -29,6 +29,18 @@ defmodule Iter7ClaudeFanout do
     account_units: 2,
     task_units: 1
   }
+  # The launcher's sandbox denies reads under the home directory, and Git
+  # aborts when it cannot read the global config there. Claude Code 2.1.300
+  # left the first live attempt's changes uncommitted for this reason. The Elf
+  # uses only repository-local Git configuration (the fixture identity).
+  @git_env [
+    {"GIT_CONFIG_GLOBAL", "/dev/null"},
+    {"GIT_CONFIG_COUNT", "2"},
+    {"GIT_CONFIG_KEY_0", "core.excludesFile"},
+    {"GIT_CONFIG_VALUE_0", "/dev/null"},
+    {"GIT_CONFIG_KEY_1", "core.attributesFile"},
+    {"GIT_CONFIG_VALUE_1", "/dev/null"}
+  ]
   @task_seconds 300
   @goal_seconds 1500
   @phase_seconds 420
@@ -63,7 +75,7 @@ defmodule Iter7ClaudeFanout do
             permission_bypass: false,
             tools: "Bash",
             command: Path.expand("tools/live_eval/claude_fixture_launcher.py"),
-            env: [{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"}]
+            env: [{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"} | @git_env]
           }
         ]
       else
@@ -120,6 +132,8 @@ defmodule Iter7ClaudeFanout do
   end
 
   defp wait_loop(fun, deadline) do
+    keep_running!()
+
     case fun.() do
       {:ok, value} ->
         value
@@ -131,6 +145,24 @@ defmodule Iter7ClaudeFanout do
         after
           200 -> wait_loop(fun, deadline)
         end
+    end
+  end
+
+  # Queues start paused at boot so each phase decides when work begins. A
+  # queue producer that crashes (for example on a SQLite busy error inside
+  # Oban) restarts with that boot setting, so the phase resumes it again and
+  # records the restart as evidence.
+  def run_queues!(queues) do
+    Process.put(:run_queues, queues)
+    for queue <- queues, do: :ok = Oban.resume_queue(queue: queue)
+  end
+
+  # `check_queue/1` returns nil while a producer is restarting.
+  defp keep_running! do
+    for queue <- Process.get(:run_queues, []),
+        match?(%{paused: true}, Oban.check_queue(queue: queue)) do
+      Process.put(:queue_restarts, [queue | Process.get(:queue_restarts, [])])
+      :ok = Oban.resume_queue(queue: queue)
     end
   end
 
@@ -156,6 +188,48 @@ defmodule Iter7ClaudeFanout do
       windows:
         Enum.map(snapshot.windows, &Map.take(&1, [:kind, :state, :used_percent, :reset_at]))
     }
+  end
+
+  # Model-free: commits in a throwaway repository under a Seatbelt profile that
+  # denies reads under the home directory, as the launcher's sandbox does, with
+  # the Elf's Git environment. Any Git warning or failure stops the preflight.
+  def git_sandbox! do
+    dir = Path.join(root(), "preflight-git")
+    false = File.exists?(dir)
+    repo = Path.join(dir, "repo")
+    File.mkdir_p!(repo)
+    git!(repo, ["init", "-q", "-b", "main"])
+    git!(repo, ["config", "user.name", "Fixture"])
+    git!(repo, ["config", "user.email", "fixture@example.invalid"])
+    File.write!(Path.join(repo, "probe.txt"), "base\n")
+    git!(repo, ["add", "probe.txt"])
+    git!(repo, ["commit", "-q", "-m", "Preflight base"])
+    File.write!(Path.join(repo, "probe.txt"), "change\n")
+    profile = Path.join(dir, "deny-home.sb")
+
+    File.write!(profile, """
+    (version 1)
+    (allow default)
+    (deny file-read* (subpath #{inspect(Path.expand("~"))}))
+    """)
+
+    {output, status} =
+      System.cmd(
+        "sandbox-exec",
+        [
+          "-f",
+          profile,
+          "sh",
+          "-c",
+          "git status --short && git commit -q -am 'Preflight change' && git status --short"
+        ],
+        cd: repo,
+        env: @git_env,
+        stderr_to_stdout: true
+      )
+
+    true = {output, status} == {" M probe.txt\n", 0}
+    %{sandboxed_commit: "ok", git_env: Enum.map(@git_env, &elem(&1, 0))}
   end
 
   def confirm!(identity, execution_id, task_id) do
@@ -499,8 +573,7 @@ defmodule Iter7ClaudeFanout do
     confirm!(identity, execution_id, "north")
     confirm!(identity, execution_id, "south")
 
-    for queue <- [:dispatch, :plan_child_inbox, :reservation_control, :plan_execution],
-        do: :ok = Oban.resume_queue(queue: queue)
+    run_queues!([:dispatch, :plan_child_inbox, :reservation_control, :plan_execution])
 
     sample = %{max_live_elves: 0, max_outstanding: 0, max_goal_outstanding: 0, samples: 0}
 
@@ -526,6 +599,7 @@ defmodule Iter7ClaudeFanout do
       needs_user: status.needs_user?,
       source_head_unchanged: git!(source(), ["rev-parse", "HEAD"]) |> String.trim() == head,
       source_clean: git!(source(), ["status", "--porcelain"]) == "",
+      queues: queue_evidence(),
       worker_jobs: jobs()
     })
   end
@@ -628,8 +702,7 @@ defmodule Iter7ClaudeFanout do
     {:ok, continued} = ExecutionControl.continue(goal_id, execution_id)
     record("continue", continued)
 
-    for queue <- [:dispatch, :plan_child_inbox, :reservation_control, :plan_execution],
-        do: :ok = Oban.resume_queue(queue: queue)
+    run_queues!([:dispatch, :plan_child_inbox, :reservation_control, :plan_execution])
 
     wait!(
       fn ->
@@ -666,28 +739,45 @@ defmodule Iter7ClaudeFanout do
       },
       reservations_outstanding: length(Reservations.outstanding()),
       worktrees: Map.new(rows, &{task_of(&1), git_worktree!(&1.id)}),
+      queues: queue_evidence(),
       worker_jobs: jobs()
     })
   end
 
   defp quiesce!(goal_id) do
-    for queue <- [:plan_execution, :dispatch], do: :ok = Oban.pause_queue(queue: queue)
+    paused = [:plan_execution, :dispatch]
+    Process.put(:run_queues, Process.get(:run_queues, []) -- paused)
+    for queue <- paused, do: :ok = Oban.pause_queue(queue: queue)
 
+    # Waits on the jobs actually running in this node. A row left
+    # `executing` with no running job is reported, not waited on.
     wait!(
       fn ->
         busy =
-          Repo.exists?(
-            from j in Oban.Job,
-              where:
-                j.queue in ["plan_execution", "plan_child_inbox", "dispatch"] and
-                  j.state == "executing"
-          )
+          Enum.any?([:plan_execution, :plan_child_inbox, :dispatch], fn queue ->
+            not match?(%{running: []}, Oban.check_queue(queue: queue))
+          end)
 
         live = Enum.any?(runs(goal_id), &Shoestring.Elves.whereis(&1.id))
         if busy or live, do: :pending, else: {:ok, :idle}
       end,
       60
     )
+  end
+
+  defp queue_evidence do
+    %{
+      restarted_paused: Enum.frequencies(Process.get(:queue_restarts, [])),
+      orphaned_executing:
+        Repo.all(
+          from j in Oban.Job,
+            where:
+              j.queue in ["plan_execution", "plan_child_inbox", "dispatch"] and
+                j.state == "executing",
+            order_by: j.id,
+            select: %{queue: j.queue, worker: j.worker, attempt: j.attempt}
+        )
+    }
   end
 
   defp jobs do
@@ -897,13 +987,27 @@ Iter7ClaudeFanout.boot()
 
 try do
   case System.argv() do
-    ["preflight"] -> Iter7ClaudeFanout.record("preflight", Iter7ClaudeFanout.capacity!())
-    ["setup"] -> Iter7ClaudeFanout.setup!()
-    ["fanout"] -> Iter7ClaudeFanout.fanout!()
-    ["integrate"] -> Iter7ClaudeFanout.integrate!()
-    ["join"] -> Iter7ClaudeFanout.join!()
-    ["export"] -> Iter7ClaudeFanout.export!()
-    _ -> raise "unsupported_phase"
+    ["preflight"] ->
+      Iter7ClaudeFanout.record("preflight-git", Iter7ClaudeFanout.git_sandbox!())
+      Iter7ClaudeFanout.record("preflight", Iter7ClaudeFanout.capacity!())
+
+    ["setup"] ->
+      Iter7ClaudeFanout.setup!()
+
+    ["fanout"] ->
+      Iter7ClaudeFanout.fanout!()
+
+    ["integrate"] ->
+      Iter7ClaudeFanout.integrate!()
+
+    ["join"] ->
+      Iter7ClaudeFanout.join!()
+
+    ["export"] ->
+      Iter7ClaudeFanout.export!()
+
+    _ ->
+      raise "unsupported_phase"
   end
 rescue
   error ->

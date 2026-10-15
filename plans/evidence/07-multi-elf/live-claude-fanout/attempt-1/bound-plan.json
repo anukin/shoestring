@@ -1,0 +1,182 @@
+{
+  "budget": {
+    "max_total_attempts": 3,
+    "max_total_duration_seconds": 1500
+  },
+  "goal": {
+    "acceptance": {
+      "evidence": [
+        "All three named test files pass at the integrated commit."
+      ],
+      "gates": [
+        {
+          "gate": "python_unittest",
+          "test_paths": [
+            "test/test_north.py",
+            "test/test_south.py",
+            "test/test_join.py"
+          ]
+        }
+      ]
+    },
+    "constraints": [
+      "Each task changes only its own module; never edit tests.",
+      "Use only the Python standard library; no network or packages."
+    ],
+    "non_goals": [
+      "Persistence, UI, packaging and changes to other modules."
+    ],
+    "repository": {
+      "base_revision": "98f7c38f83bdcda91c63d9001fa694124fe07d9d"
+    },
+    "statement": "Implement north_total and south_label independently, then summary from both."
+  },
+  "tasks": [
+    {
+      "acceptance_criteria": [
+        "Preserve the north_total(items) signature.",
+        "Change only north.py."
+      ],
+      "checkpoint": {
+        "condition": "test/test_north.py passes.",
+        "evidence": [
+          "test/test_north.py passes."
+        ]
+      },
+      "depends_on": [],
+      "execution": {
+        "max_attempts": 1,
+        "max_duration_seconds": 300
+      },
+      "expected_artifacts": [
+        "Updated north.py."
+      ],
+      "gates": [
+        {
+          "gate": "python_unittest",
+          "test_paths": [
+            "test/test_north.py"
+          ]
+        }
+      ],
+      "hints": {
+        "files": [
+          "north.py",
+          "test/test_north.py"
+        ],
+        "symbols": [
+          "north_total"
+        ]
+      },
+      "id": "north",
+      "inputs": [
+        "north.py currently raises NotImplementedError.",
+        "test/test_north.py specifies it."
+      ],
+      "outcome": "north_total(items) returns the sum of each item's quantity, 0 when empty.",
+      "risks": [
+        "Changing other files would break the declared independent scope."
+      ],
+      "title": "Total item quantities"
+    },
+    {
+      "acceptance_criteria": [
+        "Preserve the south_label(name) signature.",
+        "Change only south.py."
+      ],
+      "checkpoint": {
+        "condition": "test/test_south.py passes.",
+        "evidence": [
+          "test/test_south.py passes."
+        ]
+      },
+      "depends_on": [],
+      "execution": {
+        "max_attempts": 1,
+        "max_duration_seconds": 300
+      },
+      "expected_artifacts": [
+        "Updated south.py."
+      ],
+      "gates": [
+        {
+          "gate": "python_unittest",
+          "test_paths": [
+            "test/test_south.py"
+          ]
+        }
+      ],
+      "hints": {
+        "files": [
+          "south.py",
+          "test/test_south.py"
+        ],
+        "symbols": [
+          "south_label"
+        ]
+      },
+      "id": "south",
+      "inputs": [
+        "south.py currently raises NotImplementedError.",
+        "test/test_south.py specifies it."
+      ],
+      "outcome": "south_label(name) returns Item: plus the trimmed upper-case name, or (unnamed).",
+      "risks": [
+        "Changing other files would break the declared independent scope."
+      ],
+      "title": "Render item labels"
+    },
+    {
+      "acceptance_criteria": [
+        "Preserve the summary(name, items) signature.",
+        "Use north_total and south_label.",
+        "Change only join.py."
+      ],
+      "checkpoint": {
+        "condition": "test/test_join.py passes.",
+        "evidence": [
+          "test/test_join.py passes."
+        ]
+      },
+      "depends_on": [
+        "north",
+        "south"
+      ],
+      "execution": {
+        "max_attempts": 1,
+        "max_duration_seconds": 300
+      },
+      "expected_artifacts": [
+        "Updated join.py."
+      ],
+      "gates": [
+        {
+          "gate": "python_unittest",
+          "test_paths": [
+            "test/test_join.py"
+          ]
+        }
+      ],
+      "hints": {
+        "files": [
+          "join.py",
+          "test/test_join.py"
+        ],
+        "symbols": [
+          "summary"
+        ]
+      },
+      "id": "join",
+      "inputs": [
+        "join.py currently raises NotImplementedError.",
+        "test/test_join.py specifies it."
+      ],
+      "outcome": "summary(name, items) returns south_label(name) followed by x and north_total(items).",
+      "risks": [
+        "Changing other files would break the declared independent scope."
+      ],
+      "title": "Summarize an order"
+    }
+  ],
+  "version": 1
+}

@@ -395,26 +395,32 @@ defmodule Shoestring.Harness.Dispatches do
     repo = Keyword.get(opts, :repo, Repo)
     now = now(opts)
 
-    case repo.transaction(fn ->
-           case repo.get(DispatchRecord, dispatch_id) do
-             %DispatchRecord{status: "effect_started"} = dispatch ->
-               case repo.update(
-                      DispatchRecord.status_changeset(dispatch, "effect_completed", now)
-                    ) do
-                 {:ok, _dispatch} -> :ok
-                 {:error, changeset} -> repo.rollback(changeset)
-               end
+    # Read then write. Under WAL a deferred transaction fails at once with
+    # busy (no busy wait) if another writer commits between the two, so the
+    # write lock is taken at BEGIN. Same for record_effect_outcome/3.
+    case repo.transaction(
+           fn ->
+             case repo.get(DispatchRecord, dispatch_id) do
+               %DispatchRecord{status: "effect_started"} = dispatch ->
+                 case repo.update(
+                        DispatchRecord.status_changeset(dispatch, "effect_completed", now)
+                      ) do
+                   {:ok, _dispatch} -> :ok
+                   {:error, changeset} -> repo.rollback(changeset)
+                 end
 
-             %DispatchRecord{status: "effect_completed"} ->
-               :ok
+               %DispatchRecord{status: "effect_completed"} ->
+                 :ok
 
-             %DispatchRecord{} ->
-               repo.rollback(:effect_not_claimed)
+               %DispatchRecord{} ->
+                 repo.rollback(:effect_not_claimed)
 
-             nil ->
-               repo.rollback(:dispatch_not_found)
-           end
-         end) do
+               nil ->
+                 repo.rollback(:dispatch_not_found)
+             end
+           end,
+           mode: :immediate
+         ) do
       {:ok, :ok} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -428,24 +434,27 @@ defmodule Shoestring.Harness.Dispatches do
     now = now(opts)
 
     result =
-      repo.transaction(fn ->
-        case repo.get(DispatchRecord, dispatch_id) do
-          %DispatchRecord{status: ^status} = dispatch ->
-            {:ok, dispatch}
+      repo.transaction(
+        fn ->
+          case repo.get(DispatchRecord, dispatch_id) do
+            %DispatchRecord{status: ^status} = dispatch ->
+              {:ok, dispatch}
 
-          %DispatchRecord{status: "effect_started"} = dispatch ->
-            case repo.update(DispatchRecord.outcome_changeset(dispatch, status, now)) do
-              {:ok, updated} -> {:ok, updated}
-              {:error, changeset} -> repo.rollback(changeset)
-            end
+            %DispatchRecord{status: "effect_started"} = dispatch ->
+              case repo.update(DispatchRecord.outcome_changeset(dispatch, status, now)) do
+                {:ok, updated} -> {:ok, updated}
+                {:error, changeset} -> repo.rollback(changeset)
+              end
 
-          %DispatchRecord{} ->
-            repo.rollback(:effect_outcome_not_recordable)
+            %DispatchRecord{} ->
+              repo.rollback(:effect_outcome_not_recordable)
 
-          nil ->
-            repo.rollback(:dispatch_not_found)
-        end
-      end)
+            nil ->
+              repo.rollback(:dispatch_not_found)
+          end
+        end,
+        mode: :immediate
+      )
 
     case result do
       {:ok, {:ok, dispatch}} ->

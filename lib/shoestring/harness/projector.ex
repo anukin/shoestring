@@ -41,7 +41,8 @@ defmodule Shoestring.Harness.Projector do
   @spec rebuild(Ecto.UUID.t(), keyword()) :: {:ok, ProjectorPosition.t()} | {:error, term()}
   def rebuild(goal_id, opts \\ []) do
     with {:ok, goal_id} <- cast_uuid(goal_id),
-         {:ok, :ok} <- Repo.transaction(fn -> reset_derived_state(goal_id, opts) end) do
+         {:ok, :ok} <-
+           Repo.transaction(fn -> reset_derived_state(goal_id, opts) end, mode: :immediate) do
       project(goal_id, opts)
     end
   end
@@ -96,7 +97,7 @@ defmodule Shoestring.Harness.Projector do
   end
 
   defp apply_next(goal_id, opts) do
-    case Repo.transaction(fn -> apply_next_in_transaction(goal_id, opts) end) do
+    case Repo.transaction(fn -> apply_next_in_transaction(goal_id, opts) end, mode: :immediate) do
       {:ok, {:done, position}} -> {:ok, :done, position}
       {:ok, {:applied, position}} -> {:ok, :applied, position}
       {:ok, {:failed, error}} -> {:error, error}
