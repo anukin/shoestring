@@ -1,0 +1,37 @@
+{
+  "mode": "live",
+  "base": "f3bc0afcc80cf775d717a9f48f521f248d6329f3",
+  "task_seconds": 300,
+  "goal_seconds": 1500,
+  "plan_digest": "8224169e7e05f076f07bc9cef3adbba5d6aecc46fe96f1dc9ccfe5d1aa3d27d4",
+  "task_order": [
+    "north",
+    "south",
+    "join"
+  ],
+  "task_attempt_limit": 1,
+  "goal_attempt_limit": 3,
+  "reservation_policy": {
+    "global_limit": 2,
+    "provider_account_limit": 2,
+    "goal_limit": 2,
+    "account_units": 2,
+    "task_units": 1
+  },
+  "model": "opus",
+  "approval_attribution": "human:user",
+  "source_tests": [
+    {
+      "exit_status": 1,
+      "test": "test/test_north.py"
+    },
+    {
+      "exit_status": 1,
+      "test": "test/test_south.py"
+    },
+    {
+      "exit_status": 1,
+      "test": "test/test_join.py"
+    }
+  ]
+}

@@ -1,0 +1,241 @@
+{
+  "queues": {
+    "restarted_paused": {},
+    "orphaned_executing": []
+  },
+  "completed": true,
+  "dispatch_mode": "fanout_v1",
+  "accepted": [
+    "join",
+    "north",
+    "south"
+  ],
+  "reservations_outstanding": 0,
+  "integration": {
+    "commit": "4cf6109f6b5553ea4f52c17c15289ac4588fdd0d",
+    "covers?": true
+  },
+  "worker_jobs": [
+    {
+      "state": "completed",
+      "queue": "plan_execution",
+      "worker": "Shoestring.Cobbler.PlanExecutionWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "dispatch",
+      "worker": "Shoestring.Harness.DispatchWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "dispatch",
+      "worker": "Shoestring.Harness.DispatchWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "dispatch",
+      "worker": "Shoestring.Harness.DispatchWorker",
+      "attempt": 1
+    }
+  ],
+  "total_attempts": 3,
+  "run_count": 3,
+  "goal_row_status": "completed",
+  "charged": {
+    "total_duration_ms": 33305,
+    "total_run_duration_ms": 30852,
+    "total_gate_duration_ms": 774,
+    "total_verification_overhead_ms": 1679
+  },
+  "worktrees": {
+    "join": {
+      "base": "4cf6109f6b5553ea4f52c17c15289ac4588fdd0d",
+      "changed": [
+        "join.py"
+      ],
+      "diff": "diff --git a/join.py b/join.py\nindex 0d5abb9..77c5fad 100644\n--- a/join.py\n+++ b/join.py\n@@ -4,4 +4,4 @@ from south import south_label\n \n def summary(name, items):\n     \"\"\"Return the one-line order summary.\"\"\"\n-    raise NotImplementedError\n+    return f\"{south_label(name)} x{north_total(items)}\"\n",
+      "dirty": false,
+      "head": "764cfeb2911bff1b929e0821199dc43c7e874353",
+      "message": "Implement summary from south_label and north_total\n\n"
+    },
+    "north": {
+      "base": "f3bc0afcc80cf775d717a9f48f521f248d6329f3",
+      "changed": [
+        "north.py"
+      ],
+      "diff": "diff --git a/north.py b/north.py\nindex a05c6bb..785113d 100644\n--- a/north.py\n+++ b/north.py\n@@ -1,3 +1,3 @@\n def north_total(items):\n     \"\"\"Return the total quantity across items.\"\"\"\n-    raise NotImplementedError\n+    return sum(item[\"quantity\"] for item in items)\n",
+      "dirty": false,
+      "head": "f0b0336d9bc7f496088325721d2507e9126302f2",
+      "message": "Implement north_total as sum of item quantities\n\n"
+    },
+    "south": {
+      "base": "f3bc0afcc80cf775d717a9f48f521f248d6329f3",
+      "changed": [
+        "south.py"
+      ],
+      "diff": "diff --git a/south.py b/south.py\nindex 6128a50..a45446f 100644\n--- a/south.py\n+++ b/south.py\n@@ -1,3 +1,4 @@\n def south_label(name):\n     \"\"\"Return the display label for an item name.\"\"\"\n-    raise NotImplementedError\n+    trimmed = name.strip()\n+    return \"Item: \" + (trimmed.upper() if trimmed else \"(unnamed)\")\n",
+      "dirty": false,
+      "head": "1425f4894abce7ebf6fc55c27158aa76767bd627",
+      "message": "Implement south_label\n\n"
+    }
+  }
+}

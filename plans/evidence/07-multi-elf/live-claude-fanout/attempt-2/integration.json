@@ -1,0 +1,45 @@
+{
+  "payload": {
+    "accepted_commits": [
+      "1425f4894abce7ebf6fc55c27158aa76767bd627",
+      "f0b0336d9bc7f496088325721d2507e9126302f2"
+    ],
+    "commit": "4cf6109f6b5553ea4f52c17c15289ac4588fdd0d",
+    "execution_id": "145fb2be-ff4f-59ea-a4f1-8ac4ced9c1e4",
+    "integration_id": "38056793-5ac7-4159-82e6-a923b11e470d",
+    "plan_digest": "8224169e7e05f076f07bc9cef3adbba5d6aecc46fe96f1dc9ccfe5d1aa3d27d4",
+    "reason": "Merged the accepted north and south branches with no conflicts.",
+    "recorded_by": "human:user",
+    "revision_number": 1
+  },
+  "event_id": "01606bcf-6472-4b8c-871e-418bbef92202",
+  "integration": {
+    "commit": "4cf6109f6b5553ea4f52c17c15289ac4588fdd0d",
+    "covers?": true
+  },
+  "merged": [
+    {
+      "task": "north",
+      "commit": "f0b0336d9bc7f496088325721d2507e9126302f2"
+    },
+    {
+      "task": "south",
+      "commit": "1425f4894abce7ebf6fc55c27158aa76767bd627"
+    }
+  ],
+  "commit": "4cf6109f6b5553ea4f52c17c15289ac4588fdd0d",
+  "tests_at_integration": [
+    {
+      "exit_status": 0,
+      "test": "test/test_north.py"
+    },
+    {
+      "exit_status": 0,
+      "test": "test/test_south.py"
+    },
+    {
+      "exit_status": 1,
+      "test": "test/test_join.py"
+    }
+  ]
+}

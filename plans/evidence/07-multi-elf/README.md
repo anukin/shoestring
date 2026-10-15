@@ -66,5 +66,7 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
 - [Live Claude fan-out](live-claude-fanout.md): registered bound, Fake
   rehearsals, the worker admission-clock fix, live attempt 1 (concurrent but
   uncommitted: sandboxed Git could not read its global config; evidence in
-  [attempt-1](live-claude-fanout/attempt-1/)), and the SQLite snapshot fix for
-  dispatch completion.
+  [attempt-1](live-claude-fanout/attempt-1/)), the SQLite snapshot fix for
+  dispatch completion, the Exqlite 0.42 upgrade, and live attempt 2 (all three
+  tasks accepted, goal gate passed; evidence in
+  [attempt-2](live-claude-fanout/attempt-2/)).

@@ -337,8 +337,10 @@ queue policy and record its version.
   first, and the driver gives the Elf a home-free Git configuration. The
   waited SQLite busy errors came from an Exqlite 0.40 statement-destructor
   stall that 0.42 fixes; the upgrade is evidenced by a diagnostic probe and
-  clean rehearsals, not by a suite test. The user authorized three more runs
-  for a second live attempt.
+  clean rehearsals, not by a suite test. The second live attempt (3 provider
+  runs) passed: north and south ran concurrently and were accepted, the human
+  merge was recorded, join was accepted and the goal gate passed at the
+  integrated revision.
 - **Instructions for iteration 8:** verify fan-out children with
   independent/cross-provider review using the retained private branches and
   final-scope evidence. Keep integration human-recorded. Reuse

@@ -1,0 +1,232 @@
+{
+  "queues": {
+    "restarted_paused": {},
+    "orphaned_executing": []
+  },
+  "children": [
+    {
+      "attempt": 1,
+      "plan_task_id": "north",
+      "run_id": "aa592d55-ba1e-5e93-adf3-7a5807926819",
+      "stop_class": "accepted"
+    },
+    {
+      "attempt": 1,
+      "plan_task_id": "south",
+      "run_id": "8539a71a-fc29-56e0-98dc-a3eb68fb8d85",
+      "stop_class": "accepted"
+    }
+  ],
+  "execution_id": "145fb2be-ff4f-59ea-a4f1-8ac4ced9c1e4",
+  "runs": 2,
+  "dispatch_mode": "fanout_v1",
+  "accepted": [
+    "north",
+    "south"
+  ],
+  "concurrency": {
+    "max_live_elves": 2,
+    "max_outstanding": 2,
+    "max_goal_outstanding": 2,
+    "samples": 79
+  },
+  "intervals": [
+    {
+      "status": "completed",
+      "terminal": "run.completed",
+      "task": "north",
+      "run_id": "aa592d55-ba1e-5e93-adf3-7a5807926819",
+      "running_at": "2026-10-15T22:33:16.267885Z",
+      "ended_at": "2026-10-15T22:33:28.047311Z"
+    },
+    {
+      "status": "completed",
+      "terminal": "run.completed",
+      "task": "south",
+      "run_id": "8539a71a-fc29-56e0-98dc-a3eb68fb8d85",
+      "running_at": "2026-10-15T22:33:16.268134Z",
+      "ended_at": "2026-10-15T22:33:24.704747Z"
+    }
+  ],
+  "reservations_outstanding": 0,
+  "integration": null,
+  "needs_user": false,
+  "source_head_unchanged": true,
+  "source_clean": true,
+  "worker_jobs": [
+    {
+      "state": "scheduled",
+      "queue": "plan_execution",
+      "worker": "Shoestring.Cobbler.PlanExecutionWorker",
+      "attempt": 0
+    },
+    {
+      "state": "completed",
+      "queue": "dispatch",
+      "worker": "Shoestring.Harness.DispatchWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "dispatch",
+      "worker": "Shoestring.Harness.DispatchWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    },
+    {
+      "state": "completed",
+      "queue": "plan_child_inbox",
+      "worker": "Shoestring.Cobbler.PlanChildWorker",
+      "attempt": 1
+    }
+  ]
+}

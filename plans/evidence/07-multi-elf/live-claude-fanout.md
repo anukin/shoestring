@@ -403,3 +403,43 @@ fine." This registers attempt 2:
   runs** (north, south, join), one attempt per task, no replacement;
 - a fresh evaluation root, so no attempt-1 state is reused;
 - no third attempt without asking the user again.
+
+## Live attempt 2: passed, all three tasks accepted
+
+VERIFIED: the assistant ran the six phases on 2026-10-15 from `8bb9139`
+under the attempt-2 bound, on a fresh evaluation root. Redacted evidence is in
+[live-claude-fanout/attempt-2](live-claude-fanout/attempt-2/): every phase
+record, the export, and the three launch settings with
+`$EVALUATION`/`$USER_HOME` substituted. A scan for home, temporary and
+machine paths and for provider session/message identifiers found none.
+Message text is byte-identical to the stored events.
+
+| Registered check | Result |
+| --- | --- |
+| 1. Concurrency | north and south admitted after per-task confirmation, `dispatch_mode: fanout_v1`. `run.running` 0.25 ms apart; intervals 16.268–24.705 s and 16.268–28.047 s overlap. Peak 2 live Elves, 2 outstanding reservations (2 for the goal), 79 samples. Separate private stores (`.git-repositories/<run id>` in each launch setting) |
+| 2. Own gates, own modules | both `accepted`. North changed only `north.py` (`f0b0336`), south only `south.py` (`1425f48`), each worktree clean. Fixture source head unchanged and clean after the phase |
+| 3. Join waits for integration | join's confirmation, admission and dispatch all follow `cobbler.plan.integration.recorded` (human-recorded merge `4cf6109` of both accepted commits, no conflicts; at that commit north and south tests pass and join's fails). The `integration_required` reason is returned by the executor, not stored as an event, so the record shows the order but not the reason code |
+| 4. Completion | join ran from `4cf6109`, changed only `join.py` (`764cfeb`) and was accepted. `cobbler.plan.execution.completed` carries the goal gate at `764cfeb`: all three test files, 6 tests, OK. Exactly 3 runs, 0 reservations outstanding, goal row `completed` |
+| 5. Runtime and usage | `claude-opus-5-5`, CLI 2.1.301, Bash only, `dontAsk`, for all three. Claude-reported cost 0.0659, 0.0672 and 0.0655 USD (subscription); 11.6, 8.2 and 9.0 s; three turns each. Five-hour utilization 0.20→0.21, seven-day 0.62 |
+| 6. Export | 32 events, 24 normalized (12 command, 6 lifecycle, 3 output, 3 result); no raw frames, reasoning or provider identifiers |
+
+**Provider runs: 3 of the 3 authorized for attempt 2** (5 in total across both
+attempts). No replacement, no retry.
+
+The Git fix held: each Elf ran `git add` and `git commit` inside the sandbox,
+and every command ended `is_error: false`. Claude Code also moved from 2.1.300
+to 2.1.301 between the attempts, so this run does not separate the two
+explanations for attempt 1's failure.
+
+Diagnostics: no job errors in the node, no `Database busy`, every dispatch
+`effect_completed`, no queue restart and no orphaned `executing` row.
+
+Also recorded, as in attempt 1: each run has a `lease.expired` about 150 ms
+before its `run.completed`. REPO-INSPECTION: this is the turn-outcome lease
+renewal being refused after the turn has finished (`elf.ex`, the
+`:expired` branch for a completed turn). The expiry marker stands and the
+ordinary terminal path runs. Nothing was interrupted.
+
+Join's public answer notes that it ran only its own test; the goal gate ran
+all three.
+

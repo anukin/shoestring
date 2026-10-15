@@ -1,0 +1,36 @@
+{
+  "alwaysThinkingEnabled": false,
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "excludedCommands": [],
+    "filesystem": {
+      "allowWrite": [
+        "$EVALUATION/worktrees/run-aa592d55-ba1e-5e93-adf3-7a5807926819",
+        "$EVALUATION/worktrees/.git-repositories/aa592d55-ba1e-5e93-adf3-7a5807926819/worktrees/run-aa592d55-ba1e-5e93-adf3-7a5807926819",
+        "$EVALUATION/worktrees/.git-repositories/aa592d55-ba1e-5e93-adf3-7a5807926819/objects",
+        "$EVALUATION/worktrees/.git-repositories/aa592d55-ba1e-5e93-adf3-7a5807926819/refs/heads",
+        "$EVALUATION/worktrees/.git-repositories/aa592d55-ba1e-5e93-adf3-7a5807926819/logs/refs/heads"
+      ],
+      "denyWrite": [
+        "$EVALUATION/repos/source"
+      ],
+      "denyRead": [
+        "$USER_HOME"
+      ],
+      "allowRead": [
+        "$EVALUATION/worktrees/run-aa592d55-ba1e-5e93-adf3-7a5807926819",
+        "$EVALUATION/worktrees/.git-repositories/aa592d55-ba1e-5e93-adf3-7a5807926819"
+      ]
+    },
+    "network": {
+      "allowedDomains": []
+    }
+  }
+}

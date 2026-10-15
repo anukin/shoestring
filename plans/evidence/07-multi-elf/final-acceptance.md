@@ -102,8 +102,12 @@ afterwards.
 
 ## Retained limits
 
-- UNVERIFIED: no live Codex/Claude fan-out, provider concurrency, account
-  discovery or real capacity delta. Reservation units are conservative
+- VERIFIED after the packet: one live Claude Code fan-out (attempt 2,
+  3 provider runs). North and south ran concurrently and were accepted, then a
+  human-recorded integration, then join was accepted and the goal gate passed
+  ([live Claude fan-out](live-claude-fanout.md)). Still UNVERIFIED: live
+  Codex fan-out, cross-provider concurrency, account discovery and real
+  capacity delta. Reservation units are conservative
   configured allowances, not forecasts. After the packet, a Fake rehearsal
   of the registered live run through the production worker found that every
   reservation-owned dispatch was refused (`reservation_admission_mismatch`,
@@ -112,8 +116,8 @@ afterwards.
   and south concurrently through Claude Code (2 provider runs) but accepted
   nothing: the launcher's sandbox denied Git its global config, so neither
   Elf could commit. The driver now gives the Elf a home-free Git
-  configuration, with a model-free sandboxed preflight. The user authorized
-  three more runs for attempt 2.
+  configuration, with a model-free sandboxed preflight. Attempt 2 then
+  passed every registered check.
 - The common `Database busy` on dispatch completion was a deferred
   read-then-write transaction failing at once on a stale WAL snapshot. It is
   fixed with `mode: :immediate` and regression-locked; the projectors got the

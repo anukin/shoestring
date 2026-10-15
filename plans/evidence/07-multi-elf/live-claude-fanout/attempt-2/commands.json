@@ -1,0 +1,80 @@
+[
+  {
+    "command": "cat south.py test/test_south.py",
+    "task": "south",
+    "ordinal": 2,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "south",
+    "ordinal": 4,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "cat north.py test/test_north.py",
+    "task": "north",
+    "ordinal": 2,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "north",
+    "ordinal": 4,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "cat > south.py <<'EOF'\ndef south_label(name):\n    \"\"\"Return the display label for an item name.\"\"\"\n    trimmed = name.strip()\n    return \"Item: \" + (trimmed.upper() if trimmed else \"(unnamed)\")\nEOF\npython3 -B -m unittest test/test_south.py && git add south.py && git commit -q -m \"Implement south_label\" && git log --oneline -1 && git status --short",
+    "task": "south",
+    "ordinal": 5,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "south",
+    "ordinal": 6,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "cat > north.py <<'EOF'\ndef north_total(items):\n    \"\"\"Return the total quantity across items.\"\"\"\n    return sum(item[\"quantity\"] for item in items)\nEOF\npython3 -B -m unittest test/test_north.py && git add north.py && git commit -q -m \"Implement north_total as sum of item quantities\" && git log --oneline -1 && git status --short",
+    "task": "north",
+    "ordinal": 5,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "north",
+    "ordinal": 6,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "cat join.py test/test_join.py north.py south.py; ls",
+    "task": "join",
+    "ordinal": 2,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "join",
+    "ordinal": 4,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "python3 - <<'EOF'\np='join.py'\ns=open(p).read().replace('    raise NotImplementedError\\n','    return f\"{south_label(name)} x{north_total(items)}\"\\n')\nopen(p,'w').write(s)\nEOF\npython3 -B -m unittest test/test_join.py && git add join.py && git commit -qm \"Implement summary from south_label and north_total\" && git log -1 --format=%H && git status --short",
+    "task": "join",
+    "ordinal": 5,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "join",
+    "ordinal": 6,
+    "boundary": "end",
+    "is_error": false
+  }
+]
