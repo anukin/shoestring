@@ -1,6 +1,6 @@
 # Iteration 7: multi-Elf fan-out
 
-**Status:** in progress — started 2026-10-13
+**Status:** implementation complete, awaiting human acceptance (2026-10-14) — started 2026-10-13
 **Hard dependencies:** iteration 6 complete
 **Unlocks:** iteration 8 verification and cross-review
 
@@ -294,14 +294,39 @@ queue policy and record its version.
 
 ## Completion record
 
-- **Final status:**
-- **Completed on:**
-- **Concurrency/reservation policy version:**
-- **Events/schemas/configuration:**
-- **Conflict-detection strategy:**
-- **Deterministic eval results:**
-- **Economic/fairness results:**
-- **Verification commands:**
-- **Demo result:**
-- **Deviations and remaining risks:**
-- **Instructions for iteration 8:**
+- **Final status:** implementation complete; awaiting human acceptance. See the
+  [final acceptance packet](../evidence/07-multi-elf/final-acceptance.md).
+- **Completed on:** implementation 2026-10-14; acceptance pending.
+- **Concurrency/reservation policy version:** `ReservationPolicy` version 1
+  (all limits and units default to one); fan-out queue policy version 1
+  (rotating round-robin over goals, declared task order, provider-blocked tasks
+  skipped).
+- **Events/schemas/configuration:** reservation, settlement and operation
+  events; `cobbler.plan.child.observed`; `cobbler.plan.task.scope_resolved`;
+  `cobbler.plan.cancellation.requested`/`completed`;
+  `cobbler.plan.integration.recorded`; `verification_overhead_ms` on
+  acceptance events. Config: `:plan_fanout` (`enabled: false`) and
+  `:plan_reservation_policy`.
+- **Conflict-detection strategy:** layered file-level evidence. Declared hints
+  must be known and disjoint before dispatch; live observations run before more
+  dispatch; final changed files are bound to the tested commit. Any overlap,
+  shared surface, symlink, escape or unknown blocks for an explicit human
+  accept/reject. Uncertainty falls back to sequential execution, and nothing
+  merges automatically.
+- **Deterministic eval results:** all 11 required evals VERIFIED (see packet).
+- **Economic/fairness results:** maxima equal to the limits (3/2/2), zero false
+  admissions, leaks or unrelated waits; 10/12 tasks accepted with zero
+  regressions. Capacity delta is unavailable with Fake.
+- **Verification commands:** `mix precommit` → 4 doctests, 2161 tests,
+  0 failures, 1 skipped, 6 excluded; JavaScript 52/52 and 8/8.
+- **Demo result:** VERIFIED on an isolated node with live Fake Elves through the
+  production driver ([transcript](../evidence/07-multi-elf/demo/transcript.json)).
+- **Deviations and remaining risks:** integration happens through a
+  human-recorded merge commit, because iteration 6 forbids amending an accepted
+  repository contract. Dependents after integration run sequentially. Fan-out
+  ships default-off. No live provider fan-out was run.
+- **Instructions for iteration 8:** verify fan-out children with
+  independent/cross-provider review using the retained private branches and
+  final-scope evidence. Keep integration human-recorded. Reuse
+  `stop_class`, cancellation and replacement rather than adding a second
+  failure policy.

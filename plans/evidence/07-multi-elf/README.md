@@ -58,3 +58,6 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
 - [Production activation](production-activation.md): default-off configured
   fan-out driver with deterministic sequential fallback, fan-out completion,
   and read-only verified human integration that unlocks dependents.
+- [Final acceptance packet](final-acceptance.md): required-eval map, fairness
+  [simulation](fairness/simulation.json), live [demo transcript](demo/transcript.json),
+  gate result and retained limits; awaiting human acceptance.

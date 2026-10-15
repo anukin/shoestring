@@ -1,0 +1,351 @@
+{
+  "rounds": [
+    {
+      "round": 1,
+      "goals": [
+        {
+          "blocked": [
+            "{:execution_admission_blocked, \"provider_window_closed\"}",
+            "{:execution_admission_blocked, \"provider_window_closed\"}",
+            "{:execution_admission_blocked, \"provider_window_closed\"}"
+          ],
+          "provider": "a",
+          "ready": 3,
+          "goal": 1,
+          "dispatched": 0,
+          "window_open": false
+        },
+        {
+          "blocked": [
+            "{:reservation_blocked, :provider_account_limit}"
+          ],
+          "provider": "b",
+          "ready": 3,
+          "goal": 2,
+          "dispatched": 2,
+          "window_open": true
+        },
+        {
+          "blocked": [
+            "{:reservation_blocked, :provider_account_limit}",
+            "{:reservation_blocked, :provider_account_limit}",
+            "{:reservation_blocked, :provider_account_limit}"
+          ],
+          "provider": "b",
+          "ready": 3,
+          "goal": 3,
+          "dispatched": 0,
+          "window_open": true
+        },
+        {
+          "blocked": [
+            "{:execution_admission_blocked, \"provider_window_closed\"}",
+            "{:execution_admission_blocked, \"provider_window_closed\"}",
+            "{:execution_admission_blocked, \"provider_window_closed\"}"
+          ],
+          "provider": "a",
+          "ready": 3,
+          "goal": 0,
+          "dispatched": 0,
+          "window_open": false
+        }
+      ],
+      "outstanding": 2
+    },
+    {
+      "round": 2,
+      "goals": [
+        {
+          "blocked": [],
+          "provider": "b",
+          "ready": 1,
+          "goal": 2,
+          "dispatched": 1,
+          "window_open": true
+        },
+        {
+          "blocked": [
+            "{:reservation_blocked, :provider_account_limit}",
+            "{:reservation_blocked, :provider_account_limit}"
+          ],
+          "provider": "b",
+          "ready": 3,
+          "goal": 3,
+          "dispatched": 1,
+          "window_open": true
+        },
+        {
+          "blocked": [
+            "{:execution_admission_blocked, \"provider_window_closed\"}",
+            "{:execution_admission_blocked, \"provider_window_closed\"}",
+            "{:execution_admission_blocked, \"provider_window_closed\"}"
+          ],
+          "provider": "a",
+          "ready": 3,
+          "goal": 0,
+          "dispatched": 0,
+          "window_open": false
+        },
+        {
+          "blocked": [
+            "{:execution_admission_blocked, \"provider_window_closed\"}",
+            "{:execution_admission_blocked, \"provider_window_closed\"}",
+            "{:execution_admission_blocked, \"provider_window_closed\"}"
+          ],
+          "provider": "a",
+          "ready": 3,
+          "goal": 1,
+          "dispatched": 0,
+          "window_open": false
+        }
+      ],
+      "outstanding": 2
+    },
+    {
+      "round": 3,
+      "goals": [
+        {
+          "blocked": [],
+          "provider": "b",
+          "ready": 2,
+          "goal": 3,
+          "dispatched": 2,
+          "window_open": true
+        },
+        {
+          "blocked": [
+            "{:reservation_blocked, :global_limit}",
+            "{:reservation_blocked, :global_limit}"
+          ],
+          "provider": "a",
+          "ready": 3,
+          "goal": 0,
+          "dispatched": 1,
+          "window_open": true
+        },
+        {
+          "blocked": [
+            "{:reservation_blocked, :global_limit}",
+            "{:reservation_blocked, :global_limit}",
+            "{:reservation_blocked, :global_limit}"
+          ],
+          "provider": "a",
+          "ready": 3,
+          "goal": 1,
+          "dispatched": 0,
+          "window_open": true
+        },
+        {
+          "blocked": [],
+          "provider": "b",
+          "ready": 0,
+          "goal": 2,
+          "dispatched": 0,
+          "window_open": true
+        }
+      ],
+      "outstanding": 3
+    },
+    {
+      "round": 4,
+      "goals": [
+        {
+          "blocked": [
+            "{:reservation_blocked, :provider_account_limit}"
+          ],
+          "provider": "a",
+          "ready": 3,
+          "goal": 0,
+          "dispatched": 2,
+          "window_open": true
+        },
+        {
+          "blocked": [
+            "{:reservation_blocked, :provider_account_limit}",
+            "{:reservation_blocked, :provider_account_limit}",
+            "{:reservation_blocked, :provider_account_limit}"
+          ],
+          "provider": "a",
+          "ready": 3,
+          "goal": 1,
+          "dispatched": 0,
+          "window_open": true
+        },
+        {
+          "blocked": [],
+          "provider": "b",
+          "ready": 0,
+          "goal": 2,
+          "dispatched": 0,
+          "window_open": true
+        },
+        {
+          "blocked": [],
+          "provider": "b",
+          "ready": 0,
+          "goal": 3,
+          "dispatched": 0,
+          "window_open": true
+        }
+      ],
+      "outstanding": 2
+    },
+    {
+      "round": 5,
+      "goals": [
+        {
+          "blocked": [
+            "{:reservation_blocked, :provider_account_limit}"
+          ],
+          "provider": "a",
+          "ready": 3,
+          "goal": 1,
+          "dispatched": 2,
+          "window_open": true
+        },
+        {
+          "blocked": [],
+          "provider": "b",
+          "ready": 0,
+          "goal": 2,
+          "dispatched": 0,
+          "window_open": true
+        },
+        {
+          "blocked": [],
+          "provider": "b",
+          "ready": 0,
+          "goal": 3,
+          "dispatched": 0,
+          "window_open": true
+        },
+        {
+          "blocked": [
+            "{:reservation_blocked, :provider_account_limit}"
+          ],
+          "provider": "a",
+          "ready": 1,
+          "goal": 0,
+          "dispatched": 0,
+          "window_open": true
+        }
+      ],
+      "outstanding": 2
+    },
+    {
+      "round": 6,
+      "goals": [
+        {
+          "blocked": [],
+          "provider": "b",
+          "ready": 0,
+          "goal": 2,
+          "dispatched": 0,
+          "window_open": true
+        },
+        {
+          "blocked": [],
+          "provider": "b",
+          "ready": 0,
+          "goal": 3,
+          "dispatched": 0,
+          "window_open": true
+        },
+        {
+          "blocked": [],
+          "provider": "a",
+          "ready": 1,
+          "goal": 0,
+          "dispatched": 1,
+          "window_open": true
+        },
+        {
+          "blocked": [],
+          "provider": "a",
+          "ready": 1,
+          "goal": 1,
+          "dispatched": 1,
+          "window_open": true
+        }
+      ],
+      "outstanding": 2
+    },
+    {
+      "round": 7,
+      "goals": [
+        {
+          "blocked": [],
+          "provider": "b",
+          "ready": 0,
+          "goal": 3,
+          "dispatched": 0,
+          "window_open": true
+        },
+        {
+          "blocked": [],
+          "provider": "a",
+          "ready": 0,
+          "goal": 0,
+          "dispatched": 0,
+          "window_open": true
+        },
+        {
+          "blocked": [],
+          "provider": "a",
+          "ready": 0,
+          "goal": 1,
+          "dispatched": 0,
+          "window_open": true
+        },
+        {
+          "blocked": [],
+          "provider": "b",
+          "ready": 0,
+          "goal": 2,
+          "dispatched": 0,
+          "window_open": true
+        }
+      ],
+      "outstanding": 0
+    }
+  ],
+  "violations": [],
+  "max_simultaneous": {
+    "global": 3,
+    "goal": {
+      "0": 2,
+      "1": 2,
+      "2": 2,
+      "3": 2
+    },
+    "bucket": {
+      "fake/account:codex": 2,
+      "fake/account:second": 2
+    }
+  },
+  "unrelated_wait_rounds": 0,
+  "accepted_regressions": 0,
+  "leaked_owners": [],
+  "retained_quota_owners": 0,
+  "quota_sleep_children": 1,
+  "false_parallel_admissions": 0,
+  "accepted_total": 10,
+  "limit_wait_rounds": 8,
+  "queue_policy_version": 1,
+  "queue_policy": "rotating round-robin over goals; declared task order; provider-blocked tasks skipped",
+  "reservation_policy": {
+    "global_limit": 3,
+    "provider_account_limit": 2,
+    "goal_limit": 2,
+    "account_units": 2
+  },
+  "provider_window_closed_rounds": {
+    "a": [
+      1,
+      2
+    ]
+  },
+  "rounds_run": 7,
+  "observed_capacity_delta_per_child": null,
+  "observed_capacity_delta_reason": "Fake fixtures report no provider capacity consumption"
+}

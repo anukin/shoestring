@@ -1,0 +1,73 @@
+{
+  "demo": "iteration-7",
+  "steps": [
+    {
+      "mode": "fanout_v1",
+      "step": 2,
+      "dispatched": [
+        "north",
+        "south"
+      ],
+      "separate_private_stores": true
+    },
+    {
+      "step": 3,
+      "children": [
+        {
+          "task": "north",
+          "class": "accepted",
+          "attempt": 1
+        },
+        {
+          "task": "south",
+          "class": "adapter_failure",
+          "attempt": 1
+        }
+      ],
+      "accepted": [
+        "north"
+      ]
+    },
+    {
+      "step": 4,
+      "children": [
+        {
+          "task": "north",
+          "class": "accepted",
+          "attempt": 1
+        },
+        {
+          "task": "south",
+          "class": "adapter_failure",
+          "attempt": 1
+        }
+      ],
+      "accepted": [
+        "north"
+      ],
+      "outstanding_reservations": 0
+    },
+    {
+      "step": 5,
+      "attempt": 2,
+      "replaced": "south",
+      "join_dispatched": false
+    },
+    {
+      "step": 6,
+      "completed": true,
+      "join_unlocked_after": [
+        "north",
+        "south"
+      ],
+      "goal_row": "completed",
+      "total_attempts": 4
+    },
+    {
+      "mode": "sequential",
+      "step": 7,
+      "dispatched": 1,
+      "fanout": "refused: independence_unverified"
+    }
+  ]
+}
