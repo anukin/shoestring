@@ -26,6 +26,18 @@ defmodule Shoestring.WorktreesTest do
     def cmd(cmd, args, opts), do: System.cmd(cmd, args, opts)
   end
 
+  # Reports each command to the calling process, then runs it.
+  defmodule RecordingRunner do
+    @behaviour CommandRunner
+    @impl true
+    def find_executable(cmd), do: System.find_executable(cmd)
+    @impl true
+    def cmd(cmd, args, opts) do
+      send(self(), {:command, cmd, args, opts})
+      System.cmd(cmd, args, opts)
+    end
+  end
+
   defmodule FailingGitDirRunner do
     @behaviour CommandRunner
     @impl true
@@ -758,6 +770,33 @@ defmodule Shoestring.WorktreesTest do
       refute Worktrees.recognized?(Path.join(worktrees_dir, "iter1-foundation"),
                worktrees_dir: worktrees_dir
              )
+    end
+
+    test "an unknown run ID is not found without asking Git about a missing directory", %{
+      repo_path: repo_path,
+      worktrees_dir: worktrees_dir
+    } do
+      assert {:ok, wt} =
+               Worktrees.create(repo_path, "run-known", "HEAD", worktrees_dir: worktrees_dir)
+
+      # A bare run ID with no record falls back to a path lookup relative to
+      # the working directory. Git used to be spawned there and Erlang printed
+      # "spawn: Could not cd to <cwd>/<run id>".
+      assert {:error, :not_found} =
+               Worktrees.get("run-unknown-#{System.unique_integer([:positive])}",
+                 worktrees_dir: worktrees_dir,
+                 runner: RecordingRunner
+               )
+
+      refute_received {:command, "git", _args, _opts}
+
+      # A real worktree path with no record still consults Git.
+      File.rm!(Shoestring.Worktrees.Record.record_path(worktrees_dir, wt.run_id))
+
+      assert {:ok, %Worktree{run_id: "run-known"}} =
+               Worktrees.get(wt.path, worktrees_dir: worktrees_dir, runner: RecordingRunner)
+
+      assert_received {:command, "git", ["rev-parse", "--git-dir"], _opts}
     end
   end
 end

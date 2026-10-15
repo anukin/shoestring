@@ -57,12 +57,18 @@ defmodule Shoestring.Cobbler.PlanGoalStatus do
   def sync(goal_id, opts \\ []) do
     repo = Keyword.get(opts, :repo, Repo)
 
-    case repo.transaction(fn ->
-           case sync_in_transaction(repo, goal_id) do
-             {:ok, outcome} -> outcome
-             {:error, reason} -> repo.rollback(reason)
-           end
-         end) do
+    # Read then write. Under WAL a deferred transaction fails at once with
+    # busy (no busy wait) if another writer commits between the two, so the
+    # write lock is taken at BEGIN.
+    case repo.transaction(
+           fn ->
+             case sync_in_transaction(repo, goal_id) do
+               {:ok, outcome} -> outcome
+               {:error, reason} -> repo.rollback(reason)
+             end
+           end,
+           mode: :immediate
+         ) do
       {:ok, outcome} -> {:ok, outcome}
       {:error, reason} -> {:error, reason}
     end

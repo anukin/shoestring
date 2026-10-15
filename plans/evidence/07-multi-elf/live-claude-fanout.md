@@ -251,8 +251,8 @@ The Cobbler stores already open their read-then-write transactions with
 `mode: :immediate`. This fix does the same for both dispatch functions and for
 the harness and trajectory projectors' apply/rebuild transactions, which showed
 the same 0 ms busy on `projector_positions`. `PlanGoalStatus.sync/2` has the
-same read-then-write shape and is unchanged; it runs only in startup repair and
-explicit sync.
+same read-then-write shape; it runs only in startup repair and explicit sync,
+and was changed after this section was written (below).
 
 VERIFIED: `test/shoestring/harness/dispatch_effect_snapshot_regression_test.exs`
 uses an independent WAL database with real pooled connections (no SQL
@@ -329,9 +329,77 @@ VERIFIED: `mix precommit` exited 0: **4 doctests, 2169 tests, 0 failures,
 1 skipped (6 excluded)**, seed 940704, 442.0 s (9.5 s async, 432.4 s sync).
 JavaScript passed **52/52** and **8/8**.
 
-## Live attempt 2: needs a new bound
+## After attempt 1: the remaining busy, fixed upstream
 
-UNVERIFIED: not run. Attempt 1 used 2 of the 3 registered provider runs, and
-the registration forbids a second live attempt without asking the user again.
-A full attempt needs three runs (north, south, join), so it needs a new bound
-from the user. Use a fresh evaluation root.
+### Exqlite 0.40 → 0.42
+
+REPO-INSPECTION: Exqlite 0.42.0's statement destructor no longer takes the
+connection mutex when it is held: it `trylock`s and otherwise queues the
+finalize, which the connection's holder drains after its SQLite call returns.
+`release/2` does the same, locking the statement's own connection. The
+Elixir-side changes from 0.40 are additive (an `:authorizer` connection
+option). `ecto_sqlite3` 0.24.1 accepts it (`~> 0.22`). `mix.lock` is the only
+dependency change; Oban and `ecto_sqlite3` are unchanged.
+
+VERIFIED: `tools/diagnostics/exqlite_destructor_stall.exs` (raw Exqlite, no
+application, no provider) reproduces the iteration 6 diagnosis. The lock
+holder P has dropped a statement of connection B; the waiter Q busy-waits on
+B; P collects garbage, writes and commits. Busy timeout 3 s, 12 runs each:
+
+| Exqlite | Waiter locked out after the full timeout | Holder's insert |
+| --- | --- | --- |
+| 0.40.0 | **7 of 12** (`database is locked`, 3.2 s) | stalled 486–3154 ms in all 12 |
+| 0.42.0 | **0 of 12** (lock granted in 121–127 ms) | 0 ms in all 12 |
+
+Not regression-locked in the suite. Under `mix test` on 0.40.0 the probe's
+own steps stalled the holder about 160 ms and the waiter got the lock (3 of 3);
+two ExUnit drafts saw one lockout in 16 runs. Such a test would be
+documentation, not a lock, so none was committed. The probe
+is the evidence; rerun it after any Exqlite change.
+
+VERIFIED (Fake rehearsals 11, 12 and 13 on 0.42.0, all phases, no provider
+call): **3 of 3 passed**, with no job errors in any node, every dispatch
+`effect_completed`, no queue restart and no orphaned `executing` row. Before
+the upgrade the waited busy appeared in 3 of 5 rehearsals. Three clean runs
+are evidence, not proof, that the waited form is gone. The Oban behaviours
+above (no retry of `Exqlite.Error` during an ack, restart into the boot pause
+state) are unchanged, and the driver keeps its handling for them.
+
+### The same shape in `PlanGoalStatus.sync/2`
+
+`sync/2` reads the goal and its plan history, then updates the goal row, in a
+deferred transaction. It now takes the write lock at `BEGIN`, like the
+dispatch functions. VERIFIED:
+`test/shoestring/cobbler/plan_goal_status_snapshot_regression_test.exs` (same
+independent WAL setup and racing writer as the dispatch test) failed **3 of 3**
+seeds before the change with `Exqlite.Error` "Database busy" on
+`UPDATE "goals"` (code of `abc4090`), and passed **6 of 6** seeds after it.
+
+### The `spawn: Could not cd` noise
+
+`Worktrees.get/2` falls back from a run ID to a path lookup, and the path
+lookup asked Git about a directory that does not exist. It now returns
+`:not_found` without spawning Git when the path is not a directory, which was
+already the result. VERIFIED: a new case in `test/shoestring/worktrees_test.exs`
+records the runner's commands. Before the change it received
+`git rev-parse --git-dir` with `cd: <checkout>/run-unknown-5`; after it, none.
+A real worktree path with no record still consults Git.
+
+### Verification
+
+VERIFIED: `mix precommit` exited 0: **4 doctests, 2171 tests, 0 failures,
+1 skipped (6 excluded)**, seed 86046, 438.1 s (9.7 s async, 428.4 s sync).
+JavaScript passed **52/52** and **8/8**. The log has one
+`Exqlite.Connection ... failed to connect: database is locked` line from a
+passing test; whether earlier gates logged the same line was not checked
+(their logs are gone).
+
+## Live attempt 2: authorization and bound
+
+VERIFIED (user direction, 2026-10-15): "lets fi these issues. 3 more runs is
+fine." This registers attempt 2:
+
+- the attempt-1 bound, unchanged except that it allows **three more provider
+  runs** (north, south, join), one attempt per task, no replacement;
+- a fresh evaluation root, so no attempt-1 state is reused;
+- no third attempt without asking the user again.

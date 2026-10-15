@@ -322,7 +322,8 @@ queue policy and record its version.
   cancellation status fix: 4 doctests, 2165 tests, 0 failures, 1 skipped,
   6 excluded. After the worker clock fix: 2167 tests, 0 failures. After the
   first live attempt's fixes: 4 doctests, 2169 tests, 0 failures, 1 skipped,
-  6 excluded.
+  6 excluded. After the Exqlite 0.42 upgrade and its twins: 4 doctests,
+  2171 tests, 0 failures, 1 skipped, 6 excluded.
 - **Demo result:** VERIFIED on an isolated node with live Fake Elves through the
   production driver ([transcript](../evidence/07-multi-elf/demo/transcript.json)).
 - **Deviations and remaining risks:** integration happens through a
@@ -333,9 +334,11 @@ queue policy and record its version.
   south concurrently, but neither Elf could commit inside the launcher's
   sandbox, so no task was accepted. The fixes made after it: the worker
   reserves after admission, dispatch completion takes the SQLite write lock
-  first, and the driver gives the Elf a home-free Git configuration. A second
-  live attempt needs a new bound from the user. Waited SQLite busy errors
-  (Exqlite statement-destructor stall) remain.
+  first, and the driver gives the Elf a home-free Git configuration. The
+  waited SQLite busy errors came from an Exqlite 0.40 statement-destructor
+  stall that 0.42 fixes; the upgrade is evidenced by a diagnostic probe and
+  clean rehearsals, not by a suite test. The user authorized three more runs
+  for a second live attempt.
 - **Instructions for iteration 8:** verify fan-out children with
   independent/cross-provider review using the retained private branches and
   final-scope evidence. Keep integration human-recorded. Reuse

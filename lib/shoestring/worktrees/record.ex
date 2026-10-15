@@ -183,18 +183,19 @@ defmodule Shoestring.Worktrees.Record do
       Path.expand(a.repo_path) != Path.expand(b.repo_path)
   end
 
+  # A missing directory has no gitdir copy. Spawning Git there would only fail
+  # to cd (and Erlang prints the failure on stderr).
   defp read_gitdir_metadata(worktree_path, runner) do
-    case Git.git_dir(worktree_path, runner) do
-      {:ok, gitdir} ->
-        meta_file = Path.join(gitdir, @meta_filename)
+    with true <- File.dir?(worktree_path),
+         {:ok, gitdir} <- Git.git_dir(worktree_path, runner) do
+      meta_file = Path.join(gitdir, @meta_filename)
 
-        case File.read(meta_file) do
-          {:ok, content} -> decode_worktree(content)
-          _ -> {:error, :not_found}
-        end
-
-      _ ->
-        {:error, :not_found}
+      case File.read(meta_file) do
+        {:ok, content} -> decode_worktree(content)
+        _ -> {:error, :not_found}
+      end
+    else
+      _ -> {:error, :not_found}
     end
   end
 

@@ -112,16 +112,19 @@ afterwards.
   and south concurrently through Claude Code (2 provider runs) but accepted
   nothing: the launcher's sandbox denied Git its global config, so neither
   Elf could commit. The driver now gives the Elf a home-free Git
-  configuration, with a model-free sandboxed preflight. A second attempt needs
-  a new bound from the user.
+  configuration, with a model-free sandboxed preflight. The user authorized
+  three more runs for attempt 2.
 - The common `Database busy` on dispatch completion was a deferred
   read-then-write transaction failing at once on a stale WAL snapshot. It is
   fixed with `mode: :immediate` and regression-locked; the projectors got the
-  same change without a lock. Waited busy errors (full 2 s timeout, matching
-  the Exqlite 0.40 statement-destructor stall) remain in 3 of 5 rehearsals
-  after the fix. They can crash an Oban ack or producer, leave an `executing`
-  row until Lifeline (5 min), or record a misleading `effect_unknown`. No
-  duplicate run was observed.
+  same change without a lock, and `PlanGoalStatus.sync/2` the same change with
+  one. Waited busy errors (full 2 s timeout) came from the Exqlite 0.40
+  statement-destructor stall, in 3 of 5 rehearsals. Exqlite 0.42 fixes it
+  upstream: a diagnostic probe locks the waiter out 7 of 12 times on 0.40 and
+  0 of 12 on 0.42, and rehearsals 11–13 on 0.42 recorded no busy at all. Not
+  regression-locked in the suite (`mix test` hides the stall). Oban still does
+  not retry `Exqlite.Error` during an ack, so any busy that remains can leave
+  an `executing` row until Lifeline (5 min).
 - Production fan-out ships default-off. Enabling it is an operator
   configuration decision.
 - Automatic merging remains out of scope. Committed siblings need a human merge
