@@ -9,6 +9,18 @@ Use the same state root
 as the server (`SHOESTRING_STATE_DIR` in dev/prod). Tests use the separate
 `SHOESTRING_TEST_STATE_DIR` variable.
 
+## Create a goal
+
+```sh
+mix shoestring.goals create --title "Ship the parser" --description "Parse the log format."
+GOAL=<the printed "id">
+mix shoestring.goals list
+```
+
+`create` records an `active` goal and prints it as JSON. It plans, approves and
+starts nothing. The CLI has no authenticated identity, so each goal gets a
+fresh owner ID. `list` shows every goal, newest first.
+
 ## Review a goal
 
 ```sh

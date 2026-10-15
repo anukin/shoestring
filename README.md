@@ -88,6 +88,10 @@ mix shoestring.agents show builder
 mix shoestring.agents show builder --revision 1
 ```
 
+Work starts from a goal. `mix shoestring.goals create --title "..."` records
+one and prints its `id`, the GOAL argument of the plan and execution commands;
+`mix shoestring.goals list` shows existing goals.
+
 REPO-INSPECTION: plan review, immutable JSON edits and exact-revision decisions
 are available through `mix shoestring.plans`. It starts only the repository and
 does not dispatch work. See [the CLI plan review workflow](docs/cli-plan-review.md)
