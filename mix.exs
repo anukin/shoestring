@@ -71,6 +71,8 @@ defmodule Shoestring.MixProject do
       "db.setup": ["shoestring.state.prepare", "ecto.create", "ecto.migrate"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
+      "ecto.migrate": &one_connection("ecto.migrate", &1),
+      "ecto.rollback": &one_connection("ecto.rollback", &1),
       test: ["shoestring.state.prepare", "ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "assets.deploy": ["phx.digest"],
       precommit: [
@@ -81,5 +83,16 @@ defmodule Shoestring.MixProject do
         "ui.node_test"
       ]
     ]
+  end
+
+  # Historical SQLite rebuilds switch connection-local PRAGMAs and rely on one
+  # connection's schema view, so migrations run on a single connection, as
+  # Shoestring.Release.migrate/0 and the CLI already do. The task's default
+  # pool of 2 left fresh databases half-rebuilt. The test SQL sandbox shares
+  # its connections and cannot run the migrator on one, so test keeps the
+  # default. A caller's own --pool-size comes later and wins.
+  defp one_connection(task, args) do
+    args = if Mix.env() == :test, do: args, else: ["--pool-size", "1" | args]
+    Mix.Task.run(task, args)
   end
 end
