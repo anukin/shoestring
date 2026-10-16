@@ -700,7 +700,8 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     argv = ["claude", "--print", "--verbose", "--output-format", "stream-json"]
 
     argv =
-      if Keyword.get(state.opts, :permission_bypass, true) do
+      if Keyword.get(state.opts, :permission_bypass, true) and
+           not Keyword.has_key?(state.opts, :sandbox_options) do
         argv ++ ["--dangerously-skip-permissions"]
       else
         argv
@@ -712,7 +713,11 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
         _ -> []
       end
 
-    argv ++ model_args ++ ["--tools=#{tools}", prompt]
+    # Sandboxed launches carry their settings and flags before the prompt
+    # (`Shoestring.Harness.ClaudeHeadless.Sandbox`), and never the bypass.
+    sandbox_options = Keyword.get(state.opts, :sandbox_options, [])
+
+    argv ++ model_args ++ ["--tools=#{tools}"] ++ sandbox_options ++ [prompt]
   end
 
   defp validate_workdir(nil), do: {:ok, nil}

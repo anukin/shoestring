@@ -72,6 +72,10 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
     end
   end
 
+  @doc false
+  # The Elf options a persisted run would launch with; read-only, for tests.
+  def launch_opts(%RunRecord{} = run), do: elf_opts(run)
+
   # -- Private helpers --
 
   defp elf_opts(%RunRecord{provider_id: provider_id, extensions: extensions}) do
@@ -104,8 +108,13 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
               opts
 
             binding ->
-              adapter_opts = Keyword.get(opts, :adapter_opts, %{}) |> Map.drop([:args, :argv])
-              Keyword.put(opts, :adapter_opts, Map.put(adapter_opts, :model, binding["model"]))
+              adapter_opts =
+                Keyword.get(opts, :adapter_opts, %{})
+                |> Map.drop([:args, :argv])
+                |> Map.put(:model, binding["model"])
+                |> sandbox_plan_run(Keyword.get(opts, :adapter))
+
+              Keyword.put(opts, :adapter_opts, adapter_opts)
           end
 
         {:ok, opts}
@@ -114,6 +123,18 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
         error
     end
   end
+
+  # Plan runs work in private per-run Git storage, which the Claude sandbox
+  # requires, so every plan-bound Claude run is sandboxed unless the operator
+  # configured an explicit launch (`:command`, as the live drivers do). Manual
+  # runs share Git storage and keep their previous launch.
+  defp sandbox_plan_run(adapter_opts, ClaudeHeadless) do
+    if Map.has_key?(adapter_opts, :command),
+      do: adapter_opts,
+      else: Map.put_new(adapter_opts, :sandbox, true)
+  end
+
+  defp sandbox_plan_run(adapter_opts, _adapter), do: adapter_opts
 
   defp fake_scenario(extensions) do
     case extensions["shoestring.fake:scenario"] do

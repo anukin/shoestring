@@ -41,7 +41,7 @@ defmodule Shoestring.Harness.ClaudeHeadless do
     RunRequest
   }
 
-  alias Shoestring.Harness.ClaudeHeadless.{EventNormalizer, Session}
+  alias Shoestring.Harness.ClaudeHeadless.{EventNormalizer, Sandbox, Session}
 
   @adapter_id "claude_headless_stream_json"
   # Pinned to the CLI version the wire contract was captured against
@@ -251,7 +251,8 @@ defmodule Shoestring.Harness.ClaudeHeadless do
         true -> request.workspace_ref
       end
 
-    with {:ok, valid_workdir} <- validate_workdir(workdir) do
+    with {:ok, valid_workdir} <- validate_workdir(workdir),
+         {:ok, sandbox} <- sandbox(opts, valid_workdir, request.workspace_ref) do
       session_opts =
         opts
         |> Map.to_list()
@@ -260,6 +261,7 @@ defmodule Shoestring.Harness.ClaudeHeadless do
         |> Keyword.put(:workdir, valid_workdir)
         |> Keyword.put_new(:tools, "Bash")
         |> Keyword.put_new(:permission_bypass, true)
+        |> apply_sandbox(sandbox)
 
       case Session.start_link(session_opts) do
         {:ok, pid} ->
@@ -281,6 +283,37 @@ defmodule Shoestring.Harness.ClaudeHeadless do
           {:error, Error.new(:transport, "session_start_failed", inspect(reason))}
       end
     end
+  end
+
+  # A sandboxed launch fails closed when its settings cannot be prepared; it
+  # never falls back to an unsandboxed or permission-bypassing launch.
+  defp sandbox(opts, workdir, workspace_ref) do
+    if Map.get(opts, :sandbox) == true do
+      sandbox_opts =
+        case Map.get(opts, :sandbox_worktrees_dir) do
+          nil -> []
+          dir -> [worktrees_dir: dir]
+        end
+
+      case Sandbox.prepare(workdir, workspace_ref, sandbox_opts) do
+        {:ok, sandbox} ->
+          {:ok, sandbox}
+
+        {:error, reason} ->
+          {:error, Error.new(:transport, "sandbox_unavailable", "Sandbox refused: #{reason}")}
+      end
+    else
+      {:ok, nil}
+    end
+  end
+
+  defp apply_sandbox(session_opts, nil), do: session_opts
+
+  defp apply_sandbox(session_opts, sandbox) do
+    session_opts
+    |> Keyword.put(:permission_bypass, false)
+    |> Keyword.put(:sandbox_options, sandbox.options)
+    |> Keyword.update(:env, sandbox.env, &(&1 ++ sandbox.env))
   end
 
   defp validate_workdir(nil) do
