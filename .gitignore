@@ -50,6 +50,7 @@ plans/milestones/*
 !/plans/milestones/05-quota-aware-mvp.md
 !/plans/milestones/06-cobbler-planning.md
 !/plans/milestones/07-multi-elf.md
+!/plans/milestones/07a-cli-work-loop.md
 !/plans/milestones/configuration-and-usage-ui.md
 !/plans/mockups/
 /plans/mockups/*
