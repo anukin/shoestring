@@ -1,7 +1,8 @@
 # Iteration 7A: CLI work loop
 
-**Status:** in progress (2026-10-15), prioritized ahead of iteration 8 at the
-user's direction ("yeah we need this now")
+**Status:** implemented and live-verified (2026-10-15); awaiting human
+acceptance. Prioritized ahead of iteration 8 at the user's direction ("yeah we
+need this now")
 **Hard dependencies:** iteration 6 (planning, sequential execution); iteration 7
 implementation (fan-out stays opt-in and is not required)
 **Unlocks:** everyday use from a terminal; reconciles the iteration 9 browser
@@ -181,7 +182,8 @@ bypassing them.
 
 Requires explicit authorization naming the budget. Proposed: one Claude
 planner call and at most two Claude Elf runs on a disposable fixture repository,
-driven only through `shoestring do` and `follow`.
+driven only through `shoestring do` and `follow`. Authorized on 2026-10-15 as at
+most two planner calls and two Elf runs; see the completion record.
 
 ## Demo
 
@@ -203,10 +205,39 @@ terminal UI beyond line output, Codex planning, and packaging (iteration 10).
 
 ## Completion record
 
-- Final status and date:
+- Final status and date: implemented and live-verified, 2026-10-15; awaiting
+  human acceptance.
 - Decisions and deviations:
-- Events, contracts and configuration introduced:
-- Verification commands and results:
-- Live verification and demo:
-- Remaining risks:
-- Preflight notes for iteration 8:
+  - Packages A to H landed as `4962141`, `55f12ef`, `c2ba1ac`, `53f79a2`,
+    `01051d7` and `7f3393c`, directly on main as authorized.
+  - The live budget was authorized as two planner calls rather than the one
+    proposed above, so that one repair or retry fit; both were used for first
+    drafts (attempt 1's plan was over the run budget and declined).
+  - `--bare` is not used for planning: it skips the subscription's keychain
+    sign-in.
+  - Manual `/runs/new` Claude runs keep their previous launch; only plan runs
+    are sandboxed by default.
+- Events, contracts and configuration introduced: the planner projection's
+  optional `repository_map`; planner adapter `:claude` (scope `subscription`,
+  tier `conservative_partial`); `elf_dispatch_opts` sandbox default for plan
+  runs; the `/health` `instance` fingerprint; Mix tasks `shoestring.models`,
+  `shoestring.do`, `shoestring.follow`, `shoestring.result` and the new
+  `shoestring.agents` subcommands; `bin/shoestring`.
+- Verification commands and results: `mix precommit` after the live
+  verification: 4 doctests, 2209 tests, 0 failures, 1 skipped (6 excluded),
+  seed 707858; JavaScript 52/52 and 8/8;
+  `tools/live_eval/iter7a_work_loop.exs` rehearsal 3 of 3.
+- Live verification and demo: two live attempts in
+  `plans/evidence/07a-cli-work-loop/live-1` and `live-2`. Attempt 2 passed:
+  plan, human edit to the run budget, approval, held capacity confirmed, one
+  sandboxed Claude Elf run, task accepted, final gate passed, result printed;
+  the printed fetch and merge, run in the fixture, fast-forwarded and its
+  tests passed. Two planner calls and one Elf run were used.
+- Remaining risks: Git prints a non-fatal `packed-refs.lock` error on every
+  sandboxed commit, and a Git that made it fatal would stop Elf commits; the
+  home read denial was not probed live; the planner proposes 3 attempts and
+  `do` has no budget option; the service check against a separate service
+  process is covered only by tests and the manual smoke; Codex planning is out
+  of scope.
+- Preflight notes for iteration 8: start from these evidence records; the
+  Claude five-hour window was at 0.91 utilization after this verification.

@@ -1,0 +1,222 @@
+[
+  [
+    "info",
+    "Goal 7e2034f4-48f8-4d77-8d52-10726428db27"
+  ],
+  [
+    "info",
+    "Base 313b007958df in $EVALUATION/repos/source; gates: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "Drafting a plan..."
+  ],
+  [
+    "info",
+    "Planning is held: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "prompt",
+    "Make this one planning call anyway? Its usage is charged before the call. [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "Plan revision 1 (cf9a553916d2)"
+  ],
+  [
+    "info",
+    "  Goal: Make add(a, b) in calc.py return the sum of its arguments."
+  ],
+  [
+    "info",
+    "  Checks at the end: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  1. fix-add: Make calc.add return the sum of its arguments"
+  ],
+  [
+    "info",
+    "     Outcome: add(a, b) in calc.py returns a + b, and the python_unittest gate on test/test_calc.py passes."
+  ],
+  [
+    "info",
+    "     Files: calc.py, test/test_calc.py"
+  ],
+  [
+    "info",
+    "     Checks: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  Budget: 3 attempts, 30 minutes"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "prompt",
+    "Approve this plan? [y]es / [n]o / [e]dit: ",
+    "e"
+  ],
+  [
+    "edit",
+    {
+      "max_total_attempts": [
+        3,
+        2
+      ],
+      "task_max_attempts": [
+        [
+          "fix-add",
+          3,
+          2
+        ]
+      ]
+    }
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "Plan revision 2 (e8aeb65469dd)"
+  ],
+  [
+    "info",
+    "  Goal: Make add(a, b) in calc.py return the sum of its arguments."
+  ],
+  [
+    "info",
+    "  Checks at the end: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  1. fix-add: Make calc.add return the sum of its arguments"
+  ],
+  [
+    "info",
+    "     Outcome: add(a, b) in calc.py returns a + b, and the python_unittest gate on test/test_calc.py passes."
+  ],
+  [
+    "info",
+    "     Files: calc.py, test/test_calc.py"
+  ],
+  [
+    "info",
+    "     Checks: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  Budget: 2 attempts, 30 minutes"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "prompt",
+    "Approve this plan? [y]es / [n]o / [e]dit: ",
+    "y"
+  ],
+  [
+    "info",
+    "Approved. Execution 0ff37803-2721-5f86-9ee1-861c77332d76 is queued for the service."
+  ],
+  [
+    "info",
+    "Execution requested."
+  ],
+  [
+    "info",
+    "Waiting: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "info",
+    "Task fix-add is held: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "prompt",
+    "Confirm capacity for this one attempt of fix-add? [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    "Confirmed. The service admits it on its next pass."
+  ],
+  [
+    "info",
+    "Task fix-add: capacity confirmed by human:user."
+  ],
+  [
+    "info",
+    "Task fix-add: started (attempt 1)."
+  ],
+  [
+    "info",
+    "  The worker finished; checking its work."
+  ],
+  [
+    "info",
+    "Task fix-add: accepted at f47ae6ee6f2b."
+  ],
+  [
+    "info",
+    "All checks passed at f47ae6ee6f2b."
+  ],
+  [
+    "info",
+    "Done."
+  ],
+  [
+    "info",
+    "Result: f47ae6ee6f2bacf7cab368465b65f43a22785ade"
+  ],
+  [
+    "info",
+    "  Built on 313b007958df in $EVALUATION/worktrees/run-489d9413-a6f8-5c23-a34e-af1caf6d97e1"
+  ],
+  [
+    "info",
+    "  Check: python3 -B -m unittest test/test_calc.py -> exit 0"
+  ],
+  [
+    "info",
+    "    OK"
+  ],
+  [
+    "info",
+    "   calc.py | 2 +-"
+  ],
+  [
+    "info",
+    "   1 file changed, 1 insertion(+), 1 deletion(-)"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "To take it into your repository:"
+  ],
+  [
+    "info",
+    "  cd $EVALUATION/repos/source"
+  ],
+  [
+    "info",
+    "  git fetch $EVALUATION/worktrees/run-489d9413-a6f8-5c23-a34e-af1caf6d97e1 f47ae6ee6f2bacf7cab368465b65f43a22785ade"
+  ],
+  [
+    "info",
+    "  git merge FETCH_HEAD"
+  ]
+]

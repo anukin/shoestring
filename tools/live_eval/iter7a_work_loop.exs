@@ -14,7 +14,9 @@
 # The terminal is a scripted shell that records the transcript. It confirms a
 # held planning call and held task attempts, and approves a plan only when
 # every task names only the fixture's files and the plan's budget is at most
-# two attempts; otherwise it declines and nothing runs. The service check is
+# two attempts. A plan within the fixture but over budget is edited once, as a
+# human would with [e]dit: every attempt limit is capped at two and the edit is
+# submitted as a new revision. Anything else is declined and nothing runs. The service check is
 # not exercised (the service runs in this node). No raw provider frames,
 # session/message identifiers, credentials or reasoning are exported.
 
@@ -45,14 +47,62 @@ defmodule Iter7aShell do
       question =~ "planning call" -> "y"
       question =~ "repair it once" -> "y"
       question =~ "Confirm capacity" -> "y"
-      question =~ "Approve this plan" -> if acceptable_plan?(), do: "y", else: "n"
+      question =~ "Approve this plan" -> review_answer()
       true -> "q"
     end
   end
 
-  # The plan printed most recently: every Files line within the fixture, and
-  # a budget of at most two attempts.
-  defp acceptable_plan? do
+  defp review_answer do
+    {files_ok?, budget} = plan_shown()
+
+    cond do
+      files_ok? and is_integer(budget) and budget <= @max_attempts -> "y"
+      files_ok? and not edited?() -> "e"
+      true -> "n"
+    end
+  end
+
+  defp edited?, do: Enum.any?(transcript(), &match?({:edit, _}, &1))
+
+  @doc "The human edit: caps the plan's and every task's attempt limit."
+  def edit(path) do
+    plan = path |> File.read!() |> Jason.decode!()
+
+    capped =
+      plan
+      |> update_in(["budget", "max_total_attempts"], &min(&1, @max_attempts))
+      |> Map.update!("tasks", fn tasks ->
+        Enum.map(tasks, fn task ->
+          update_in(task, ["execution", "max_attempts"], &min(&1, @max_attempts))
+        end)
+      end)
+
+    File.write!(path, Jason.encode!(capped, pretty: true))
+
+    Agent.update(
+      __MODULE__,
+      &[
+        {:edit,
+         %{
+           "max_total_attempts" => [
+             plan["budget"]["max_total_attempts"],
+             capped["budget"]["max_total_attempts"]
+           ],
+           "task_max_attempts" =>
+             Enum.map(Enum.zip(plan["tasks"], capped["tasks"]), fn {a, b} ->
+               [a["id"], a["execution"]["max_attempts"], b["execution"]["max_attempts"]]
+             end)
+         }}
+        | &1
+      ]
+    )
+
+    :submit
+  end
+
+  # The plan printed most recently: whether every Files line is within the
+  # fixture, and its budget.
+  defp plan_shown do
     lines =
       transcript()
       |> Enum.flat_map(fn
@@ -77,7 +127,7 @@ defmodule Iter7aShell do
         end
       end)
 
-    Enum.all?(files, &(&1 in @allowed_files)) and is_integer(budget) and budget <= @max_attempts
+    {Enum.all?(files, &(&1 in @allowed_files)), budget}
   end
 end
 
@@ -274,7 +324,14 @@ defmodule Iter7aWorkLoop do
     source_before = source_state()
 
     loop_opts =
-      [repo: source(), by: @by, shell: Iter7aShell, service: fn -> :ok end]
+      [
+        repo: source(),
+        by: @by,
+        shell: Iter7aShell,
+        service: fn -> :ok end,
+        edit: &Iter7aShell.edit/1,
+        edit_dir: Path.join(root(), "edits") |> tap(&File.mkdir_p!/1)
+      ]
       |> then(
         &if live?(), do: &1, else: Keyword.put(&1, :planner_config, rehearsal_planner(base))
       )

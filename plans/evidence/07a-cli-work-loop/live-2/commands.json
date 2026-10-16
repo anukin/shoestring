@@ -1,0 +1,47 @@
+[
+  {
+    "command": "cat calc.py; echo ---; cat test/test_calc.py; git ls-files",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "sed -i '' 's/    raise NotImplementedError/    return a + b/' calc.py && git diff && python3 -m unittest test.test_calc -v",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "git commit -qam \"Make calc.add return the sum of its arguments\" && git diff --stat 313b007958dfa192946781a931c53c22b416123a HEAD && git log --oneline -1",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "git status --short --branch; git rev-parse HEAD; git log --oneline -3",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "rm -rf __pycache__ test/__pycache__ && git status --short",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  }
+]

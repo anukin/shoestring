@@ -1,0 +1,68 @@
+[
+  [
+    "info",
+    "Goal e9cdd98c-f3f8-448f-a59f-8b04f6221d6d"
+  ],
+  [
+    "info",
+    "Base c126ea87bd85 in $EVALUATION/repos/source; gates: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "Drafting a plan..."
+  ],
+  [
+    "info",
+    "Planning is held: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "prompt",
+    "Make this one planning call anyway? Its usage is charged before the call. [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "Plan revision 1 (4966189713b0)"
+  ],
+  [
+    "info",
+    "  Goal: Make add(a, b) in calc.py return the sum of its arguments."
+  ],
+  [
+    "info",
+    "  Checks at the end: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  1. fix-add: Make calc.add(a, b) return a + b"
+  ],
+  [
+    "info",
+    "     Outcome: add(a, b) in calc.py returns the sum of its two arguments, and test/test_calc.py passes."
+  ],
+  [
+    "info",
+    "     Files: calc.py, test/test_calc.py"
+  ],
+  [
+    "info",
+    "     Checks: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  Budget: 3 attempts, 15 minutes"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "prompt",
+    "Approve this plan? [y]es / [n]o / [e]dit: ",
+    "n"
+  ]
+]

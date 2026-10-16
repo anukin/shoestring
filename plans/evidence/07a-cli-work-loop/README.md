@@ -12,12 +12,15 @@ Started from `788413d`. Direct-main development, as for iteration 7.
 | C. Claude planner | `c2ba1ac` | `Planner.ClaudeHeadless`: one tool-free `claude --print --json-schema` call on the subscription scope; confirmation per call |
 | D. Sandboxed Elves | `53f79a2` | plan-run Claude Elves launch sandboxed by default (GitSandbox roots, `dontAsk`, no bypass, home-free Git); fail closed |
 | E-G. do, follow, result | `01051d7` | `shoestring.do`, `follow`, `result`; `/health` database fingerprint |
-| H. Entry point, docs, driver | this commit | `bin/shoestring`, README quick start, `docs/cli-work-loop.md`, `tools/live_eval/iter7a_work_loop.exs` |
+| H. Entry point, docs, driver | `7f3393c` | `bin/shoestring`, README quick start, `docs/cli-work-loop.md`, `tools/live_eval/iter7a_work_loop.exs` |
 
 ## Verification
 
 VERIFIED: `mix precommit` exited 0: **4 doctests, 2209 tests, 0 failures,
 1 skipped (6 excluded)**, seed 440093, 443.1 s. JavaScript **52/52** and **8/8**.
+After the live verification (driver edit path added): `mix precommit` exited
+0: **4 doctests, 2209 tests, 0 failures, 1 skipped (6 excluded)**, seed
+707858, 455.5 s; JavaScript 52/52 and 8/8.
 Earlier, after packages A-C: 4 doctests, 2186 tests, 0 failures, 1 skipped,
 6 excluded (seed 450409).
 
@@ -60,18 +63,83 @@ VERIFIED: `bin/shoestring models add`, `agents create ... --default` and
   different state directory than this command." No goal was recorded.
 - A dirty repository and a non-repository were refused with directions.
 
-## Unverified until the live verification
+## Live verification (authorized: at most two planner calls, two Claude Elf runs)
 
-- The Claude result shape for `--json-schema` (the adapter accepts
-  `structured_output` or JSON text in `result`).
-- That the Claude sandbox's `allowRead` for the run's paths wins over
-  `denyRead` for the home directory when the state directory is under it.
-- Plan quality from a real planner call, and the sandboxed Elf completing the
-  task with Claude Code.
+The user authorized it on 2026-10-15 ("yes run the live verification run")
+against the proposed bound: one disposable fixture under the home directory,
+at most **two planner calls** and **two Claude Elf runs**. Used: **two planner
+calls, one Elf run**. Claude Code 2.1.301, model `claude-opus-5-5`, Git 2.50.1.
+Each run's fixture and state directory was a new directory under the home
+directory, so the sandbox's home `denyRead` covered the worktree's parent.
+Records were exported by the driver with the evaluation root and home
+directory substituted; no session or message identifiers, raw provider frames
+or reasoning are exported.
 
-Proposed live bound (needs the user's authorization): one disposable fixture
-repository under the home directory, at most **two planner calls** and **two
-Claude Elf runs**, driven only through the work loop modules.
+### Attempt 1: planner call, plan declined (no Elf run)
+
+VERIFIED ([live-1](live-1/)): the held planning call was confirmed and one
+`claude --print --json-schema` call returned a plan that parsed and passed the
+contract on the first try (826 output tokens, about 7 s for the whole command).
+The result shape question is closed: the adapter accepted Claude's reply as is.
+The plan was sound (one task, `calc.py`, the detected gate, criteria that keep
+the tests unchanged) but asked for a budget of **3 attempts**, above the
+authorized two runs, so the scripted terminal declined it and nothing ran.
+
+The driver was then given the human's other option: on a plan within the
+fixture but over budget, answer `e`, cap every attempt limit at two and submit
+the edit as a new revision (`Iter7aShell.edit/1`). Checked offline against
+attempt 1's stored plan before spending the second call: the capped plan
+passed `PlanContract.new/1` and the answers were `e`, then `y`, and `n` for an
+over-budget or out-of-fixture plan.
+
+### Attempt 2: plan, edit, approve, sandboxed Elf, result (passed)
+
+VERIFIED ([live-2](live-2/), `transcript.json`, `domain-events.json`):
+
+- One planner call (878 output tokens): one task `fix-add` on `calc.py`, budget
+  3 attempts and 30 minutes. The terminal pressed `e`; revision 2 carried
+  budget 2 and task `max_attempts` 2, was shown and approved.
+- The task was held for capacity (`conservative_partial`), confirmed once by
+  `human:user`, admitted and run: **one** Claude Elf run, 6 turns, 27.6 s,
+  0.0845 USD reported by the CLI, `terminal_reason` `completed`.
+- Runtime: tools `Bash` only, permission mode `dontAsk` (the bypass mode is no
+  longer used for plan runs).
+- The Elf read `calc.py` and the tests, replaced `raise NotImplementedError`
+  with `return a + b`, ran the tests, committed, and removed its
+  `__pycache__` directories, all inside its worktree under the home directory.
+- Shoestring accepted the task at `f47ae6e`, ran the final gate
+  (`python3 -B -m unittest test/test_calc.py` exit 0) and printed the result:
+  `calc.py | 2 +-`, with the fetch and merge commands.
+- The fixture source was unchanged by the run. The printed `git fetch` and
+  `git merge FETCH_HEAD`, run as printed in the fixture source afterwards,
+  fast-forwarded to `f47ae6e`, and the tests ran 2, OK. The driver's clone
+  check gave the same.
+- Whole loop: 100.4 s from request to result.
+
+Sandbox findings:
+
+- VERIFIED: with the state directory under the home directory, the sandboxed
+  Elf could read and write its worktree and private Git directories; the
+  run-path `allowRead` was not overridden by the home `denyRead`. That the
+  rest of the home directory was unreadable was **not** probed live (the Elf
+  never tried); the hermetic tests cover only the settings derived.
+- VERIFIED: the sandbox confined writes. The Elf reported that `git commit`
+  printed "Unable to create ... packed-refs.lock: Operation not permitted";
+  the commit still landed and the branch pointed at it. Reproduced without
+  Claude on Git 2.50.1 with the private store laid out as Shoestring builds it
+  (`init --bare`, fetch, `worktree add`) and its top directory read-only: a
+  worktree commit prints the same error, exits 0 and records the commit,
+  whether or not `packed-refs` exists. It is Git's own non-fatal lock attempt
+  on a branch update, refused because the store's top directory is outside
+  the writable roots by design. It is noise, not a failure; a future Git that
+  made it fatal would stop Elf commits under the sandbox.
+- Claude reported `allowed_warning` with five-hour utilization **0.90 → 0.91**
+  and seven-day 0.71 during the run.
+
+Not verified live: planner cost (the planner records output tokens, not
+cost); a repair call; a failing or scope-blocked attempt; the service check
+against a separate service process (the driver runs the service in its own
+node, as in the rehearsal).
 
 ## Limits
 
@@ -80,3 +148,7 @@ Claude Elf runs**, driven only through the work loop modules.
 - Amendment projections do not carry the repository map.
 - `follow` asks only for capacity confirmations; failures, scope blockers and
   integration stop it with the command to run.
+- The planner chose a budget of 3 attempts in both live calls. `do` has no
+  budget option; a human lowers it with `[e]dit`.
+- Git prints a harmless `packed-refs.lock` error on every sandboxed Elf
+  commit (see the live findings).

@@ -1,0 +1,16 @@
+{
+  "mode": "live",
+  "result": "nil",
+  "base": "c126ea87bd852e4d7555696c83d0339c83a714e8",
+  "agent_id": "71f4f60c-560d-4f36-821c-7b3a9606e911",
+  "outcome": "{:declined, \"e9cdd98c-f3f8-448f-a59f-8b04f6221d6d\"}",
+  "followed": "{:declined, \"e9cdd98c-f3f8-448f-a59f-8b04f6221d6d\"}",
+  "source_unchanged": true,
+  "merge_in_clone": null,
+  "elapsed_ms": 7193,
+  "runs": 0,
+  "planner_attempts": 1,
+  "final_status": {
+    "completed?": false
+  }
+}

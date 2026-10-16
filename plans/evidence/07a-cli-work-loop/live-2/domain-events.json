@@ -1,0 +1,546 @@
+[
+  {
+    "type": "cobbler.planner.requested",
+    "payload": {
+      "configuration": {
+        "adapter": "claude",
+        "endpoint_digest": "44965f1c4bf1114100b5927a2b7761d7c27e8d9f449ec563d93e6134d0ab5acd",
+        "max_attempts": 2,
+        "max_charged_output_tokens": 16384,
+        "max_output_tokens": 8192,
+        "model": "opus",
+        "provider_id": "claude",
+        "scope": "subscription",
+        "support_tier": "conservative_partial",
+        "timeout_ms": 240000,
+        "version": "1"
+      },
+      "input_digest": "527a24bfa4983751d10a540c736c4085800d7d3d717d4c8dc80d6dc992f8b204",
+      "projection_json": "{\"description\":\"Make add(a, b) in calc.py return the sum of its arguments.\",\"evidence_summaries\":{\"items\":[]},\"goal_contract\":{\"acceptance\":{\"evidence\":[\"Every named gate passes at the final commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}]},\"constraints\":[\"Change only what the request needs; leave unrelated files unchanged.\",\"Do not edit or delete existing tests unless the request asks for it.\"],\"non_goals\":[\"Unrelated refactoring, dependency upgrades or formatting changes.\"],\"repository\":{\"base_revision\":\"313b007958dfa192946781a931c53c22b416123a\"},\"statement\":\"Make add(a, b) in calc.py return the sum of its arguments.\"},\"goal_id\":\"7e2034f4-48f8-4d77-8d52-10726428db27\",\"repository_map\":{\"complete\":true,\"omitted_paths\":0,\"paths\":[\"calc.py\",\"test/__init__.py\",\"test/test_calc.py\"],\"total_paths\":3},\"requested_by\":\"human:user\",\"source_context_refs\":[],\"title\":\"Make add(a, b) in calc.py return the sum of its arguments.\"}",
+      "request_id": "631ace44-d8b7-40d2-8afa-97299b2ac962",
+      "request_key": "initial"
+    },
+    "sequence": 1,
+    "occurred_at": "2026-10-16T02:04:38.530815Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "planner.claude",
+        "compatibility_state": "compatible",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "a6d21337-2777-45bf-b2f3-9833da9de77e",
+      "evaluated_at": "2026-10-16T02:04:38.534897Z",
+      "explanation": "Candidate support tier 'conservative_partial' requires attributable single-decision confirmation",
+      "extensions": {},
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "1dc1f58e-cab2-4fbb-a2e8-7b7cd24d4a02",
+        "windows": []
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-16T02:09:38.534897Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "support_tier_conservative_partial",
+      "reobservation_required": true,
+      "requested_capability": "read_only",
+      "result": "require_confirmation",
+      "scope": "subscription"
+    },
+    "sequence": 2,
+    "occurred_at": "2026-10-16T02:04:38.548793Z"
+  },
+  {
+    "type": "cobbler.planner.blocked",
+    "payload": {
+      "admission_event_id": "bd612a11-4c84-4430-a963-7d412b9c0bf9",
+      "errors": {
+        "items": [
+          {
+            "code": "support_tier_conservative_partial",
+            "message": "Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+          }
+        ]
+      },
+      "request_id": "631ace44-d8b7-40d2-8afa-97299b2ac962"
+    },
+    "sequence": 3,
+    "occurred_at": "2026-10-16T02:04:38.551119Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "planner.claude",
+        "compatibility_state": "compatible",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "e0fce019-d5d9-4165-a622-c003e3352ddc",
+      "evaluated_at": "2026-10-16T02:04:38.553038Z",
+      "explanation": "Admitted via attributable single-decision confirmation by 'human:user' (intent: 'read_only'); not automatically safe (Candidate support tier 'conservative_partial' requires attributable single-decision confirmation)",
+      "extensions": {},
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "1dc1f58e-cab2-4fbb-a2e8-7b7cd24d4a02",
+        "windows": []
+      },
+      "override": {
+        "confirmed_at": null,
+        "confirmed_by": "human:user",
+        "intent": "read_only",
+        "reason": "valid",
+        "target_provider_id": "claude",
+        "target_scope": "subscription",
+        "valid": true
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-16T02:09:38.553038Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confirmed_support_tier_conservative_partial",
+      "reobservation_required": false,
+      "requested_capability": "read_only",
+      "result": "admit",
+      "scope": "subscription"
+    },
+    "sequence": 4,
+    "occurred_at": "2026-10-16T02:04:38.553846Z"
+  },
+  {
+    "type": "cobbler.planner.attempt.started",
+    "payload": {
+      "admission_event_id": "defcfafe-1aa1-417c-85ba-dae3f638fb9c",
+      "attempt": 1,
+      "charged_output_tokens": 8192,
+      "output_token_allowance": 8192,
+      "request_id": "631ace44-d8b7-40d2-8afa-97299b2ac962"
+    },
+    "sequence": 7,
+    "occurred_at": "2026-10-16T02:04:38.562181Z"
+  },
+  {
+    "type": "cobbler.planner.attempt.finished",
+    "payload": {
+      "attempt": 1,
+      "errors": {
+        "items": []
+      },
+      "output_tokens": 878,
+      "plan_content": "{\"budget\":{\"max_total_attempts\":3,\"max_total_duration_seconds\":1800},\"goal\":{\"acceptance\":{\"evidence\":[\"Every named gate passes at the final commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}]},\"constraints\":[\"Change only what the request needs; leave unrelated files unchanged.\",\"Do not edit or delete existing tests unless the request asks for it.\"],\"non_goals\":[\"Unrelated refactoring, dependency upgrades or formatting changes.\"],\"repository\":{\"base_revision\":\"313b007958dfa192946781a931c53c22b416123a\"},\"statement\":\"Make add(a, b) in calc.py return the sum of its arguments.\"},\"planner\":{\"identity\":\"claude:opus\",\"source_context_refs\":[\"goal:7e2034f4-48f8-4d77-8d52-10726428db27\"],\"version\":\"1\"},\"tasks\":[{\"acceptance_criteria\":[\"calc.add(a, b) returns a + b.\",\"Only calc.py is modified; test files are unchanged.\",\"The python_unittest gate on test/test_calc.py passes at the final commit.\"],\"checkpoint\":{\"condition\":\"The python_unittest gate on test/test_calc.py passes, and the diff against the base revision touches only calc.py.\",\"evidence\":[\"Gate output for test/test_calc.py showing every test passing\",\"Diff against 313b007958dfa192946781a931c53c22b416123a limited to calc.py\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":3,\"max_duration_seconds\":600},\"expected_artifacts\":[\"Modified calc.py\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}],\"hints\":{\"files\":[\"calc.py\",\"test/test_calc.py\"],\"symbols\":[\"add\"]},\"id\":\"fix-add\",\"inputs\":[\"Goal statement: Make add(a, b) in calc.py return the sum of its arguments.\",\"Base revision 313b007958dfa192946781a931c53c22b416123a\"],\"outcome\":\"add(a, b) in calc.py returns a + b, and the python_unittest gate on test/test_calc.py passes.\",\"risks\":[\"The existing tests may expect behaviour beyond simple addition (for example, specific types). Read test/test_calc.py before changing anything.\",\"Accidental formatting or refactoring changes elsewhere in calc.py would break the non-goals.\"],\"title\":\"Make calc.add return the sum of its arguments\"}],\"version\":1}",
+      "plan_digest": "cf9a553916d297420a333f471a7e20a9c33c1c9b5e1c164070007334bc35e304",
+      "request_id": "631ace44-d8b7-40d2-8afa-97299b2ac962",
+      "state": "ready"
+    },
+    "sequence": 8,
+    "occurred_at": "2026-10-16T02:04:46.551909Z"
+  },
+  {
+    "type": "cobbler.plan.revision.created",
+    "payload": {
+      "author_kind": "human",
+      "authored_by": "human:user",
+      "ordered_task_ids": [
+        "fix-add"
+      ],
+      "plan_content": "{\"budget\":{\"max_total_attempts\":3,\"max_total_duration_seconds\":1800},\"goal\":{\"acceptance\":{\"evidence\":[\"Every named gate passes at the final commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}]},\"constraints\":[\"Change only what the request needs; leave unrelated files unchanged.\",\"Do not edit or delete existing tests unless the request asks for it.\"],\"non_goals\":[\"Unrelated refactoring, dependency upgrades or formatting changes.\"],\"repository\":{\"base_revision\":\"313b007958dfa192946781a931c53c22b416123a\"},\"statement\":\"Make add(a, b) in calc.py return the sum of its arguments.\"},\"planner\":{\"identity\":\"claude:opus\",\"source_context_refs\":[\"goal:7e2034f4-48f8-4d77-8d52-10726428db27\"],\"version\":\"1\"},\"tasks\":[{\"acceptance_criteria\":[\"calc.add(a, b) returns a + b.\",\"Only calc.py is modified; test files are unchanged.\",\"The python_unittest gate on test/test_calc.py passes at the final commit.\"],\"checkpoint\":{\"condition\":\"The python_unittest gate on test/test_calc.py passes, and the diff against the base revision touches only calc.py.\",\"evidence\":[\"Gate output for test/test_calc.py showing every test passing\",\"Diff against 313b007958dfa192946781a931c53c22b416123a limited to calc.py\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":3,\"max_duration_seconds\":600},\"expected_artifacts\":[\"Modified calc.py\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}],\"hints\":{\"files\":[\"calc.py\",\"test/test_calc.py\"],\"symbols\":[\"add\"]},\"id\":\"fix-add\",\"inputs\":[\"Goal statement: Make add(a, b) in calc.py return the sum of its arguments.\",\"Base revision 313b007958dfa192946781a931c53c22b416123a\"],\"outcome\":\"add(a, b) in calc.py returns a + b, and the python_unittest gate on test/test_calc.py passes.\",\"risks\":[\"The existing tests may expect behaviour beyond simple addition (for example, specific types). Read test/test_calc.py before changing anything.\",\"Accidental formatting or refactoring changes elsewhere in calc.py would break the non-goals.\"],\"title\":\"Make calc.add return the sum of its arguments\"}],\"version\":1}",
+      "plan_digest": "cf9a553916d297420a333f471a7e20a9c33c1c9b5e1c164070007334bc35e304",
+      "plan_revision_id": "f050b02d-0fa3-48b0-9af9-9e21d9ca6bf7",
+      "plan_version": 1,
+      "proposal_id": "planner:631ace44-d8b7-40d2-8afa-97299b2ac962",
+      "revision_number": 1,
+      "task_count": 1
+    },
+    "sequence": 11,
+    "occurred_at": "2026-10-16T02:04:46.557007Z"
+  },
+  {
+    "type": "cobbler.plan.revision.created",
+    "payload": {
+      "author_kind": "human",
+      "authored_by": "human:user",
+      "ordered_task_ids": [
+        "fix-add"
+      ],
+      "parent_revision_number": 1,
+      "plan_content": "{\"budget\":{\"max_total_attempts\":2,\"max_total_duration_seconds\":1800},\"goal\":{\"acceptance\":{\"evidence\":[\"Every named gate passes at the final commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}]},\"constraints\":[\"Change only what the request needs; leave unrelated files unchanged.\",\"Do not edit or delete existing tests unless the request asks for it.\"],\"non_goals\":[\"Unrelated refactoring, dependency upgrades or formatting changes.\"],\"repository\":{\"base_revision\":\"313b007958dfa192946781a931c53c22b416123a\"},\"statement\":\"Make add(a, b) in calc.py return the sum of its arguments.\"},\"planner\":{\"identity\":\"claude:opus\",\"source_context_refs\":[\"goal:7e2034f4-48f8-4d77-8d52-10726428db27\"],\"version\":\"1\"},\"tasks\":[{\"acceptance_criteria\":[\"calc.add(a, b) returns a + b.\",\"Only calc.py is modified; test files are unchanged.\",\"The python_unittest gate on test/test_calc.py passes at the final commit.\"],\"checkpoint\":{\"condition\":\"The python_unittest gate on test/test_calc.py passes, and the diff against the base revision touches only calc.py.\",\"evidence\":[\"Gate output for test/test_calc.py showing every test passing\",\"Diff against 313b007958dfa192946781a931c53c22b416123a limited to calc.py\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":2,\"max_duration_seconds\":600},\"expected_artifacts\":[\"Modified calc.py\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}],\"hints\":{\"files\":[\"calc.py\",\"test/test_calc.py\"],\"symbols\":[\"add\"]},\"id\":\"fix-add\",\"inputs\":[\"Goal statement: Make add(a, b) in calc.py return the sum of its arguments.\",\"Base revision 313b007958dfa192946781a931c53c22b416123a\"],\"outcome\":\"add(a, b) in calc.py returns a + b, and the python_unittest gate on test/test_calc.py passes.\",\"risks\":[\"The existing tests may expect behaviour beyond simple addition (for example, specific types). Read test/test_calc.py before changing anything.\",\"Accidental formatting or refactoring changes elsewhere in calc.py would break the non-goals.\"],\"title\":\"Make calc.add return the sum of its arguments\"}],\"version\":1}",
+      "plan_digest": "e8aeb65469dd92e4ee1cbf0f2fabe457699b5399d9c3e902aabe6a23ad72e253",
+      "plan_revision_id": "33b231fa-8330-407c-b30d-639432ed95ce",
+      "plan_version": 1,
+      "proposal_id": "do-edit-1-11266",
+      "revision_number": 2,
+      "task_count": 1
+    },
+    "sequence": 12,
+    "occurred_at": "2026-10-16T02:04:46.562133Z"
+  },
+  {
+    "type": "cobbler.plan.approved",
+    "payload": {
+      "decided_at": "2026-10-16T02:04:46.563975Z",
+      "decided_by": "human:user",
+      "decision_id": "do-approve-2",
+      "plan_digest": "e8aeb65469dd92e4ee1cbf0f2fabe457699b5399d9c3e902aabe6a23ad72e253",
+      "plan_revision_id": "33b231fa-8330-407c-b30d-639432ed95ce",
+      "revision_number": 2
+    },
+    "sequence": 13,
+    "occurred_at": "2026-10-16T02:04:46.563975Z"
+  },
+  {
+    "type": "cobbler.plan.execution.requested",
+    "payload": {
+      "agent_profile": {
+        "adapter_id": "claude_headless_stream_json",
+        "digest": "0792c2de8abe18bf1ab39212fd074769108bfb6f5bc96eb50f633089eb978288",
+        "instructions": "Complete the task within its stated scope and acceptance gates. Commit the result.",
+        "model": "opus",
+        "profile_id": "118df2d0-ce79-4f99-9aee-36c290425249",
+        "provider": "claude",
+        "revision": 1,
+        "role": "Worker"
+      },
+      "execution_id": "0ff37803-2721-5f86-9ee1-861c77332d76",
+      "ordered_task_ids": [
+        "fix-add"
+      ],
+      "plan_digest": "e8aeb65469dd92e4ee1cbf0f2fabe457699b5399d9c3e902aabe6a23ad72e253",
+      "repository_path": "$EVALUATION/repos/source",
+      "requested_by": "human:user",
+      "revision_number": 2
+    },
+    "sequence": 14,
+    "occurred_at": "2026-10-16T02:04:46.597988Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "claude_headless_stream_json",
+        "compatibility_state": "degraded",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "2eedf8bb-c170-4e64-9685-8339c60de583",
+      "evaluated_at": "2026-10-16T02:04:46.618392Z",
+      "explanation": "Candidate support tier 'conservative_partial' requires attributable single-decision confirmation",
+      "extensions": {},
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "c2662270-d2e5-595c-9bf3-28dce18fc94f",
+        "windows": []
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-16T02:09:46.618392Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "support_tier_conservative_partial",
+      "reobservation_required": true,
+      "requested_capability": "supervised_execution",
+      "result": "require_confirmation",
+      "scope": "subscription"
+    },
+    "sequence": 16,
+    "occurred_at": "2026-10-16T02:04:46.618392Z"
+  },
+  {
+    "type": "cobbler.plan.capacity.confirmed",
+    "payload": {
+      "adapter_id": "claude_headless_stream_json",
+      "attempt": 1,
+      "confirmation_id": "401a06e8-cd21-4680-99d3-c9164becb62e",
+      "confirmed_by": "human:user",
+      "execution_id": "0ff37803-2721-5f86-9ee1-861c77332d76",
+      "plan_digest": "e8aeb65469dd92e4ee1cbf0f2fabe457699b5399d9c3e902aabe6a23ad72e253",
+      "plan_task_id": "fix-add",
+      "provider_id": "claude",
+      "revision_number": 2,
+      "scope": "subscription"
+    },
+    "sequence": 17,
+    "occurred_at": "2026-10-16T02:04:47.637557Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "claude_headless_stream_json",
+        "compatibility_state": "degraded",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "25a2bb33-d69c-4092-9f56-b34241449cba",
+      "evaluated_at": "2026-10-16T02:05:47.428620Z",
+      "explanation": "Admitted via attributable single-decision confirmation by 'human:user' (intent: 'supervised_execution'); not automatically safe (Candidate support tier 'conservative_partial' requires attributable single-decision confirmation)",
+      "extensions": {
+        "shoestring.plan:capacity_confirmation_id": "25a2bb33-d69c-4092-9f56-b34241449cba"
+      },
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "c2662270-d2e5-595c-9bf3-28dce18fc94f",
+        "windows": []
+      },
+      "override": {
+        "confirmed_at": "2026-10-16T02:04:47.637557Z",
+        "confirmed_by": "human:user",
+        "intent": "supervised_execution",
+        "reason": "valid",
+        "target_provider_id": "claude",
+        "target_scope": "subscription",
+        "valid": true
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-16T02:10:47.428620Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confirmed_support_tier_conservative_partial",
+      "reobservation_required": false,
+      "requested_capability": "supervised_execution",
+      "result": "admit",
+      "scope": "subscription"
+    },
+    "sequence": 18,
+    "occurred_at": "2026-10-16T02:05:47.428620Z"
+  },
+  {
+    "type": "cobbler.plan.task.dispatched",
+    "payload": {
+      "attempt": 1,
+      "command_id": "plan-fix-add-1",
+      "execution_id": "0ff37803-2721-5f86-9ee1-861c77332d76",
+      "grant_id": "3cbb06e8-0df9-42d2-b20c-c58c74a8ba3d",
+      "plan_digest": "e8aeb65469dd92e4ee1cbf0f2fabe457699b5399d9c3e902aabe6a23ad72e253",
+      "plan_task_id": "fix-add",
+      "revision_number": 2,
+      "run_id": "489d9413-a6f8-5c23-a34e-af1caf6d97e1",
+      "trajectory_task_id": "b8f76c12-153f-5441-bbb4-e369669ba6ca"
+    },
+    "sequence": 26,
+    "occurred_at": "2026-10-16T02:05:47.802179Z"
+  },
+  {
+    "type": "run.running",
+    "payload": {
+      "run_id": "489d9413-a6f8-5c23-a34e-af1caf6d97e1"
+    },
+    "sequence": 28,
+    "occurred_at": "2026-10-16T02:05:48.878073Z"
+  },
+  {
+    "type": "run.completed",
+    "payload": {
+      "run_id": "489d9413-a6f8-5c23-a34e-af1caf6d97e1"
+    },
+    "sequence": 50,
+    "occurred_at": "2026-10-16T02:06:16.639766Z"
+  },
+  {
+    "type": "cobbler.plan.task.accepted",
+    "payload": {
+      "attempt": 1,
+      "commit": "f47ae6ee6f2bacf7cab368465b65f43a22785ade",
+      "evidence": {
+        "gates": [
+          {
+            "argv": "python3 -B -m unittest test/test_calc.py",
+            "commit": "f47ae6ee6f2bacf7cab368465b65f43a22785ade",
+            "duration_ms": 200,
+            "exit_status": 0,
+            "gate": "python_unittest",
+            "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+            "worktree": "$EVALUATION/worktrees/run-489d9413-a6f8-5c23-a34e-af1caf6d97e1"
+          }
+        ],
+        "run_completed": true
+      },
+      "execution_id": "0ff37803-2721-5f86-9ee1-861c77332d76",
+      "gate": "python_unittest",
+      "gate_argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "test/test_calc.py"
+      ],
+      "plan_digest": "e8aeb65469dd92e4ee1cbf0f2fabe457699b5399d9c3e902aabe6a23ad72e253",
+      "plan_task_id": "fix-add",
+      "revision_number": 2,
+      "run_id": "489d9413-a6f8-5c23-a34e-af1caf6d97e1"
+    },
+    "sequence": 51,
+    "occurred_at": "2026-10-16T02:06:17.792180Z"
+  },
+  {
+    "type": "cobbler.plan.execution.completed",
+    "payload": {
+      "commit": "f47ae6ee6f2bacf7cab368465b65f43a22785ade",
+      "evidence": {
+        "gates": [
+          {
+            "argv": "python3 -B -m unittest test/test_calc.py",
+            "commit": "f47ae6ee6f2bacf7cab368465b65f43a22785ade",
+            "duration_ms": 201,
+            "exit_status": 0,
+            "gate": "python_unittest",
+            "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+            "worktree": "$EVALUATION/worktrees/run-489d9413-a6f8-5c23-a34e-af1caf6d97e1"
+          }
+        ]
+      },
+      "execution_id": "0ff37803-2721-5f86-9ee1-861c77332d76",
+      "global_gate": "python_unittest",
+      "plan_digest": "e8aeb65469dd92e4ee1cbf0f2fabe457699b5399d9c3e902aabe6a23ad72e253",
+      "revision_number": 2
+    },
+    "sequence": 52,
+    "occurred_at": "2026-10-16T02:06:18.117169Z"
+  }
+]
