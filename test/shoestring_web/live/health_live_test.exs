@@ -26,6 +26,11 @@ defmodule ShoestringWeb.HealthLiveTest do
 
     assert body["ready"] == true
     assert body["checks"]["application"] == "ok"
+
+    # Identifies the database for the CLI without revealing its path.
+    assert body["instance"] == Shoestring.Health.instance()
+    assert body["instance"] =~ ~r/\A[0-9a-f]{16}\z/
+    refute String.contains?(body["instance"], "/")
   end
 
   test "returns service unavailable when local state is invalid", %{conn: conn} do

@@ -23,6 +23,18 @@ defmodule Shoestring.Health do
     }
   end
 
+  @doc """
+  A short fingerprint of the database this node uses: the first 16 hex
+  characters of the SHA-256 of its absolute path. The CLI compares it with its
+  own before queuing work, so work is never left in a database no running
+  service reads. It does not reveal the path.
+  """
+  @spec instance() :: String.t()
+  def instance do
+    database = Repo.config() |> Keyword.fetch!(:database) |> Path.expand()
+    :crypto.hash(:sha256, database) |> Base.encode16(case: :lower) |> binary_part(0, 16)
+  end
+
   @spec ready?() :: boolean()
   def ready?, do: ready?(check())
 

@@ -9,6 +9,6 @@ defmodule ShoestringWeb.HealthController do
 
     conn
     |> put_status(if(ready?, do: :ok, else: :service_unavailable))
-    |> json(%{ready: ready?, checks: checks})
+    |> json(%{ready: ready?, checks: checks, instance: Health.instance()})
   end
 end
