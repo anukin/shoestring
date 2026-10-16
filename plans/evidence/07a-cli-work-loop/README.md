@@ -145,6 +145,10 @@ node, as in the rehearsal).
 
 - Manual `/runs/new` Claude runs share Git storage and keep their previous,
   unsandboxed launch.
+- Checks (gates) run unsandboxed (REPO-INSPECTION: `Cobbler.GateProcess`
+  spawns the command with no file or network confinement and the service's
+  environment). A gate runs code the Elf wrote, so it can do what the Elf's
+  sandbox refuses. Planned as iteration 8 work package 0.
 - Amendment projections do not carry the repository map.
 - `follow` asks only for capacity confirmations; failures, scope blockers and
   integration stop it with the command to run.
