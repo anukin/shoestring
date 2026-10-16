@@ -108,6 +108,44 @@ defmodule Shoestring.Cobbler.PlannerTest do
     refute_receive {:planner_input, _}
   end
 
+  test "a repository map reaches the planner input and replays; a malformed one is refused",
+       context do
+    map = %{
+      "paths" => ["calc.py", "test/test_calc.py"],
+      "total_paths" => 3,
+      "omitted_paths" => 1,
+      "complete" => false
+    }
+
+    opts = options(context)
+
+    assert {:ok, %{request: row, outcome: :recorded}} =
+             Planner.request(context.goal.id, attrs(%{repository_map: map}), opts)
+
+    assert row.projection["repository_map"] == map
+
+    assert {:ok, %{outcome: :finished}} = Planner.generate(context.goal.id, "initial-1", opts)
+    assert_received {:planner_input, input}
+    assert input["projection"]["repository_map"] == map
+    assert {:ok, %{consistent?: true}} = Planner.rebuild(context.goal.id)
+
+    other = create_goal!()
+
+    for bad <- [
+          Map.put(map, "complete", true),
+          Map.put(map, "paths", ["calc.py", "calc.py"]),
+          Map.put(map, "extra", 1),
+          Map.put(map, "paths", Enum.map(1..401, &"f#{&1}.py")) |> Map.put("total_paths", 401)
+        ] do
+      assert {:error, :unsafe_or_oversized_planner_projection} =
+               Planner.request(other.id, attrs(%{repository_map: bad}), opts)
+    end
+
+    # A request without a map keeps the previous projection shape.
+    assert {:ok, %{request: plain}} = Planner.request(other.id, attrs(), opts)
+    refute Map.has_key?(plain.projection, "repository_map")
+  end
+
   test "valid inference charges before a single call and stays unapproved", context do
     opts = options(context)
     request!(context, opts)

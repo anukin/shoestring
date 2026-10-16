@@ -21,6 +21,7 @@ defmodule Shoestring.Cobbler.Planner.Projection do
            "source_context_refs" => Enum.map(evidence, & &1["reference"]),
            "evidence_summaries" => %{"items" => evidence}
          },
+         projection = put_repository_map(projection, attrs[:repository_map]),
          :ok <- validate(projection) do
       {:ok, projection}
     else
@@ -36,7 +37,7 @@ defmodule Shoestring.Cobbler.Planner.Projection do
 
   def validate(projection) when is_map(projection) do
     with true <-
-           Map.keys(Map.delete(projection, "amendment")) |> Enum.sort() ==
+           Map.keys(Map.drop(projection, ["amendment", "repository_map"])) |> Enum.sort() ==
              Enum.sort(
                ~w(goal_id title description requested_by goal_contract source_context_refs evidence_summaries)
              ),
@@ -62,6 +63,7 @@ defmodule Shoestring.Cobbler.Planner.Projection do
          true <- Enum.all?(evidence, &valid_summary?/1),
          true <- Enum.map(evidence, &Map.get(&1, "reference")) == refs,
          true <- Shoestring.Cobbler.Planner.Amendment.valid_projection?(projection),
+         true <- valid_repository_map?(projection),
          [] <- Security.scan_term(projection),
          true <- byte_size(Jason.encode!(projection)) <= @max_bytes do
       :ok
@@ -71,6 +73,34 @@ defmodule Shoestring.Cobbler.Planner.Projection do
   end
 
   def validate(_), do: {:error, :invalid_planner_projection}
+
+  # Optional, so requests recorded before it existed keep their digests and
+  # still replay. Tracked paths only (`Shoestring.Cobbler.Intake`), never
+  # file contents.
+  defp put_repository_map(projection, nil), do: projection
+  defp put_repository_map(projection, map), do: Map.put(projection, "repository_map", map)
+
+  defp valid_repository_map?(%{"repository_map" => map}) do
+    case map do
+      %{
+        "paths" => paths,
+        "total_paths" => total,
+        "omitted_paths" => omitted,
+        "complete" => complete
+      }
+      when map_size(map) == 4 and is_list(paths) and length(paths) <= 400 and
+             is_integer(total) and total >= length(paths) and is_integer(omitted) and
+             omitted >= 0 and is_boolean(complete) ->
+        Enum.all?(paths, &(is_binary(&1) and &1 != "" and byte_size(&1) <= 400)) and
+          length(Enum.uniq(paths)) == length(paths) and
+          complete == (length(paths) == total)
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_repository_map?(_projection), do: true
 
   # References are explicit and finite. We never project raw provider output,
   # transcript or hidden reasoning, nor fetch files based on model requests.
