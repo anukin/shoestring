@@ -60,7 +60,7 @@ or hidden model reasoning. Use `$WORKTREE` for local implementation paths.
   and read-only verified human integration that unlocks dependents.
 - [Final acceptance packet](final-acceptance.md): required-eval map, fairness
   [simulation](fairness/simulation.json), live [demo transcript](demo/transcript.json),
-  gate result and retained limits; awaiting human acceptance.
+  gate result and retained limits; accepted by the user on 2026-10-16.
 - [Goal cancellation status](goal-cancellation-status.md): a goal-scope
   cancellation moves the generic goal row to `cancelled`.
 - [Live Claude fan-out](live-claude-fanout.md): registered bound, Fake

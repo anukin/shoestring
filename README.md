@@ -118,8 +118,9 @@ for import/export, approval/rejection and stored planner quota display.
 
 Here `builder` is an example saved agent name. REPO-INSPECTION: sequential executor
 integration, saved-profile execution binding and bounded amendment/replan are
-implemented. Iteration 6 is awaiting human acceptance of its
-[closure packet](plans/evidence/06-cobbler-planning/final-acceptance.md). See the
+implemented. Iteration 6 was accepted on 2026-10-13 (its
+[closure packet](plans/evidence/06-cobbler-planning/final-acceptance.md)), and
+iterations 7 and 7A on 2026-10-16. See the
 [configuration and usage UI milestone](plans/milestones/configuration-and-usage-ui.md)
 and [implementation evidence](plans/evidence/06-cobbler-planning/configuration-and-usage.md).
 

@@ -1,7 +1,7 @@
 # Iteration 7A: CLI work loop
 
-**Status:** implemented and live-verified (2026-10-15); awaiting human
-acceptance. Prioritized ahead of iteration 8 at the user's direction ("yeah we
+**Status:** complete — implemented and live-verified (2026-10-15); accepted by
+the user on 2026-10-16. Prioritized ahead of iteration 8 at the user's direction ("yeah we
 need this now")
 **Hard dependencies:** iteration 6 (planning, sequential execution); iteration 7
 implementation (fan-out stays opt-in and is not required)
@@ -205,8 +205,9 @@ terminal UI beyond line output, Codex planning, and packaging (iteration 10).
 
 ## Completion record
 
-- Final status and date: implemented and live-verified, 2026-10-15; awaiting
-  human acceptance.
+- Final status and date: implemented and live-verified, 2026-10-15; accepted
+  by the user on 2026-10-16 ("i accept both", with iteration 7). The remaining
+  risks below remain part of the accepted closure.
 - Decisions and deviations:
   - Packages A to H landed as `4962141`, `55f12ef`, `c2ba1ac`, `53f79a2`,
     `01051d7` and `7f3393c`, directly on main as authorized.

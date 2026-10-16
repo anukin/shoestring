@@ -1,6 +1,6 @@
 # Iteration 7: multi-Elf fan-out
 
-**Status:** implementation complete, awaiting human acceptance (2026-10-14) — started 2026-10-13
+**Status:** complete — accepted by the user on 2026-10-16 (implementation 2026-10-14; started 2026-10-13)
 **Hard dependencies:** iteration 6 complete
 **Unlocks:** iteration 8 verification and cross-review
 
@@ -294,9 +294,11 @@ queue policy and record its version.
 
 ## Completion record
 
-- **Final status:** implementation complete; awaiting human acceptance. See the
-  [final acceptance packet](../evidence/07-multi-elf/final-acceptance.md).
-- **Completed on:** implementation 2026-10-14; acceptance pending.
+- **Final status:** complete; the user accepted the
+  [final acceptance packet](../evidence/07-multi-elf/final-acceptance.md) on
+  2026-10-16 ("i accept both", with iteration 7A). Its recorded limitations
+  remain part of the accepted closure.
+- **Completed on:** implementation 2026-10-14; accepted 2026-10-16.
 - **Concurrency/reservation policy version:** `ReservationPolicy` version 1
   (all limits and units default to one); fan-out queue policy version 1
   (rotating round-robin over goals, declared task order, provider-blocked tasks

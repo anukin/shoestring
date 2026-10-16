@@ -1,6 +1,7 @@
 # Iteration 7 final acceptance packet
 
-**Decision status:** awaiting human acceptance.
+**Decision status:** accepted by the user on 2026-10-16 ("i accept both",
+together with iteration 7A).
 **Prepared:** 2026-10-14.
 
 This packet is an assistant assessment, not a human review or an independent
