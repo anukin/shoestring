@@ -590,11 +590,21 @@ defmodule Shoestring.Cobbler.Planner do
         Repo.rollback(:invalid_planner_snapshot)
 
       :error ->
-        case Observatory.latest_observation(
-               public["provider_id"],
-               "structured-planning",
-               public["scope"]
-             ) do
+        lookup =
+          if public["provider_id"] == "claude",
+            do:
+              Shoestring.Cobbler.WakeupObserve.observe(%{
+                provider_id: "claude",
+                scope: public["scope"]
+              }),
+            else:
+              Observatory.latest_observation(
+                public["provider_id"],
+                "structured-planning",
+                public["scope"]
+              )
+
+        case lookup do
           {:ok, snapshot} -> snapshot
           _ -> nil
         end

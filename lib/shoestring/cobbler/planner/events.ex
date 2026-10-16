@@ -82,15 +82,21 @@ defmodule Shoestring.Cobbler.Planner.Events do
 
   defp errors(_), do: Contract.invalid(:errors, "must contain bounded safe diagnostics")
 
+  # Adapter => {scope, support tier}, as `Planner.Configuration` derives them.
+  # Claude plans on the subscription scope that execution uses.
+  @adapters %{
+    "fixture" => {"planner:fixture", "proactive"},
+    "ollama" => {"planner:ollama", "reactive_only"},
+    "claude" => {"subscription", "conservative_partial"}
+  }
+
   defp configuration(config) when is_map(config) do
     expected =
       ~w(adapter model version provider_id scope support_tier max_output_tokens max_attempts max_charged_output_tokens timeout_ms endpoint_digest)
 
     if Enum.sort(Map.keys(config)) == Enum.sort(expected) and
-         config["adapter"] in ["fixture", "ollama"] and config["provider_id"] == config["adapter"] and
-         config["scope"] == "planner:#{config["adapter"]}" and
-         config["support_tier"] ==
-           if(config["adapter"] == "fixture", do: "proactive", else: "reactive_only") and
+         Map.get(@adapters, config["adapter"]) == {config["scope"], config["support_tier"]} and
+         config["provider_id"] == config["adapter"] and
          config["version"] == "1" and is_binary(config["model"]) and
          byte_size(config["model"]) in 1..400 and
          config["max_attempts"] == 2 and config["max_output_tokens"] in 1..8192 and

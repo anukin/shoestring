@@ -17,7 +17,7 @@ defmodule Shoestring.Cobbler.Planner.Configuration do
         "model" => model,
         "version" => "1",
         "provider_id" => provider,
-        "scope" => "planner:#{provider}",
+        "scope" => scope(provider),
         "support_tier" => to_string(tier),
         "max_output_tokens" => limit,
         "max_attempts" => 2,
@@ -46,11 +46,34 @@ defmodule Shoestring.Cobbler.Planner.Configuration do
 
   defp adapter(:fixture), do: {:ok, Shoestring.Cobbler.Planner.Fixture, "fixture", :proactive}
   defp adapter(:ollama), do: {:ok, Shoestring.Cobbler.Planner.Ollama, "ollama", :reactive_only}
+
+  # Claude plans on the subscription execution uses, so it shares that scope
+  # and its observations; its support tier makes every call need confirmation.
+  defp adapter(:claude),
+    do: {:ok, Shoestring.Cobbler.Planner.ClaudeHeadless, "claude", :conservative_partial}
+
   defp adapter(:disabled), do: {:error, :planner_disabled}
   defp adapter(_), do: {:error, :unsupported_planner_adapter}
 
-  # Local inference only. No credentials, cloud hosts or automatic downloads.
+  defp scope("claude"), do: "subscription"
+  defp scope(provider), do: "planner:#{provider}"
+
+  # Local inference or the locally installed Claude Code CLI. No credentials,
+  # hosts or automatic downloads. For Claude the bound "endpoint" is the
+  # executable, so a configuration change cannot reroute a durable request.
   defp endpoint(_config, "fixture"), do: {:ok, "fixture"}
+
+  defp endpoint(config, "claude") do
+    case Keyword.get(config, :command, "claude") do
+      command when is_binary(command) and command != "" ->
+        if String.contains?(command, <<0>>),
+          do: {:error, :invalid_planner_endpoint},
+          else: {:ok, command}
+
+      _ ->
+        {:error, :invalid_planner_endpoint}
+    end
+  end
 
   defp endpoint(config, "ollama") do
     endpoint = Keyword.get(config, :endpoint, "http://127.0.0.1:11434")
