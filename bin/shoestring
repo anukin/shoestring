@@ -1,0 +1,76 @@
+#!/bin/sh
+# Shoestring from any directory: runs this checkout's Mix tasks against the
+# service's state, with the caller's directory as the repository for `do`.
+set -eu
+
+usage() {
+  cat <<'USAGE'
+usage: shoestring COMMAND [ARGS...]
+
+  do "REQUEST" [--agent NAME] [--test PATH]... [--gate NAME]... [--no-follow]
+              plan, approve and run REQUEST in the current Git repository
+  follow GOAL follow a goal and answer what it waits for
+  result GOAL show a completed goal's result and how to take it
+  goals | plans | execution | agents | models | reservations ...
+              the step-by-step commands (see `shoestring COMMAND --help`)
+
+The service must be running from the same checkout: mix phx.server
+USAGE
+}
+
+# Resolve this script through symlinks to find the checkout.
+script=$0
+while [ -L "$script" ]; do
+  link=$(readlink "$script")
+  case $link in
+    /*) script=$link ;;
+    *) script=$(dirname "$script")/$link ;;
+  esac
+done
+checkout=$(cd "$(dirname "$script")/.." && pwd)
+caller=$PWD
+
+[ $# -gt 0 ] || { usage; exit 2; }
+command=$1
+shift
+
+case $command in
+  -h | --help | help)
+    usage
+    exit 0
+    ;;
+  do | follow | result | goals | plans | execution | agents | models | reservations) ;;
+  *)
+    echo "shoestring: unknown command '$command'" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+if [ $# -gt 0 ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
+  cd "$checkout"
+  exec mix help "shoestring.$command"
+fi
+
+# File arguments are relative to the caller, but Mix runs in the checkout.
+count=$#
+previous=
+while [ "$count" -gt 0 ]; do
+  argument=$1
+  shift
+  count=$((count - 1))
+  if [ "$previous" = "--file" ]; then
+    case $argument in
+      /*) ;;
+      *) argument=$caller/$argument ;;
+    esac
+  fi
+  set -- "$@" "$argument"
+  previous=$argument
+done
+
+cd "$checkout"
+if [ "$command" = "do" ]; then
+  exec mix shoestring.do --repo "$caller" "$@"
+fi
+exec mix "shoestring.$command" "$@"

@@ -166,6 +166,9 @@ defmodule Shoestring.CLI.WorkLoop do
     options =
       [retry: false, receive_timeout: 3_000, connect_options: [timeout: 2_000]] ++ req_options
 
+    # The CLI starts only the repository; Req's HTTP pool is not running yet.
+    {:ok, _} = Application.ensure_all_started(:req)
+
     case Req.get(url, options) do
       {:ok, %{status: 200, body: %{"instance" => instance}}} ->
         if instance == Shoestring.Health.instance(),

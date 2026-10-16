@@ -1,0 +1,157 @@
+[
+  [
+    "info",
+    "Goal ed2159e1-af88-4701-ad45-14ddc8ff495c"
+  ],
+  [
+    "info",
+    "Base f7310e999dd5 in $EVALUATION/repos/source; gates: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "Drafting a plan..."
+  ],
+  [
+    "info",
+    "Planning is held: Capacity snapshot is missing or unknown; requires attributable single-decision confirmation"
+  ],
+  [
+    "prompt",
+    "Make this one planning call anyway? Its usage is charged before the call. [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "Plan revision 1 (37a97af5ce99)"
+  ],
+  [
+    "info",
+    "  Goal: Make add(a, b) in calc.py return the sum of its arguments."
+  ],
+  [
+    "info",
+    "  Checks at the end: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  1. add: Implement add"
+  ],
+  [
+    "info",
+    "     Outcome: add(a, b) returns a + b."
+  ],
+  [
+    "info",
+    "     Files: calc.py"
+  ],
+  [
+    "info",
+    "     Checks: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  Budget: 2 attempts, 15 minutes"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "prompt",
+    "Approve this plan? [y]es / [n]o / [e]dit: ",
+    "y"
+  ],
+  [
+    "info",
+    "Approved. Execution 30c55b4f-9069-56bf-aa5a-e01a14aadbd2 is queued for the service."
+  ],
+  [
+    "info",
+    "Execution requested."
+  ],
+  [
+    "info",
+    "Waiting: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "info",
+    "Task add is held: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "prompt",
+    "Confirm capacity for this one attempt of add? [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    "Confirmed. The service admits it on its next pass."
+  ],
+  [
+    "info",
+    "Task add: capacity confirmed by human:user."
+  ],
+  [
+    "info",
+    "Task add: started (attempt 1)."
+  ],
+  [
+    "info",
+    "Waiting: Capacity snapshot '81815c56-ffad-5426-ab7d-00c4f4013917' records provider 'fake' / scope 'subscription' but the candidate is provider 'claude' / scope 'subscription' (cannot be bypassed by confirmation)"
+  ],
+  [
+    "info",
+    "  The worker finished; checking its work."
+  ],
+  [
+    "info",
+    "Task add: accepted at f7310e999dd5."
+  ],
+  [
+    "info",
+    "All checks passed at f7310e999dd5."
+  ],
+  [
+    "info",
+    "Done."
+  ],
+  [
+    "info",
+    "Result: f7310e999dd557fcf58b2e9d41586d9ed6170c38"
+  ],
+  [
+    "info",
+    "  Built on f7310e999dd5 in $EVALUATION/worktrees/run-dbe82754-26a8-5563-a141-ef7cd6a19dbf"
+  ],
+  [
+    "info",
+    "  Check: python3 -B -m unittest test/test_calc.py -> exit 0"
+  ],
+  [
+    "info",
+    "    OK"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "To take it into your repository:"
+  ],
+  [
+    "info",
+    "  cd $EVALUATION/repos/source"
+  ],
+  [
+    "info",
+    "  git fetch $EVALUATION/worktrees/run-dbe82754-26a8-5563-a141-ef7cd6a19dbf f7310e999dd557fcf58b2e9d41586d9ed6170c38"
+  ],
+  [
+    "info",
+    "  git merge FETCH_HEAD"
+  ]
+]

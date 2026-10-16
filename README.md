@@ -77,6 +77,25 @@ replaceable execution providers. The longer-term product vocabulary is:
 
 ## Product interface
 
+### One command (iteration 7A)
+
+From any clean Git repository, with the service running from this checkout
+(`mix phx.server`) and `bin/` on your `PATH`:
+
+```sh
+shoestring do "make add() return the sum of its arguments"
+```
+
+Shoestring records a goal at your `HEAD`, has Claude draft a plan (tool-free,
+through your subscription), and shows it. Nothing runs until you answer `y`.
+It then queues the work for the service, which runs sandboxed Elves in private
+copies of the repository, follows progress, asks you when something waits for
+you, and finishes with the verified commit and the `git fetch`/`git merge`
+commands to take it. It never changes your checkout. One-time setup and
+details: [the CLI work loop](docs/cli-work-loop.md).
+
+### Step by step
+
 The agreed product direction puts work, execution, and approvals in the CLI.
 The web UI provides Usage, Agents and Settings: reported provider/account
 allowances, named orchestrators with configurable team roles, and shared defaults.

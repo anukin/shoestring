@@ -63,7 +63,7 @@ defmodule Mix.Tasks.Shoestring.Do do
           else
             by = opts[:by] || WorkLoop.default_human()
 
-            case Follow.run(goal_id, by: by) do
+            case Follow.run(goal_id, by: by, from_execution: true) do
               {:ok, :completed} -> Result.show(goal_id)
               {:ok, _} -> :ok
               {:error, reason} -> Mix.raise("Following stopped: #{inspect(reason)}")

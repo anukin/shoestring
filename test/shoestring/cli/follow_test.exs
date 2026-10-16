@@ -6,6 +6,7 @@ defmodule Shoestring.CLI.FollowTest do
   use Shoestring.DataCase, async: false
 
   alias Shoestring.CLI.Follow
+  import Ecto.Query
   import Shoestring.Test.CobblerHelpers, only: [create_goal!: 0]
   import Shoestring.Test.PlanExecutorHelpers, only: [propose_and_approve!: 1]
 
@@ -200,5 +201,50 @@ defmodule Shoestring.CLI.FollowTest do
                status: status_script([admitted, running_held]),
                max_polls: 3
              )
+  end
+
+  test "from_execution starts at the latest execution request", c do
+    last =
+      Shoestring.Repo.one(
+        from e in Shoestring.Trajectory.TrajectoryEvent,
+          where: e.goal_id == ^c.goal.id,
+          select: max(e.sequence)
+      ) || 0
+
+    # Inserted directly: only its type and sequence matter here.
+    Shoestring.Repo.insert!(%Shoestring.Trajectory.TrajectoryEvent{
+      goal_id: c.goal.id,
+      sequence: last + 5,
+      type: "cobbler.plan.execution.requested",
+      actor: "test",
+      occurred_at: DateTime.utc_now(),
+      schema_version: 1,
+      payload: %{}
+    })
+
+    test = self()
+
+    events = fn _goal, cursor ->
+      send(test, {:cursor, cursor})
+      []
+    end
+
+    assert {:ok, :completed} =
+             follow(c,
+               events: events,
+               status: status_script([{:ok, %{completed?: true}}]),
+               from_execution: true
+             )
+
+    assert_received {:cursor, cursor}
+
+    expected = last + 4
+
+    assert cursor == expected
+
+    assert {:ok, :completed} =
+             follow(c, events: events, status: status_script([{:ok, %{completed?: true}}]))
+
+    assert_received {:cursor, 0}
   end
 end

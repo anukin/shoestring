@@ -1,0 +1,632 @@
+[
+  {
+    "type": "cobbler.planner.requested",
+    "payload": {
+      "configuration": {
+        "adapter": "fixture",
+        "endpoint_digest": "8ccee6416e771be860d86b1d095a42a65bbe2f0c1057a2c4dbc300eb57c5b3e9",
+        "max_attempts": 2,
+        "max_charged_output_tokens": 8192,
+        "max_output_tokens": 4096,
+        "model": "fixture-v1",
+        "provider_id": "fixture",
+        "scope": "planner:fixture",
+        "support_tier": "proactive",
+        "timeout_ms": 60000,
+        "version": "1"
+      },
+      "input_digest": "0395d7cd44710452002cb79751dba8e40850c4a26255f33b6c8f691f80c1ba99",
+      "projection_json": "{\"description\":\"Make add(a, b) in calc.py return the sum of its arguments.\",\"evidence_summaries\":{\"items\":[]},\"goal_contract\":{\"acceptance\":{\"evidence\":[\"Every named gate passes at the final commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}]},\"constraints\":[\"Change only what the request needs; leave unrelated files unchanged.\",\"Do not edit or delete existing tests unless the request asks for it.\"],\"non_goals\":[\"Unrelated refactoring, dependency upgrades or formatting changes.\"],\"repository\":{\"base_revision\":\"f7310e999dd557fcf58b2e9d41586d9ed6170c38\"},\"statement\":\"Make add(a, b) in calc.py return the sum of its arguments.\"},\"goal_id\":\"ed2159e1-af88-4701-ad45-14ddc8ff495c\",\"repository_map\":{\"complete\":true,\"omitted_paths\":0,\"paths\":[\"calc.py\",\"test/__init__.py\",\"test/test_calc.py\"],\"total_paths\":3},\"requested_by\":\"human:user\",\"source_context_refs\":[],\"title\":\"Make add(a, b) in calc.py return the sum of its arguments.\"}",
+      "request_id": "13756f95-166e-4188-8813-3dc9f9d821fd",
+      "request_key": "initial"
+    },
+    "sequence": 1,
+    "occurred_at": "2026-10-16T00:54:02.053658Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "planner.fixture",
+        "compatibility_state": "compatible",
+        "provider_id": "fixture",
+        "support_tier": "proactive"
+      },
+      "decision_id": "a5cbac63-d50f-4111-9294-ef7ca58ece01",
+      "evaluated_at": "2026-10-16T00:54:02.056524Z",
+      "explanation": "Capacity snapshot is missing or unknown; requires attributable single-decision confirmation",
+      "extensions": {},
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": null,
+        "windows": [
+          {
+            "kind": "five_hour",
+            "reason": "missing_snapshot",
+            "reset_at": null,
+            "state": "unknown",
+            "used_percent": null
+          },
+          {
+            "kind": "weekly",
+            "reason": "missing_snapshot",
+            "reset_at": null,
+            "state": "unknown",
+            "used_percent": null
+          }
+        ]
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-16T00:59:02.056524Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "unknown_capacity",
+      "reobservation_required": true,
+      "requested_capability": "read_only",
+      "result": "require_confirmation",
+      "scope": "planner:fixture"
+    },
+    "sequence": 2,
+    "occurred_at": "2026-10-16T00:54:02.065172Z"
+  },
+  {
+    "type": "cobbler.planner.blocked",
+    "payload": {
+      "admission_event_id": "1ed11ca7-69fe-4057-a522-b4eed92153ee",
+      "errors": {
+        "items": [
+          {
+            "code": "unknown_capacity",
+            "message": "Capacity snapshot is missing or unknown; requires attributable single-decision confirmation"
+          }
+        ]
+      },
+      "request_id": "13756f95-166e-4188-8813-3dc9f9d821fd"
+    },
+    "sequence": 3,
+    "occurred_at": "2026-10-16T00:54:02.067128Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "planner.fixture",
+        "compatibility_state": "compatible",
+        "provider_id": "fixture",
+        "support_tier": "proactive"
+      },
+      "decision_id": "c7580698-418e-4918-8f1b-9f62cc478d1d",
+      "evaluated_at": "2026-10-16T00:54:02.068826Z",
+      "explanation": "Admitted via attributable single-decision confirmation by 'human:user' (intent: 'read_only'); not automatically safe (Capacity snapshot is missing or unknown; requires attributable single-decision confirmation)",
+      "extensions": {},
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": null,
+        "windows": [
+          {
+            "kind": "five_hour",
+            "reason": "missing_snapshot",
+            "reset_at": null,
+            "state": "unknown",
+            "used_percent": null
+          },
+          {
+            "kind": "weekly",
+            "reason": "missing_snapshot",
+            "reset_at": null,
+            "state": "unknown",
+            "used_percent": null
+          }
+        ]
+      },
+      "override": {
+        "confirmed_at": null,
+        "confirmed_by": "human:user",
+        "intent": "read_only",
+        "reason": "valid",
+        "target_provider_id": "fixture",
+        "target_scope": "planner:fixture",
+        "valid": true
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-16T00:59:02.068826Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confirmed_unknown_capacity",
+      "reobservation_required": false,
+      "requested_capability": "read_only",
+      "result": "admit",
+      "scope": "planner:fixture"
+    },
+    "sequence": 4,
+    "occurred_at": "2026-10-16T00:54:02.069283Z"
+  },
+  {
+    "type": "cobbler.planner.attempt.started",
+    "payload": {
+      "admission_event_id": "980b8067-adbc-455c-ad64-23e136c0f600",
+      "attempt": 1,
+      "charged_output_tokens": 4096,
+      "output_token_allowance": 4096,
+      "request_id": "13756f95-166e-4188-8813-3dc9f9d821fd"
+    },
+    "sequence": 7,
+    "occurred_at": "2026-10-16T00:54:02.077606Z"
+  },
+  {
+    "type": "cobbler.planner.attempt.finished",
+    "payload": {
+      "attempt": 1,
+      "errors": {
+        "items": []
+      },
+      "output_tokens": 120,
+      "plan_content": "{\"budget\":{\"max_total_attempts\":2,\"max_total_duration_seconds\":900},\"goal\":{\"acceptance\":{\"evidence\":[\"Every named gate passes at the final commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}]},\"constraints\":[\"Change only what the request needs; leave unrelated files unchanged.\",\"Do not edit or delete existing tests unless the request asks for it.\"],\"non_goals\":[\"Unrelated refactoring, dependency upgrades or formatting changes.\"],\"repository\":{\"base_revision\":\"f7310e999dd557fcf58b2e9d41586d9ed6170c38\"},\"statement\":\"Make add(a, b) in calc.py return the sum of its arguments.\"},\"planner\":{\"identity\":\"fixture:fixture-v1\",\"source_context_refs\":[\"goal:ed2159e1-af88-4701-ad45-14ddc8ff495c\"],\"version\":\"1\"},\"tasks\":[{\"acceptance_criteria\":[\"Change only calc.py.\",\"Preserve the add(a, b) signature.\"],\"checkpoint\":{\"condition\":\"test/test_calc.py passes.\",\"evidence\":[\"test/test_calc.py passes.\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":1,\"max_duration_seconds\":300},\"expected_artifacts\":[\"Updated calc.py.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}],\"hints\":{\"files\":[\"calc.py\"],\"symbols\":[\"add\"]},\"id\":\"add\",\"inputs\":[\"calc.py raises NotImplementedError.\",\"test/test_calc.py specifies it.\"],\"outcome\":\"add(a, b) returns a + b.\",\"risks\":[\"Editing the test would hide a wrong implementation.\"],\"title\":\"Implement add\"}],\"version\":1}",
+      "plan_digest": "37a97af5ce99ee18d5880f442459a0e4a198b8a886b0e02072f8541af4766aae",
+      "request_id": "13756f95-166e-4188-8813-3dc9f9d821fd",
+      "state": "ready"
+    },
+    "sequence": 8,
+    "occurred_at": "2026-10-16T00:54:02.085124Z"
+  },
+  {
+    "type": "cobbler.plan.revision.created",
+    "payload": {
+      "author_kind": "human",
+      "authored_by": "human:user",
+      "ordered_task_ids": [
+        "add"
+      ],
+      "plan_content": "{\"budget\":{\"max_total_attempts\":2,\"max_total_duration_seconds\":900},\"goal\":{\"acceptance\":{\"evidence\":[\"Every named gate passes at the final commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}]},\"constraints\":[\"Change only what the request needs; leave unrelated files unchanged.\",\"Do not edit or delete existing tests unless the request asks for it.\"],\"non_goals\":[\"Unrelated refactoring, dependency upgrades or formatting changes.\"],\"repository\":{\"base_revision\":\"f7310e999dd557fcf58b2e9d41586d9ed6170c38\"},\"statement\":\"Make add(a, b) in calc.py return the sum of its arguments.\"},\"planner\":{\"identity\":\"fixture:fixture-v1\",\"source_context_refs\":[\"goal:ed2159e1-af88-4701-ad45-14ddc8ff495c\"],\"version\":\"1\"},\"tasks\":[{\"acceptance_criteria\":[\"Change only calc.py.\",\"Preserve the add(a, b) signature.\"],\"checkpoint\":{\"condition\":\"test/test_calc.py passes.\",\"evidence\":[\"test/test_calc.py passes.\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":1,\"max_duration_seconds\":300},\"expected_artifacts\":[\"Updated calc.py.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}],\"hints\":{\"files\":[\"calc.py\"],\"symbols\":[\"add\"]},\"id\":\"add\",\"inputs\":[\"calc.py raises NotImplementedError.\",\"test/test_calc.py specifies it.\"],\"outcome\":\"add(a, b) returns a + b.\",\"risks\":[\"Editing the test would hide a wrong implementation.\"],\"title\":\"Implement add\"}],\"version\":1}",
+      "plan_digest": "37a97af5ce99ee18d5880f442459a0e4a198b8a886b0e02072f8541af4766aae",
+      "plan_revision_id": "77a2016a-f8d0-4f9d-85c8-73004faee3b8",
+      "plan_version": 1,
+      "proposal_id": "planner:13756f95-166e-4188-8813-3dc9f9d821fd",
+      "revision_number": 1,
+      "task_count": 1
+    },
+    "sequence": 11,
+    "occurred_at": "2026-10-16T00:54:02.089287Z"
+  },
+  {
+    "type": "cobbler.plan.approved",
+    "payload": {
+      "decided_at": "2026-10-16T00:54:02.090741Z",
+      "decided_by": "human:user",
+      "decision_id": "do-approve-1",
+      "plan_digest": "37a97af5ce99ee18d5880f442459a0e4a198b8a886b0e02072f8541af4766aae",
+      "plan_revision_id": "77a2016a-f8d0-4f9d-85c8-73004faee3b8",
+      "revision_number": 1
+    },
+    "sequence": 12,
+    "occurred_at": "2026-10-16T00:54:02.090741Z"
+  },
+  {
+    "type": "cobbler.plan.execution.requested",
+    "payload": {
+      "agent_profile": {
+        "adapter_id": "claude_headless_stream_json",
+        "digest": "0792c2de8abe18bf1ab39212fd074769108bfb6f5bc96eb50f633089eb978288",
+        "instructions": "Complete the task within its stated scope and acceptance gates. Commit the result.",
+        "model": "opus",
+        "profile_id": "5d783052-3b68-402f-b74a-620456dafba2",
+        "provider": "claude",
+        "revision": 1,
+        "role": "Worker"
+      },
+      "execution_id": "30c55b4f-9069-56bf-aa5a-e01a14aadbd2",
+      "ordered_task_ids": [
+        "add"
+      ],
+      "plan_digest": "37a97af5ce99ee18d5880f442459a0e4a198b8a886b0e02072f8541af4766aae",
+      "repository_path": "$EVALUATION/repos/source",
+      "requested_by": "human:user",
+      "revision_number": 1
+    },
+    "sequence": 13,
+    "occurred_at": "2026-10-16T00:54:02.120442Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "claude_headless_stream_json",
+        "compatibility_state": "degraded",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "6196e8ba-fc3f-43aa-af9d-7a710db589b9",
+      "evaluated_at": "2026-10-16T00:54:02.145613Z",
+      "explanation": "Candidate support tier 'conservative_partial' requires attributable single-decision confirmation",
+      "extensions": {},
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "1cac5731-412d-56eb-ad4d-f04a713abc8e",
+        "windows": []
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-16T00:59:02.145613Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "support_tier_conservative_partial",
+      "reobservation_required": true,
+      "requested_capability": "supervised_execution",
+      "result": "require_confirmation",
+      "scope": "subscription"
+    },
+    "sequence": 15,
+    "occurred_at": "2026-10-16T00:54:02.145613Z"
+  },
+  {
+    "type": "cobbler.plan.capacity.confirmed",
+    "payload": {
+      "adapter_id": "claude_headless_stream_json",
+      "attempt": 1,
+      "confirmation_id": "783b32d2-6380-4cd9-bd5e-f9302d1b2fc1",
+      "confirmed_by": "human:user",
+      "execution_id": "30c55b4f-9069-56bf-aa5a-e01a14aadbd2",
+      "plan_digest": "37a97af5ce99ee18d5880f442459a0e4a198b8a886b0e02072f8541af4766aae",
+      "plan_task_id": "add",
+      "provider_id": "claude",
+      "revision_number": 1,
+      "scope": "subscription"
+    },
+    "sequence": 16,
+    "occurred_at": "2026-10-16T00:54:03.169652Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "claude_headless_stream_json",
+        "compatibility_state": "degraded",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "216539f8-008c-45af-9ea5-1344480f0b08",
+      "evaluated_at": "2026-10-16T00:55:02.955735Z",
+      "explanation": "Admitted via attributable single-decision confirmation by 'human:user' (intent: 'supervised_execution'); not automatically safe (Candidate support tier 'conservative_partial' requires attributable single-decision confirmation)",
+      "extensions": {
+        "shoestring.plan:capacity_confirmation_id": "216539f8-008c-45af-9ea5-1344480f0b08"
+      },
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "1cac5731-412d-56eb-ad4d-f04a713abc8e",
+        "windows": []
+      },
+      "override": {
+        "confirmed_at": "2026-10-16T00:54:03.169652Z",
+        "confirmed_by": "human:user",
+        "intent": "supervised_execution",
+        "reason": "valid",
+        "target_provider_id": "claude",
+        "target_scope": "subscription",
+        "valid": true
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-16T01:00:02.955735Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confirmed_support_tier_conservative_partial",
+      "reobservation_required": false,
+      "requested_capability": "supervised_execution",
+      "result": "admit",
+      "scope": "subscription"
+    },
+    "sequence": 17,
+    "occurred_at": "2026-10-16T00:55:02.955735Z"
+  },
+  {
+    "type": "cobbler.plan.task.dispatched",
+    "payload": {
+      "attempt": 1,
+      "command_id": "plan-add-1",
+      "execution_id": "30c55b4f-9069-56bf-aa5a-e01a14aadbd2",
+      "grant_id": "67299051-7a71-4e35-bb3a-45febd0335eb",
+      "plan_digest": "37a97af5ce99ee18d5880f442459a0e4a198b8a886b0e02072f8541af4766aae",
+      "plan_task_id": "add",
+      "revision_number": 1,
+      "run_id": "dbe82754-26a8-5563-a141-ef7cd6a19dbf",
+      "trajectory_task_id": "59ad82c4-d44a-5965-9e35-9ab8b945e1c4"
+    },
+    "sequence": 25,
+    "occurred_at": "2026-10-16T00:55:03.340832Z"
+  },
+  {
+    "type": "run.running",
+    "payload": {
+      "run_id": "dbe82754-26a8-5563-a141-ef7cd6a19dbf"
+    },
+    "sequence": 27,
+    "occurred_at": "2026-10-16T00:55:04.033408Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "claude_headless_stream_json",
+        "compatibility_state": "degraded",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "94afd1dc-4365-4350-87a5-22ed1c85b9d2",
+      "evaluated_at": "2026-10-16T00:55:04.054317Z",
+      "explanation": "Capacity snapshot '81815c56-ffad-5426-ab7d-00c4f4013917' records provider 'fake' / scope 'subscription' but the candidate is provider 'claude' / scope 'subscription' (cannot be bypassed by confirmation)",
+      "extensions": {},
+      "observation": {
+        "age_seconds": 62,
+        "capacity_state": "observed",
+        "confidence": "high",
+        "expires_at": "2026-10-16T00:59:01.265244Z",
+        "freshness": "fresh",
+        "observed_at": "2026-10-16T00:54:01.265244Z",
+        "snapshot_id": "81815c56-ffad-5426-ab7d-00c4f4013917",
+        "windows": [
+          {
+            "kind": "five_hour",
+            "reason": null,
+            "reset_at": null,
+            "state": "observed",
+            "used_percent": 20.0
+          }
+        ]
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-16T01:00:04.054317Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "snapshot_provider_mismatch",
+      "reobservation_required": false,
+      "requested_capability": "supervised_execution",
+      "result": "reject",
+      "run_id": "dbe82754-26a8-5563-a141-ef7cd6a19dbf",
+      "scope": "subscription"
+    },
+    "sequence": 34,
+    "occurred_at": "2026-10-16T00:55:04.054317Z"
+  },
+  {
+    "type": "run.completed",
+    "payload": {
+      "run_id": "dbe82754-26a8-5563-a141-ef7cd6a19dbf"
+    },
+    "sequence": 38,
+    "occurred_at": "2026-10-16T00:55:04.211492Z"
+  },
+  {
+    "type": "cobbler.plan.task.accepted",
+    "payload": {
+      "attempt": 1,
+      "commit": "f7310e999dd557fcf58b2e9d41586d9ed6170c38",
+      "evidence": {
+        "gates": [
+          {
+            "argv": "python3 -B -m unittest test/test_calc.py",
+            "commit": "f7310e999dd557fcf58b2e9d41586d9ed6170c38",
+            "duration_ms": 205,
+            "exit_status": 0,
+            "gate": "python_unittest",
+            "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+            "worktree": "$EVALUATION/worktrees/run-dbe82754-26a8-5563-a141-ef7cd6a19dbf"
+          }
+        ],
+        "run_completed": true
+      },
+      "execution_id": "30c55b4f-9069-56bf-aa5a-e01a14aadbd2",
+      "gate": "python_unittest",
+      "gate_argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "test/test_calc.py"
+      ],
+      "plan_digest": "37a97af5ce99ee18d5880f442459a0e4a198b8a886b0e02072f8541af4766aae",
+      "plan_task_id": "add",
+      "revision_number": 1,
+      "run_id": "dbe82754-26a8-5563-a141-ef7cd6a19dbf"
+    },
+    "sequence": 39,
+    "occurred_at": "2026-10-16T00:55:09.296942Z"
+  },
+  {
+    "type": "cobbler.plan.execution.completed",
+    "payload": {
+      "commit": "f7310e999dd557fcf58b2e9d41586d9ed6170c38",
+      "evidence": {
+        "gates": [
+          {
+            "argv": "python3 -B -m unittest test/test_calc.py",
+            "commit": "f7310e999dd557fcf58b2e9d41586d9ed6170c38",
+            "duration_ms": 185,
+            "exit_status": 0,
+            "gate": "python_unittest",
+            "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+            "worktree": "$EVALUATION/worktrees/run-dbe82754-26a8-5563-a141-ef7cd6a19dbf"
+          }
+        ]
+      },
+      "execution_id": "30c55b4f-9069-56bf-aa5a-e01a14aadbd2",
+      "global_gate": "python_unittest",
+      "plan_digest": "37a97af5ce99ee18d5880f442459a0e4a198b8a886b0e02072f8541af4766aae",
+      "revision_number": 1
+    },
+    "sequence": 40,
+    "occurred_at": "2026-10-16T00:55:09.603232Z"
+  }
+]

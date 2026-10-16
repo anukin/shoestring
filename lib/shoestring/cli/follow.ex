@@ -26,7 +26,8 @@ defmodule Shoestring.CLI.Follow do
   @doc """
   Follows `goal_id` until it completes, is cancelled, needs a human decision it
   cannot take here, or is left held. Options: `:shell`, `:by`, `:interval_ms`,
-  and for tests `:status`, `:events`, `:confirm`, `:sleep`, `:max_polls`.
+  `:from_execution` (start at the latest execution request; `do` uses it), and
+  for tests `:status`, `:events`, `:confirm`, `:sleep`, `:max_polls`.
   """
   @spec run(Ecto.UUID.t(), keyword()) :: {:ok, outcome()} | {:error, term()}
   def run(goal_id, opts \\ []) do
@@ -42,7 +43,8 @@ defmodule Shoestring.CLI.Follow do
           Process.sleep(Keyword.get(opts, :interval_ms, @interval_ms))
         end),
       polls_left: Keyword.get(opts, :max_polls, :infinity),
-      cursor: 0,
+      cursor:
+        if(Keyword.get(opts, :from_execution, false), do: execution_cursor(goal_id), else: 0),
       asked: MapSet.new()
     }
 
@@ -182,6 +184,20 @@ defmodule Shoestring.CLI.Follow do
   end
 
   # -- Events --------------------------------------------------------------
+
+  # Just before the latest execution request, so `do` does not repeat the
+  # planning it has already shown.
+  defp execution_cursor(goal_id) do
+    Repo.one(
+      from e in TrajectoryEvent,
+        where: e.goal_id == ^goal_id and e.type == "cobbler.plan.execution.requested",
+        select: max(e.sequence)
+    )
+    |> case do
+      nil -> 0
+      sequence -> sequence - 1
+    end
+  end
 
   @doc false
   def events_after(goal_id, sequence) do
