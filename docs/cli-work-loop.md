@@ -68,6 +68,13 @@ shoestring do "add retry with backoff to the HTTP client" --test test/test_http.
   way; only plan runs are.
 - Planning uses Claude only (or a configured local Ollama planner); Codex
   planning is not available.
-- UNVERIFIED until the live verification: the exact Claude result shape for
-  structured planning output, and that the sandbox lets an Elf read its own
-  worktree when the state directory is under your home directory.
+- The checks Shoestring runs after a worker finishes are not sandboxed; they
+  run the worker's code with the service's access. Planned for iteration 8.
+- The planner tends to propose 3 attempts and `do` has no budget option; press
+  `e` to lower it before approving.
+- Verified live on 2026-10-15 (see
+  `plans/evidence/07a-cli-work-loop/README.md`): Claude's structured planning
+  output is accepted as is, and a sandboxed Elf can read and write its own
+  worktree when the state directory is under your home directory. That the
+  rest of your home directory is unreadable is configured but was not probed
+  live.
