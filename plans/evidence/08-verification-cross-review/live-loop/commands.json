@@ -1,0 +1,38 @@
+[
+  {
+    "command": "cat calc.py test/test_calc.py; ls -a; ls test",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "printf 'def add(a, b):\\n    \"\"\"Return a + b.\"\"\"\\n    return a + b\\n' > calc.py && python3 -m unittest test/test_calc.py -v; git diff --stat",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "git add calc.py && git commit -qm \"Make add(a, b) return a + b\" && git log --oneline -1 && git status --short",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "rm -rf __pycache__ test/__pycache__; git rev-parse HEAD shoestring/run-05392de3-147b-5517-abbb-05225ebc10a4; git status --short; git show --stat HEAD | tail -3",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  }
+]

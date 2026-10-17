@@ -1,0 +1,72 @@
+[
+  {
+    "adapter": "codex",
+    "blocking_count": 0,
+    "case": "clean",
+    "elapsed_ms": 2928,
+    "findings": [],
+    "gate_exit": 0,
+    "model": "gpt-6-luna",
+    "outcome": "approved",
+    "output_tokens": 47,
+    "packet_digest": "3172ab405b71bbe15b3d7f8bb0011f9d26cc9ff78eb163d0269c2631bdb5c32f",
+    "result": "validated",
+    "summary": "The change implements add(a, b) as a + b, meets the stated contract, and the provided unittest gate passes.",
+    "verdict": "approve"
+  },
+  {
+    "adapter": "claude",
+    "blocking_count": 1,
+    "case": "seeded",
+    "elapsed_ms": 6802,
+    "findings": [
+      {
+        "claim": "add(a, b) returns a * b (the product) rather than a + b (the sum).",
+        "confidence": "high",
+        "correction": "Change line 2 to `return a + b`.",
+        "evidence": "The diff changes line 2 to `return a * b`. For example, add(1, 2) returns 2, but the correct answer is 3.",
+        "id": "F1",
+        "line": 2,
+        "path": "calc.py",
+        "reference": "supported",
+        "severity": "blocking",
+        "violates": "Acceptance criteria: 'add(a, b) returns the sum a + b' and goal 'add(a, b) returns a + b for all numbers'"
+      },
+      {
+        "claim": "The gate passed even though add() is wrong, so the existing test does not catch the product-for-sum mistake.",
+        "confidence": "medium",
+        "correction": "Don't treat the green gate as proof the code is correct. The task forbids changing test/test_calc.py, so any stronger test (for example add(2, 3) == 5) would need separate approval.",
+        "evidence": "`python3 -B -m unittest test/test_calc.py` exited 0 with 'Ran 1 test ... OK' while add returns a * b. The test file contents were not in the packet, so I did not check which inputs it uses.",
+        "id": "F2",
+        "line": null,
+        "path": "test/test_calc.py",
+        "reference": "supported",
+        "severity": "non_blocking",
+        "violates": "The global contract's rule on tests that actually defend: a passing gate here is documentation, not a regression lock"
+      }
+    ],
+    "gate_exit": 0,
+    "model": "opus",
+    "outcome": "changes_requested",
+    "output_tokens": 693,
+    "packet_digest": "9bbaae04852567b76bb6eee1e98eee3ad913e82e2f288376c48675f031fc9117",
+    "result": "validated",
+    "summary": "The change makes add() return a * b, which is the product, not the sum. That breaks the main acceptance criterion. The unittest gate passed (1 test, OK), so the existing test doesn't catch this. It probably uses inputs where a*b == a+b, such as (2, 2) or (0, 0). The test file's contents weren't in the packet, so I couldn't confirm this. Only calc.py changed, so the file scope is fine.",
+    "verdict": "request_changes"
+  },
+  {
+    "adapter": "claude",
+    "blocking_count": 0,
+    "case": "clean",
+    "elapsed_ms": 5023,
+    "findings": [],
+    "gate_exit": 0,
+    "model": "opus",
+    "outcome": "approved",
+    "output_tokens": 264,
+    "packet_digest": "d4162643777146fe52bd708e30c22b076783c45eb69e62c6dfd56350ad43de31",
+    "result": "validated",
+    "summary": "The diff changes one line in calc.py, which is the only file this task owns: `raise NotImplementedError` becomes `return a + b`, so add(a, b) now returns the sum as the contract requires. test/test_calc.py was not touched, and calc.py is the only changed file. The gate passed: `python3 -B -m unittest test/test_calc.py` exited 0 after running 1 test. One limit: the packet doesn't include the test file, so I couldn't see what that single test checks. I found no blocking issues.",
+    "verdict": "approve"
+  }
+]

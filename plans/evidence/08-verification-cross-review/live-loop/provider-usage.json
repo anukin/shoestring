@@ -1,0 +1,13 @@
+[
+  {
+    "five_hour_utilization": 0.72,
+    "rate_limit_status": "allowed_warning",
+    "seven_day_utilization": 0.84
+  },
+  {
+    "duration_ms": 15199,
+    "num_turns": 5,
+    "terminal_reason": "completed",
+    "total_cost_usd": 0.09271360000000001
+  }
+]

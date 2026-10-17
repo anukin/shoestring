@@ -34,7 +34,8 @@ defmodule Shoestring.Cobbler.Planner.Amendment do
               "checkpoint.created",
               "cobbler.plan.task.accepted",
               "cobbler.plan.task.scope_blocked",
-              "cobbler.plan.task.gate_failed"
+              "cobbler.plan.task.gate_failed",
+              "cobbler.plan.task.review_blocked"
             ])
         )
         |> Enum.take(-15)

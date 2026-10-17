@@ -150,6 +150,9 @@ defmodule Shoestring.Cobbler.Planner.Projection do
   defp summary_fields("cobbler.plan.task.gate_failed"),
     do: ~w(plan_task_id revision_number plan_digest run_id attempt gate retry_state)
 
+  defp summary_fields("cobbler.plan.task.review_blocked"),
+    do: ~w(plan_task_id revision_number plan_digest run_id attempt gate retry_state)
+
   defp summary_fields(_), do: []
 
   defp valid_summary?(%{"reference" => ref, "facts" => facts} = summary)
