@@ -9,7 +9,9 @@
 #                      call; "live": the agent's Claude Coordinator plans and
 #                      sandboxed Claude Elves work (needs an authorized budget).
 #   ITER7A_REVIEW      optional; "fixture" enables iteration 8 cross-review with
-#                      the deterministic fixture reviewer (no provider call).
+#                      the deterministic fixture reviewer (no provider call);
+#                      "codex" reviews with Codex (ITER7A_REVIEW_MODEL, default
+#                      gpt-6-luna; one call per review, needs an authorized budget).
 #
 #     mix run --no-start tools/live_eval/iter7a_work_loop.exs run < /dev/null
 #
@@ -178,12 +180,23 @@ defmodule Iter7aWorkLoop do
       )
     end
 
-    if System.get_env("ITER7A_REVIEW") == "fixture" do
-      Application.put_env(:shoestring, :plan_review,
-        enabled: true,
-        adapter: :fixture,
-        model: "fixture-reviewer"
-      )
+    case System.get_env("ITER7A_REVIEW") do
+      "fixture" ->
+        Application.put_env(:shoestring, :plan_review,
+          enabled: true,
+          adapter: :fixture,
+          model: "fixture-reviewer"
+        )
+
+      "codex" ->
+        Application.put_env(:shoestring, :plan_review,
+          enabled: true,
+          adapter: :codex,
+          model: System.get_env("ITER7A_REVIEW_MODEL", "gpt-6-luna")
+        )
+
+      nil ->
+        :ok
     end
 
     config = Application.fetch_env!(:shoestring, Oban)
@@ -472,6 +485,9 @@ defmodule Iter7aWorkLoop do
     cobbler.plan.execution.requested cobbler.plan.capacity.confirmed admission.decided
     cobbler.plan.task.dispatched cobbler.plan.task.accepted cobbler.plan.task.gate_failed
     cobbler.plan.task.scope_blocked cobbler.plan.execution.completed
+    cobbler.plan.task.review_requested cobbler.plan.review.confirmed
+    cobbler.plan.review.attempt.started cobbler.plan.task.reviewed
+    cobbler.plan.review.decided cobbler.plan.task.review_blocked
     run.running run.completed run.failed run.cancelled run.interrupted
   )
 

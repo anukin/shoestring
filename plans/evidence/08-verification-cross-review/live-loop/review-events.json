@@ -1,0 +1,78 @@
+[
+  {
+    "sequence": 46,
+    "type": "cobbler.plan.task.review_requested",
+    "payload": {
+      "attempt": 1,
+      "base_commit": "2f75620ef5459894c00f232983bd8dccf8439cf7",
+      "commit": "1b48f02bcad9b79ce577959a40dd9adfb8b9544f",
+      "configuration": {
+        "adapter": "codex",
+        "endpoint_digest": "8b8042614dd7f37b2c7755495fd2ec2e49550523c60adc291ba8f73fb9109400",
+        "implementer_provider": "claude",
+        "max_output_tokens": 4096,
+        "max_rounds": 2,
+        "model": "gpt-6-luna",
+        "provider_id": "codex",
+        "scope": "subscription",
+        "support_tier": "conservative_partial",
+        "timeout_ms": 180000,
+        "version": "1"
+      },
+      "execution_id": "c7da9cfe-dc30-53f7-ab56-fd3c5fe7172b",
+      "packet_digest": "0bc99526a07541381e2f97173af8c30412b598118924af107eb8fa2c8b05be06",
+      "plan_digest": "34422efef917ddfe3090c140f719ef786ddbca5a5a1049e2ee86be6930d05b97",
+      "plan_task_id": "fix-add",
+      "review_id": "90481455-a58c-43f6-866f-712a6f11e0e0",
+      "revision_number": 2,
+      "round": 1,
+      "run_id": "05392de3-147b-5517-abbb-05225ebc10a4"
+    }
+  },
+  {
+    "sequence": 48,
+    "type": "cobbler.plan.review.confirmed",
+    "payload": {
+      "attempt": 1,
+      "confirmation_id": "23b3f748-fdb3-4e31-9887-63210099b775",
+      "confirmed_by": "human:user",
+      "execution_id": "c7da9cfe-dc30-53f7-ab56-fd3c5fe7172b",
+      "plan_task_id": "fix-add",
+      "provider_id": "codex",
+      "review_id": "90481455-a58c-43f6-866f-712a6f11e0e0",
+      "scope": "subscription"
+    }
+  },
+  {
+    "sequence": 50,
+    "type": "cobbler.plan.review.attempt.started",
+    "payload": {
+      "admission_event_id": "9ae1af1e-cd9a-4968-81ca-9fd5fdc1e52b",
+      "call": 1,
+      "output_token_allowance": 4096,
+      "review_id": "90481455-a58c-43f6-866f-712a6f11e0e0"
+    }
+  },
+  {
+    "sequence": 51,
+    "type": "cobbler.plan.task.reviewed",
+    "payload": {
+      "attempt": 1,
+      "blocking_count": 0,
+      "commit": "1b48f02bcad9b79ce577959a40dd9adfb8b9544f",
+      "duration_ms": 2477,
+      "execution_id": "c7da9cfe-dc30-53f7-ab56-fd3c5fe7172b",
+      "findings_json": "{\"blocking_count\":0,\"findings\":[],\"outcome\":\"approved\",\"summary\":\"The change implements add(a, b) by returning a + b. The diff is limited to calc.py, and the supplied unittest gate passes.\",\"verdict\":\"approve\"}",
+      "outcome": "approved",
+      "output_tokens": 51,
+      "packet_digest": "0bc99526a07541381e2f97173af8c30412b598118924af107eb8fa2c8b05be06",
+      "plan_digest": "34422efef917ddfe3090c140f719ef786ddbca5a5a1049e2ee86be6930d05b97",
+      "plan_task_id": "fix-add",
+      "review_id": "90481455-a58c-43f6-866f-712a6f11e0e0",
+      "reviewer": "codex:gpt-6-luna",
+      "revision_number": 2,
+      "round": 1,
+      "run_id": "05392de3-147b-5517-abbb-05225ebc10a4"
+    }
+  }
+]

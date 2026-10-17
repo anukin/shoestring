@@ -259,3 +259,59 @@ loop, not a review of a real change (the repair path is the hermetic test).
   artifacts, no cheap-first ordering beyond the plan's order.
 - Review call time is charged as verification overhead; there is no separate
   review budget class beyond the call and round bounds.
+
+## Live verification of cross-review (authorized)
+
+The user authorized live runs on 2026-10-17 ("i ahve authorized you and budget
+is free for now as i have subscription"). Because subscription windows still
+bound use, the run was capped at four Codex review calls, two Claude review
+calls, two planner calls and two Claude Elf runs. Used: **three Codex review
+calls, two Claude review calls, one planner call, one Elf run**. Claude Code
+2.1.302, codex-cli 0.163.0, models `gpt-6-luna` (Codex) and `opus` (Claude).
+
+### Reviewer adapters, direct (`tools/live_eval/iter8_review_probe.exs`)
+
+Outside the service (no admission or records), like the earlier Codex capture.
+The fixture's only test is `add(2, 2) == 4`; "seeded" implements `a * b`
+(the gate passes, the contract is violated), "clean" implements `a + b`.
+
+VERIFIED ([probe-1](live-review-probe/probe-1.json),
+[probe-2](live-review-probe/probe-2.json)): every answer passed
+`Review.Findings` unchanged.
+
+| Reviewer | Seeded | Clean |
+| --- | --- | --- |
+| Codex `gpt-6-luna` | changes requested: 1 blocking, `calc.py:2`, "returns the product instead of the sum" (5.1 s, 175 output tokens) | approved (2.9 s, 47 tokens) |
+| Claude `opus` | changes requested: 1 blocking, `calc.py:2`; 1 non-blocking on `test/test_calc.py` ("the existing test does not catch the product-for-sum mistake") (6.8 s, 693 tokens) | approved (5.0 s, 264 tokens) |
+
+This closes the two UNVERIFIED adapter questions: `--output-schema` held
+Codex to the findings schema, and the Claude review result arrived as
+`structured_output`. Four cases on one tiny fixture say nothing about review
+quality at large; the review-quality eval is still not built.
+
+### Full loop with a Codex reviewer ([live-loop](live-loop/))
+
+VERIFIED: `tools/live_eval/iter7a_work_loop.exs` with `ITER7A_MODE=live` and
+`ITER7A_REVIEW=codex`, in a service node, on a new fixture under the home
+directory:
+
+- One Claude planner call (812 output tokens): one task `fix-add`, 2 attempts;
+  approved as shown.
+- The task was held for capacity, confirmed, and one sandboxed Claude Elf run
+  (5 turns, 15.2 s, 0.0927 USD reported by the CLI) replaced
+  `raise NotImplementedError` with the sum.
+- The gate passed in the sandbox (`macos_seatbelt:v1:sha256:f9bb9af2…`), the
+  review was requested, held (`unknown_capacity`: Codex capacity cannot be
+  read yet), `follow` asked, the scripted terminal confirmed, and **one Codex
+  call approved it** (51 output tokens, 2.5 s; [review events](live-loop/review-events.json)).
+- The task was accepted with the review summary, the final gate passed, and
+  `result` printed the review. The fixture source was unchanged; the printed
+  fetch and merge in a clone gave passing tests. 95.2 s from request to
+  result.
+- Claude reported `allowed_warning`, five-hour utilization 0.72, seven-day
+  0.84.
+
+Not verified live: a blocking review in the loop and the repair that follows
+(the Elf made a correct change, so there was nothing to send back), a Claude
+reviewer inside the loop, a held review on known capacity, and fan-out with
+review.

@@ -17,8 +17,9 @@ defmodule Shoestring.Cobbler.Review.CodexExec do
   Codex has no output allowance flag; the reported `output_tokens` is checked
   against the allowance after the call (`:output_limit`).
 
-  UNVERIFIED until a live call: that `--output-schema` holds the final message
-  to the findings schema on this CLI version (0.163.0 accepts the flag).
+  VERIFIED live on codex-cli 0.163.0 (2026-10-17, three calls, see
+  `plans/evidence/08-verification-cross-review/`): with `--output-schema` the
+  final message was a findings object that passed `Review.Findings`.
   """
   @behaviour Shoestring.Cobbler.Review.Adapter
 

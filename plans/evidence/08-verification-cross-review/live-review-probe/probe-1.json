@@ -1,0 +1,30 @@
+[
+  {
+    "adapter": "codex",
+    "blocking_count": 1,
+    "case": "seeded",
+    "elapsed_ms": 5141,
+    "findings": [
+      {
+        "claim": "add returns the product instead of the sum, so it fails the required behavior for inputs such as 2 and 3.",
+        "confidence": "high",
+        "correction": "Return a + b.",
+        "evidence": "The diff changes calc.py line 2 to `return a * b`.",
+        "id": "F1",
+        "line": 2,
+        "path": "calc.py",
+        "reference": "supported",
+        "severity": "blocking",
+        "violates": "The task requires add(a, b) to return a + b; the implementation multiplies the arguments instead. The passing test does not establish the required behavior for this case."
+      }
+    ],
+    "gate_exit": 0,
+    "model": "gpt-6-luna",
+    "outcome": "changes_requested",
+    "output_tokens": 175,
+    "packet_digest": "a82792f1950295a1cd0ffbcfe82b11a3362f1681886a94bee5f8e43d86cc6e01",
+    "result": "validated",
+    "summary": "The implementation multiplies rather than adds, violating the task’s acceptance criteria.",
+    "verdict": "request_changes"
+  }
+]

@@ -112,10 +112,13 @@ shoestring review retry GOAL TASK --reason "why"    # one more call
   way; only plan runs are.
 - Planning uses Claude only (or a configured local Ollama planner); Codex
   planning is not available.
-- Cross-review has not been run against a real Claude or Codex reviewer; the
-  adapters are tested against scripted stand-ins only. A fan-out replacement
-  after a blocking review starts from the approved base with the findings, not
-  from the reviewed commit, and fan-out with review enabled has no test yet.
+- Cross-review was verified live on 2026-10-17 on one small fixture (Codex and
+  Claude each found a seeded defect and approved a correct change; one full
+  loop with a Codex review approved a real Claude Elf change). The repair loop
+  (blocking findings, repair, re-review) has been tested only with the fixture
+  reviewer. A fan-out replacement after a blocking review starts from the
+  approved base with the findings, not from the reviewed commit, and fan-out
+  with review enabled has no test yet.
 - The checks Shoestring runs after a worker finishes run under macOS
   `sandbox-exec`: they can read the worktree and anything outside your home
   directory, write only to the worktree and a temporary directory, make no
