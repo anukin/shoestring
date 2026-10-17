@@ -114,9 +114,9 @@ shoestring review retry GOAL TASK --reason "why"    # one more call
   planning is not available.
 - Cross-review was verified live on 2026-10-17 on one small fixture (Codex and
   Claude each found a seeded defect and approved a correct change; one full
-  loop with a Codex review approved a real Claude Elf change). The repair loop
-  (blocking findings, repair, re-review) has been tested only with the fixture
-  reviewer. A fan-out replacement after a blocking review starts from the
+  loop with a Codex review approved a real Claude Elf change; one loop with a
+  seeded defect was blocked by Codex, repaired from the reviewed commit and
+  approved on the second round). A fan-out replacement after a blocking review starts from the
   approved base with the findings, not from the reviewed commit, and fan-out
   with review enabled has no test yet.
 - The checks Shoestring runs after a worker finishes run under macOS

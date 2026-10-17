@@ -12,6 +12,11 @@
 #                      the deterministic fixture reviewer (no provider call);
 #                      "codex" reviews with Codex (ITER7A_REVIEW_MODEL, default
 #                      gpt-6-luna; one call per review, needs an authorized budget).
+#   ITER7A_SEED_DEFECT optional; "1" seeds a review defect for the repair path:
+#                      the fixture's test only checks add(2, 2) == 4, the
+#                      agent's instructions tell the worker to implement a * b
+#                      unless its prompt carries cross-review findings, and the
+#                      plan is edited once so the task has exactly two attempts.
 #
 #     mix run --no-start tools/live_eval/iter7a_work_loop.exs run < /dev/null
 #
@@ -60,6 +65,8 @@ defmodule Iter7aShell do
     {files_ok?, budget} = plan_shown()
 
     cond do
+      seeded?() and files_ok? and not edited?() -> "e"
+      seeded?() -> if(files_ok?, do: "y", else: "n")
       files_ok? and is_integer(budget) and budget <= @max_attempts -> "y"
       files_ok? and not edited?() -> "e"
       true -> "n"
@@ -68,17 +75,20 @@ defmodule Iter7aShell do
 
   defp edited?, do: Enum.any?(transcript(), &match?({:edit, _}, &1))
 
+  def seeded?, do: System.get_env("ITER7A_SEED_DEFECT") == "1"
+
+  # Seeded: exactly two attempts, so one repair can follow a blocking review.
+  defp limit(value), do: if(seeded?(), do: @max_attempts, else: min(value, @max_attempts))
+
   @doc "The human edit: caps the plan's and every task's attempt limit."
   def edit(path) do
     plan = path |> File.read!() |> Jason.decode!()
 
     capped =
       plan
-      |> update_in(["budget", "max_total_attempts"], &min(&1, @max_attempts))
+      |> update_in(["budget", "max_total_attempts"], &limit/1)
       |> Map.update!("tasks", fn tasks ->
-        Enum.map(tasks, fn task ->
-          update_in(task, ["execution", "max_attempts"], &min(&1, @max_attempts))
-        end)
+        Enum.map(tasks, fn task -> update_in(task, ["execution", "max_attempts"], &limit/1) end)
       end)
 
     File.write!(path, Jason.encode!(capped, pretty: true))
@@ -252,6 +262,27 @@ defmodule Iter7aWorkLoop do
       unittest.main()
   """
 
+  # Passes for a * b as well: only a review can find that defect.
+  @weak_test """
+  import unittest
+
+  from calc import add
+
+
+  class AddTest(unittest.TestCase):
+      def test_two_and_two(self):
+          self.assertEqual(add(2, 2), 4)
+
+
+  if __name__ == "__main__":
+      unittest.main()
+  """
+
+  @seed_instruction " Evaluation instruction (a deliberately seeded defect for a code-review " <>
+                      "test): if this prompt has no 'Cross-review of attempt' section, implement " <>
+                      "add as `return a * b` and commit it. If it has one, fix exactly what the " <>
+                      "findings describe and commit."
+
   def fixture! do
     false = File.exists?(source())
     File.mkdir_p!(Path.join(source(), "test"))
@@ -265,7 +296,11 @@ defmodule Iter7aWorkLoop do
     )
 
     File.write!(Path.join(source(), "test/__init__.py"), "")
-    File.write!(Path.join(source(), "test/test_calc.py"), @test)
+
+    File.write!(
+      Path.join(source(), "test/test_calc.py"),
+      if(Iter7aShell.seeded?(), do: @weak_test, else: @test)
+    )
 
     git!(source(), ["init", "-q", "-b", "main"])
     git!(source(), ["config", "user.name", "Fixture"])
@@ -292,7 +327,8 @@ defmodule Iter7aWorkLoop do
         "slug" => "builder",
         "purpose" => "Carry out approved plan tasks.",
         "instructions" =>
-          "Complete the task within its stated scope and acceptance gates. Commit the result.",
+          "Complete the task within its stated scope and acceptance gates. Commit the result." <>
+            if(Iter7aShell.seeded?(), do: @seed_instruction, else: ""),
         "roles" => [
           %{"name" => "Coordinator", "provider" => "claude", "model" => "opus"},
           %{"name" => "Worker", "provider" => "claude", "model" => "opus"}

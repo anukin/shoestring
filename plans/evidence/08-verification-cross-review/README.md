@@ -311,7 +311,43 @@ directory:
 - Claude reported `allowed_warning`, five-hour utilization 0.72, seven-day
   0.84.
 
-Not verified live: a blocking review in the loop and the repair that follows
-(the Elf made a correct change, so there was nothing to send back), a Claude
-reviewer inside the loop, a held review on known capacity, and fan-out with
-review.
+### Blocking review and repair, live ([live-repair](live-repair/))
+
+The user asked for this path next ("can go ahead with this"). Cap for the run:
+one planner call, two Claude Elf runs, three Codex review calls. Used: **one
+planner call, two Elf runs, two Codex calls**.
+
+The defect was **seeded**, not found in the wild: with `ITER7A_SEED_DEFECT=1`
+the fixture's only test is `add(2, 2) == 4`, and the agent's instructions tell
+the worker to implement `a * b` when its prompt has no cross-review section
+and to fix the findings when it has one. The plan was edited once so the task
+had exactly two attempts. The driver's logic was rehearsed first without a
+provider (fixture reviewer, Fake Elves).
+
+VERIFIED (`transcript.json`, `domain-events.json`, `result.json`):
+
+- Attempt 1: one sandboxed Claude Elf run committed `return a * b`
+  (`af72ab3`); the gate passed (the weak test).
+- Round 1: held, confirmed, one Codex call: **1 blocking finding**, `calc.py:3`
+  "add(a, b) multiplies its arguments instead of returning their sum"
+  (3.8 s). The attempt was resolved `review_blocked` with `retry`.
+- Attempt 2: held and confirmed like any attempt; its private worktree was
+  created **from the reviewed commit `af72ab3`** (not the base `86e8f04`), and
+  its prompt carried the "Cross-review of attempt 1" section with the finding.
+  One Elf run committed `return a + b` (`6c07702`); the gate passed.
+- Round 2 reviewed the whole task change from the original base `86e8f04`:
+  held, confirmed, one Codex call: **approved** (2.5 s).
+- The task was accepted at `6c07702` with the review summary; the final gate
+  passed; `result` printed both rounds and the round-1 finding. Fixture source
+  unchanged; the printed merge in a clone passed its tests. 203.3 s overall.
+- Claude: 5 turns per run, 0.0865 and 0.0787 USD reported by the CLI;
+  five-hour utilization 0.82 → 0.83 (`allowed_warning`).
+
+The same path is now also covered hermetically with real worktrees and real
+sandboxed gates (`plan_review_test` "the repair runs in a real worktree
+started from the reviewed commit"), which the earlier tests skipped by
+injecting the gate runner.
+
+Not verified live: a defect the worker made on its own, a Claude reviewer
+inside the loop, escalation and human decisions, a held review on known
+capacity, and fan-out with review.

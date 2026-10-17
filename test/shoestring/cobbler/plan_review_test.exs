@@ -21,6 +21,7 @@ defmodule Shoestring.Cobbler.PlanReviewTest do
       exec_opts: 1,
       gate_opts: 0,
       propose_and_approve!: 1,
+      propose_and_approve!: 2,
       run_count: 1
     ]
 
@@ -138,6 +139,90 @@ defmodule Shoestring.Cobbler.PlanReviewTest do
     assert prompt =~ record.commit
     assert prompt =~ "subtracts instead of adding"
     assert run_count(c.goal.id) == 2
+  end
+
+  test "the repair runs in a real worktree started from the reviewed commit, with real sandboxed gates",
+       c do
+    # No injected runner: the executor creates every worktree and the gates
+    # run for real. The test commits in place of the Elf.
+    File.mkdir_p!(Path.join(c.source, "test"))
+    File.write!(Path.join(c.source, "test/__init__.py"), "")
+
+    File.write!(
+      Path.join(c.source, "test/test_calc.py"),
+      "import unittest\nfrom calc import add\n\n\nclass AddTest(unittest.TestCase):\n" <>
+        "    def test_four(self):\n        self.assertEqual(add(2, 2), 4)\n"
+    )
+
+    git!(c.source, ["add", "."])
+    git!(c.source, ["-c", "commit.gpgsign=false", "commit", "-m", "A weak test"])
+    base = head!(c.source)
+    gate = %{"gate" => "python_unittest", "test_paths" => ["test/test_calc.py"]}
+
+    plan =
+      Shoestring.Test.PlanExecutorHelpers.chain_plan(%{
+        "goal" =>
+          Shoestring.Test.PlanFixtures.goal(%{
+            "repository" => %{"base_revision" => base},
+            "acceptance" => %{"gates" => [gate], "evidence" => ["The tests pass."]}
+          }),
+        "tasks" => [
+          Shoestring.Test.PlanFixtures.task("alpha", "Implement add", [], %{"gates" => [gate]})
+        ]
+      })
+
+    opts =
+      exec_opts(
+        gate_runner_opts: [timeout_ms: 60_000],
+        review_config: @review,
+        repository_path: c.source
+      )
+
+    rev = propose_and_approve!(c.goal, plan)
+    admission = admit!(c.goal)
+
+    attrs = %{
+      revision_number: rev.revision_number,
+      digest: rev.digest,
+      admission_event_id: admission.id
+    }
+
+    assert {:ok, _} = Cobbler.request_plan_execution(c.goal.id, attrs, opts)
+
+    first = advance!(c, Keyword.put(opts, :admission_event_id, admission.id))
+    defect = "def add(a, b):\n    return a * b  # #{Fixture.marker()} multiplies\n"
+    commit_in!(first, defect)
+    complete_run!(c.goal, first.run_id)
+    assert {:ok, %{reason: :review_held}} = complete(c, first, opts)
+    reviewed = record!(first)
+
+    assert [%{"sandbox" => "macos_seatbelt:v1:" <> _, "exit_status" => 0}] =
+             reviewed.gates["items"]
+
+    confirm!(c, reviewed)
+    assert {:ok, %{disposition: :review_blocked, retry_state: "retry"}} = complete(c, first, opts)
+
+    second = advance!(c, opts)
+    assert second.attempt == 2
+    assert {:ok, wt} = Worktrees.get(second.run_id)
+    assert wt.base_commit == reviewed.commit
+    assert File.read!(Path.join(wt.path, "calc.py")) == defect
+    refute wt.repo_path == Worktrees.get(first.run_id) |> elem(1) |> Map.fetch!(:repo_path)
+
+    commit_in!(second, "def add(a, b):\n    return a + b\n")
+    complete_run!(c.goal, second.run_id)
+    assert {:ok, %{reason: :review_held}} = complete(c, second, opts)
+    confirm!(c, record!(second))
+    assert {:ok, %{disposition: :accepted}} = complete(c, second, opts)
+
+    # Round 2 reviews the whole task change from the original base.
+    round2 = record!(second)
+    assert round2.round == 2
+    assert round2.base_commit == base
+    diff = Jason.decode!(round2.packet_json)["diff"]
+    assert diff =~ "+    return a + b"
+    refute diff =~ "a * b"
+    assert event!(c.goal.id, "cobbler.plan.task.accepted").payload["commit"] == round2.commit
   end
 
   test "a repeated blocking finding escalates to the user, who can dismiss it with a reason", c do
@@ -531,6 +616,14 @@ defmodule Shoestring.Cobbler.PlanReviewTest do
 
     snapshot
   end
+
+  defp commit_in!(dispatched, content) do
+    {:ok, %{path: path}} = Worktrees.get(dispatched.run_id)
+    File.write!(Path.join(path, "calc.py"), content)
+    git!(path, ["-c", "commit.gpgsign=false", "commit", "-qam", "Attempt #{dispatched.attempt}"])
+  end
+
+  defp head!(dir), do: dir |> git!(["rev-parse", "HEAD"]) |> String.trim()
 
   defp failing_runner do
     fn _argv, _worktree, _timeout ->
