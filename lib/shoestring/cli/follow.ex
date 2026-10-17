@@ -240,7 +240,13 @@ defmodule Shoestring.CLI.Follow do
         "Task #{task}: accepted at #{short(p["commit"])}."
 
       "cobbler.plan.task.gate_failed" ->
-        "Task #{task}: checks failed (#{p["gate"]})."
+        case Regex.run(~r/\A\{:gate_unavailable, %\{reason: :(\w+)\}\}\z/, p["reason"] || "") do
+          [_, reason] ->
+            "Task #{task}: checks could not run in a sandbox (#{p["gate"]}: #{reason}); needs your decision."
+
+          nil ->
+            "Task #{task}: checks failed (#{p["gate"]})."
+        end
 
       "cobbler.plan.task.scope_blocked" ->
         "Task #{task}: changed files outside its scope; needs your decision."

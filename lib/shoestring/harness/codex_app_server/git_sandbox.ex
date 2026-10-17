@@ -57,7 +57,8 @@ defmodule Shoestring.Harness.CodexAppServer.GitSandbox do
 
   # Platform aliases such as /var -> /private/var must compare by their actual
   # location. Links below the configured root are still refused above.
-  defp physical_path(path) do
+  @doc false
+  def physical_path(path) do
     path |> Path.expand() |> Path.split() |> resolve_parts("/", 40)
   end
 

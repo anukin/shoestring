@@ -296,6 +296,36 @@ defmodule Shoestring.Cobbler.PlanExecutorTest do
       assert run_count(goal.id) == 2
     end
 
+    test "a gate that cannot be sandboxed stops for the user instead of retrying", %{goal: goal} do
+      rev = propose_and_approve!(goal)
+      admission = admit!(goal)
+      assert :recorded = elem(request!(goal, rev, admission), 0)
+
+      first = advance!(goal, admission_event_id: admission.id)
+      complete_run!(goal, first.run_id)
+
+      unavailable = fn _argv, _worktree, _timeout ->
+        {:error, {:gate_unavailable, %{reason: :no_sandbox_mechanism}}}
+      end
+
+      opts = exec_opts(gate_runner_opts: Keyword.put(gate_opts(), :runner, unavailable))
+      assert {:ok, failed} = Cobbler.complete_plan_task_run(goal.id, first.run_id, opts)
+      assert failed.disposition == :gate_failed
+      assert failed.retry_state == "needs_user"
+      assert failed.reason =~ "no_sandbox_mechanism"
+
+      # Attempts remain (the same budget retries an ordinary gate failure),
+      # but no second Elf run is dispatched.
+      assert {:ok, result} =
+               Cobbler.advance_plan_execution(
+                 goal.id,
+                 exec_opts(admission_event_id: admit!(goal).id)
+               )
+
+      refute Map.get(result, :disposition) == :dispatched
+      assert run_count(goal.id) == 1
+    end
+
     test "a failing global gate blocks goal completion", %{goal: goal} do
       rev = propose_and_approve!(goal)
       admission = admit!(goal)

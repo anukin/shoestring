@@ -3,6 +3,7 @@ defmodule Shoestring.Cobbler.PlanPythonGateTest do
 
   alias Shoestring.Cobbler.{GateProcess, PlanContract, PlanGate, PlanGateRunner}
   alias Shoestring.Cobbler.Planner.Evaluation
+  alias Shoestring.Worktrees
 
   test "Python gates require named tests and preserve the trusted executable" do
     gate = %{"gate" => "python_unittest", "test_paths" => ["test/test_greeting.py"]}
@@ -114,19 +115,29 @@ defmodule Shoestring.Cobbler.PlanPythonGateTest do
     } do
       case_id = unquote(case_id)
       root = Application.app_dir(:shoestring, "priv/planner_eval")
-      repository = Path.join(dir, "repository")
-      File.cp_r!(Path.join(root, "repository"), repository)
-      git!(repository, ["init"])
-      git!(repository, ["config", "user.name", "Fixture"])
-      git!(repository, ["config", "user.email", "fixture@example.invalid"])
-      commit!(repository, "Python fixture baseline")
+      source = Path.join(dir, "source")
+      File.cp_r!(Path.join(root, "repository"), source)
+      git!(source, ["init"])
+      git!(source, ["config", "user.name", "Fixture"])
+      git!(source, ["config", "user.email", "fixture@example.invalid"])
+      commit!(source, "Python fixture baseline")
+      # Gates run only, sandboxed, in a registered private run worktree.
+      worktrees_dir = Path.join(dir, "worktrees")
+
+      {:ok, %{path: repository}} =
+        Worktrees.create(source, Ecto.UUID.generate(), "HEAD",
+          private_git: true,
+          worktrees_dir: worktrees_dir
+        )
+
       {:ok, json} = Evaluation.reference(case_id)
       plan = Jason.decode!(json)
       [goal_gate] = plan["goal"]["acceptance"]["gates"]
-      opts = [worktree_path: repository, timeout_ms: 15_000]
+      opts = [worktree_path: repository, worktrees_dir: worktrees_dir, timeout_ms: 15_000]
       ctx = context(case_id)
 
       assert {:ok, baseline} = PlanGateRunner.run(goal_gate, ctx, opts)
+      assert "macos_seatbelt:v1:sha256:" <> _ = baseline.sandbox
       assert baseline.exit_status == 1
       assert baseline.output =~ "AssertionError:"
       refute baseline.output =~ "ImportError"
