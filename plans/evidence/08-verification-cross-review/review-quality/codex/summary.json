@@ -1,0 +1,22 @@
+{
+  "codex": {
+    "blocked_blocking_cases": 8,
+    "blocking_cases": 8,
+    "calls": 13,
+    "clean_cases": 5,
+    "elapsed_ms": 49465,
+    "failed_calls": 0,
+    "false_block_rate": 0.0,
+    "falsely_blocked_clean_cases": 0,
+    "findings": 9,
+    "line_located_blocking_cases": 8,
+    "located_blocking_cases": 8,
+    "non_blocking_findings": 0,
+    "output_tokens": 2090,
+    "output_tokens_per_located_blocking_case": 261.25,
+    "recall_located": 1.0,
+    "reference_validity": 1.0,
+    "unsupported_findings": 0,
+    "validated": 13
+  }
+}

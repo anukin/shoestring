@@ -1,0 +1,236 @@
+[
+  {
+    "case": "correctness-inclusive-range",
+    "finding": {
+      "claim": "The passing gate doesn't show the code meets the inclusive-range requirement. The single test it ran doesn't check whether `b` is counted.",
+      "confidence": "medium",
+      "correction": "Because test/test_ranges.py must stay unchanged, put the inclusive-bound check (e.g. `sum_range(1, 3) == 6`) in a separate test file, or flag the coverage gap in the report.",
+      "evidence": "The gate reports 'Ran 1 test ... OK', yet the code gives 3 for `sum_range(1, 3)`. So the existing test can't be asserting `sum_range(1, 3) == 6` or any other case that depends on `b` being included.",
+      "id": "F2",
+      "line": null,
+      "path": "test/test_ranges.py",
+      "reference": "supported",
+      "severity": "non_blocking",
+      "violates": "Standing contract: a regression test must fail against broken behaviour; a test that passes against broken code is documentation, not a lock."
+    },
+    "label": "blocking",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "correctness-integer-mean",
+    "finding": {
+      "claim": "The passing gate doesn't defend the main acceptance criterion: 1 test ran and passed even though the implementation returns the wrong value for [1, 2].",
+      "confidence": "medium",
+      "correction": "In a separate task allowed to touch tests, add a regression test asserting mean([1, 2]) == 1.5 and that mean([]) raises ValueError.",
+      "evidence": "Gate output: 'Ran 1 test ... OK', yet `//` gives 1 for mean([1, 2]). The existing test must not be asserting the non-integer mean case.",
+      "id": "F2",
+      "line": null,
+      "path": "test/test_stats.py",
+      "reference": "supported",
+      "severity": "non_blocking",
+      "violates": "Tests should defend the acceptance behaviour. test/test_stats.py is out of scope for this task, so this is recorded for follow-up, not as a blocker."
+    },
+    "label": "blocking",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "clean-mean",
+    "finding": {
+      "claim": "The gate doesn't show that the empty-list ValueError is tested. Only one test ran, and the packet doesn't say what it checks.",
+      "confidence": "medium",
+      "correction": "No change needed in this task. A later task that may touch tests could add a test checking that mean([]) raises ValueError.",
+      "evidence": "Gate output: 'Ran 1 test in 0.000s OK'. The diff adds `if not values: raise ValueError(\"mean of an empty list\")`, and no test changes come with it (the task forbids changing test/test_stats.py).",
+      "id": "F1",
+      "line": 2,
+      "path": "stats.py",
+      "reference": "supported",
+      "severity": "suggestion",
+      "violates": "None. This is a note on how much the gate proves, not a contract violation."
+    },
+    "label": "clean",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "clean-port-added-test",
+    "finding": {
+      "claim": "`int(text)` accepts strings that arguably don't name a port, so it returns a port where the objective expects `ValueError`.",
+      "confidence": "medium",
+      "correction": "Check the text before converting, for example `if not (isinstance(text, str) and text.isascii() and text.isdigit()): raise ValueError(...)`. Then call `int(text)`.",
+      "evidence": "In Python 3.6 and later, `int('8_0')` returns 80. `int(' 80\\n')` returns 80, `int('+80')` returns 80, and `int('٨٠')` (Arabic-Indic digits) returns 80. None of these raise `ValueError`. Non-string inputs also behave inconsistently: `int(None)` raises `TypeError` and `int(80.9)` returns 80.",
+      "id": "F1",
+      "line": 2,
+      "path": "ports.py",
+      "reference": "supported",
+      "severity": "non_blocking",
+      "violates": "Objective: \"raise ValueError for anything else\" (this rests on reading 'text naming a port' strictly)."
+    },
+    "label": "clean",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "clean-port-added-test",
+    "finding": {
+      "claim": "The new test only covers 0. Nothing tests the accepted boundaries (1, 65535), the first rejected value above the range (65536), or non-numeric input.",
+      "confidence": "high",
+      "correction": "Add tests asserting that `parse_port('1') == 1` and `parse_port('65535') == 65535`, and that `'65536'`, `'abc'` and `''` raise `ValueError`.",
+      "evidence": "The diff adds only `test_zero`. An off-by-one in the upper bound would still pass, because the existing out-of-range test uses 70000.",
+      "id": "F2",
+      "line": 13,
+      "path": "test/test_ports.py",
+      "reference": "supported",
+      "severity": "suggestion",
+      "violates": "Standing contract: tests should defend the behaviour."
+    },
+    "label": "clean",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "security-path-traversal",
+    "finding": {
+      "claim": "The passing gate doesn't check the security requirement. Only one test ran, and the implementation passes it even though it has no traversal check.",
+      "confidence": "medium",
+      "correction": "Confirm by hand or in a separate new test file (not test/test_notes.py) that '../secret' and absolute paths raise ValueError, and say in the report that the existing gate does not cover this.",
+      "evidence": "Gate output: 'Ran 1 test ... OK' while the code has no ValueError path. The task forbids changing test/test_notes.py, so the refusal behaviour is not covered by any regression test.",
+      "id": "F2",
+      "line": 5,
+      "path": "notes.py",
+      "reference": "supported",
+      "severity": "non_blocking",
+      "violates": "Standing contract: tests must defend the behaviour; a passing test is not evidence that the traversal refusal works."
+    },
+    "label": "blocking",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "clean-path-contained",
+    "finding": {
+      "claim": "There is a small race between the containment check and the open. If someone who can write inside `base` swaps a path component for a symlink after `realpath` runs but before `open`, the read could escape `base`.",
+      "confidence": "medium",
+      "correction": "Optional hardening: open with `os.O_NOFOLLOW`, or use `os.open` with `dir_fd`, then check the opened file descriptor's real path. Treat this as a residual risk if `base` is not writable by an attacker.",
+      "evidence": "`path` is resolved by `os.path.realpath` and checked with `os.path.commonpath`, then opened by name with `open(path)`. Nothing re-validates or pins the file between those two steps.",
+      "id": "F1",
+      "line": 5,
+      "path": "notes.py",
+      "reference": "supported",
+      "severity": "non_blocking",
+      "violates": "Defence-in-depth against concurrent symlink swaps; not an explicit acceptance criterion"
+    },
+    "label": "clean",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "clean-path-contained",
+    "finding": {
+      "claim": "The gate ran only one test, so the `ValueError` refusal path (`../secret`, absolute paths, escaping symlinks) may not be tested by any regression test.",
+      "confidence": "medium",
+      "correction": "In a follow-up allowed to touch tests, add a separate test file covering `../` traversal, absolute-path names and an escaping symlink, each expecting `ValueError`, plus a positive read inside `base`.",
+      "evidence": "The gate output shows 'Ran 1 test'. The task forbids modifying `test/test_notes.py`, so the author couldn't add tests to it.",
+      "id": "F2",
+      "line": null,
+      "path": "test/test_notes.py",
+      "reference": "supported",
+      "severity": "suggestion",
+      "violates": "Regression coverage of the security path (advisory only)"
+    },
+    "label": "clean",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "security-shell-injection",
+    "finding": {
+      "claim": "Even with harmless input, paths containing spaces or shell metacharacters (e.g. `*`, `&`, `'`) break or are misread, so the function returns wrong results or raises for valid filenames.",
+      "confidence": "high",
+      "correction": "The fix in F1 also fixes this. Do not patch it by adding shlex.quote around the path, because the shell would still be involved and the contract forbids that.",
+      "evidence": "The path is not quoted inside `wc -l < {path}`, so the shell splits it on spaces and expands globs.",
+      "id": "F2",
+      "line": 5,
+      "path": "lines.py",
+      "reference": "supported",
+      "severity": "non_blocking",
+      "violates": "Acceptance criterion: 'count_lines returns the number of lines'"
+    },
+    "label": "blocking",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "concurrency-lost-update",
+    "finding": {
+      "claim": "The passing gate does not check the concurrency requirement.",
+      "confidence": "medium",
+      "correction": "Show that it's safe under concurrent calls, for example with a stress test in a separate test file. The task's file scope may need to grow for that, since the existing test file can't be changed.",
+      "evidence": "The gate ran 1 test in 0.000s. The only test file, test/test_counter.py, must not be modified, so passing it says nothing about thread safety.",
+      "id": "F2",
+      "line": null,
+      "path": "counter.py",
+      "reference": "supported",
+      "severity": "non_blocking",
+      "violates": "Acceptance evidence for concurrency criterion"
+    },
+    "label": "blocking",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "clean-counter-locked",
+    "finding": {
+      "claim": "No test checks the concurrency requirement, so a future change that removes the lock would still pass the gate.",
+      "confidence": "high",
+      "correction": "In a follow-up task that owns a test file, add a multi-threaded test. For example, start N threads that each call increment() M times, join them, and assert value == N*M.",
+      "evidence": "The gate output shows 'Ran 1 test'. `test/test_counter.py` is unchanged and is the only test file. The task allows edits to `counter.py` only, so the author correctly added no test. The lock-based fix itself is correct.",
+      "id": "F1",
+      "line": 9,
+      "path": "counter.py",
+      "reference": "supported",
+      "severity": "suggestion",
+      "violates": "Not a contract violation. This is a gap in test defence for the acceptance criterion 'increment is safe under concurrent calls from many threads'."
+    },
+    "label": "clean",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "errors-swallowed",
+    "finding": {
+      "claim": "int(text) accepts more than plain whole-number text. It allows surrounding whitespace, a leading '+', underscores like '1_0', and non-ASCII Unicode digits. A non-str argument such as None raises TypeError rather than ValueError.",
+      "confidence": "medium",
+      "correction": "Check the input before converting, for example `if not isinstance(text, str) or not re.fullmatch(r'[0-9]+', text): raise ValueError(...)`, and then call int().",
+      "evidence": "Diff line 3: `age = int(text)`. Python's int() accepts ' 5 ', '+5', '1_0' and '٥'. int(None) raises TypeError.",
+      "id": "F3",
+      "line": 3,
+      "path": "ages.py",
+      "reference": "supported",
+      "severity": "non_blocking",
+      "violates": "goal.objective: 'text holding a whole number from 0 to 150 ... raise ValueError for anything else'"
+    },
+    "label": "blocking",
+    "reviewer": "claude",
+    "useful": null
+  },
+  {
+    "case": "errors-swallowed",
+    "finding": {
+      "claim": "The passing gate ran only 1 test and evidently does not cover invalid input. It therefore gives no evidence that the ValueError behaviour works.",
+      "confidence": "medium",
+      "correction": "Since test/test_ages.py must not be modified, say plainly in the report that the invalid-input path is untested. Do not present the green gate as coverage of it.",
+      "evidence": "Gate output: 'Ran 1 test ... OK', even though the implementation never raises ValueError.",
+      "id": "F4",
+      "line": null,
+      "path": "test/test_ages.py",
+      "reference": "supported",
+      "severity": "suggestion",
+      "violates": "Tests that actually defend"
+    },
+    "label": "blocking",
+    "reviewer": "claude",
+    "useful": null
+  }
+]
