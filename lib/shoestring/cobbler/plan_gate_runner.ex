@@ -20,6 +20,13 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
   - **Ownership.** The calling process owns the gate port and process group.
     Timeout and output overflow apply only to this explicit gate invocation;
     they do not cancel another Elf.
+  - **Sandbox.** The gate command runs under `Shoestring.Cobbler.GateSandbox`
+    (no reads of the rest of the home directory, writes only to the worktree
+    and a per-gate temporary directory, no outbound network, an explicit
+    environment). When it cannot be confined the gate is unavailable,
+    `{:error, {:gate_unavailable, %{reason: reason}}}`, never passed or
+    failed. Evidence records the sandbox profile's identity. Shoestring's own
+    `git` checks around the gate are not sandboxed.
 
   ## Evidence binding
 
@@ -36,10 +43,11 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
   `(argv, worktree, timeout_ms -> {:ok, %{exit_status, output, duration_ms}}
   | {:error, reason})`. It replaces the OS invocation only; gate names,
   argv resolution, and evidence binding are unchanged. A plan can never
-  supply executable names or results through this option.
+  supply executable names or results through this option. Injected runs
+  carry no sandbox identity (`sandbox: nil`).
   """
 
-  alias Shoestring.Cobbler.{GateProcess, PlanGate}
+  alias Shoestring.Cobbler.{GateProcess, GateSandbox, PlanGate}
 
   @default_timeout_ms 120_000
   @max_timeout_ms 300_000
@@ -68,7 +76,8 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
           required(:worktree) => String.t(),
           required(:exit_status) => integer(),
           required(:output) => String.t(),
-          required(:duration_ms) => non_neg_integer()
+          required(:duration_ms) => non_neg_integer(),
+          required(:sandbox) => GateSandbox.identity() | nil
         }
 
   @doc """
@@ -76,8 +85,9 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
 
   `gate_ref` is a validated `%{"gate" => name}` reference (optionally with
   `test_paths` for `mix_test` or `python_unittest`). `context` binds the run to its plan task.
-  Options: `:worktree_path` (required), `:timeout_ms`,
-  `:runner` (test injection, see moduledoc).
+  Options: `:worktree_path` (required), `:timeout_ms`, `:worktrees_dir` (the
+  service's worktree root), `:gate_sandbox` (options for
+  `GateSandbox.wrap/3`), `:runner` (test injection, see moduledoc).
   """
   @spec run(map(), context(), keyword()) :: {:ok, evidence()} | {:error, term()}
   def run(gate_ref, context, opts \\ []) do
@@ -105,7 +115,8 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
          worktree: worktree,
          exit_status: result.exit_status,
          output: result.output,
-         duration_ms: result.duration_ms
+         duration_ms: result.duration_ms,
+         sandbox: Map.get(result, :sandbox)
        }}
     end
   end
@@ -304,7 +315,7 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
   defp invoke(argv, worktree, timeout_ms, opts) do
     case Keyword.get(opts, :runner) do
       nil ->
-        invoke_system(argv, worktree, timeout_ms)
+        invoke_system(argv, worktree, timeout_ms, opts)
 
       runner when is_function(runner, 3) ->
         normalize_injected(runner.(argv, worktree, timeout_ms))
@@ -328,8 +339,16 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
   defp normalize_injected({:error, reason}), do: {:error, reason}
   defp normalize_injected(_other), do: {:error, {:invalid_gate_runner, :result}}
 
-  defp invoke_system(argv, worktree, timeout_ms) do
-    GateProcess.run(argv, worktree, timeout_ms, @max_output_bytes)
+  defp invoke_system(argv, worktree, timeout_ms, opts) do
+    sandbox_opts =
+      opts
+      |> Keyword.get(:gate_sandbox, [])
+      |> Keyword.put_new(:worktrees_dir, Keyword.get(opts, :worktrees_dir))
+
+    with {:ok, sandbox} <- GateSandbox.wrap(argv, worktree, sandbox_opts),
+         {:ok, result} <- GateProcess.run(sandbox.argv, worktree, timeout_ms, @max_output_bytes) do
+      {:ok, Map.put(result, :sandbox, sandbox.identity)}
+    end
   end
 
   defp check_output_size(%{output: output} = _result, gate) do

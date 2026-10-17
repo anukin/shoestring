@@ -75,6 +75,8 @@ plans/evidence/06-cobbler-planning/*
 !/plans/evidence/07-multi-elf/**
 !/plans/evidence/07a-cli-work-loop/
 !/plans/evidence/07a-cli-work-loop/**
+!/plans/evidence/08-verification-cross-review/
+!/plans/evidence/08-verification-cross-review/**
 
 # Native capture originals remain local; named review images are versioned.
 /.impeccable/review/Screenshot*.png
