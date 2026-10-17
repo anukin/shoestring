@@ -329,6 +329,11 @@ defmodule Shoestring.Cobbler.PlanReviewTest do
              )
 
     decide!(c, record!(first), "accept", "Waived: no second provider is configured yet.")
+
+    # Recorded but not yet applied: it no longer waits for the human.
+    assert {:ok, %{needs_user?: false, reviews: [%{decision_pending?: true}]}} =
+             Cobbler.plan_execution_status(c.goal.id)
+
     assert {:ok, %{disposition: :accepted}} = complete(c, first, opts)
 
     assert event!(c.goal.id, "cobbler.plan.task.accepted").payload["review"]["reviewer"] ==

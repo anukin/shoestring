@@ -834,7 +834,10 @@ defmodule Shoestring.Cobbler.PlanReview do
       unavailable: record.configuration["unavailable"],
       reason: first_code(record),
       calls: record.calls,
-      needs_user?: needs_user?(record),
+      # A recorded decision the service has not applied yet no longer waits
+      # for the human.
+      decision_pending?: pending_decision(record) != nil,
+      needs_user?: needs_user?(record) and pending_decision(record) == nil,
       findings:
         if(record.result_json, do: Jason.decode!(record.result_json)["findings"], else: [])
     }

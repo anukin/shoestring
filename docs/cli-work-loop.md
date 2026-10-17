@@ -116,9 +116,10 @@ shoestring review retry GOAL TASK --reason "why"    # one more call
   Claude each found a seeded defect and approved a correct change; one full
   loop with a Codex review approved a real Claude Elf change; one loop with a
   seeded defect was blocked by Codex, repaired from the reviewed commit and
-  approved on the second round). A fan-out replacement after a blocking review starts from the
-  approved base with the findings, not from the reviewed commit, and fan-out
-  with review enabled has no test yet.
+  approved on the second round; one escalated and was dismissed with
+  `shoestring review accept`). A fan-out replacement after a blocking review starts from the
+  approved base with the findings, not from the reviewed commit; fan-out with
+  review is tested hermetically only.
 - The checks Shoestring runs after a worker finishes run under macOS
   `sandbox-exec`: they can read the worktree and anything outside your home
   directory, write only to the worktree and a temporary directory, make no

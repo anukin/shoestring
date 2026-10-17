@@ -11,12 +11,18 @@
 #   ITER7A_REVIEW      optional; "fixture" enables iteration 8 cross-review with
 #                      the deterministic fixture reviewer (no provider call);
 #                      "codex" reviews with Codex (ITER7A_REVIEW_MODEL, default
-#                      gpt-6-luna; one call per review, needs an authorized budget).
+#                      gpt-6-luna; one call per review, needs an authorized budget);
+#                      "claude" is the Worker's own provider, so review is
+#                      unavailable and waits for a human decision (no call).
 #   ITER7A_SEED_DEFECT optional; "1" seeds a review defect for the repair path:
 #                      the fixture's test only checks add(2, 2) == 4, the
 #                      agent's instructions tell the worker to implement a * b
 #                      unless its prompt carries cross-review findings, and the
 #                      plan is edited once so the task has exactly two attempts.
+#   ITER7A_REVIEW_MAX_ROUNDS  optional review round limit (default 2).
+#   ITER7A_REVIEW_DECISION    optional "accept" or "reject": when following stops
+#                      because a review needs the human, record that decision
+#                      with `shoestring review` and follow again.
 #
 #     mix run --no-start tools/live_eval/iter7a_work_loop.exs run < /dev/null
 #
@@ -202,7 +208,17 @@ defmodule Iter7aWorkLoop do
         Application.put_env(:shoestring, :plan_review,
           enabled: true,
           adapter: :codex,
-          model: System.get_env("ITER7A_REVIEW_MODEL", "gpt-6-luna")
+          model: System.get_env("ITER7A_REVIEW_MODEL", "gpt-6-luna"),
+          max_rounds: String.to_integer(System.get_env("ITER7A_REVIEW_MAX_ROUNDS", "2"))
+        )
+
+      # With this driver's Claude Worker a Claude reviewer is the same
+      # provider: review is unavailable and no review call is made.
+      "claude" ->
+        Application.put_env(:shoestring, :plan_review,
+          enabled: true,
+          adapter: :claude,
+          model: "opus"
         )
 
       nil ->
@@ -377,6 +393,40 @@ defmodule Iter7aWorkLoop do
 
   # -- The loop --------------------------------------------------------------
 
+  defp follow(goal_id) do
+    Follow.run(goal_id,
+      by: @by,
+      shell: Iter7aShell,
+      interval_ms: 1_000,
+      max_polls: 900,
+      from_execution: true
+    )
+  end
+
+  # The human's step, through the real command: list, then decide the one
+  # review that waits. Its output joins the transcript.
+  defp decide_review!(goal_id, decision) do
+    {:ok, status} = Shoestring.Cobbler.ExecutionControl.status(goal_id)
+    %{plan_task_id: task} = Enum.find(status.reviews, & &1.needs_user?)
+
+    reason =
+      "Evaluation: #{decision} the seeded finding to verify the human decision path."
+
+    for args <- [
+          ["list", goal_id],
+          ["show", goal_id, task],
+          [decision, goal_id, task, "--reason", reason, "--by", @by]
+        ] do
+      Iter7aShell.info("$ shoestring review " <> Enum.join(Enum.map(args, &inspect_arg/1), " "))
+
+      ExUnit.CaptureIO.capture_io(fn -> Mix.Tasks.Shoestring.Review.run(args) end)
+      |> String.split("\n", trim: true)
+      |> Enum.each(&Iter7aShell.info/1)
+    end
+  end
+
+  defp inspect_arg(arg), do: if(String.contains?(arg, " "), do: inspect(arg), else: arg)
+
   def run! do
     base = fixture!()
     agent_id = configure!()
@@ -402,13 +452,15 @@ defmodule Iter7aWorkLoop do
       case outcome do
         {:ok, %{goal_id: goal_id}} ->
           followed =
-            Follow.run(goal_id,
-              by: @by,
-              shell: Iter7aShell,
-              interval_ms: 1_000,
-              max_polls: 900,
-              from_execution: true
-            )
+            case {follow(goal_id), System.get_env("ITER7A_REVIEW_DECISION")} do
+              {{:ok, :needs_user}, decision} when decision in ["accept", "reject"] ->
+                decide_review!(goal_id, decision)
+                Iter7aShell.info("(following again)")
+                follow(goal_id)
+
+              {followed, _} ->
+                followed
+            end
 
           result =
             case followed do

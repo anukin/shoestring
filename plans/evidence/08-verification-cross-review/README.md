@@ -348,6 +348,57 @@ sandboxed gates (`plan_review_test` "the repair runs in a real worktree
 started from the reviewed commit"), which the earlier tests skipped by
 injecting the gate runner.
 
-Not verified live: a defect the worker made on its own, a Claude reviewer
-inside the loop, escalation and human decisions, a held review on known
-capacity, and fan-out with review.
+### Escalation and a human decision, live ([live-escalation](live-escalation/))
+
+The user said "go ahead" with the remaining paths. Cap for the run: one
+planner call, **one** Elf run, one Codex call. Used: one planner call, **two
+Elf runs (one over the cap)**, one Codex call. Seeded as above, with
+`ITER7A_REVIEW_MAX_ROUNDS=1` and `ITER7A_REVIEW_DECISION=accept`.
+
+- Attempt 1: the Elf committed `a * b` but left `__pycache__/` and
+  `test/__pycache__/` untracked (it ran the tests without `-B`). The gate
+  refused the dirty worktree (`gate_worktree_dirty`) and the executor retried
+  automatically, which is what spent the second, uncapped Elf run. This is
+  pre-existing behaviour, not caused by review (the 7A live Elf happened to
+  clean up). Not fixed here; a likely fix is `PYTHONDONTWRITEBYTECODE=1` in
+  the Elf sandbox environment.
+- Attempt 2: `a * b` committed cleanly; the gate passed; round 1: held,
+  confirmed, one Codex call: 1 blocking finding at `calc.py:3`. With one round
+  allowed it **escalated**: `follow` stopped and named the command.
+- The driver then ran, as the human, `shoestring review list`, `show` (the
+  finding and its correction) and `accept ... --reason ... --by human:user`.
+  `follow` re-attached; the service applied the decision; the task was
+  accepted with the review `waived` and `blocking_count` 1, and `result`
+  printed the dismissed finding. The accepted commit still multiplies: that
+  is what dismissing a finding means, and why it is a recorded human act.
+- Claude: 4 and 5 turns, 0.0766 and 0.0840 USD reported by the CLI;
+  five-hour utilization 0.90 → 0.91. Live calls stopped there.
+
+The decision step was rehearsed first without a provider (a Claude reviewer
+for the Claude Worker is unavailable, so no call is made). That rehearsal
+found a real defect: right after a decision was recorded, status still
+reported `needs_user?`, so a re-attached `follow` stopped again until the
+service had applied it. Fixed: a review with a recorded, not yet applied
+decision no longer needs the user (`decision_pending?` in the status view).
+`plan_review_test` "a reviewer of the implementer's provider..." now checks
+it, and fails on the unfixed code (`needs_user?` true), verified by reverting
+the fix locally.
+
+### Fan-out with review (hermetic)
+
+`plan_fanout_review_test`: two sibling children in real worktrees with real
+sandboxed `mix format` gates; each is reviewed alone (its packet holds only its
+own file), the approved sibling is accepted, the blocked one is resolved
+`review_blocked`/`retry` without needing the user, and the coordinator
+replaces only that child: attempt 2 from the approved base, with the findings
+and a prompt that says it does not start from the reviewed commit.
+
+### Still not verified
+
+- A defect the worker makes on its own (every live block here was seeded).
+- A Claude reviewer inside the loop: it needs a Codex worker, and iteration 5
+  recorded that Codex workers cannot commit in a Shoestring worktree
+  (codex-cli 0.158/0.159, `05-quota-aware-mvp/live-closeout-post85.md`); not
+  retried on 0.163. The Claude reviewer adapter itself was verified directly.
+- A human `reject` or `retry` live (both hermetic), a held review on known
+  capacity, and fan-out with review live.
