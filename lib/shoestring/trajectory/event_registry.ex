@@ -827,14 +827,15 @@ defmodule Shoestring.Trajectory.EventRegistry do
           :commit,
           :evidence
         ],
-        optional: [:worktree_ref, :scope_json, :verification_overhead_ms],
+        optional: [:worktree_ref, :scope_json, :verification_overhead_ms, :review],
         uuid_fields: [:execution_id, :run_id],
         types: %{
           revision_number: :integer,
           attempt: :integer,
           gate_argv: {:array, :string},
           evidence: :map,
-          verification_overhead_ms: :integer
+          verification_overhead_ms: :integer,
+          review: :map
         }
       }
     },
@@ -885,6 +886,127 @@ defmodule Shoestring.Trajectory.EventRegistry do
           revision_number: :integer,
           attempt: :integer,
           duration_ms: :integer
+        }
+      }
+    },
+    "cobbler.plan.task.review_requested" => %{
+      1 => %{
+        required: [
+          :review_id,
+          :execution_id,
+          :plan_task_id,
+          :revision_number,
+          :plan_digest,
+          :run_id,
+          :attempt,
+          :round,
+          :base_commit,
+          :commit,
+          :packet_digest,
+          :configuration
+        ],
+        optional: [],
+        uuid_fields: [:review_id, :execution_id, :run_id],
+        types: %{
+          revision_number: :integer,
+          attempt: :integer,
+          round: :integer,
+          configuration: :map
+        }
+      }
+    },
+    "cobbler.plan.review.confirmed" => %{
+      1 => %{
+        required: [
+          :confirmation_id,
+          :review_id,
+          :execution_id,
+          :plan_task_id,
+          :attempt,
+          :provider_id,
+          :scope,
+          :confirmed_by
+        ],
+        optional: [],
+        uuid_fields: [:confirmation_id, :review_id, :execution_id],
+        types: %{attempt: :integer}
+      }
+    },
+    "cobbler.plan.review.attempt.started" => %{
+      1 => %{
+        required: [:review_id, :call, :admission_event_id, :output_token_allowance],
+        optional: [],
+        uuid_fields: [:review_id, :admission_event_id],
+        types: %{call: :integer, output_token_allowance: :integer}
+      }
+    },
+    "cobbler.plan.task.reviewed" => %{
+      1 => %{
+        required: [
+          :review_id,
+          :execution_id,
+          :plan_task_id,
+          :revision_number,
+          :plan_digest,
+          :run_id,
+          :attempt,
+          :round,
+          :commit,
+          :packet_digest,
+          :outcome,
+          :reviewer
+        ],
+        optional: [:findings_json, :blocking_count, :output_tokens, :error_code, :duration_ms],
+        uuid_fields: [:review_id, :execution_id, :run_id],
+        types: %{
+          revision_number: :integer,
+          attempt: :integer,
+          round: :integer,
+          blocking_count: :integer,
+          output_tokens: :integer,
+          duration_ms: :integer
+        }
+      }
+    },
+    "cobbler.plan.review.decided" => %{
+      1 => %{
+        required: [
+          :decision_id,
+          :review_id,
+          :execution_id,
+          :plan_task_id,
+          :attempt,
+          :decision,
+          :reason,
+          :decided_by
+        ],
+        optional: [],
+        uuid_fields: [:decision_id, :review_id, :execution_id],
+        types: %{attempt: :integer}
+      }
+    },
+    "cobbler.plan.task.review_blocked" => %{
+      1 => %{
+        required: [
+          :execution_id,
+          :plan_task_id,
+          :revision_number,
+          :plan_digest,
+          :run_id,
+          :attempt,
+          :review_id,
+          :gate,
+          :reason,
+          :retry_state,
+          :commit
+        ],
+        optional: [:duration_ms, :verification_overhead_ms],
+        uuid_fields: [:execution_id, :run_id, :review_id],
+        types: %{
+          revision_number: :integer,
+          attempt: :integer,
+          duration_ms: :integer,
+          verification_overhead_ms: :integer
         }
       }
     },
@@ -1045,7 +1167,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
            :ok <- validate_plan(type, version, validated, opts),
            :ok <- validate_plan_decision(type, version, validated, opts),
            :ok <- validate_plan_execution(type, version, validated, opts),
-           :ok <- Shoestring.Cobbler.Planner.Events.validate(type, validated) do
+           :ok <- Shoestring.Cobbler.Planner.Events.validate(type, validated),
+           :ok <- Shoestring.Cobbler.Review.Events.validate(type, validated) do
         {:ok, validated}
       else
         {:error, changeset} -> {:error, {:invalid_payload, type, version, changeset}}
@@ -1431,7 +1554,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
              payload["message_kind"]
            ),
          true <-
-           payload["outcome"] in ~w(observed accepted gate_failed scope_blocked replayed prior_attempt prior_execution) do
+           payload["outcome"] in ~w(observed accepted gate_failed review_blocked scope_blocked replayed prior_attempt prior_execution) do
       :ok
     else
       _ ->

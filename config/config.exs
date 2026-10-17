@@ -46,6 +46,11 @@ config :shoestring, :capacity_monitors,
 # and configured units all default to one.
 config :shoestring, :plan_fanout, enabled: false
 
+# Cross-review is an explicit operator decision. When enabled, each task whose
+# checks pass is reviewed by the execution agent's `Reviewer` role, which must
+# be another provider than its `Worker` (see Shoestring.Cobbler.PlanReview).
+config :shoestring, :plan_review, enabled: false
+
 config :shoestring, Oban,
   engine: Oban.Engines.Lite,
   repo: Shoestring.Repo,

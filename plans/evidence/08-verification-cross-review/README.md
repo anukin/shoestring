@@ -135,3 +135,127 @@ VERIFIED, with a hand-written profile using the same rules:
   sandboxed Claude Elves still inherit the service environment.
 - The optional live probe (an Elf asked to read home and reach a public host)
   was not run; it needs separate authorization and a budget.
+
+## Cross-review (packages C–G, first slice; A and B partly)
+
+Date: 2026-10-17. Branch `iter8/cross-review`, stacked on
+`iter8/sandboxed-checks` (`c92c9ac`). No provider call was made; every
+reviewer below is the deterministic fixture or a scripted stand-in.
+
+### Decisions taken without a human answer (conservative readings; revisit)
+
+- **Off by default.** `config :shoestring, :plan_review, enabled: false`, as
+  for fan-out. Review policy comes from configuration and the execution's
+  immutable agent revision (its `Reviewer` role), never from the plan or a
+  model.
+- **"Different provider"** means a different provider family: `claude`
+  (Anthropic) and `codex` (OpenAI). Two models of one vendor are the same
+  provider. An unknown implementer family is unavailable, not trusted.
+- **Reviewer unavailable** (no Reviewer role, the implementer's provider, an
+  unusable packet, a failed or lost call): nothing is accepted; the task waits
+  for a human `accept` (a recorded waiver), `reject` or `retry`. There is no
+  "no cross-review" mode while review is enabled, and no self-approval.
+- **Bounds:** at most `max_rounds` reviews per task (default 2, at most 3); at
+  most two calls per review (one automatic, one human `retry`); repairs spend
+  the task's ordinary attempt budget. A repeated blocking finding (same path
+  and violated contract) or the last round escalates to the human.
+- **Isolation by construction:** the reviewer gets a packet and an empty
+  working directory, no worktree and no tools, so there is no review copy to
+  mutate. The implementation worktree is checked (same `HEAD`, clean) before
+  and after the call; a change discards the review as failed.
+- **Admission:** each call is a `read_only` admission on the reviewer's
+  provider and scope. Claude and Codex reviewers are `conservative_partial`,
+  so each call needs one human confirmation (asked by `follow`) until their
+  capacity can be read; a hard stop such as refused capacity is never
+  bypassed by a confirmation. Review calls do not take the global task claim.
+
+### What was built
+
+- `Review.Configuration`, `Review.Packet` (content-addressed; contract, plan
+  revision, base and reviewed commits, complete diff up to 200 kB, changed and
+  tracked files, gate evidence with labelled output tails, rubric, output
+  schema; never a transcript), `Review.Findings` (strict schema; supported /
+  unsupported / path-free references; deterministic outcome; fingerprints),
+  `Review.Events` (strict validation; recorded findings replay to their
+  outcome and blocking count) and the `plan_reviews` record.
+- Adapters: `Review.CodexExec` (`codex exec` with the flag set of the reviewed
+  isolated capture `tools/planner_eval/codex_proposal.py`: ephemeral, user
+  config and rules ignored, read-only sandbox, no approvals or web search, 22
+  features disabled (every tool, plus unbounded retries), `--output-schema`), `Review.ClaudeHeadless` (the
+  planner's tool-free call, now shared as `Harness.ClaudeHeadless.OneShot`),
+  `Review.Fixture` (seeded `REVIEW-DEFECT:` markers become blocking findings).
+- `PlanReview`: the stage between passing gates and acceptance, for sequential
+  and fan-out children alike (`complete_task_run`). Events:
+  `cobbler.plan.task.review_requested`, `cobbler.plan.review.confirmed`,
+  `cobbler.plan.review.attempt.started`, `cobbler.plan.task.reviewed`,
+  `cobbler.plan.review.decided`, and the resolution
+  `cobbler.plan.task.review_blocked` (added to every resolution list). Accepted
+  tasks carry a `review` summary.
+- Repair: the next attempt of a sequential task starts from the reviewed
+  commit in a new private store and its prompt carries the blocking findings
+  as review data; its gates and review run again.
+- CLI: `follow` prints review progress, confirms one held review call, and
+  names the `shoestring review` command when a review needs you;
+  `shoestring review list|show|accept|reject|retry`; `result` prints every
+  review round and its blocking findings.
+
+### Required evals (hermetic)
+
+| Eval | Result | Test |
+| --- | --- | --- |
+| Gate pass | Exact commit, command and result stored, now with the sandbox identity (package 0) and, under review, the review summary | `plan_review_test` approve |
+| Gate failure | A failing gate records no review | `plan_review_test` "a failing gate never reaches review" |
+| Stale evidence | The reviewed commit moving before the call fails the review; nothing is reviewed or accepted | `plan_review_test` stale evidence |
+| Reviewer self | Same provider family is unavailable, cannot be confirmed, needs a human waiver | `plan_review_test`, `review_contract_test` |
+| Reviewer write | A reviewer that changes the implementation fails the review; nothing approved | `plan_review_test` |
+| Hallucinated file | Unsupported reference, never blocks | `plan_review_test`, `review_contract_test` |
+| Blocking repair | `review_blocked` with `retry`; attempt 2 of the same task gets the findings and the reviewed commit | `plan_review_test` |
+| Repeated finding | Escalated, no re-dispatch, human dismissal recorded with the acceptance | `plan_review_test` |
+| Capacity exhausted | Held; a confirmation cannot bypass refused capacity; no call | `plan_review_test` |
+| Restart | A lost (`running`) call is never re-sent by time; a human `retry` makes exactly one more call; then final | `plan_review_test` |
+
+Also: packet contents and digest, review off unchanged, known capacity admits
+without confirmation, human reject, the `shoestring review` command, the Codex
+and Claude adapters against stand-ins (flags, empty working directory, schema
+file, tools / extra messages / failures / limits / overrun killing the
+group), the fixture rule, findings schema refusals, and follow's review lines
+and prompts.
+
+These are new-functionality tests: at the base commit the modules do not
+exist, so they cannot fail there for a behavioural reason and are not
+regression locks.
+
+### Gate
+
+VERIFIED: `mix precommit` exited 0: **4 doctests, 2253 tests, 0 failures,
+1 skipped (6 excluded)**, seed 552440, 478.5 s. JavaScript **52/52** and
+**8/8**.
+
+### Rehearsal (no provider call)
+
+VERIFIED: `tools/live_eval/iter7a_work_loop.exs` with `ITER7A_MODE=rehearsal`
+and `ITER7A_REVIEW=fixture` passed 1 of 1 in a service node: checks passed,
+cross-review requested, held for capacity, `follow` asked and the scripted
+terminal confirmed, review approved, task accepted, final checks passed, and
+`result` printed `Review: add attempt 1 by fixture:fixture-reviewer -> approved`.
+Fake Elves change no files, so the reviewed diff was empty: this proves the
+loop, not a review of a real change (the repair path is the hermetic test).
+
+### Not done or not verified
+
+- **Live review**: no Claude or Codex review call has been made. That
+  `--output-schema` holds Codex to the findings schema on 0.163.0, and the
+  result shape of a Claude review, are UNVERIFIED. A live check needs
+  authorization and a budget.
+- **Review-quality eval** (seeded-defect recall, false blocking rate, …):
+  not built; it needs live reviewer calls and human labels.
+- **Fan-out with review**: the stage is shared, but no test runs fan-out with
+  review enabled; a fan-out replacement starts from the approved base with the
+  findings (its prompt says so), not from the reviewed commit.
+- **Package A**: no versioned gate specification (ids, versions,
+  required/optional, artifact policy) and no project-approved gate commands
+  yet; "unavailable" is still a reason inside `gate_failed`.
+- **Package B**: no gate start/completion events, no streaming output
+  artifacts, no cheap-first ordering beyond the plan's order.
+- Review call time is charged as verification overhead; there is no separate
+  review budget class beyond the call and round bounds.

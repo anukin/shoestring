@@ -5,7 +5,7 @@ defmodule Shoestring.Cobbler.PlanSupersession do
   alias Shoestring.Harness.RunRecord
   alias Shoestring.Trajectory.TrajectoryEvent
 
-  @resolutions ~w(cobbler.plan.task.accepted cobbler.plan.task.scope_blocked cobbler.plan.task.gate_failed cobbler.plan.task.superseded)
+  @resolutions ~w(cobbler.plan.task.accepted cobbler.plan.task.scope_blocked cobbler.plan.task.gate_failed cobbler.plan.task.review_blocked cobbler.plan.task.superseded)
 
   def boundary(repo, goal_id, status) do
     events =

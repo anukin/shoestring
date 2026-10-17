@@ -8,6 +8,8 @@
 #   ITER7A_MODE        "rehearsal": fixture planner and Fake Elves, no provider
 #                      call; "live": the agent's Claude Coordinator plans and
 #                      sandboxed Claude Elves work (needs an authorized budget).
+#   ITER7A_REVIEW      optional; "fixture" enables iteration 8 cross-review with
+#                      the deterministic fixture reviewer (no provider call).
 #
 #     mix run --no-start tools/live_eval/iter7a_work_loop.exs run < /dev/null
 #
@@ -173,6 +175,14 @@ defmodule Iter7aWorkLoop do
           scenario: Shoestring.Harness.Fake.Scenario.normal_completion(now: DateTime.utc_now())
         },
         command: ["sleep", "30"]
+      )
+    end
+
+    if System.get_env("ITER7A_REVIEW") == "fixture" do
+      Application.put_env(:shoestring, :plan_review,
+        enabled: true,
+        adapter: :fixture,
+        model: "fixture-reviewer"
       )
     end
 

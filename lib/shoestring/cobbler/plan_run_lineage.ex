@@ -78,6 +78,7 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
         "cobbler.plan.task.accepted",
         "cobbler.plan.task.scope_blocked",
         "cobbler.plan.task.gate_failed",
+        "cobbler.plan.task.review_blocked",
         "cobbler.plan.task.superseded"
       ] and
         event.payload["run_id"] in ids and event.payload["run_id"] != own_id
@@ -94,7 +95,8 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
         [
           "cobbler.plan.task.accepted",
           "cobbler.plan.task.scope_blocked",
-          "cobbler.plan.task.gate_failed"
+          "cobbler.plan.task.gate_failed",
+          "cobbler.plan.task.review_blocked"
         ]
 
     repo.all(
@@ -141,6 +143,7 @@ defmodule Shoestring.Cobbler.PlanRunLineage do
             "cobbler.plan.task.accepted",
             "cobbler.plan.task.scope_blocked",
             "cobbler.plan.task.gate_failed",
+            "cobbler.plan.task.review_blocked",
             "cobbler.plan.task.superseded"
           ] and
             resolution.payload["run_id"] in chains[root] and resolution.sequence < event.sequence

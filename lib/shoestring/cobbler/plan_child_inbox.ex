@@ -14,7 +14,7 @@ defmodule Shoestring.Cobbler.PlanChildInbox do
   alias Shoestring.{Repo, Trajectory}
   alias Shoestring.Trajectory.TrajectoryEvent
 
-  @types ~w(run.starting run.running run.pausing run.suspended run.completed run.failed run.cancelled run.interrupted checkpoint.created harness.event_recorded cobbler.plan.task.accepted cobbler.plan.task.gate_failed cobbler.plan.task.scope_blocked)
+  @types ~w(run.starting run.running run.pausing run.suspended run.completed run.failed run.cancelled run.interrupted checkpoint.created harness.event_recorded cobbler.plan.task.accepted cobbler.plan.task.gate_failed cobbler.plan.task.review_blocked cobbler.plan.task.scope_blocked)
   @identity ~w(event_id goal_id execution_id plan_task_id revision_number plan_digest attempt root_run_id run_id source_sequence source_type message_kind)a
   @active_jobs ~w(available scheduled executing retryable)
 
@@ -62,9 +62,13 @@ defmodule Shoestring.Cobbler.PlanChildInbox do
         {:ok, %{outcome: :replayed, event_id: row.event_id, observation_event_id: ack.id}}
       else
         with {:ok, result} <- observe(repo, row, event, opts) do
-          if result.outcome == :awaiting_quiescence,
-            do: wait_for_stop(repo, row),
-            else: acknowledge(repo, row, result, opts)
+          # A pending cross-review, like a child still stopping, is observed
+          # again later rather than acknowledged.
+          case result.outcome do
+            :awaiting_quiescence -> wait_for_stop(repo, row, "awaiting_quiescence")
+            :review_pending -> wait_for_stop(repo, row, "awaiting_review")
+            _ -> acknowledge(repo, row, result, opts)
+          end
         end
       end
     else
@@ -275,7 +279,7 @@ defmodule Shoestring.Cobbler.PlanChildInbox do
         )
       )
 
-  defp wait_for_stop(repo, row) do
+  defp wait_for_stop(repo, row, reason) do
     ReservationWriter.run(repo, fn ->
       repo.transaction(
         fn ->
@@ -284,7 +288,7 @@ defmodule Shoestring.Cobbler.PlanChildInbox do
 
           case acknowledgement(repo, current) do
             {:ok, nil} ->
-              repo.update!(Ecto.Changeset.change(current, last_reason: "awaiting_quiescence"))
+              repo.update!(Ecto.Changeset.change(current, last_reason: reason))
 
             {:ok, _} ->
               :ok
@@ -293,7 +297,7 @@ defmodule Shoestring.Cobbler.PlanChildInbox do
               repo.rollback(reason)
           end
 
-          %{outcome: :awaiting_quiescence, event_id: row.event_id}
+          %{outcome: String.to_existing_atom(reason), event_id: row.event_id}
         end,
         mode: :immediate
       )

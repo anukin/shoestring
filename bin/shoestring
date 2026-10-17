@@ -11,6 +11,8 @@ usage: shoestring COMMAND [ARGS...]
               plan, approve and run REQUEST in the current Git repository
   follow GOAL follow a goal and answer what it waits for
   result GOAL show a completed goal's result and how to take it
+  review list|show|accept|reject|retry GOAL [TASK] [--reason TEXT]
+              list cross-reviews and decide the ones that wait for you
   goals | plans | execution | agents | models | reservations ...
               the step-by-step commands (see `shoestring COMMAND --help`)
 
@@ -39,7 +41,7 @@ case $command in
     usage
     exit 0
     ;;
-  do | follow | result | goals | plans | execution | agents | models | reservations) ;;
+  do | follow | result | review | goals | plans | execution | agents | models | reservations) ;;
   *)
     echo "shoestring: unknown command '$command'" >&2
     usage >&2
