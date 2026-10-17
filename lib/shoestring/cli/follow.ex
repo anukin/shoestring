@@ -317,12 +317,21 @@ defmodule Shoestring.CLI.Follow do
 
       "cobbler.plan.task.gate_failed" ->
         case Regex.run(~r/\A\{:gate_unavailable, %\{reason: :(\w+)\}\}\z/, p["reason"] || "") do
+          [_, "project_gate_not_configured"] ->
+            "Task #{task}: check #{p["gate"]} is not configured; needs your decision."
+
           [_, reason] ->
             "Task #{task}: checks could not run in a sandbox (#{p["gate"]}: #{reason}); needs your decision."
 
           nil ->
-            "Task #{task}: checks failed (#{p["gate"]})."
+            "Task #{task}: checks failed (#{p["gate"]})." <> not_run(p["skipped"])
         end
+
+      "cobbler.plan.gate.started" ->
+        "  Running check #{p["gate"]}#{optional(p)}."
+
+      "cobbler.plan.gate.completed" ->
+        "  Check #{p["gate"]}#{optional(p)}: #{gate_result(p)}."
 
       "cobbler.plan.task.review_requested" ->
         "Task #{task}: checks passed; cross-review requested (round #{p["round"]})."
@@ -365,6 +374,27 @@ defmodule Shoestring.CLI.Follow do
     case line(event) do
       nil -> :ok
       text -> shell.info(text)
+    end
+  end
+
+  defp not_run(skipped) when is_list(skipped) and skipped != [],
+    do: " Not run: #{Enum.join(skipped, ", ")}."
+
+  defp not_run(_skipped), do: ""
+
+  defp optional(%{"required" => false}), do: " (optional)"
+  defp optional(_payload), do: ""
+
+  defp gate_result(p) do
+    seconds = :erlang.float_to_binary((p["duration_ms"] || 0) / 1000, decimals: 1)
+
+    case p["result"] do
+      "passed" -> "passed in #{seconds} s"
+      "failed" -> "failed with exit #{p["exit_status"]} in #{seconds} s"
+      "timeout" -> "timed out after #{seconds} s"
+      "output_oversized" -> "stopped: output over the limit"
+      "unavailable" -> "could not run"
+      _ -> "not verified"
     end
   end
 

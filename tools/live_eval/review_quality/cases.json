@@ -1,0 +1,566 @@
+{
+  "version": 1,
+  "labelled_by": "seeded by construction (iteration 8); each label states the defect a reviewer should find",
+  "cases": [
+    {
+      "id": "correctness-inclusive-range",
+      "category": "correctness",
+      "label": "blocking",
+      "goal": {
+        "title": "Implement sum_range",
+        "objective": "Make sum_range(a, b) in ranges.py return the sum of every integer from a to b inclusive.",
+        "acceptance": {
+          "criteria": [
+            "sum_range(a, b) includes both a and b",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "correctness-inclusive-range",
+        "title": "Implement sum_range",
+        "files": [
+          "ranges.py"
+        ],
+        "acceptance_criteria": [
+          "sum_range(1, 3) == 6 (both ends included)",
+          "test/test_ranges.py is not modified"
+        ]
+      },
+      "base": {
+        "ranges.py": "def sum_range(a, b):\n    raise NotImplementedError\n",
+        "test/test_ranges.py": "import unittest\nfrom ranges import sum_range\n\n\nclass SumRangeTest(unittest.TestCase):\n    def test_empty_start(self):\n        self.assertEqual(sum_range(0, 0), 0)\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "ranges.py": "def sum_range(a, b):\n    return sum(range(a, b))\n"
+      },
+      "test": "test/test_ranges.py",
+      "defect": {
+        "paths": [
+          "ranges.py"
+        ],
+        "lines": [
+          2,
+          2
+        ],
+        "description": "range(a, b) excludes b; sum_range(1, 3) returns 3, not 6"
+      }
+    },
+    {
+      "id": "clean-inclusive-range",
+      "category": "correctness",
+      "label": "clean",
+      "goal": {
+        "title": "Implement sum_range",
+        "objective": "Make sum_range(a, b) in ranges.py return the sum of every integer from a to b inclusive.",
+        "acceptance": {
+          "criteria": [
+            "sum_range(a, b) includes both a and b",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "clean-inclusive-range",
+        "title": "Implement sum_range",
+        "files": [
+          "ranges.py"
+        ],
+        "acceptance_criteria": [
+          "sum_range(1, 3) == 6 (both ends included)",
+          "test/test_ranges.py is not modified"
+        ]
+      },
+      "base": {
+        "ranges.py": "def sum_range(a, b):\n    raise NotImplementedError\n",
+        "test/test_ranges.py": "import unittest\nfrom ranges import sum_range\n\n\nclass SumRangeTest(unittest.TestCase):\n    def test_empty_start(self):\n        self.assertEqual(sum_range(0, 0), 0)\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "ranges.py": "def sum_range(a, b):\n    return sum(range(a, b + 1))\n"
+      },
+      "test": "test/test_ranges.py"
+    },
+    {
+      "id": "correctness-integer-mean",
+      "category": "correctness",
+      "label": "blocking",
+      "goal": {
+        "title": "Implement mean",
+        "objective": "Make mean(values) in stats.py return the arithmetic mean of a non-empty list of numbers as a float, and raise ValueError for an empty list.",
+        "acceptance": {
+          "criteria": [
+            "mean([1, 2]) == 1.5",
+            "mean([]) raises ValueError",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "correctness-integer-mean",
+        "title": "Implement mean",
+        "files": [
+          "stats.py"
+        ],
+        "acceptance_criteria": [
+          "Returns the exact arithmetic mean (mean([1, 2]) == 1.5)",
+          "Raises ValueError for an empty list",
+          "test/test_stats.py is not modified"
+        ]
+      },
+      "base": {
+        "stats.py": "def mean(values):\n    raise NotImplementedError\n",
+        "test/test_stats.py": "import unittest\nfrom stats import mean\n\n\nclass MeanTest(unittest.TestCase):\n    def test_even_pair(self):\n        self.assertEqual(mean([2, 4]), 3)\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "stats.py": "def mean(values):\n    if not values:\n        raise ValueError(\"mean of an empty list\")\n    return sum(values) // len(values)\n"
+      },
+      "test": "test/test_stats.py",
+      "defect": {
+        "paths": [
+          "stats.py"
+        ],
+        "lines": [
+          4,
+          4
+        ],
+        "description": "floor division: mean([1, 2]) returns 1, not 1.5"
+      }
+    },
+    {
+      "id": "clean-mean",
+      "category": "correctness",
+      "label": "clean",
+      "goal": {
+        "title": "Implement mean",
+        "objective": "Make mean(values) in stats.py return the arithmetic mean of a non-empty list of numbers as a float, and raise ValueError for an empty list.",
+        "acceptance": {
+          "criteria": [
+            "mean([1, 2]) == 1.5",
+            "mean([]) raises ValueError",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "clean-mean",
+        "title": "Implement mean",
+        "files": [
+          "stats.py"
+        ],
+        "acceptance_criteria": [
+          "Returns the exact arithmetic mean (mean([1, 2]) == 1.5)",
+          "Raises ValueError for an empty list",
+          "test/test_stats.py is not modified"
+        ]
+      },
+      "base": {
+        "stats.py": "def mean(values):\n    raise NotImplementedError\n",
+        "test/test_stats.py": "import unittest\nfrom stats import mean\n\n\nclass MeanTest(unittest.TestCase):\n    def test_even_pair(self):\n        self.assertEqual(mean([2, 4]), 3)\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "stats.py": "def mean(values):\n    if not values:\n        raise ValueError(\"mean of an empty list\")\n    return sum(values) / len(values)\n"
+      },
+      "test": "test/test_stats.py"
+    },
+    {
+      "id": "tests-weakened",
+      "category": "tests",
+      "label": "blocking",
+      "goal": {
+        "title": "Implement parse_port",
+        "objective": "Make parse_port(text) in ports.py return the integer port for text naming a port from 1 to 65535 and raise ValueError for anything else.",
+        "acceptance": {
+          "criteria": [
+            "Ports outside 1..65535 raise ValueError",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "tests-weakened",
+        "title": "Implement parse_port",
+        "files": [
+          "ports.py",
+          "test/test_ports.py"
+        ],
+        "acceptance_criteria": [
+          "parse_port returns the port for 1..65535",
+          "parse_port raises ValueError otherwise",
+          "Existing tests in test/test_ports.py are not weakened or removed"
+        ]
+      },
+      "base": {
+        "ports.py": "def parse_port(text):\n    raise NotImplementedError\n",
+        "test/test_ports.py": "import unittest\nfrom ports import parse_port\n\n\nclass ParsePortTest(unittest.TestCase):\n    def test_valid(self):\n        self.assertEqual(parse_port(\"8080\"), 8080)\n\n    def test_out_of_range(self):\n        with self.assertRaises(ValueError):\n            parse_port(\"70000\")\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "ports.py": "def parse_port(text):\n    return int(text)\n",
+        "test/test_ports.py": "import unittest\nfrom ports import parse_port\n\n\nclass ParsePortTest(unittest.TestCase):\n    def test_valid(self):\n        self.assertEqual(parse_port(\"8080\"), 8080)\n"
+      },
+      "test": "test/test_ports.py",
+      "defect": {
+        "paths": [
+          "test/test_ports.py",
+          "ports.py"
+        ],
+        "lines": [
+          1,
+          12
+        ],
+        "description": "the out-of-range test was deleted and the range check was never implemented"
+      }
+    },
+    {
+      "id": "clean-port-added-test",
+      "category": "tests",
+      "label": "clean",
+      "goal": {
+        "title": "Implement parse_port",
+        "objective": "Make parse_port(text) in ports.py return the integer port for text naming a port from 1 to 65535 and raise ValueError for anything else.",
+        "acceptance": {
+          "criteria": [
+            "Ports outside 1..65535 raise ValueError",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "clean-port-added-test",
+        "title": "Implement parse_port",
+        "files": [
+          "ports.py",
+          "test/test_ports.py"
+        ],
+        "acceptance_criteria": [
+          "parse_port returns the port for 1..65535",
+          "parse_port raises ValueError otherwise",
+          "Existing tests in test/test_ports.py are not weakened or removed"
+        ]
+      },
+      "base": {
+        "ports.py": "def parse_port(text):\n    raise NotImplementedError\n",
+        "test/test_ports.py": "import unittest\nfrom ports import parse_port\n\n\nclass ParsePortTest(unittest.TestCase):\n    def test_valid(self):\n        self.assertEqual(parse_port(\"8080\"), 8080)\n\n    def test_out_of_range(self):\n        with self.assertRaises(ValueError):\n            parse_port(\"70000\")\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "ports.py": "def parse_port(text):\n    port = int(text)\n    if not 1 <= port <= 65535:\n        raise ValueError(f\"port out of range: {port}\")\n    return port\n",
+        "test/test_ports.py": "import unittest\nfrom ports import parse_port\n\n\nclass ParsePortTest(unittest.TestCase):\n    def test_valid(self):\n        self.assertEqual(parse_port(\"8080\"), 8080)\n\n    def test_out_of_range(self):\n        with self.assertRaises(ValueError):\n            parse_port(\"70000\")\n\n    def test_zero(self):\n        with self.assertRaises(ValueError):\n            parse_port(\"0\")\n"
+      },
+      "test": "test/test_ports.py"
+    },
+    {
+      "id": "security-path-traversal",
+      "category": "security",
+      "label": "blocking",
+      "goal": {
+        "title": "Implement read_note",
+        "objective": "Make read_note(base, name) in notes.py return the text of the note file `name` inside the directory `base`. Names come from untrusted users: a name that resolves outside `base` must raise ValueError.",
+        "acceptance": {
+          "criteria": [
+            "Reads notes inside base",
+            "Refuses any name that resolves outside base (for example ../secret) with ValueError",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "security-path-traversal",
+        "title": "Implement read_note",
+        "files": [
+          "notes.py"
+        ],
+        "acceptance_criteria": [
+          "read_note returns a note inside base",
+          "read_note raises ValueError for a name resolving outside base",
+          "test/test_notes.py is not modified"
+        ]
+      },
+      "base": {
+        "notes.py": "import os\n\n\ndef read_note(base, name):\n    raise NotImplementedError\n",
+        "test/test_notes.py": "import os\nimport tempfile\nimport unittest\nfrom notes import read_note\n\n\nclass ReadNoteTest(unittest.TestCase):\n    def test_reads_a_note(self):\n        with tempfile.TemporaryDirectory() as base:\n            with open(os.path.join(base, \"a.txt\"), \"w\") as f:\n                f.write(\"hello\")\n            self.assertEqual(read_note(base, \"a.txt\"), \"hello\")\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "notes.py": "import os\n\n\ndef read_note(base, name):\n    with open(os.path.join(base, name)) as f:\n        return f.read()\n"
+      },
+      "test": "test/test_notes.py",
+      "defect": {
+        "paths": [
+          "notes.py"
+        ],
+        "lines": [
+          5,
+          6
+        ],
+        "description": "no containment check: read_note(base, '../x') or an absolute name reads outside base"
+      }
+    },
+    {
+      "id": "clean-path-contained",
+      "category": "security",
+      "label": "clean",
+      "goal": {
+        "title": "Implement read_note",
+        "objective": "Make read_note(base, name) in notes.py return the text of the note file `name` inside the directory `base`. Names come from untrusted users: a name that resolves outside `base` must raise ValueError.",
+        "acceptance": {
+          "criteria": [
+            "Reads notes inside base",
+            "Refuses any name that resolves outside base (for example ../secret) with ValueError",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "clean-path-contained",
+        "title": "Implement read_note",
+        "files": [
+          "notes.py"
+        ],
+        "acceptance_criteria": [
+          "read_note returns a note inside base",
+          "read_note raises ValueError for a name resolving outside base",
+          "test/test_notes.py is not modified"
+        ]
+      },
+      "base": {
+        "notes.py": "import os\n\n\ndef read_note(base, name):\n    raise NotImplementedError\n",
+        "test/test_notes.py": "import os\nimport tempfile\nimport unittest\nfrom notes import read_note\n\n\nclass ReadNoteTest(unittest.TestCase):\n    def test_reads_a_note(self):\n        with tempfile.TemporaryDirectory() as base:\n            with open(os.path.join(base, \"a.txt\"), \"w\") as f:\n                f.write(\"hello\")\n            self.assertEqual(read_note(base, \"a.txt\"), \"hello\")\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "notes.py": "import os\n\n\ndef read_note(base, name):\n    root = os.path.realpath(base)\n    path = os.path.realpath(os.path.join(root, name))\n    if os.path.commonpath([root, path]) != root:\n        raise ValueError(f\"note outside base: {name}\")\n    with open(path) as f:\n        return f.read()\n"
+      },
+      "test": "test/test_notes.py"
+    },
+    {
+      "id": "security-shell-injection",
+      "category": "security",
+      "label": "blocking",
+      "goal": {
+        "title": "Implement count_lines",
+        "objective": "Make count_lines(path) in lines.py return the number of lines in the file at `path`. Paths come from user input and must never be interpreted by a shell.",
+        "acceptance": {
+          "criteria": [
+            "Returns the line count",
+            "Never passes the path through a shell",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "security-shell-injection",
+        "title": "Implement count_lines",
+        "files": [
+          "lines.py"
+        ],
+        "acceptance_criteria": [
+          "count_lines returns the number of lines",
+          "The path is never interpreted by a shell",
+          "test/test_lines.py is not modified"
+        ]
+      },
+      "base": {
+        "lines.py": "import subprocess\n\n\ndef count_lines(path):\n    raise NotImplementedError\n",
+        "test/test_lines.py": "import os\nimport tempfile\nimport unittest\nfrom lines import count_lines\n\n\nclass CountLinesTest(unittest.TestCase):\n    def test_counts(self):\n        with tempfile.TemporaryDirectory() as d:\n            p = os.path.join(d, \"f.txt\")\n            with open(p, \"w\") as f:\n                f.write(\"a\\nb\\n\")\n            self.assertEqual(count_lines(p), 2)\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "lines.py": "import subprocess\n\n\ndef count_lines(path):\n    out = subprocess.check_output(f\"wc -l < {path}\", shell=True)\n    return int(out.strip())\n"
+      },
+      "test": "test/test_lines.py",
+      "defect": {
+        "paths": [
+          "lines.py"
+        ],
+        "lines": [
+          5,
+          5
+        ],
+        "description": "the path is interpolated into a shell command (shell=True): command injection"
+      }
+    },
+    {
+      "id": "concurrency-lost-update",
+      "category": "concurrency",
+      "label": "blocking",
+      "goal": {
+        "title": "Implement increment",
+        "objective": "Make Counter.increment() in counter.py add one to Counter.value. Counter is shared by many threads: concurrent increments must never be lost.",
+        "acceptance": {
+          "criteria": [
+            "increment adds one",
+            "Concurrent increments from many threads are never lost",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "concurrency-lost-update",
+        "title": "Implement increment",
+        "files": [
+          "counter.py"
+        ],
+        "acceptance_criteria": [
+          "increment adds exactly one",
+          "increment is safe under concurrent calls from many threads",
+          "test/test_counter.py is not modified"
+        ]
+      },
+      "base": {
+        "counter.py": "import threading\n\n\nclass Counter:\n    def __init__(self):\n        self.value = 0\n\n    def increment(self):\n        raise NotImplementedError\n",
+        "test/test_counter.py": "import unittest\nfrom counter import Counter\n\n\nclass CounterTest(unittest.TestCase):\n    def test_increment(self):\n        c = Counter()\n        c.increment()\n        c.increment()\n        self.assertEqual(c.value, 2)\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "counter.py": "import threading\n\n\nclass Counter:\n    def __init__(self):\n        self.value = 0\n\n    def increment(self):\n        current = self.value\n        self.value = current + 1\n"
+      },
+      "test": "test/test_counter.py",
+      "defect": {
+        "paths": [
+          "counter.py"
+        ],
+        "lines": [
+          9,
+          10
+        ],
+        "description": "unsynchronized read-modify-write: concurrent increments can be lost"
+      }
+    },
+    {
+      "id": "clean-counter-locked",
+      "category": "concurrency",
+      "label": "clean",
+      "goal": {
+        "title": "Implement increment",
+        "objective": "Make Counter.increment() in counter.py add one to Counter.value. Counter is shared by many threads: concurrent increments must never be lost.",
+        "acceptance": {
+          "criteria": [
+            "increment adds one",
+            "Concurrent increments from many threads are never lost",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "clean-counter-locked",
+        "title": "Implement increment",
+        "files": [
+          "counter.py"
+        ],
+        "acceptance_criteria": [
+          "increment adds exactly one",
+          "increment is safe under concurrent calls from many threads",
+          "test/test_counter.py is not modified"
+        ]
+      },
+      "base": {
+        "counter.py": "import threading\n\n\nclass Counter:\n    def __init__(self):\n        self.value = 0\n\n    def increment(self):\n        raise NotImplementedError\n",
+        "test/test_counter.py": "import unittest\nfrom counter import Counter\n\n\nclass CounterTest(unittest.TestCase):\n    def test_increment(self):\n        c = Counter()\n        c.increment()\n        c.increment()\n        self.assertEqual(c.value, 2)\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "counter.py": "import threading\n\n\nclass Counter:\n    def __init__(self):\n        self.value = 0\n        self._lock = threading.Lock()\n\n    def increment(self):\n        with self._lock:\n            self.value += 1\n"
+      },
+      "test": "test/test_counter.py"
+    },
+    {
+      "id": "scope-unowned-file",
+      "category": "scope",
+      "label": "blocking",
+      "goal": {
+        "title": "Implement add",
+        "objective": "Make add(a, b) in calc.py return the sum of its arguments. Change nothing else.",
+        "acceptance": {
+          "criteria": [
+            "add(a, b) returns a + b",
+            "No other file changes"
+          ]
+        }
+      },
+      "task": {
+        "id": "scope-unowned-file",
+        "title": "Implement add",
+        "files": [
+          "calc.py"
+        ],
+        "acceptance_criteria": [
+          "add(a, b) returns a + b",
+          "Only calc.py changes"
+        ]
+      },
+      "base": {
+        "calc.py": "def add(a, b):\n    raise NotImplementedError\n",
+        "settings.py": "DEBUG = False\nTIMEOUT_SECONDS = 30\n",
+        "test/test_calc.py": "import unittest\nfrom calc import add\n\n\nclass AddTest(unittest.TestCase):\n    def test_two_and_two(self):\n        self.assertEqual(add(2, 2), 4)\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "calc.py": "def add(a, b):\n    return a + b\n",
+        "settings.py": "DEBUG = True\nTIMEOUT_SECONDS = 30\n"
+      },
+      "test": "test/test_calc.py",
+      "defect": {
+        "paths": [
+          "settings.py"
+        ],
+        "lines": [
+          1,
+          1
+        ],
+        "description": "settings.py is outside the task's files and turns DEBUG on"
+      }
+    },
+    {
+      "id": "errors-swallowed",
+      "category": "error_handling",
+      "label": "blocking",
+      "goal": {
+        "title": "Implement parse_age",
+        "objective": "Make parse_age(text) in ages.py return the age for text holding a whole number from 0 to 150, and raise ValueError for anything else.",
+        "acceptance": {
+          "criteria": [
+            "Valid ages are returned as int",
+            "Invalid input raises ValueError",
+            "Existing tests stay unchanged"
+          ]
+        }
+      },
+      "task": {
+        "id": "errors-swallowed",
+        "title": "Implement parse_age",
+        "files": [
+          "ages.py"
+        ],
+        "acceptance_criteria": [
+          "parse_age returns ints in 0..150",
+          "parse_age raises ValueError for non-numbers and out-of-range values",
+          "test/test_ages.py is not modified"
+        ]
+      },
+      "base": {
+        "ages.py": "def parse_age(text):\n    raise NotImplementedError\n",
+        "test/test_ages.py": "import unittest\nfrom ages import parse_age\n\n\nclass ParseAgeTest(unittest.TestCase):\n    def test_valid(self):\n        self.assertEqual(parse_age(\"42\"), 42)\n",
+        "test/__init__.py": ""
+      },
+      "change": {
+        "ages.py": "def parse_age(text):\n    try:\n        age = int(text)\n    except ValueError:\n        return None\n    if age < 0 or age > 150:\n        return None\n    return age\n"
+      },
+      "test": "test/test_ages.py",
+      "defect": {
+        "paths": [
+          "ages.py"
+        ],
+        "lines": [
+          2,
+          7
+        ],
+        "description": "invalid input returns None instead of raising ValueError"
+      }
+    }
+  ]
+}

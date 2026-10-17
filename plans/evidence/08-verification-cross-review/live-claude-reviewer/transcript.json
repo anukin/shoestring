@@ -1,0 +1,275 @@
+[
+  [
+    "info",
+    "Goal a2cdb3ee-5a58-4c2c-a7d8-ad881667f08c"
+  ],
+  [
+    "info",
+    "Base fc60f7f2782d in $EVALUATION/repos/source; gates: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "Drafting a plan..."
+  ],
+  [
+    "info",
+    "Planning is held: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "prompt",
+    "Make this one planning call anyway? Its usage is charged before the call. [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "Plan revision 1 (35d68f280e5e)"
+  ],
+  [
+    "info",
+    "  Goal: Make add(a, b) in calc.py return the sum of its arguments."
+  ],
+  [
+    "info",
+    "  Checks at the end: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  1. fix-add: Make calc.add(a, b) return the sum of its arguments"
+  ],
+  [
+    "info",
+    "     Outcome: add(a, b) in calc.py returns a + b, and test/test_calc.py passes."
+  ],
+  [
+    "info",
+    "     Files: calc.py, test/test_calc.py"
+  ],
+  [
+    "info",
+    "     Checks: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  Budget: 3 attempts, 30 minutes"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "prompt",
+    "Approve this plan? [y]es / [n]o / [e]dit: ",
+    "e"
+  ],
+  [
+    "edit",
+    {
+      "max_total_attempts": [
+        3,
+        2
+      ],
+      "task_max_attempts": [
+        [
+          "fix-add",
+          3,
+          2
+        ]
+      ]
+    }
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "Plan revision 2 (169033169e8f)"
+  ],
+  [
+    "info",
+    "  Goal: Make add(a, b) in calc.py return the sum of its arguments."
+  ],
+  [
+    "info",
+    "  Checks at the end: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  1. fix-add: Make calc.add(a, b) return the sum of its arguments"
+  ],
+  [
+    "info",
+    "     Outcome: add(a, b) in calc.py returns a + b, and test/test_calc.py passes."
+  ],
+  [
+    "info",
+    "     Files: calc.py, test/test_calc.py"
+  ],
+  [
+    "info",
+    "     Checks: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  Budget: 2 attempts, 30 minutes"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "prompt",
+    "Approve this plan? [y]es / [n]o / [e]dit: ",
+    "y"
+  ],
+  [
+    "info",
+    "Approved. Execution a25fa974-0f91-55ed-be4b-8d23e5cb3f57 is queued for the service."
+  ],
+  [
+    "info",
+    "Execution requested."
+  ],
+  [
+    "info",
+    "Waiting: Capacity confidence is 'medium'; automatic admission requires high confidence"
+  ],
+  [
+    "info",
+    "Task fix-add is held: Capacity confidence is 'medium'; automatic admission requires high confidence"
+  ],
+  [
+    "prompt",
+    "Confirm capacity for this one attempt of fix-add? [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    "Confirmed. The service admits it on its next pass."
+  ],
+  [
+    "info",
+    "Task fix-add: capacity confirmed by human:user."
+  ],
+  [
+    "info",
+    "Task fix-add: started (attempt 1)."
+  ],
+  [
+    "info",
+    "Waiting: Capacity confidence is 'medium'; automatic admission requires high confidence"
+  ],
+  [
+    "info",
+    "  The worker finished; checking its work."
+  ],
+  [
+    "info",
+    "  Running check python_unittest."
+  ],
+  [
+    "info",
+    "  Check python_unittest: passed in 0.2 s."
+  ],
+  [
+    "info",
+    "Task fix-add: checks passed; cross-review requested (round 1)."
+  ],
+  [
+    "info",
+    "Waiting: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "info",
+    "The review of task fix-add (attempt 1) by claude:opus is held: support_tier_conservative_partial"
+  ],
+  [
+    "prompt",
+    "Confirm capacity for this one review call? [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    "Confirmed. The service makes the call on its next pass."
+  ],
+  [
+    "info",
+    "Task fix-add: review approved (claude:opus)."
+  ],
+  [
+    "info",
+    "Task fix-add: accepted at a627eeee2eb0."
+  ],
+  [
+    "info",
+    "  Running check python_unittest."
+  ],
+  [
+    "info",
+    "  Check python_unittest: passed in 0.2 s."
+  ],
+  [
+    "info",
+    "All checks passed at a627eeee2eb0."
+  ],
+  [
+    "info",
+    "Done."
+  ],
+  [
+    "info",
+    "Result: a627eeee2eb02fcb8d87f026264f34a1337e21ac"
+  ],
+  [
+    "info",
+    "  Built on fc60f7f2782d in $EVALUATION/worktrees/run-5cb735d0-94b0-596c-a797-8292641c6f5d"
+  ],
+  [
+    "info",
+    "  Check: python3 -B -m unittest test/test_calc.py -> exit 0"
+  ],
+  [
+    "info",
+    "    OK"
+  ],
+  [
+    "info",
+    "  Every check that ran: shoestring checks a2cdb3ee-5a58-4c2c-a7d8-ad881667f08c"
+  ],
+  [
+    "info",
+    "  Review: fix-add attempt 1 by claude:opus -> approved (0 blocking, 0 total)"
+  ],
+  [
+    "info",
+    "   calc.py | 2 +-"
+  ],
+  [
+    "info",
+    "   1 file changed, 1 insertion(+), 1 deletion(-)"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "To take it into your repository:"
+  ],
+  [
+    "info",
+    "  cd $EVALUATION/repos/source"
+  ],
+  [
+    "info",
+    "  git fetch $EVALUATION/worktrees/run-5cb735d0-94b0-596c-a797-8292641c6f5d a627eeee2eb02fcb8d87f026264f34a1337e21ac"
+  ],
+  [
+    "info",
+    "  git merge FETCH_HEAD"
+  ]
+]

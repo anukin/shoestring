@@ -26,6 +26,8 @@ defmodule Shoestring.Harness.Capacity.Codex.StdioTransport do
     * `:executable` - explicit resolved executable path (skips `System.find_executable/1`).
     * `:args` - command-line arguments (default: `["app-server", "--stdio"]`).
     * `:max_frame_size` - maximum allowed frame size in bytes (default: `262_144`).
+    * `:env` - `[{name, value}]` set in the process environment on top of the
+      inherited one (default: none).
   """
   @impl Shoestring.Harness.Capacity.Codex.Transport
   def start_link(opts) do
@@ -81,18 +83,19 @@ defmodule Shoestring.Harness.Capacity.Codex.StdioTransport do
         {:stop, :executable_not_found}
 
       path when is_binary(path) ->
-        open_port(path, args, max_frame_size, owner)
+        open_port(path, args, max_frame_size, owner, Keyword.get(opts, :env, []))
     end
   end
 
-  defp open_port(exec_path, args, max_frame_size, owner) do
+  defp open_port(exec_path, args, max_frame_size, owner, env) do
     port_opts = [
       :binary,
       :stream,
       {:line, max_frame_size},
       :use_stdio,
       :exit_status,
-      args: args
+      args: args,
+      env: Enum.map(env, fn {key, value} -> {to_charlist(key), to_charlist(value)} end)
     ]
 
     try do

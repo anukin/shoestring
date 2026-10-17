@@ -671,9 +671,65 @@ defmodule Shoestring.Trajectory.EventRegistry do
     "cobbler.plan.execution.gate_failed" => %{
       1 => %{
         required: [:execution_id, :revision_number, :plan_digest, :gate, :reason, :duration_ms],
-        optional: [],
+        optional: [:result, :skipped],
         uuid_fields: [:execution_id],
-        types: %{revision_number: :integer, duration_ms: :integer}
+        types: %{revision_number: :integer, duration_ms: :integer, skipped: {:array, :string}}
+      }
+    },
+    "cobbler.plan.gate.started" => %{
+      1 => %{
+        required: [
+          :invocation_id,
+          :execution_id,
+          :scope,
+          :gate,
+          :spec,
+          :kind,
+          :position,
+          :required
+        ],
+        optional: [:plan_task_id, :run_id, :attempt],
+        uuid_fields: [:invocation_id, :execution_id, :run_id],
+        types: %{position: :integer, attempt: :integer, required: :boolean}
+      }
+    },
+    "cobbler.plan.gate.completed" => %{
+      1 => %{
+        required: [
+          :invocation_id,
+          :execution_id,
+          :scope,
+          :gate,
+          :spec,
+          :kind,
+          :position,
+          :required,
+          :result,
+          :duration_ms,
+          :output_truncated
+        ],
+        optional: [
+          :plan_task_id,
+          :run_id,
+          :attempt,
+          :commit,
+          :exit_status,
+          :sandbox,
+          :reason,
+          :artifact_id,
+          :output_sha256,
+          :output_bytes
+        ],
+        uuid_fields: [:invocation_id, :execution_id, :run_id, :artifact_id],
+        types: %{
+          position: :integer,
+          attempt: :integer,
+          required: :boolean,
+          duration_ms: :integer,
+          exit_status: :integer,
+          output_bytes: :integer,
+          output_truncated: :boolean
+        }
       }
     },
     "cobbler.plan.task.superseded" => %{
@@ -880,12 +936,13 @@ defmodule Shoestring.Trajectory.EventRegistry do
           :reason,
           :retry_state
         ],
-        optional: [:detail, :duration_ms],
+        optional: [:detail, :duration_ms, :result, :skipped],
         uuid_fields: [:execution_id, :run_id],
         types: %{
           revision_number: :integer,
           attempt: :integer,
-          duration_ms: :integer
+          duration_ms: :integer,
+          skipped: {:array, :string}
         }
       }
     },
@@ -1516,8 +1573,48 @@ defmodule Shoestring.Trajectory.EventRegistry do
          :ok <- plan_execution_attempt(payload),
          :ok <- plan_execution_task_id(payload),
          :ok <- plan_execution_gate(payload),
-         :ok <- plan_execution_retry_state(payload) do
+         :ok <- plan_execution_retry_state(payload),
+         :ok <- gate_failure_result(payload) do
       :ok
+    end
+  end
+
+  defp validate_plan_execution(type, 1, payload, _opts)
+       when type in ["cobbler.plan.gate.started", "cobbler.plan.gate.completed"] do
+    task? = payload["scope"] == "task"
+
+    cond do
+      payload["scope"] not in ["task", "execution"] ->
+        Contract.invalid(:scope, "must be task or execution")
+
+      task? != Enum.all?(~w(plan_task_id run_id attempt), &Map.has_key?(payload, &1)) or
+          (not task? and Enum.any?(~w(plan_task_id run_id attempt), &Map.has_key?(payload, &1))) ->
+        Contract.invalid(:scope, "task gates name their attempt; final gates do not")
+
+      task? and plan_execution_attempt(payload) != :ok ->
+        plan_execution_attempt(payload)
+
+      task? and plan_execution_task_id(payload) != :ok ->
+        plan_execution_task_id(payload)
+
+      plan_execution_gate(payload) != :ok ->
+        plan_execution_gate(payload)
+
+      not Shoestring.Cobbler.GateSpec.identity?(payload["spec"]) or
+          not String.starts_with?(payload["spec"], payload["gate"] <> "@") ->
+        Contract.invalid(:spec, "must be the identity of the gate's specification")
+
+      payload["kind"] not in Shoestring.Cobbler.GateSpec.kinds() ->
+        Contract.invalid(:kind, "must be a gate kind")
+
+      payload["position"] < 1 ->
+        Contract.invalid(:position, "must be positive")
+
+      type == "cobbler.plan.gate.completed" ->
+        gate_completion(payload)
+
+      true ->
+        :ok
     end
   end
 
@@ -1533,6 +1630,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
     with :ok <- plan_execution_digest(payload),
          :ok <- plan_execution_revision(payload),
          :ok <- plan_execution_gate(payload),
+         :ok <- gate_failure_result(payload),
          true <- is_integer(payload["duration_ms"]) and payload["duration_ms"] >= 0,
          {:ok, _} <- Contract.text(payload["reason"], :reason, max: 2000) do
       :ok
@@ -1722,10 +1820,58 @@ defmodule Shoestring.Trajectory.EventRegistry do
     end
   end
 
+  # A failed gate's result never claims a pass; skipped names are gates.
+  defp gate_failure_result(payload) do
+    cond do
+      Map.get(payload, "result") not in [
+        nil | Shoestring.Cobbler.PlanGateLog.results() -- ["passed"]
+      ] ->
+        Contract.invalid(:result, "must be a failing gate result")
+
+      not Enum.all?(Map.get(payload, "skipped", []), &Shoestring.Cobbler.PlanGate.known?/1) ->
+        Contract.invalid(:skipped, "must name gates")
+
+      true ->
+        :ok
+    end
+  end
+
+  defp gate_completion(payload) do
+    passed? = payload["result"] == "passed"
+
+    cond do
+      payload["result"] not in Shoestring.Cobbler.PlanGateLog.results() ->
+        Contract.invalid(:result, "must be a gate result")
+
+      passed? and payload["exit_status"] != 0 ->
+        Contract.invalid(:result, "a pass is exit status zero")
+
+      payload["result"] == "failed" and payload["exit_status"] in [nil, 0] ->
+        Contract.invalid(:result, "a failure is a nonzero exit status")
+
+      Map.has_key?(payload, "commit") and plan_execution_commit(payload) != :ok ->
+        plan_execution_commit(payload)
+
+      payload["duration_ms"] < 0 ->
+        Contract.invalid(:duration_ms, "must be nonnegative")
+
+      Map.has_key?(payload, "artifact_id") !=
+          (Map.has_key?(payload, "output_sha256") and Map.has_key?(payload, "output_bytes")) ->
+        Contract.invalid(:artifact_id, "an output artifact names its digest and size")
+
+      Map.has_key?(payload, "output_sha256") and
+          not Regex.match?(~r/\A[0-9a-f]{64}\z/, payload["output_sha256"]) ->
+        Contract.invalid(:output_sha256, "must be a SHA-256 digest")
+
+      true ->
+        :ok
+    end
+  end
+
   defp plan_execution_gate(payload) do
     case Map.get(payload, "gate") do
       gate when is_binary(gate) ->
-        if gate in Shoestring.Cobbler.PlanGate.names() do
+        if Shoestring.Cobbler.PlanGate.known?(gate) do
           :ok
         else
           Contract.invalid(:gate, "must be a trusted gate name")

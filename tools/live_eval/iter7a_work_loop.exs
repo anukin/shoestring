@@ -13,7 +13,12 @@
 #                      "codex" reviews with Codex (ITER7A_REVIEW_MODEL, default
 #                      gpt-6-luna; one call per review, needs an authorized budget);
 #                      "claude" is the Worker's own provider, so review is
-#                      unavailable and waits for a human decision (no call).
+#                      unavailable and waits for a human decision (no call),
+#                      unless ITER7A_WORKER=codex: then Claude reviews
+#                      (ITER7A_REVIEW_MODEL, default opus; one call per review).
+#   ITER7A_WORKER      optional; "codex" makes the agent's Worker Codex
+#                      (ITER7A_WORKER_MODEL, default gpt-6-luna) instead of
+#                      Claude. The Coordinator (planner) stays Claude.
 #   ITER7A_SEED_DEFECT optional; "1" seeds a review defect for the repair path:
 #                      the fixture's test only checks add(2, 2) == 4, the
 #                      agent's instructions tell the worker to implement a * b
@@ -176,11 +181,13 @@ defmodule Iter7aWorkLoop do
     false = File.exists?(local("result.json"))
     File.mkdir_p!(Path.join(root(), "evidence"))
     {:ok, _} = Application.ensure_all_started(:logger)
-    Logger.configure(level: :none)
+    Logger.configure(level: if(System.get_env("ITER7A_LOG"), do: :error, else: :none))
 
+    # A Codex Worker is admitted from a Codex capacity observation (the
+    # product default); without one its task waits for a snapshot.
     Application.put_env(:shoestring, :capacity_monitors,
       claude: [enabled: true, auto_ingest_initial: true],
-      codex: [enabled: false]
+      codex: [enabled: System.get_env("ITER7A_WORKER") == "codex"]
     )
 
     # Live Elves use the product default (sandboxed plan runs); the rehearsal
@@ -212,13 +219,15 @@ defmodule Iter7aWorkLoop do
           max_rounds: String.to_integer(System.get_env("ITER7A_REVIEW_MAX_ROUNDS", "2"))
         )
 
-      # With this driver's Claude Worker a Claude reviewer is the same
-      # provider: review is unavailable and no review call is made.
+      # With a Claude Worker a Claude reviewer is the same provider: review
+      # is unavailable and no review call is made. With a Codex Worker it is
+      # a real cross-provider review.
       "claude" ->
         Application.put_env(:shoestring, :plan_review,
           enabled: true,
           adapter: :claude,
-          model: "opus"
+          model: System.get_env("ITER7A_REVIEW_MODEL", "opus"),
+          max_rounds: String.to_integer(System.get_env("ITER7A_REVIEW_MAX_ROUNDS", "2"))
         )
 
       nil ->
@@ -335,7 +344,19 @@ defmodule Iter7aWorkLoop do
 
   def configure! do
     settings = AgentProfiles.settings()
-    {:ok, _} = AgentProfiles.save_settings(settings, %{"claude_models" => "default\nopus"})
+    worker_model = System.get_env("ITER7A_WORKER_MODEL", "gpt-6-luna")
+
+    {:ok, _} =
+      AgentProfiles.save_settings(settings, %{
+        "claude_models" => "default\nopus",
+        "codex_models" => "default\n" <> worker_model
+      })
+
+    worker =
+      case System.get_env("ITER7A_WORKER") do
+        "codex" -> %{"name" => "Worker", "provider" => "codex", "model" => worker_model}
+        nil -> %{"name" => "Worker", "provider" => "claude", "model" => "opus"}
+      end
 
     {:ok, agent} =
       AgentProfiles.create(%{
@@ -347,7 +368,7 @@ defmodule Iter7aWorkLoop do
             if(Iter7aShell.seeded?(), do: @seed_instruction, else: ""),
         "roles" => [
           %{"name" => "Coordinator", "provider" => "claude", "model" => "opus"},
-          %{"name" => "Worker", "provider" => "claude", "model" => "opus"}
+          worker
         ]
       })
 
@@ -576,6 +597,7 @@ defmodule Iter7aWorkLoop do
     cobbler.plan.task.review_requested cobbler.plan.review.confirmed
     cobbler.plan.review.attempt.started cobbler.plan.task.reviewed
     cobbler.plan.review.decided cobbler.plan.task.review_blocked
+    cobbler.plan.gate.started cobbler.plan.gate.completed cobbler.plan.execution.gate_failed
     run.running run.completed run.failed run.cancelled run.interrupted
   )
 

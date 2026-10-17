@@ -170,8 +170,12 @@ defmodule Shoestring.Cobbler.Intake do
     end
   end
 
+  # A project gate must be configured when the goal is recorded; it is
+  # resolved again when it runs.
   defp known_names(names) do
-    case Enum.reject(names, &(&1 in @parameterless_gates)) do
+    configured = PlanGate.configured()
+
+    case Enum.reject(names, &(&1 in @parameterless_gates or Map.has_key?(configured, &1))) do
       [] -> :ok
       [name | _] -> {:error, {:unknown_gate, name}}
     end

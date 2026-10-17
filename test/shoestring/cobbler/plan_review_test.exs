@@ -98,6 +98,22 @@ defmodule Shoestring.Cobbler.PlanReviewTest do
     assert record.packet_digest == Shoestring.Cobbler.PlanContract.digest(packet)
   end
 
+  test "gate output is redacted before it is stored for review or sent to the reviewer", c do
+    {first, opts} = start!(c, "    return a + b\n")
+
+    runner = fn _argv, _worktree, _timeout ->
+      {:ok, %{exit_status: 0, output: "OK\npassword=hunter2-in-gate-output\n", duration_ms: 1}}
+    end
+
+    opts = Keyword.update!(opts, :gate_runner_opts, &Keyword.put(&1, :runner, runner))
+    assert {:ok, %{reason: :review_held}} = complete(c, first, opts)
+    record = record!(first)
+
+    refute record.packet_json =~ "hunter2-in-gate-output"
+    refute inspect(record.gates) =~ "hunter2-in-gate-output"
+    assert [%{"output_tail" => "OK\n" <> _}] = Jason.decode!(record.packet_json)["gates"]
+  end
+
   test "a failing gate never reaches review", c do
     {first, opts} = start!(c, "    return a + b\n")
 
