@@ -66,7 +66,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   alias Shoestring.Cobbler.{
     Dispatcher,
     PlanBudget,
+    GateSpec,
     PlanContract,
+    PlanGateLog,
     PlanGateRunner,
     PlanReview,
     Plans
@@ -484,6 +486,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
                   opts
                   |> Keyword.put(:gate_runner_opts, gate_opts)
                   |> Keyword.put(:remaining_duration_ms, remaining)
+                  |> Keyword.put(
+                    :gate_log,
+                    PlanGateLog.new(repo, goal_id, execution.execution_id, "task", context, opts)
+                  )
                 )
 
               {:error, reason} ->
@@ -1974,20 +1980,65 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   # Gates
   # ----------------------------------------------------------------------------
 
+  # Gates run in their specification order (cheap kinds first, plan order
+  # within a kind). A failed optional gate is recorded and the run goes on;
+  # any other failure stops it, and the gates not run are listed as skipped.
   defp run_all_gates(task_contract, context, opts) do
-    gates = task_contract["gates"] || []
     gate_opts = Keyword.get(opts, :gate_runner_opts, [])
+    default_timeout = Keyword.get(gate_opts, :timeout_ms, 120_000)
 
-    Enum.reduce_while(gates, {:ok, []}, fn gate_ref, {:ok, acc} ->
-      spent = evidences_duration_ms(acc)
-      remaining = Keyword.get(opts, :remaining_duration_ms, 86_400_000) - spent
-      timeout = min(Keyword.get(gate_opts, :timeout_ms, 120_000), remaining)
+    case GateSpec.plan(task_contract["gates"] || [], default_timeout) do
+      {:ok, planned} ->
+        names = Enum.map(planned, fn {gate_ref, _spec} -> gate_name(gate_ref) end)
+
+        planned
+        |> Enum.with_index(1)
+        |> Enum.reduce_while({:ok, []}, fn {{gate_ref, spec}, position}, {:ok, acc} ->
+          case run_gate(gate_ref, spec, position, context, acc, opts) do
+            {:ok, evidence} ->
+              {:cont, {:ok, acc ++ [evidence]}}
+
+            {:error, {:gate_failed, detail}} ->
+              {:halt,
+               {:error, {:gate_failed, Map.put(detail, :skipped, Enum.drop(names, position))}}}
+
+            {:error, reason} ->
+              {:halt, {:error, reason}}
+          end
+        end)
+
+      {:error, {gate_ref, reason}} ->
+        reason = {:gate_unavailable, %{reason: reason}}
+
+        detail =
+          gate_ref
+          |> gate_failure_detail(reason, context, %{duration_ms: 0}, [])
+          |> Map.merge(%{
+            result: "unavailable",
+            skipped: (task_contract["gates"] -- [gate_ref]) |> Enum.map(&gate_name/1)
+          })
+
+        {:error, {:gate_failed, detail}}
+    end
+  end
+
+  defp run_gate(gate_ref, spec, position, context, acc, opts) do
+    gate_opts = Keyword.get(opts, :gate_runner_opts, [])
+    log = Keyword.get(opts, :gate_log)
+    remaining = Keyword.get(opts, :remaining_duration_ms, 86_400_000) - evidences_duration_ms(acc)
+    timeout = min(spec["timeout_ms"], remaining)
+    invocation_id = Ecto.UUID.generate()
+
+    with true <- timeout > 0 || :duration_budget_exhausted,
+         :ok <- PlanGateLog.started(log, invocation_id, position, spec) do
       started = System.monotonic_time(:millisecond)
 
       result =
-        if timeout > 0,
-          do: PlanGateRunner.run(gate_ref, context, Keyword.put(gate_opts, :timeout_ms, timeout)),
-          else: {:error, :duration_budget_exhausted}
+        PlanGateRunner.run(
+          gate_ref,
+          context,
+          gate_opts |> Keyword.put(:timeout_ms, timeout) |> Keyword.put(:gate_spec, spec)
+        )
 
       elapsed =
         if is_function(Keyword.get(gate_opts, :runner), 3) do
@@ -1999,34 +2050,102 @@ defmodule Shoestring.Cobbler.PlanExecutor do
           max(0, System.monotonic_time(:millisecond) - started)
         end
 
-      case result do
-        {:ok, evidence} ->
-          evidence = Map.update!(evidence, :duration_ms, &max(&1, elapsed))
+      {evidence, verdict} =
+        case result do
+          {:ok, evidence} ->
+            evidence = Map.update!(evidence, :duration_ms, &max(&1, elapsed))
 
-          case if(evidence.duration_ms <= remaining,
-                 do: PlanGateRunner.verify(gate_ref, evidence, context, gate_opts),
-                 else: {:error, :duration_budget_exhausted}
-               ) do
-            {:ok, :accepted} ->
-              {:cont, {:ok, acc ++ [evidence]}}
+            {evidence,
+             if(evidence.duration_ms <= remaining,
+               do: PlanGateRunner.verify(gate_ref, evidence, context, gate_opts),
+               else: {:error, :duration_budget_exhausted}
+             )}
 
-            {:error, reason} ->
-              {:halt,
-               {:error,
-                {:gate_failed, gate_failure_detail(gate_ref, reason, context, evidence, acc)}}}
-          end
+          {:error, reason} ->
+            {nil, {:error, reason}}
+        end
 
-        {:error, reason} ->
-          detail = gate_failure_detail(gate_ref, reason, context, %{duration_ms: elapsed}, acc)
-          {:halt, {:error, {:gate_failed, detail}}}
+      outcome = gate_outcome(evidence, verdict, elapsed)
+
+      with {:ok, artifact_id} <-
+             PlanGateLog.completed(log, invocation_id, position, spec, outcome) do
+        evidence =
+          evidence &&
+            Map.merge(evidence, %{result: outcome.result, artifact_id: artifact_id})
+
+        optional? = spec["required"] == false
+
+        case verdict do
+          {:ok, :accepted} ->
+            {:ok, evidence}
+
+          # A nonzero exit of an optional gate; snapshot and binding failures
+          # still stop the run.
+          {:error, {:gate_failed, %{exit_status: _}}} when optional? ->
+            {:ok, evidence}
+
+          {:error, reason} ->
+            detail =
+              gate_ref
+              |> gate_failure_detail(reason, context, evidence || %{duration_ms: elapsed}, acc)
+              |> Map.put(:result, outcome.result)
+
+            {:error, {:gate_failed, detail}}
+        end
       end
-    end)
+    else
+      :duration_budget_exhausted ->
+        detail =
+          gate_ref
+          |> gate_failure_detail(:duration_budget_exhausted, context, %{duration_ms: 0}, acc)
+          |> Map.put(:result, "error")
+
+        {:error, {:gate_failed, detail}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
+
+  defp gate_outcome(evidence, verdict, elapsed) do
+    reason =
+      case verdict do
+        {:error, reason} -> reason
+        _ -> nil
+      end
+
+    partial = partial_output(reason)
+
+    %{
+      result: gate_result(evidence, verdict),
+      duration_ms: if(evidence, do: evidence.duration_ms, else: elapsed),
+      commit: evidence && evidence.commit,
+      exit_status: evidence && evidence.exit_status,
+      sandbox: evidence && evidence.sandbox,
+      output: if(evidence, do: evidence.output, else: partial),
+      output_truncated: match?({:gate_output_oversized, _}, reason),
+      reason: reason && inspect(without_output(reason))
+    }
+  end
+
+  defp gate_result(_evidence, {:ok, :accepted}), do: "passed"
+  defp gate_result(%{}, {:error, {:gate_failed, %{exit_status: _}}}), do: "failed"
+  defp gate_result(_evidence, {:error, {:gate_timeout, _}}), do: "timeout"
+  defp gate_result(_evidence, {:error, {:gate_output_oversized, _}}), do: "output_oversized"
+  defp gate_result(_evidence, {:error, {:gate_unavailable, _}}), do: "unavailable"
+  defp gate_result(_evidence, _verdict), do: "error"
+
+  defp partial_output({_tag, %{partial_output: output}}) when is_binary(output), do: output
+  defp partial_output(_reason), do: nil
+
+  # Gate output never goes into a reason string; it is kept as an artifact.
+  defp without_output({tag, %{} = detail}), do: {tag, Map.delete(detail, :partial_output)}
+  defp without_output(reason), do: reason
 
   defp gate_failure_detail(gate_ref, reason, context, evidence, prior_evidences) do
     %{
       gate: gate_name(gate_ref),
-      reason: inspect(reason),
+      reason: inspect(without_output(reason)),
       run_id: context.run_id,
       attempt: context.attempt,
       plan_task_id: context.plan_task_id,
@@ -2046,9 +2165,15 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       "commit" => evidence.commit,
       "worktree" => evidence.worktree,
       "exit_status" => evidence.exit_status,
-      "output" => evidence.output,
+      # Redacted like the artifact: a secret-looking line in a gate's output
+      # would otherwise make the whole event unrecordable (GateOutput).
+      "output" => Shoestring.Cobbler.GateOutput.redact(evidence.output),
       "duration_ms" => evidence.duration_ms,
-      "sandbox" => Map.get(evidence, :sandbox)
+      "sandbox" => Map.get(evidence, :sandbox),
+      "spec" => Map.get(evidence, :spec),
+      "required" => Map.get(evidence, :required, true),
+      "result" => Map.get(evidence, :result, "passed"),
+      "artifact_id" => Map.get(evidence, :artifact_id)
     }
   end
 
@@ -2278,6 +2403,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         "retry_state" => retry_state,
         "duration_ms" => detail.duration_ms
       }
+      |> maybe_put("result", detail[:result])
+      |> maybe_put("skipped", detail[:skipped])
 
     with {:ok, _event} <-
            append_executor_event(
@@ -2338,7 +2465,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              contract,
              execution,
              gate_opts,
-             PlanBudget.global_remaining(usage, contract)
+             PlanBudget.global_remaining(usage, contract),
+             PlanGateLog.new(repo, goal_id, execution.execution_id, "execution", %{}, opts)
            ),
          first = hd(global_evidences),
          {:ok, _event} <-
@@ -2375,7 +2503,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
                    "gate" => detail.gate,
                    "reason" => detail.reason,
                    "duration_ms" => detail.duration_ms
-                 },
+                 }
+                 |> maybe_put("result", detail[:result])
+                 |> maybe_put("skipped", detail[:skipped]),
                  "plan-global-failed:#{execution.execution_id}",
                  opts
                ) do
@@ -2466,7 +2596,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     end
   end
 
-  defp run_global_gates(goal_id, contract, execution, gate_opts, remaining) do
+  defp run_global_gates(goal_id, contract, execution, gate_opts, remaining, log) do
     gates = get_in(contract.content, ["goal", "acceptance", "gates"]) || []
 
     context = %{
@@ -2480,7 +2610,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
     run_all_gates(%{"gates" => gates}, context,
       gate_runner_opts: gate_opts,
-      remaining_duration_ms: remaining
+      remaining_duration_ms: remaining,
+      gate_log: log
     )
   end
 

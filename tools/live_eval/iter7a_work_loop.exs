@@ -576,6 +576,7 @@ defmodule Iter7aWorkLoop do
     cobbler.plan.task.review_requested cobbler.plan.review.confirmed
     cobbler.plan.review.attempt.started cobbler.plan.task.reviewed
     cobbler.plan.review.decided cobbler.plan.task.review_blocked
+    cobbler.plan.gate.started cobbler.plan.gate.completed cobbler.plan.execution.gate_failed
     run.running run.completed run.failed run.cancelled run.interrupted
   )
 

@@ -120,11 +120,28 @@ defmodule Shoestring.Cobbler.GateSandbox do
     end
   end
 
+  @doc """
+  The names of the only environment variables a gate can see (a locale
+  variable only when the service has it set).
+  """
+  @spec environment_names() :: [String.t()]
+  def environment_names do
+    (~w(PATH HOME TMPDIR PYTHONDONTWRITEBYTECODE) ++
+       @locale ++ Enum.map(Sandbox.git_env(), &elem(&1, 0)))
+    |> Enum.sort()
+  end
+
+  # Python writes no bytecode, so a project gate running Python leaves the
+  # worktree as clean as it found it (the runner checks after the gate).
   defp env(tmp) do
     locale = for key <- @locale, value = System.get_env(key), do: {key, value}
 
-    [{"PATH", System.get_env("PATH") || "/usr/bin:/bin"}, {"HOME", tmp}, {"TMPDIR", tmp}] ++
-      locale ++ Sandbox.git_env()
+    [
+      {"PATH", System.get_env("PATH") || "/usr/bin:/bin"},
+      {"HOME", tmp},
+      {"TMPDIR", tmp},
+      {"PYTHONDONTWRITEBYTECODE", "1"}
+    ] ++ locale ++ Sandbox.git_env()
   end
 
   defp profile(worktree, store, tmp, home) do

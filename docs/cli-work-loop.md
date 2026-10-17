@@ -34,7 +34,8 @@ shoestring do "add retry with backoff to the HTTP client" --test test/test_http.
 
 1. **Intake.** The base is your `HEAD`; uncommitted changes are refused.
    Checks come from `--test` (tracked test files) and `--gate`
-   (`mix_test`, `mix_precommit`, `mix_format_check`, `mix_compile_strict`), or
+   (`mix_test`, `mix_precommit`, `mix_format_check`, `mix_compile_strict`, or
+   `project:NAME` for a command you approved, see [Checks](#checks)), or
    are detected: a Mix project runs `mix_test`; Python with 1-16
    `test/**/test_*.py` files runs `python_unittest` over them. The planner
    never picks checks.
@@ -65,6 +66,41 @@ shoestring do "add retry with backoff to the HTTP client" --test test/test_http.
    git fetch <run worktree> <commit>
    git merge FETCH_HEAD
    ```
+
+## Checks
+
+Each check has a versioned specification: its command (an argument array,
+never a shell string), kind, timeout, output limit, environment allowlist,
+whether it is required, and how its output is kept. Every run records that
+specification's identity, the exact result (`passed`, `failed`, `timeout`,
+`output_oversized`, `unavailable` or `error`), the exit status, the commit it
+verified and its duration, and keeps the output (redacted) as an artifact.
+
+Checks run cheap first: repository status, formatting, lint / compile /
+typecheck, build, tests, precommit; in the plan's order within a kind. When a
+required check fails, the rest are not run and are listed as skipped.
+
+For commands the built-in checks do not cover, approve them in your
+configuration (never in a plan):
+
+```elixir
+config :shoestring, :project_gates, %{
+  "npm_test" => %{argv: ["npm", "test"], kind: "test", timeout_ms: 300_000},
+  "ruff" => %{argv: ["ruff", "check", "."], kind: "lint", required: false}
+}
+```
+
+and cite them with `--gate project:npm_test`. The program must be a bare
+name on `PATH` (not installed under your home directory, which the check
+sandbox cannot read). A failed check with `required: false` is recorded and
+shown but does not block the task, unless all of a task's checks are
+optional. A cited name that is no longer configured stops the task for you;
+it is never skipped as passed.
+
+```sh
+shoestring checks GOAL            # every check run: task, attempt, result, spec
+shoestring checks GOAL --output 3 # the stored output of check 3
+```
 
 ## Cross-review
 
