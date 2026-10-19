@@ -712,3 +712,100 @@ VERIFIED: the streaming implementation passed
 **52/52** Gate 0A tests and **8/8** UI tests. The package B streaming
 deviation is now closed; partial-line buffering remains an explicit
 redaction constraint.
+
+### Budgeted live follow-up
+
+VERIFIED: [live-budget.json](live-budget.json) records **4/4 planner calls,
+12/12 worker runs, 9/16 reviewer calls**. The failed reviewer delivery and
+failed worker are charged. No further worker run is authorized by this
+budget. Installed versions were Claude Code **2.1.303** and Codex **0.163.0**.
+
+- **Manual runs:** [Claude](live-manual-postfix/claude.json) and
+  [Codex](live-manual-postfix/codex.json) each completed, made one commit in
+  private Git storage, and passed the reference test. Each source remained
+  unchanged. These invoke the real `/runs/new` event handler programmatically,
+  without expert bypass or a plan binding; browser interaction was not part
+  of this live probe. Claude requested the product sandbox; Codex committed
+  using the five private Git roots.
+- **Retry:** [events](live-human-retry/domain-events.json) and
+  [transcript](live-human-retry/transcript.json) show one planner, one worker,
+  and two reviewer invocations. The first real Codex response was deliberately
+  discarded by the quota wrapper to inject a delivery failure. The failed
+  review accepted nothing; the scripted, user-authorized `human:user` operator
+  recorded `retry`, confirmed the next call, and the second call approved.
+  Task and final gates passed; source unchanged and the integration clone's
+  test passed. The injected failure is not an unseeded review defect.
+- **Reject:** [events](live-human-reject/domain-events.json) and
+  [transcript](live-human-reject/transcript.json) show one planner, one worker
+  and one review. Codex blocked the seeded multiplication defect. The
+  user-authorized operator recorded `reject`; the review became rejected,
+  the task remained unaccepted and the goal needed a decision. No merge or
+  replacement worker followed.
+- **Repair samples:** [sample 1](live-repair-sample-1/result.json) and
+  [sample 2](live-repair-sample-2/result.json) each used one planner, two
+  workers and two reviews: seeded defect blocked, repaired from its reviewed
+  commit, approved in round 2, final gate and clone test passed, source
+  unchanged. Together with the previously recorded loop,
+  [repair-rates.json](repair-rates.json) measures **3/3 successful repairs**
+  and **0/3 repeated blockers** in rereview, using **607 review output
+  tokens**. These are three small seeded `calc.add` trials, not an estimate
+  for general defects.
+
+### Unseeded fan-out failure and session-index ownership
+
+VERIFIED: the first live review-enabled fan-out
+([failure event](live-fanout-before-fix/failure-event.json)) failed with
+`transport/session_not_found` for one child after the sibling completed.
+The failed trial is retained as a failure. A read-only process-group probe
+confirmed that neither owned worker group remained live afterward; no
+cleanup or duplicate run was started against that state.
+
+REPO-INSPECTION: both Claude and Codex created their named ETS session
+index in whichever caller reached it first. That caller's normal exit
+deleted the whole index, hiding other live sessions. The fix introduces
+`Harness.SessionTables`, supervised before the execution workers, to own
+both indexes independently of callers. Confirmed-dead session PIDs are
+reported missing; live missing sessions still fail closed. No timer,
+eviction, cancellation, automatic replacement or provider backfill was added.
+
+VERIFIED: the final ownership regressions against the `6248bf7` application
+and adapter source versions fail for the behavioral reason above:
+**2 tests, 2 failures**, seed **644969**, each returning
+`session_not_found` while its session still answers. Fixed sources were
+restored byte-for-byte. Focused ownership, missing-session, startup and
+isolation coverage passed **11 tests, 0 failures**, seed **377349**.
+
+VERIFIED: a fresh post-fix [sibling fan-out](live-fanout-after-fix/fanout.json)
+had **2 live Elves concurrently**, two separate approved Codex reviews,
+both `north` and `south` accepted, an unchanged source and **0 outstanding
+reservations**. [Scope](live-fanout-after-fix/scope.json): the join phase was
+not run after the 12-worker ceiling was reached; the fixture goal is not
+reported completed. This new post-fix trial is separate from the retained
+failed trial.
+
+The session-index defect was found naturally by the live run and reproduced
+without providers. It is a runtime defect, not a blocking cross-review
+finding after green gates: that narrower unseeded-review item remains
+UNVERIFIED. A tool-free review of the prepared real streaming diff was
+rejected by automatic approval review because authorization was needed for
+that particular real-code payload and Claude destination. The packet was
+prepared locally (digest `43bb3b09a9d0657b3b57fd87bad40ddfcee579c135266745288874929a130c2b`);
+it has not been sent and the payload-specific permission question remains
+pending. The 13 advisory usefulness labels also remain human work.
+
+VERIFIED: after the ownership fix, `timeout 590 mix precommit < /dev/null`
+passed **4 doctests, 2293 tests, 0 failures, 1 skipped, 6 excluded**, seed
+**140493**, ExUnit **524.4 s**; JavaScript **52/52** and **8/8**. Earlier,
+before that fix, the live-tool gate passed **2291 tests**, seed **704030**,
+**529.1 s**, with the same doctest, failure, skip, exclusion and JavaScript
+counts. A preceding tool-gate invocation stopped at one formatter change
+before tests; that exact change was applied and checked separately.
+
+Follow-up evidence identifiers: UUIDs are substituted consistently across
+the new exports with synthetic UUIDs preserving their version and variant.
+Apart from those identifier substitutions, exported captures are byte-for-byte
+unchanged. The drivers already replace their own root and home with
+`$EVALUATION` and `$USER_HOME`; native local evidence is retained. No provider
+frames or reasoning are included. The reusable quota guard and live drivers
+are under `tools/live_eval/`; the guard's fake-executable coverage passed
+**3 tests, 0 failures**, seed **724750**.

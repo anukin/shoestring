@@ -1,0 +1,20 @@
+{
+  "mode": "live",
+  "result": "needs_user",
+  "base": "607cb73dae0e8f64b3d83f98f8358ab978a32ec0",
+  "agent_id": "00000008-0000-4000-9000-00000000002e",
+  "outcome": "{:ok, %{revision: 2, goal_id: \"00000008-0000-4000-8000-000000000025\", execution_id: \"00000008-0000-5000-9000-00000000002f\"}}",
+  "followed": "{:ok, :needs_user}",
+  "source_unchanged": true,
+  "merge_in_clone": null,
+  "elapsed_ms": 106384,
+  "runs": 1,
+  "planner_attempts": 1,
+  "final_status": {
+    "needs_user?": true,
+    "completed?": false,
+    "accepted": [],
+    "total_attempts": 1,
+    "cancelled?": false
+  }
+}

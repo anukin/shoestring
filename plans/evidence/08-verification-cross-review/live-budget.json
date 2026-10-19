@@ -1,0 +1,167 @@
+{
+  "limits": {
+    "planner": 4,
+    "worker": 12,
+    "reviewer": 16
+  },
+  "used": {
+    "planner": 4,
+    "worker": 12,
+    "reviewer": 9
+  },
+  "calls": [
+    {
+      "role": "worker",
+      "provider": "claude",
+      "ordinal": 1,
+      "at": "2026-10-19T17:25:13.321186+00:00"
+    },
+    {
+      "role": "worker",
+      "provider": "codex",
+      "ordinal": 2,
+      "at": "2026-10-19T17:25:46.376909+00:00"
+    },
+    {
+      "role": "planner",
+      "provider": "claude",
+      "ordinal": 1,
+      "at": "2026-10-19T17:26:09.983788+00:00"
+    },
+    {
+      "role": "worker",
+      "provider": "claude",
+      "ordinal": 3,
+      "at": "2026-10-19T17:27:18.020851+00:00"
+    },
+    {
+      "role": "reviewer",
+      "provider": "codex",
+      "ordinal": 1,
+      "at": "2026-10-19T17:27:41.176508+00:00",
+      "injected_delivery_failure": true
+    },
+    {
+      "role": "reviewer",
+      "provider": "codex",
+      "ordinal": 2,
+      "at": "2026-10-19T17:27:56.232133+00:00"
+    },
+    {
+      "role": "planner",
+      "provider": "claude",
+      "ordinal": 2,
+      "at": "2026-10-19T17:28:20.921956+00:00"
+    },
+    {
+      "role": "worker",
+      "provider": "claude",
+      "ordinal": 4,
+      "at": "2026-10-19T17:29:29.991147+00:00"
+    },
+    {
+      "role": "reviewer",
+      "provider": "codex",
+      "ordinal": 3,
+      "at": "2026-10-19T17:29:57.132776+00:00"
+    },
+    {
+      "role": "planner",
+      "provider": "claude",
+      "ordinal": 3,
+      "at": "2026-10-19T17:32:28.490773+00:00"
+    },
+    {
+      "role": "worker",
+      "provider": "claude",
+      "ordinal": 5,
+      "at": "2026-10-19T17:33:37.557816+00:00"
+    },
+    {
+      "role": "reviewer",
+      "provider": "codex",
+      "ordinal": 4,
+      "at": "2026-10-19T17:34:04.717581+00:00"
+    },
+    {
+      "role": "worker",
+      "provider": "claude",
+      "ordinal": 6,
+      "at": "2026-10-19T17:35:12.887821+00:00"
+    },
+    {
+      "role": "reviewer",
+      "provider": "codex",
+      "ordinal": 5,
+      "at": "2026-10-19T17:35:39.990209+00:00"
+    },
+    {
+      "role": "planner",
+      "provider": "claude",
+      "ordinal": 4,
+      "at": "2026-10-19T17:35:50.316656+00:00"
+    },
+    {
+      "role": "worker",
+      "provider": "claude",
+      "ordinal": 7,
+      "at": "2026-10-19T17:37:02.166357+00:00"
+    },
+    {
+      "role": "reviewer",
+      "provider": "codex",
+      "ordinal": 6,
+      "at": "2026-10-19T17:37:37.308282+00:00"
+    },
+    {
+      "role": "worker",
+      "provider": "claude",
+      "ordinal": 8,
+      "at": "2026-10-19T17:38:05.968641+00:00"
+    },
+    {
+      "role": "worker",
+      "provider": "claude",
+      "ordinal": 9,
+      "at": "2026-10-19T17:38:05.969579+00:00"
+    },
+    {
+      "role": "worker",
+      "provider": "claude",
+      "ordinal": 10,
+      "at": "2026-10-19T17:38:42.298053+00:00"
+    },
+    {
+      "role": "reviewer",
+      "provider": "codex",
+      "ordinal": 7,
+      "at": "2026-10-19T17:39:11.412932+00:00"
+    },
+    {
+      "role": "worker",
+      "provider": "claude",
+      "ordinal": 11,
+      "at": "2026-10-19T17:50:56.303306+00:00"
+    },
+    {
+      "role": "worker",
+      "provider": "claude",
+      "ordinal": 12,
+      "at": "2026-10-19T17:50:56.304667+00:00"
+    },
+    {
+      "role": "reviewer",
+      "provider": "codex",
+      "ordinal": 8,
+      "at": "2026-10-19T17:51:15.383398+00:00"
+    },
+    {
+      "role": "reviewer",
+      "provider": "codex",
+      "ordinal": 9,
+      "at": "2026-10-19T17:51:16.387587+00:00"
+    }
+  ],
+  "scope": "Iteration 8 follow-up; failed launches and the deliberately discarded reviewer delivery are charged. CLI version reads are model-free and uncharged.",
+  "worker_budget_exhausted": true
+}

@@ -10,6 +10,10 @@
 #   ITER7_MODE        "rehearsal" (Fake adapter, no provider call) or "live"
 #                     (Claude Code through the reviewed fixture launcher).
 #   ITER6_REPOSITORY  the fixture source; the shared launcher denies writes to it.
+#   ITER8_REVIEW      optional "codex": cross-review each child and the join,
+#                     using the product Claude sandbox. Held review calls are
+#                     confirmed by the user-authorized scripted operator.
+# Use provider_budget.py with a user-authorized shared ceiling for live runs.
 #
 # Phases: preflight, setup, fanout, integrate, join, export. No raw provider
 # frames, session/message identifiers, credentials or reasoning are exported.
@@ -65,19 +69,33 @@ defmodule Iter7ClaudeFanout do
     )
 
     Application.put_env(:shoestring, :plan_fanout, enabled: true)
+
+    if System.get_env("ITER8_REVIEW") == "codex" do
+      Application.put_env(:shoestring, :plan_review,
+        enabled: true,
+        adapter: if(live?(), do: :codex, else: :fixture),
+        model: if(live?(), do: "gpt-6-luna", else: "fixture-reviewer"),
+        max_rounds: 2
+      )
+    end
+
     Application.put_env(:shoestring, :plan_reservation_policy, @policy)
 
     elf =
       if live?() do
-        [
-          adapter_opts: %{
-            live: true,
-            permission_bypass: false,
-            tools: "Bash",
-            command: Path.expand("tools/live_eval/claude_fixture_launcher.py"),
-            env: [{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"} | @git_env]
-          }
-        ]
+        if System.get_env("ITER8_REVIEW") == "codex" do
+          []
+        else
+          [
+            adapter_opts: %{
+              live: true,
+              permission_bypass: false,
+              tools: "Bash",
+              command: Path.expand("tools/live_eval/claude_fixture_launcher.py"),
+              env: [{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"} | @git_env]
+            }
+          ]
+        end
       else
         [
           adapter: Shoestring.Harness.Fake,
@@ -477,7 +495,7 @@ defmodule Iter7ClaudeFanout do
         revision_number: revision.revision_number,
         digest: revision.digest,
         note:
-          "User authorized the iteration 7 live fan-out verification. Registered bound: one attempt per task, three attempts and #{@goal_seconds} seconds per goal, #{@task_seconds} seconds per task, no replacement."
+          "User authorized this bounded live fan-out verification. Registered bound: one attempt per task, three attempts and #{@goal_seconds} seconds per goal, #{@task_seconds} seconds per task, no replacement."
       })
 
     {:ok, _} =
@@ -550,6 +568,32 @@ defmodule Iter7ClaudeFanout do
 
   ## Phases
 
+  def confirm_reviews!(goal_id) do
+    {:ok, status} = ExecutionControl.status(goal_id)
+
+    for review <- status.reviews,
+        review.state == "held",
+        not MapSet.member?(
+          Process.get(:confirmed_reviews, MapSet.new()),
+          {review.review_id, review.calls}
+        ) do
+      {:ok, _} =
+        Shoestring.Cobbler.PlanReview.confirm(goal_id,
+          review_id: review.review_id,
+          confirmation_id: Ecto.UUID.generate(),
+          confirmed_by: "human:user"
+        )
+
+      Process.put(
+        :confirmed_reviews,
+        MapSet.put(
+          Process.get(:confirmed_reviews, MapSet.new()),
+          {review.review_id, review.calls}
+        )
+      )
+    end
+  end
+
   def fanout! do
     identity = identity!()
     goal_id = identity["goal_id"]
@@ -605,6 +649,7 @@ defmodule Iter7ClaudeFanout do
   end
 
   defp fanout_progress(goal_id, sample) do
+    confirm_reviews!(goal_id)
     status = status!(goal_id)
     rows = runs(goal_id)
     live = Enum.count(rows, &Shoestring.Elves.whereis(&1.id))
@@ -624,6 +669,9 @@ defmodule Iter7ClaudeFanout do
     cond do
       "north" in status.accepted and "south" in status.accepted and live == 0 ->
         {:ok, {status, sample}}
+
+      Enum.any?(status.reviews, &(&1.state == "held")) ->
+        :pending
 
       status.needs_user? ->
         record("fanout-needs-user", %{
@@ -706,10 +754,12 @@ defmodule Iter7ClaudeFanout do
 
     wait!(
       fn ->
+        confirm_reviews!(goal_id)
         status = status!(goal_id)
 
         cond do
           status.completed? -> {:ok, status}
+          Enum.any?(status.reviews, &(&1.state == "held")) -> :pending
           status.needs_user? -> raise "plan_needs_user"
           true -> :pending
         end
@@ -859,6 +909,9 @@ defmodule Iter7ClaudeFanout do
     cobbler.plan.workspace.prepared cobbler.plan.task.dispatched cobbler.plan.task.accepted
     cobbler.plan.task.gate_failed cobbler.plan.task.scope_blocked cobbler.plan.integration.recorded
     cobbler.plan.execution.gate_failed cobbler.plan.execution.completed dispatch.effect_unknown
+    cobbler.plan.task.review_requested cobbler.plan.review.confirmed
+    cobbler.plan.review.attempt.started cobbler.plan.task.reviewed cobbler.plan.review.decided
+    cobbler.plan.task.review_blocked cobbler.plan.gate.started cobbler.plan.gate.output cobbler.plan.gate.completed
     lease.expired lease.revoked run.running run.completed run.failed run.cancelled run.interrupted)
 
   def export! do

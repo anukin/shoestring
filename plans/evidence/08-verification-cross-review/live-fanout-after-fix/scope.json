@@ -1,0 +1,17 @@
+{
+  "scope": "Sibling fan-out with review enabled; join phase intentionally not run after the 12-worker ceiling was reached.",
+  "workers": 2,
+  "max_live_elves": 2,
+  "approved_reviews": 2,
+  "accepted_tasks": [
+    "north",
+    "south"
+  ],
+  "source_unchanged": true,
+  "reservations_outstanding": 0,
+  "worker_commit_messages": [
+    "Implement north_total",
+    "Implement south_label"
+  ],
+  "join_run": false
+}

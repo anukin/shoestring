@@ -589,9 +589,7 @@ defmodule Shoestring.Harness.CodexAppServer do
   # --- Table Helpers ---
 
   defp ensure_table do
-    if :ets.info(@table) == :undefined do
-      :ets.new(@table, [:named_table, :public, :set])
-    end
+    Shoestring.Harness.SessionTables.ensure_table(@table)
   rescue
     _ -> :ok
   end
@@ -610,8 +608,11 @@ defmodule Shoestring.Harness.CodexAppServer do
     ensure_table()
 
     case :ets.lookup(@table, run_id) do
-      [{^run_id, pid}] when is_pid(pid) -> {:ok, pid}
-      _ -> {:error, :not_found}
+      [{^run_id, pid}] when is_pid(pid) ->
+        if Process.alive?(pid), do: {:ok, pid}, else: {:error, :not_found}
+
+      _ ->
+        {:error, :not_found}
     end
   rescue
     _ -> {:error, :not_found}

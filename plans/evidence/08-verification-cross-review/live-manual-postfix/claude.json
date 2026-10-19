@@ -1,0 +1,16 @@
+{
+  "terminal": "run.completed",
+  "base": "aabc978852162a3d8025e562f42a76e63be2e7b2",
+  "provider": "claude",
+  "rehearsal": false,
+  "commit": "6d999ce24e338b8a7ab81919c53435e3209b1736",
+  "commits": 1,
+  "source_unchanged": true,
+  "private_git": true,
+  "private_git_roots": 5,
+  "claude_sandbox_requested": true,
+  "manual_source_recorded": true,
+  "test_exit": 0,
+  "test_output": ".\n----------------------------------------------------------------------\nRan 1 test in 0.000s\n\nOK\n",
+  "commit_message": "Implement add in calc.py"
+}

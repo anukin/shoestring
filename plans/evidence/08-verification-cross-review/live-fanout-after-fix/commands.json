@@ -1,0 +1,80 @@
+[
+  {
+    "command": "cat south.py test/test_south.py; ls",
+    "task": "south",
+    "ordinal": 2,
+    "boundary": "start"
+  },
+  {
+    "command": "cat north.py test/test_north.py",
+    "task": "north",
+    "ordinal": 2,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "south",
+    "ordinal": 4,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "status": "completed",
+    "task": "north",
+    "ordinal": 4,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "cat > south.py <<'EOF'\ndef south_label(name):\n    \"\"\"Return the display label for an item name.\"\"\"\n    trimmed = name.strip()\n    return \"Item: \" + (trimmed.upper() if trimmed else \"(unnamed)\")\nEOF\npython3 -B -m unittest test/test_south.py && git add south.py && git commit -qm \"Implement south_label\" && git log --oneline -1 && git status --short",
+    "task": "south",
+    "ordinal": 5,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "south",
+    "ordinal": 6,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "cat > north.py <<'EOF'\ndef north_total(items):\n    \"\"\"Return the total quantity across items.\"\"\"\n    return sum(item[\"quantity\"] for item in items)\nEOF\npython3 -B -m unittest test/test_north.py && git add north.py && git commit -qm \"Implement north_total\" && git log --oneline -1 && git status --short",
+    "task": "north",
+    "ordinal": 5,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "north",
+    "ordinal": 7,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "git rev-parse HEAD; git branch --show-current; git status --short; git log --oneline -2",
+    "task": "south",
+    "ordinal": 7,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "south",
+    "ordinal": 8,
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "git status; git rev-parse HEAD shoestring/run-00000008-0000-5000-a000-0000000000b9; git show --stat HEAD | head",
+    "task": "north",
+    "ordinal": 8,
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "task": "north",
+    "ordinal": 9,
+    "boundary": "end",
+    "is_error": false
+  }
+]

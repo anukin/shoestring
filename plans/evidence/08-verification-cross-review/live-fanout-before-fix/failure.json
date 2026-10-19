@@ -1,0 +1,5 @@
+{
+  "code": "verification_phase_failed",
+  "message": "plan_needs_user",
+  "error_type": "RuntimeError"
+}

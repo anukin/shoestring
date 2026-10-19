@@ -1,0 +1,18 @@
+{
+  "children": [
+    {
+      "attempt": 1,
+      "plan_task_id": "north",
+      "run_id": "00000008-0000-5000-8000-0000000000a2",
+      "stop_class": "awaiting_verification"
+    },
+    {
+      "attempt": 1,
+      "plan_task_id": "south",
+      "run_id": "00000008-0000-5000-8000-0000000000a7",
+      "stop_class": "adapter_failure"
+    }
+  ],
+  "accepted": [],
+  "scope_blockers": []
+}

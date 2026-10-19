@@ -1,0 +1,178 @@
+{
+  "completed?": false,
+  "retirements": [],
+  "active_attempt": null,
+  "superseded_attempts": [],
+  "duration_budget": {
+    "reason": null,
+    "remaining_goal_ms": 1462997
+  },
+  "accepted": [
+    "north",
+    "south"
+  ],
+  "attempts": {
+    "north": 1,
+    "south": 1
+  },
+  "integration": null,
+  "children": [
+    {
+      "execution_id": "00000008-0000-5000-b000-0000000000b4",
+      "attempt": 1,
+      "command_id": "plan-north-1",
+      "revision_number": 1,
+      "plan_digest": "9f01e112b409daa15329ffa9959e88b9ecdb68f92eee730b49f04ff04e23e60f",
+      "dispatch_mode": "fanout_v1",
+      "plan_task_id": "north",
+      "run_id": "00000008-0000-5000-a000-0000000000b9",
+      "stop_class": "accepted",
+      "grant_id": "00000008-0000-4000-a000-0000000000ba",
+      "root_run_id": "00000008-0000-5000-a000-0000000000b9",
+      "retry_state": null,
+      "resolution": "accepted",
+      "resolved?": true,
+      "trajectory_task_id": "00000008-0000-5000-a000-0000000000bb",
+      "run_ids": [
+        "00000008-0000-5000-a000-0000000000b9"
+      ]
+    },
+    {
+      "execution_id": "00000008-0000-5000-b000-0000000000b4",
+      "attempt": 1,
+      "command_id": "plan-south-1",
+      "revision_number": 1,
+      "plan_digest": "9f01e112b409daa15329ffa9959e88b9ecdb68f92eee730b49f04ff04e23e60f",
+      "dispatch_mode": "fanout_v1",
+      "plan_task_id": "south",
+      "run_id": "00000008-0000-5000-b000-0000000000be",
+      "stop_class": "accepted",
+      "grant_id": "00000008-0000-4000-9000-0000000000bf",
+      "root_run_id": "00000008-0000-5000-b000-0000000000be",
+      "retry_state": null,
+      "resolution": "accepted",
+      "resolved?": true,
+      "trajectory_task_id": "00000008-0000-5000-a000-0000000000c0",
+      "run_ids": [
+        "00000008-0000-5000-b000-0000000000be"
+      ]
+    }
+  ],
+  "total_run_duration_ms": 26159,
+  "cancellations": [],
+  "planned?": true,
+  "child_inbox": {
+    "pending": [],
+    "observed_count": 34,
+    "pending_complete?": true,
+    "pending_count": 0
+  },
+  "global_failure": null,
+  "active_task": null,
+  "active_run_ids": [],
+  "task_duration_ms": {
+    "north": 13676,
+    "south": 13075
+  },
+  "total_verification_overhead_ms": 10252,
+  "needs_user?": false,
+  "reviews": [
+    {
+      "reason": null,
+      "round": 1,
+      "state": "approved",
+      "unavailable": null,
+      "model": "gpt-6-luna",
+      "attempt": 1,
+      "review_id": "00000008-0000-4000-9000-0000000000cc",
+      "calls": 1,
+      "needs_user?": false,
+      "plan_task_id": "north",
+      "commit": "9fdfd45dec3ecf7dfba6a48e5eef8c21e4adfa6f",
+      "decision_pending?": false,
+      "findings": [],
+      "reviewer": "codex"
+    },
+    {
+      "reason": null,
+      "round": 1,
+      "state": "approved",
+      "unavailable": null,
+      "model": "gpt-6-luna",
+      "attempt": 1,
+      "review_id": "00000008-0000-4000-8000-0000000000c5",
+      "calls": 1,
+      "needs_user?": false,
+      "plan_task_id": "south",
+      "commit": "24ad69b5ed1ae2d7e2ac14b436623ad6b5935510",
+      "decision_pending?": false,
+      "findings": [],
+      "reviewer": "codex"
+    }
+  ],
+  "scope_blockers": [],
+  "total_gate_duration_ms": 592,
+  "acknowledged_scope_blockers": [],
+  "cancelled?": false,
+  "execution": {
+    "execution_id": "00000008-0000-5000-b000-0000000000b4",
+    "requested_by": "human:user",
+    "revision_number": 1,
+    "plan_digest": "9f01e112b409daa15329ffa9959e88b9ecdb68f92eee730b49f04ff04e23e60f",
+    "ordered_task_ids": [
+      "north",
+      "south",
+      "join"
+    ],
+    "repository_path": "$EVALUATION/repos/source",
+    "agent_profile": {
+      "adapter_id": "claude_headless_stream_json",
+      "digest": "715e0dac51b454d1b4497dc0022fad6d12b93f982996703fe2e5b6a8b4941a06",
+      "instructions": "Implement only the current approved task in its assigned worktree. Read the task's module and its named test. Change only the module the task names, preserve signatures, and never edit tests. Do not implement other tasks. Run the named Python gate using python3 -B -m unittest. Commit the change using the configured Git identity, with no authorship or contributor trailers; leave the worktree clean. Do not push, install packages, use network tools, create other agents, delete files or perform cleanup. Report the commit and gate result.",
+      "model": "opus",
+      "profile_id": "00000008-0000-4000-a000-0000000000b3",
+      "provider": "claude",
+      "revision": 1,
+      "role": "Worker"
+    }
+  },
+  "dispatch_mode": "fanout_v1",
+  "accepted_evidence": [
+    {
+      "reason": null,
+      "execution_id": "00000008-0000-5000-b000-0000000000b4",
+      "attempt": 1,
+      "revision_number": 1,
+      "plan_digest": "9f01e112b409daa15329ffa9959e88b9ecdb68f92eee730b49f04ff04e23e60f",
+      "plan_task_id": "north",
+      "run_id": "00000008-0000-5000-a000-0000000000b9",
+      "commit": "9fdfd45dec3ecf7dfba6a48e5eef8c21e4adfa6f",
+      "duration_ms": 289,
+      "retry_state": null,
+      "gate": "python_unittest",
+      "decision_json": null,
+      "scope_json": "{\"accepted_base\":\"9f20cb328cf1b6bd945bbf914c0ea44836e049f1\",\"commit\":\"9fdfd45dec3ecf7dfba6a48e5eef8c21e4adfa6f\",\"files\":[\"north.py\"],\"root_run_id\":\"00000008-0000-5000-a000-0000000000b9\",\"version\":1}"
+    },
+    {
+      "reason": null,
+      "execution_id": "00000008-0000-5000-b000-0000000000b4",
+      "attempt": 1,
+      "revision_number": 1,
+      "plan_digest": "9f01e112b409daa15329ffa9959e88b9ecdb68f92eee730b49f04ff04e23e60f",
+      "plan_task_id": "south",
+      "run_id": "00000008-0000-5000-b000-0000000000be",
+      "commit": "24ad69b5ed1ae2d7e2ac14b436623ad6b5935510",
+      "duration_ms": 303,
+      "retry_state": null,
+      "gate": "python_unittest",
+      "decision_json": null,
+      "scope_json": "{\"accepted_base\":\"9f20cb328cf1b6bd945bbf914c0ea44836e049f1\",\"commit\":\"24ad69b5ed1ae2d7e2ac14b436623ad6b5935510\",\"files\":[\"south.py\"],\"root_run_id\":\"00000008-0000-5000-b000-0000000000be\",\"version\":1}"
+    }
+  ],
+  "accepted_count": 2,
+  "total_tasks": 3,
+  "active_run_id": null,
+  "total_attempts": 2,
+  "total_duration_ms": 37003,
+  "active_children": []
+}

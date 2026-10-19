@@ -25,7 +25,7 @@
 #                      unless its prompt carries cross-review findings, and the
 #                      plan is edited once so the task has exactly two attempts.
 #   ITER7A_REVIEW_MAX_ROUNDS  optional review round limit (default 2).
-#   ITER7A_REVIEW_DECISION    optional "accept" or "reject": when following stops
+#   ITER7A_REVIEW_DECISION    optional "accept", "reject" or "retry": when following stops
 #                      because a review needs the human, record that decision
 #                      with `shoestring review` and follow again.
 #
@@ -39,6 +39,7 @@
 # submitted as a new revision. Anything else is declined and nothing runs. The service check is
 # not exercised (the service runs in this node). No raw provider frames,
 # session/message identifiers, credentials or reasoning are exported.
+# Use provider_budget.py with a user-authorized shared ceiling for live runs.
 
 defmodule Iter7aShell do
   @moduledoc false
@@ -214,8 +215,12 @@ defmodule Iter7aWorkLoop do
       "codex" ->
         Application.put_env(:shoestring, :plan_review,
           enabled: true,
-          adapter: :codex,
-          model: System.get_env("ITER7A_REVIEW_MODEL", "gpt-6-luna"),
+          adapter: if(live?(), do: :codex, else: :fixture),
+          model:
+            if(live?(),
+              do: System.get_env("ITER7A_REVIEW_MODEL", "gpt-6-luna"),
+              else: "fixture-reviewer"
+            ),
           max_rounds: String.to_integer(System.get_env("ITER7A_REVIEW_MAX_ROUNDS", "2"))
         )
 
@@ -225,8 +230,12 @@ defmodule Iter7aWorkLoop do
       "claude" ->
         Application.put_env(:shoestring, :plan_review,
           enabled: true,
-          adapter: :claude,
-          model: System.get_env("ITER7A_REVIEW_MODEL", "opus"),
+          adapter: if(live?(), do: :claude, else: :fixture),
+          model:
+            if(live?(),
+              do: System.get_env("ITER7A_REVIEW_MODEL", "opus"),
+              else: "fixture-reviewer"
+            ),
           max_rounds: String.to_integer(System.get_env("ITER7A_REVIEW_MAX_ROUNDS", "2"))
         )
 
@@ -431,7 +440,7 @@ defmodule Iter7aWorkLoop do
     %{plan_task_id: task} = Enum.find(status.reviews, & &1.needs_user?)
 
     reason =
-      "Evaluation: #{decision} the seeded finding to verify the human decision path."
+      "User-authorized evaluation: #{decision} the held or failed review to verify the explicit human decision path."
 
     for args <- [
           ["list", goal_id],
@@ -474,7 +483,7 @@ defmodule Iter7aWorkLoop do
         {:ok, %{goal_id: goal_id}} ->
           followed =
             case {follow(goal_id), System.get_env("ITER7A_REVIEW_DECISION")} do
-              {{:ok, :needs_user}, decision} when decision in ["accept", "reject"] ->
+              {{:ok, :needs_user}, decision} when decision in ["accept", "reject", "retry"] ->
                 decide_review!(goal_id, decision)
                 Iter7aShell.info("(following again)")
                 follow(goal_id)
@@ -597,7 +606,7 @@ defmodule Iter7aWorkLoop do
     cobbler.plan.task.review_requested cobbler.plan.review.confirmed
     cobbler.plan.review.attempt.started cobbler.plan.task.reviewed
     cobbler.plan.review.decided cobbler.plan.task.review_blocked
-    cobbler.plan.gate.started cobbler.plan.gate.completed cobbler.plan.execution.gate_failed
+    cobbler.plan.gate.started cobbler.plan.gate.output cobbler.plan.gate.completed cobbler.plan.execution.gate_failed
     run.running run.completed run.failed run.cancelled run.interrupted
   )
 
