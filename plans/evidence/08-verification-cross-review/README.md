@@ -894,3 +894,48 @@ in order #93 → #94 → #95 → #96.
 
 Publication follows the brief: the PR uses its explicitly requested Claude
 Code footer; Git commit messages have no attribution trailers.
+
+### Explicit Linux deferral and merge authorization (2026-10-19)
+
+VERIFIED (human decisions): the user explicitly deferred Linux acceptance-gate
+sandbox implementation beyond iteration 8, then authorized the agent to merge
+the stack. Linux support is not an iteration 8 acceptance blocker. The
+[deferral plan](linux-sandbox-deferred.md) records its scope, resumption
+trigger and future verification requirements. No later milestone or delivery
+date is assigned. Linux continues to fail closed; no Linux backend or Linux
+verification is claimed.
+
+The explicit merge request supersedes the earlier human-only merge rule for
+PRs #93 → #94 → #95 → #96. It does not authorize bypassing required checks,
+change other acceptance limits or increase the provider-call budget.
+
+### macOS CI environment repair
+
+VERIFIED: the [pre-repair GitHub CI run](https://github.com/anukin/shoestring/actions/runs/39302660537)
+for `2252326` reported **4 doctests,
+2300 tests, 35 failures, 1 skipped, 6 excluded**, seed **189491**, **544.4 s**.
+This was a macOS run, not a consequence of deferring Linux. Most failing
+acceptance paths reported `toolchain_under_home`; the streaming test also
+failed with `enoent` because GNU `timeout` was absent. The local passing gate
+above is not a claim that this CI run passed.
+
+REPO-INSPECTION: setup-beam installs into `RUNNER_TEMP/.setup-beam`, which
+defaults under the runner's home. GitHub reserves `RUNNER_TEMP`, so CI copies
+the installed macOS toolchains to a fresh temporary root outside home and
+selects the runner image's existing Homebrew Python. It
+checks the resolved executable locations before running the full precommit
+gate, including both JavaScript suites. The streaming test uses Python's
+bounded subprocess call to release its FIFO, retaining the two-second bound
+without a GNU coreutils dependency. No sandbox permission is relaxed.
+
+The official [setup-beam source](https://github.com/erlef/setup-beam/blob/v1/src/setup-beam.js)
+and [runner image Python setup](https://github.com/actions/runner-images/blob/main/images/macos/scripts/build/install-python.sh)
+define those installation boundaries; GitHub's [variable rules](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)
+explain why the runner's temporary-directory variable is retained. The
+relocated versions are checked before the gate. Results of the repaired workflow are
+recorded on PR #96; they must be observed before claiming CI success.
+
+VERIFIED local repair validation: `timeout 590 mix precommit < /dev/null`: 4 doctests, 2300 tests, 0 failures, 1 skipped, 6 excluded, seed 110814; ExUnit 522.7 s. JavaScript Gate 0A 52/52, UI 8/8. Focused sandbox and streaming
+coverage passed **22 tests, 0 failures**, seed **600343**. Workflow YAML, shell
+and embedded Python syntax checks passed. [Local gate record](ci-repair-local-gate.json)
+is distinct from GitHub runner verification.

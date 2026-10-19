@@ -1,0 +1,39 @@
+{
+  "status": "VERIFIED",
+  "command": "timeout 590 mix precommit < /dev/null",
+  "exit_status": 0,
+  "exunit": {
+    "doctests": 4,
+    "tests": 2300,
+    "failures": 0,
+    "skipped": 1,
+    "excluded": 6,
+    "seed": 110814,
+    "seconds": 522.7
+  },
+  "javascript": {
+    "gate_0a": {
+      "tests": 52,
+      "passed": 52,
+      "failures": 0
+    },
+    "ui": {
+      "tests": 8,
+      "passed": 8,
+      "failures": 0
+    }
+  },
+  "focused": {
+    "tests": 22,
+    "failures": 0,
+    "seed": 600343
+  },
+  "workflow_static_checks": [
+    "YAML parse",
+    "shell syntax",
+    "embedded Python syntax"
+  ],
+  "base_commit": "225232689a3a63ec40060ca6e3843943950e4f6c",
+  "log_sha256": "d532610680e82b1f5690e96353209ae3bfd31a22b4fa2cb27156080dd89d5395",
+  "scope": "Local gate for Linux deferral, macOS CI relocation and portable FIFO cleanup. GitHub runner execution must be verified separately."
+}

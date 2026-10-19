@@ -191,11 +191,11 @@ defmodule Shoestring.Cobbler.PlanGateContractTest do
     after
       # Bounded even if the gate failed before opening its FIFO. Its own
       # alarm also bounds the local fixture command if an assertion fails.
-      System.cmd("timeout", [
-        "2",
-        "python3",
+      System.cmd("python3", [
         "-c",
-        "import sys; open(sys.argv[1], 'w').close()",
+        "import subprocess, sys; subprocess.run([sys.executable, '-c', " <>
+          "\"import sys; open(sys.argv[1], 'w').close()\", sys.argv[1]], " <>
+          "stdin=subprocess.DEVNULL, timeout=2)",
         barrier
       ])
 

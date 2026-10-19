@@ -8,6 +8,7 @@ jobs:
   checks:
     # Iteration 0 currently makes a macOS-only support claim.
     runs-on: macos-14
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -19,17 +20,43 @@ jobs:
           elixir-version: '1.19.5'
           version-type: strict
 
+      - name: Prepare sandbox-readable toolchains
+        run: |
+          # GitHub reserves RUNNER_TEMP; keep its original value and relocate
+          # the macOS distributions that setup-beam installs beneath it.
+          readable_root="$(mktemp -d /private/tmp/shoestring-ci-tools.XXXXXX)"
+          cp -R "$INSTALL_DIR_FOR_OTP" "$readable_root/otp"
+          cp -R "$INSTALL_DIR_FOR_ELIXIR" "$readable_root/elixir"
+          python_executable="$(brew --prefix)/bin/python3"
+          test -x "$python_executable"
+          python_alias_dir="$readable_root/python-bin"
+          mkdir "$python_alias_dir"
+          ln -s "$python_executable" "$python_alias_dir/python3"
+          printf '%s\n' "$readable_root/otp/bin" "$readable_root/elixir/bin" "$python_alias_dir" >> "$GITHUB_PATH"
+          printf 'INSTALL_DIR_FOR_OTP=%s\nINSTALL_DIR_FOR_ELIXIR=%s\n' "$readable_root/otp" "$readable_root/elixir" >> "$GITHUB_ENV"
+          export PATH="$python_alias_dir:$readable_root/elixir/bin:$readable_root/otp/bin:$PATH"
+          python3 - <<'PY'
+          import os
+          import shutil
+          home = os.path.realpath(os.path.expanduser("~"))
+          for name in ("python3", "mix", "erl", "elixir"):
+              executable = shutil.which(name)
+              if executable is None:
+                  raise SystemExit(f"Missing CI executable: {name}")
+              resolved = os.path.realpath(executable)
+              if os.path.commonpath((home, resolved)) == home:
+                  raise SystemExit(f"CI executable is under home and unreadable to gates: {name}")
+              print(f"Sandbox-readable executable: {name} -> {resolved}")
+          PY
+          erl -version
+          elixir --version
+
       - name: Fetch dependencies
         run: mix deps.get
 
-      - name: Check formatting
-        run: mix format --check-formatted
-
-      - name: Compile with warnings as errors
-        run: mix compile --warnings-as-errors
-
-      - name: Run tests
-        run: mix test
+      - name: Run full gate
+        timeout-minutes: 12
+        run: mix precommit < /dev/null
 
       - name: Build production release
         run: |
