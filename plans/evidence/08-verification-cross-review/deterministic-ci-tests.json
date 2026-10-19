@@ -1,0 +1,112 @@
+{
+  "baseline": "e2e5b4e26833dde3315325fc349b160dd9c0caa4",
+  "original_ci": {
+    "classification": "intermittent, 1 of 2 current-head runs",
+    "push": {
+      "url": "https://github.com/anukin/shoestring/actions/runs/39337742681",
+      "seed": 695985,
+      "doctests": 4,
+      "tests": 2300,
+      "failures": 0,
+      "skipped": 1,
+      "excluded": 6,
+      "seconds": 833.0,
+      "javascript_passed": [
+        52,
+        8
+      ],
+      "release": "passed"
+    },
+    "pull_request": {
+      "url": "https://github.com/anukin/shoestring/actions/runs/39337748902",
+      "seed": 116119,
+      "doctests": 4,
+      "tests": 2300,
+      "failures": [
+        "PlannerAmendmentTest: readiness message absent at 100 ms",
+        "ObservatorySnapshotTwinsTest: shared SQL sandbox checkout dropped after 124 ms"
+      ],
+      "skipped": 1,
+      "excluded": 6,
+      "seconds": 935.5,
+      "javascript_passed": [
+        52,
+        8
+      ],
+      "release": "skipped"
+    }
+  },
+  "changes": {
+    "planner": "The hermetic fixture runs checks inside its actual inference task after reservation commits. The in-flight amendment and global-claim twin retain all domain assertions, then require a completion marker and ready result. No wall-clock readiness assertion is used.",
+    "observatory": "Enqueue intent, grant and project the lease, subscribe to committed events, then start the Elf. Await run.running through PubSub instead of querying SQL while launch writes. Capture the owned process group from that event for existing teardown.",
+    "existing_timeout_values_increased": false,
+    "new_sleeps": false,
+    "new_retries": false,
+    "tests_skipped": false,
+    "real_provider_adapters_changed": false
+  },
+  "focused": {
+    "command": "timeout 180 mix test test/shoestring/cobbler/planner_test.exs test/shoestring/cobbler/planner_amendment_test.exs test/shoestring/cobbler/observatory_snapshot_twins_test.exs --seed 116119 < /dev/null",
+    "tests": 52,
+    "failures": 0,
+    "seed": 116119,
+    "seconds": 4.3,
+    "scope": "Initial setup refactor; completion-marker assertions subsequently added and covered by full gate."
+  },
+  "defense_checks": [
+    {
+      "kind": "mutation of baseline application code",
+      "change": "Remove planner_attempt_in_flight guard",
+      "tests": 1,
+      "failures": 1,
+      "excluded": 12,
+      "seed": 116119,
+      "reason": "Amendment incorrectly recorded while initial inference was active; inner assertion and final ready-result assertion failed."
+    },
+    {
+      "kind": "mutation of baseline application code",
+      "change": "Bypass goal-local snapshot localization, preserving current APIs",
+      "tests": 1,
+      "failures": 1,
+      "excluded": 9,
+      "seed": 116119,
+      "reason": "Lease renewal and terminal projection failed; lease.renewed count was zero."
+    }
+  ],
+  "rejected_probe": {
+    "kind": "whole historical renewal module from d3fa152",
+    "tests": 1,
+    "failures": 1,
+    "excluded": 9,
+    "seed": 116119,
+    "qualification": "Not valid regression evidence: historical module lacks renew_only/3 required by the current Elf. Replaced with the API-compatible localization mutation above."
+  },
+  "limits": [
+    "Test synchronization repair, not a new production behavior fix.",
+    "The original GitHub scheduler/SQL load was not reproduced deterministically locally. Mutation checks defend existing domain behavior; they do not prove the old timing failure can never recur elsewhere."
+  ],
+  "full_gate": {
+    "status": "passed",
+    "command": "timeout 590 mix precommit < /dev/null",
+    "exit_code": 0,
+    "doctests": 4,
+    "tests": 2300,
+    "failures": 0,
+    "skipped": 1,
+    "excluded": 6,
+    "seed": 726040,
+    "seconds": 523.5,
+    "javascript": {
+      "gate_0a": {
+        "tests": 52,
+        "passed": 52,
+        "failures": 0
+      },
+      "ui": {
+        "tests": 8,
+        "passed": 8,
+        "failures": 0
+      }
+    }
+  }
+}

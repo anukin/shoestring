@@ -426,25 +426,32 @@ defmodule Shoestring.Cobbler.PlannerTest do
   end
 
   test "same and other goal requests cannot infer during a global claim", context do
-    ref = make_ref()
-    opts = options(context, [{:await, self(), ref, Jason.encode!(plan()), 10}])
+    opts = options(context)
     request!(context, opts)
 
-    task =
-      Task.Supervisor.async_nolink(context.supervisor, fn ->
-        Planner.generate(context.goal.id, "initial-1", opts)
+    observer = self()
+    checked = make_ref()
+
+    check = fn ->
+      assert Planner.get(context.goal.id).state == "running"
+      assert Planner.get(context.goal.id).charged_output_tokens == 4096
+      assert Commands.active_claim().goal_id == context.goal.id
+      assert {:ok, %{outcome: :replayed}} = Planner.generate(context.goal.id, "initial-1", opts)
+      other = create_goal!()
+      {:ok, _} = Planner.request(other.id, attrs(), opts)
+      assert {:ok, %{outcome: :blocked}} = Planner.generate(other.id, "initial-1", opts)
+      send(observer, {:inference_checked, checked})
+    end
+
+    opts =
+      Keyword.update!(opts, :config, fn config ->
+        Keyword.put(config, :responses, [{:check, check, Jason.encode!(plan()), 10}])
       end)
 
-    assert_receive {:planner_waiting, pid, ^ref}
-    assert Planner.get(context.goal.id).state == "running"
-    assert Planner.get(context.goal.id).charged_output_tokens == 4096
-    assert Commands.active_claim().goal_id == context.goal.id
-    assert {:ok, %{outcome: :replayed}} = Planner.generate(context.goal.id, "initial-1", opts)
-    other = create_goal!()
-    {:ok, _} = Planner.request(other.id, attrs(), opts)
-    assert {:ok, %{outcome: :blocked}} = Planner.generate(other.id, "initial-1", opts)
-    send(pid, {:continue, ref})
-    assert {:ok, %{request: %{state: "ready"}}} = Task.await(task)
+    assert {:ok, %{request: %{state: "ready"}}} =
+             Planner.generate(context.goal.id, "initial-1", opts)
+
+    assert_received {:inference_checked, ^checked}
     assert Commands.active_claim() == nil
   end
 

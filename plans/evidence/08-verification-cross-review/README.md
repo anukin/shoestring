@@ -956,3 +956,53 @@ the existing **30-minute** job bound. Application code, test assertions,
 per-test timeouts and product-gate deadlines are unchanged. This corrects
 the CI execution budget; the old job is retained rather than rerun until
 green. Verification of the new workflow head is recorded on PR #96.
+
+
+### Deterministic setup for the two intermittent CI failures
+
+VERIFIED on `e2e5b4e`: the [push job](https://github.com/anukin/shoestring/actions/runs/39337742681)
+passed 4 doctests, 2300 tests, 0 failures, 1 skipped, 6 excluded, seed
+695985, ExUnit 833.0 s, JavaScript 52/52 and 8/8, and the production release.
+The [PR job](https://github.com/anukin/shoestring/actions/runs/39337748902)
+completed with 4 doctests, 2300 tests, 2 failures, 1 skipped, 6 excluded,
+seed 116119, ExUnit 935.5 s; JavaScript 52/52 and 8/8 passed, release skipped.
+Intermittent, 1 of 2 current-head runs. No failed job was rerun until green.
+The user requested fixes for both failures before proceeding with merges.
+
+REPO-INSPECTION: the planner test raced reservation/database work and adapter
+startup against a 100 ms readiness-message assertion. Its domain assertions
+now execute in the fixture's inference task after reservation commits; the
+outer test requires both a completion marker and the ready result. The
+same/other-goal global-claim twin uses this boundary too. Existing lost-result
+restart tests retain their separate await/kill protocol. Real provider
+adapters are unchanged; this is a trusted hermetic fixture response.
+
+REPO-INSPECTION: the Observatory test polled the shared SQL connection during
+Elf launch and granted its lease after event consumption had begun. It now
+enqueues intent and grants/projects the lease before starting the Elf, then
+waits for the committed `run.running` event through PubSub. The event supplies
+the owned process group for existing teardown without a teardown SQL query.
+Renewal, completion, checkpoint, projector and ledger assertions are retained.
+No timeout value is increased, no sleep or retry is added, and no test is
+skipped.
+
+VERIFIED: the focused planner/amendment/Observatory suite passed 52 tests,
+0 failures, seed 116119 (4.3 s) after the setup refactor. Completion-marker
+assertions were then added and are covered by the full gate below. API-compatible
+mutation checks on the `e2e5b4e` application source still fail for the intended
+behavior: removing the in-flight amendment guard records an amendment during
+initial inference (1 test, 1 failure, 12 excluded); bypassing snapshot
+localization causes zero renewals and a failed terminal projection (1 test,
+1 failure, 9 excluded). Both used seed 116119. Modules were restored before
+the full gate. These are mutation checks, not claims of reproducing the CI
+scheduler/load defect against a pre-fix commit.
+
+An initial whole-module check using the historical `d3fa152` renewal module
+was rejected as regression evidence because it lacks the current Elf's
+`renew_only/3` API. The compatible localization mutation replaces that check.
+UNVERIFIED: the original GitHub scheduler/SQL load was not reproduced
+locally. [Exact CI outcomes, setup changes and defense checks](deterministic-ci-tests.json)
+retain that limit. Full-gate and current-head CI results follow when observed.
+
+VERIFIED: `timeout 590 mix precommit < /dev/null` passed: 4 doctests, 2300 tests, 0 failures, 1 skipped, 6 excluded, seed 726040; ExUnit 523.5 s. JavaScript Gate 0A 52/52, UI 8/8.
+New-head GitHub verification and the authorized stack merges remain pending.

@@ -56,6 +56,7 @@ defmodule Shoestring.Cobbler.ObservatorySnapshotTwinsTest do
     CapacitySnapshot,
     CapacitySnapshotRecord,
     CheckpointRecord,
+    Dispatches,
     ExecutionLease,
     ExecutionLeaseRecord,
     Observatory,
@@ -307,8 +308,17 @@ defmodule Shoestring.Cobbler.ObservatorySnapshotTwinsTest do
 
       request = ElvesHelpers.run_request(goal, task)
 
+      # Prepare the lease before the Elf can consume events. Polling shared
+      # SQL during launch both contended with the writer and raced renewal.
+      assert {:ok, dispatch, _job} =
+               Dispatches.enqueue(request, ElvesHelpers.fake_identity(), clock: FixedClock)
+
+      run_id = dispatch.run_id
+      grant_id = grant_for_run!(goal, run_id, admitted_id, checkpoint_cadence: 1)
+      :ok = Phoenix.PubSub.subscribe(Shoestring.PubSub, Trajectory.topic(goal.id))
+
       assert {:ok, _pid} =
-               Elves.start_run(request, ElvesHelpers.fake_identity(),
+               Elves.start_elf(request, dispatch,
                  supervisor: sup,
                  scenario: scenario,
                  command: ["sleep", "30"],
@@ -318,19 +328,20 @@ defmodule Shoestring.Cobbler.ObservatorySnapshotTwinsTest do
                  notify: self()
                )
 
-      assert {:ok, run_id} =
-               ElvesHelpers.wait_until(fn ->
-                 ElvesHelpers.run_id_for_dispatch(request.dispatch_id)
-               end)
+      assert_receive {:trajectory_event_committed,
+                      %TrajectoryEvent{
+                        type: "run.running",
+                        run_id: ^run_id,
+                        payload: %{"process_id" => "pgid:" <> pgid_text}
+                      }},
+                     10_000
 
-      assert {:ok, _pgid} =
-               ElvesHelpers.wait_until(fn -> ElvesHelpers.recorded_pgid(goal.id, run_id) end)
-
-      on_exit(fn -> ElvesHelpers.cleanup_group(ElvesHelpers.recorded_pgid(goal.id, run_id)) end)
+      pgid = String.to_integer(pgid_text)
+      assert pgid > 1
+      on_exit(fn -> ElvesHelpers.cleanup_group(pgid) end)
 
       # checkpoint_cadence 1 — what `/runs/new` proposes — so renewal is due
       # after the first response, exactly as in the live run.
-      grant_id = grant_for_run!(goal, run_id, admitted_id, checkpoint_cadence: 1)
 
       assert_receive {:elf_terminal, ^run_id, %{class: :completed}}, 15_000
 
