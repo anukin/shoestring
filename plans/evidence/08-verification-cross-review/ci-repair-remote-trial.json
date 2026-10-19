@@ -1,0 +1,48 @@
+{
+  "head": "e579d80e7332f8bc4c08b400dbaf56fe66f7c67c",
+  "successful_push": {
+    "url": "https://github.com/anukin/shoestring/actions/runs/39336019762",
+    "command": "mix precommit < /dev/null",
+    "exunit": {
+      "doctests": 4,
+      "tests": 2300,
+      "failures": 0,
+      "skipped": 1,
+      "excluded": 6,
+      "seed": 4367,
+      "seconds": 662.7
+    },
+    "javascript": {
+      "gate_0a": {
+        "tests": 52,
+        "passed": 52,
+        "failures": 0
+      },
+      "ui": {
+        "tests": 8,
+        "passed": 8,
+        "failures": 0
+      }
+    },
+    "production_release": "passed"
+  },
+  "pull_request_timeout": {
+    "url": "https://github.com/anukin/shoestring/actions/runs/39336027270",
+    "outer_step_minutes": 12,
+    "seed": 477618,
+    "exunit_completion_observed": false,
+    "counts": null
+  },
+  "outer_step_timeout": {
+    "classification": "intermittent",
+    "failures": 1,
+    "runs": 2
+  },
+  "correction": {
+    "ci_step_minutes": 20,
+    "ci_job_minutes": 30,
+    "application_and_test_code_changed": false,
+    "test_assertions_and_timeouts_changed": false,
+    "product_gate_deadlines_changed": false
+  }
+}

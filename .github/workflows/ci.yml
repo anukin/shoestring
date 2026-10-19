@@ -55,7 +55,9 @@ jobs:
         run: mix deps.get
 
       - name: Run full gate
-        timeout-minutes: 12
+        # Includes cold compilation as well as the full suite. Individual
+        # test and product-gate timeouts retain their existing bounds.
+        timeout-minutes: 20
         run: mix precommit < /dev/null
 
       - name: Build production release

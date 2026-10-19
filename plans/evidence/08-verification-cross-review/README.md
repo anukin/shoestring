@@ -939,3 +939,20 @@ VERIFIED local repair validation: `timeout 590 mix precommit < /dev/null`: 4 doc
 coverage passed **22 tests, 0 failures**, seed **600343**. Workflow YAML, shell
 and embedded Python syntax checks passed. [Local gate record](ci-repair-local-gate.json)
 is distinct from GitHub runner verification.
+
+VERIFIED GitHub repair trial on `e579d80`: the
+[push run](https://github.com/anukin/shoestring/actions/runs/39336019762)
+passed the full gate and production release: **4 doctests, 2300 tests,
+0 failures, 1 skipped, 6 excluded**, seed **4367**, ExUnit **662.7 s**.
+The [pull-request run](https://github.com/anukin/shoestring/actions/runs/39336027270)
+hit the outer **12-minute CI step limit**, seed **477618**, before an
+ExUnit completion summary. No complete test counts are claimed for it.
+The step-duration failure was **intermittent, 1 of 2 runs**; it is not
+reported as a passing run or as a known test flake. Cold compilation plus
+the successful suite used almost the entire 12-minute allowance.
+
+REPO-INSPECTION: the CI step now has a **20-minute** outer budget within
+the existing **30-minute** job bound. Application code, test assertions,
+per-test timeouts and product-gate deadlines are unchanged. This corrects
+the CI execution budget; the old job is retained rather than rerun until
+green. Verification of the new workflow head is recorded on PR #96.
