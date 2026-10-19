@@ -54,7 +54,7 @@ defmodule ShoestringWeb.RunNewPrivateStorageTest do
 
     assert [wt] = Enum.reject(Worktrees.list(), &MapSet.member?(before, &1.run_id))
     assert wt.metadata["shoestring.manual:source"] == repo_path
-    refute wt.repo_path == repo_path
+    refute GitSandbox.physical_path(wt.repo_path) == GitSandbox.physical_path(repo_path)
     assert {:ok, %{"writableRoots" => _}} = GitSandbox.policy(wt.path, wt.workspace_ref)
 
     run = %RunRecord{
@@ -70,6 +70,33 @@ defmodule ShoestringWeb.RunNewPrivateStorageTest do
     {:ok, shared} = Worktrees.create(repo_path, Ecto.UUID.generate(), "HEAD")
     assert {:ok, opts} = ElfEffect.launch_opts(%{run | workspace_ref: shared.workspace_ref})
     refute Map.has_key?(opts[:adapter_opts], :sandbox)
+  end
+
+  test "a Codex manual run gets private Git roots without registering in the source", %{
+    conn: conn,
+    repo_path: repo_path
+  } do
+    before = MapSet.new(Worktrees.list(), & &1.run_id)
+    {:ok, view, _html} = live(conn, ~p"/runs/new")
+    _ = render_submit(view, :start_run, %{"run" => params(repo_path, "codex")})
+    assert [wt] = Enum.reject(Worktrees.list(), &MapSet.member?(before, &1.run_id))
+    assert wt.metadata["shoestring.manual:source"] == repo_path
+    refute GitSandbox.physical_path(wt.repo_path) == GitSandbox.physical_path(repo_path)
+    assert {:ok, %{"writableRoots" => roots}} = GitSandbox.policy(wt.path, wt.workspace_ref)
+    assert GitSandbox.physical_path(wt.path) in roots
+    source_git = Path.join(GitSandbox.physical_path(repo_path), ".git")
+    refute Enum.any?(roots, &String.starts_with?(&1, source_git))
+    refute File.exists?(Path.join(repo_path, ".git/worktrees"))
+  end
+
+  test "a Fake manual run retains shared Git storage", %{conn: conn, repo_path: repo_path} do
+    before = MapSet.new(Worktrees.list(), & &1.run_id)
+    {:ok, view, _html} = live(conn, ~p"/runs/new")
+    _ = render_submit(view, :start_run, %{"run" => params(repo_path, "fake")})
+    assert [wt] = Enum.reject(Worktrees.list(), &MapSet.member?(before, &1.run_id))
+    assert wt.repo_path == GitSandbox.physical_path(repo_path)
+    refute Map.has_key?(wt.metadata, "shoestring.manual:source")
+    assert {:ok, nil} = GitSandbox.policy(wt.path, wt.workspace_ref)
   end
 
   defp params(repo_path, provider) do

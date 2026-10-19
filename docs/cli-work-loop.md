@@ -99,7 +99,7 @@ it is never skipped as passed.
 
 ```sh
 shoestring checks GOAL            # every check run: task, attempt, result, spec
-shoestring checks GOAL --output 3 # the stored output of check 3
+shoestring checks GOAL --output 3 # check 3's output so far, or its complete output
 ```
 
 ## Cross-review
@@ -166,7 +166,10 @@ shoestring review retry GOAL TASK --reason "why"    # one more call
   after a blocking review starts from the approved base with the findings,
   not from the reviewed commit; fan-out with review is tested hermetically
   only.
-- Check output is stored when the check ends, not streamed while it runs.
+- Check output streams into redacted artifacts as complete lines arrive.
+  Incomplete lines and credential labels wait for more bytes or completion.
+  `checks --output N` marks output without a complete artifact as partial;
+  it remains inspectable if the invocation is interrupted.
 - The checks Shoestring runs after a worker finishes run under macOS
   `sandbox-exec`: they can read the worktree and anything outside your home
   directory, write only to the worktree and a temporary directory, make no

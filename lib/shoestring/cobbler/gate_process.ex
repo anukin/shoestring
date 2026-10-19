@@ -3,12 +3,12 @@ defmodule Shoestring.Cobbler.GateProcess do
   # Internal argv boundary. PlanGateRunner is responsible for the closed gate registry.
   alias Shoestring.Elves.PortRunner
 
-  def run(argv, worktree, timeout_ms, max_bytes) do
+  def run(argv, worktree, timeout_ms, max_bytes, opts \\ []) do
     started = System.monotonic_time(:millisecond)
 
     with {:ok, runner} <- PortRunner.spawn(argv, cd: worktree, max_output_bytes: max_bytes) do
       try do
-        collect(runner, started + timeout_ms, [], 0, max_bytes)
+        collect(runner, started + timeout_ms, [], 0, max_bytes, opts[:output_sink])
         |> case do
           {:ok, status, output} ->
             {:ok,
@@ -25,6 +25,9 @@ defmodule Shoestring.Cobbler.GateProcess do
 
           {:error, {:overflow, bytes, partial}} ->
             {:error, {:gate_output_oversized, %{bytes: bytes, partial_output: partial}}}
+
+          {:error, _reason} = error ->
+            error
         end
       after
         # Also terminates owned descendants that outlive the command's direct child.
@@ -36,7 +39,7 @@ defmodule Shoestring.Cobbler.GateProcess do
     end
   end
 
-  defp collect(%{port: port} = runner, deadline, chunks, bytes, max_bytes) do
+  defp collect(%{port: port} = runner, deadline, chunks, bytes, max_bytes, sink) do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
@@ -45,15 +48,33 @@ defmodule Shoestring.Cobbler.GateProcess do
 
         if total > max_bytes do
           kept = binary_part(data, 0, max_bytes - bytes)
-          {:error, {:overflow, total, joined([kept | chunks])}}
+
+          with {:ok, sink} <- deliver(sink, {:data, kept}) do
+            finish(sink, {:error, {:overflow, total, joined([kept | chunks])}})
+          end
         else
-          collect(runner, deadline, [data | chunks], total, max_bytes)
+          with {:ok, sink} <- deliver(sink, {:data, data}) do
+            collect(runner, deadline, [data | chunks], total, max_bytes, sink)
+          end
         end
 
       {^port, {:exit_status, status}} ->
-        {:ok, status, joined(chunks)}
+        finish(sink, {:ok, status, joined(chunks)})
     after
-      remaining -> {:error, {:timeout, joined(chunks)}}
+      remaining -> finish(sink, {:error, {:timeout, joined(chunks)}})
+    end
+  end
+
+  defp finish(sink, result) do
+    with {:ok, _sink} <- deliver(sink, :eof), do: result
+  end
+
+  defp deliver(nil, _event), do: {:ok, nil}
+
+  defp deliver({callback, state}, event) do
+    case callback.(event, state) do
+      {:ok, state} -> {:ok, {callback, state}}
+      {:error, reason} -> {:error, {:gate_output_failed, reason}}
     end
   end
 

@@ -646,20 +646,69 @@ defaults originally recorded as conservative readings above:
 - The default review-round bound is 2 (maximum 3), with at most 2 calls per
   review; repairs spend the task's ordinary attempt budget.
 
+VERIFIED (human decision in this handover): the user confirmed the 13
+review-quality case labels (8 seeded defects and 5 clean controls) as written.
+This supplies human confirmation of those labels, not evidence that the
+small fixtures measure general review quality.
+
+VERIFIED (live authorization): the user authorized a hard ceiling of
+**4 planner calls, 12 worker runs (including manual runs), and 16 reviewer
+calls** for this follow-up. A local, process-safe executable wrapper charges
+before launch and refuses exhausted or unclassified calls. Its hermetic
+probe admitted exactly 1 of 6 concurrent fake worker invocations, refused
+the other 5, and checked planner/reviewer classification and the shared
+cross-provider reviewer ceiling. No live calls were used by that probe.
+
 UNVERIFIED / pending human acceptance:
 
-- Confirm the 13 review-quality case labels (8 seeded defects, 5 clean
-  controls) in `tools/live_eval/review_quality/cases.json`.
 - Label usefulness in `review-quality/claude/non-blocking-to-label.json`:
   13 entries (8 non-blocking findings and 5 suggestions). Codex has no
   entries to label. The agent has not supplied human ground truth.
-- Implement streaming gate output before acceptance (required by the user
-  in this handover). Output is currently stored only when the invocation
-  ends; this is an open implementation item, not an accepted deviation.
-- Authorize explicit budgets before any remaining live provider checks:
-  an unseeded defect, human reject and retry, review-enabled worker fan-out,
-  additional repairs for rate measurements, and a post-fix manual run.
+- Run the remaining checks within the authorized budget: an unseeded
+  defect, human reject and retry, review-enabled worker fan-out, additional
+  repairs for rate measurements, and a post-fix manual run.
 
 Linux remains deferred and fails closed. Built-in worker checks do not
 accept a task; Shoestring's recorded gates do, with other project commands
 configured through `:project_gates` and cited as `project:NAME`.
+
+### Streaming implementation
+
+REPO-INSPECTION: real gate output now goes through an incremental,
+line-buffered redactor into immutable `ArtifactStore` chunks as it arrives.
+`cobbler.plan.gate.output` v1 links each chunk to its invocation, scope,
+specification and ordered chunk number, recording artifact id, size and
+SHA-256. Incomplete lines and credential labels wait for more bytes or the
+end of the invocation, preventing secrets split across chunks or newlines
+from being persisted. Invalid UTF-8 is withheld. The existing raw byte cap,
+timeout and owned process-group termination remain in force; a chunk write
+failure fails the gate rather than accepting without its output.
+
+`shoestring checks GOAL --output N` reads the recorded chunks before
+completion (explicitly marked partial) and the complete artifact afterward.
+An interrupted invocation retains its chunks without claiming completion;
+the next invocation has a new id and separate output. This supersedes the
+earlier package B streaming deviation once its full gate passes.
+
+VERIFIED: targeted hermetic coverage passed **23 tests, 0 failures**, seed
+318568. It covers a real sandboxed task gate held open while its artifact
+and CLI output are inspected, the final-gate twin, interrupted invocation
+output, strict chunk event validation, artifact failure, timeout and
+overflow flushing, every credential split point and bytewise UTF-8 input.
+The manual-run suite now also checks Codex private roots and Fake shared
+storage using resolved macOS paths.
+
+VERIFIED regression lock against the `0cfaa08` library source versions:
+the before-completion integration test failed because no
+`cobbler.plan.gate.output` event arrived while the gate was held open
+(**1 test, 1 failure, 10 excluded**, seed 130597). The streaming sources
+were restored byte-for-byte afterward. The first full-gate invocation then
+stopped at formatting (two test files; no tests ran); those exact formatter
+changes were applied before the next full gate.
+
+VERIFIED: the streaming implementation passed
+`timeout 590 mix precommit < /dev/null`: **4 doctests, 2288 tests, 0 failures,
+1 skipped, 6 excluded**, seed **195766**, ExUnit **534.6 s**. JavaScript:
+**52/52** Gate 0A tests and **8/8** UI tests. The package B streaming
+deviation is now closed; partial-line buffering remains an explicit
+redaction constraint.

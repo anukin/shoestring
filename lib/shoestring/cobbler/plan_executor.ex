@@ -2037,7 +2037,13 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         PlanGateRunner.run(
           gate_ref,
           context,
-          gate_opts |> Keyword.put(:timeout_ms, timeout) |> Keyword.put(:gate_spec, spec)
+          gate_opts
+          |> Keyword.put(:timeout_ms, timeout)
+          |> Keyword.put(:gate_spec, spec)
+          |> Keyword.put(
+            :output_sink,
+            PlanGateLog.output_sink(log, invocation_id, position, spec)
+          )
         )
 
       elapsed =

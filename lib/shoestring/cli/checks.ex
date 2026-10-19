@@ -13,7 +13,7 @@ defmodule Shoestring.CLI.Checks do
   alias Shoestring.Repo
   alias Shoestring.Trajectory.{ArtifactStore, TrajectoryEvent}
 
-  @types ["cobbler.plan.gate.started", "cobbler.plan.gate.completed"]
+  @types ["cobbler.plan.gate.started", "cobbler.plan.gate.output", "cobbler.plan.gate.completed"]
 
   @doc """
   The goal's invocations, oldest first: maps with `:number`, `:started`
@@ -32,10 +32,19 @@ defmodule Shoestring.CLI.Checks do
     completed =
       for {"cobbler.plan.gate.completed", p} <- events, into: %{}, do: {p["invocation_id"], p}
 
+    output =
+      for({"cobbler.plan.gate.output", p} <- events, do: p)
+      |> Enum.group_by(& &1["invocation_id"])
+
     for({"cobbler.plan.gate.started", p} <- events, do: p)
     |> Enum.with_index(1)
     |> Enum.map(fn {started, number} ->
-      %{number: number, started: started, completed: completed[started["invocation_id"]]}
+      %{
+        number: number,
+        started: started,
+        completed: completed[started["invocation_id"]],
+        output: Map.get(output, started["invocation_id"], [])
+      }
     end)
   end
 
@@ -53,15 +62,50 @@ defmodule Shoestring.CLI.Checks do
       number ->
         with %{} = invocation <-
                Enum.find(invocations, &(&1.number == number)) || {:error, :no_such_check},
-             id when is_binary(id) <-
-               get_in(invocation, [:completed, "artifact_id"]) || {:error, :no_output_recorded},
-             {:ok, %{bytes: bytes, artifact: artifact}} <- ArtifactStore.read(id) do
+             {:ok, bytes, partial?} <- output(invocation, goal_id) do
           shell.info(line(invocation))
-          shell.info("Output (#{artifact.byte_size} bytes, redacted, sha256 #{artifact.sha256}):")
+          digest = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+          label = if partial?, do: "Output so far", else: "Output"
+          shell.info("#{label} (#{byte_size(bytes)} bytes, redacted, sha256 #{digest}):")
           shell.info(bytes)
+          if partial?, do: shell.info("[partial output; no complete output artifact recorded]")
           if invocation.completed["output_truncated"], do: shell.info("[cut at the output limit]")
           :ok
         end
+    end
+  end
+
+  defp output(invocation, goal_id) do
+    case get_in(invocation, [:completed, "artifact_id"]) do
+      nil ->
+        if invocation.output == [] do
+          {:error, :no_output_recorded}
+        else
+          invocation.output
+          |> Enum.with_index(1)
+          |> Enum.reduce_while({:ok, "", true}, fn {chunk, number}, {:ok, bytes, true} ->
+            with true <- chunk["chunk"] == number,
+                 {:ok, part} <- read_output(chunk, goal_id) do
+              {:cont, {:ok, bytes <> part, true}}
+            else
+              false -> {:halt, {:error, :gate_output_sequence_invalid}}
+              error -> {:halt, error}
+            end
+          end)
+        end
+
+      _id ->
+        with {:ok, bytes} <- read_output(invocation.completed, goal_id),
+             do: {:ok, bytes, false}
+    end
+  end
+
+  defp read_output(payload, goal_id) do
+    with {:ok, %{bytes: bytes, artifact: artifact}} <- ArtifactStore.read(payload["artifact_id"]) do
+      if artifact.goal_id == goal_id and artifact.sha256 == payload["output_sha256"] and
+           artifact.byte_size == payload["output_bytes"] and artifact.redacted,
+         do: {:ok, bytes},
+         else: {:error, :gate_output_artifact_mismatch}
     end
   end
 

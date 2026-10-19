@@ -87,4 +87,48 @@ defmodule Shoestring.Cobbler.GateProcessTest do
 
     assert Enum.all?(states, &String.starts_with?(&1, "Z"))
   end
+
+  test "streamed bytes obey the same overflow bound and flush on timeout" do
+    caller = self()
+
+    sink =
+      {fn event, state ->
+         send(caller, {:output, event})
+         {:ok, state}
+       end, nil}
+
+    assert {:error, {:gate_output_oversized, %{partial_output: "xxxxxxxx"}}} =
+             GateProcess.run(["python3", "-c", "print('x' * 100)"], File.cwd!(), 5_000, 8,
+               output_sink: sink
+             )
+
+    assert_receive {:output, {:data, "xxxxxxxx"}}
+    assert_receive {:output, :eof}
+    refute_receive {:output, _}
+
+    assert {:error, {:gate_timeout, %{partial_output: "partial\n"}}} =
+             GateProcess.run(
+               ["python3", "-c", "import signal; print('partial', flush=True); signal.pause()"],
+               File.cwd!(),
+               1_000,
+               1024,
+               output_sink: sink
+             )
+
+    assert_receive {:output, {:data, "partial\n"}}
+    assert_receive {:output, :eof}
+  end
+
+  test "a failed output sink fails the gate rather than discarding the error" do
+    sink = {fn _event, _state -> {:error, :synthetic_sink_failure} end, nil}
+
+    assert {:error, {:gate_output_failed, :synthetic_sink_failure}} =
+             GateProcess.run(
+               ["python3", "-c", "import signal; print('ready', flush=True); signal.pause()"],
+               File.cwd!(),
+               5_000,
+               1024,
+               output_sink: sink
+             )
+  end
 end
