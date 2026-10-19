@@ -300,6 +300,9 @@ defmodule Shoestring.CLI.Follow do
       "admission.decided" ->
         if p["result"] != "admit", do: "Waiting: #{p["explanation"]}"
 
+      "cobbler.plan.admission.waiting" ->
+        "Task #{task} is waiting: " <> waiting_reason(p)
+
       "cobbler.plan.capacity.confirmed" ->
         "Task #{task}: capacity confirmed by #{p["confirmed_by"]}."
 
@@ -376,6 +379,17 @@ defmodule Shoestring.CLI.Follow do
       text -> shell.info(text)
     end
   end
+
+  defp waiting_reason(%{"reason" => reason, "provider_id" => provider})
+       when reason in ["no_observation", "no_observation_for_provider"] do
+    "no capacity reading for #{provider} yet. It starts when one arrives; check that the " <>
+      "#{provider} CLI is installed and signed in and that its capacity monitor is enabled " <>
+      "(config :shoestring, :capacity_monitors)."
+  end
+
+  defp waiting_reason(%{"reason" => reason, "provider_id" => provider}),
+    do:
+      "capacity for #{provider} could not be checked (#{reason}); the service retries every minute."
 
   defp not_run(skipped) when is_list(skipped) and skipped != [],
     do: " Not run: #{Enum.join(skipped, ", ")}."

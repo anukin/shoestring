@@ -592,3 +592,74 @@ committing in a plan worktree at 0.163.0 for one small task.
   fan-out with review live.
 - Linux gates (fail closed), streaming gate output, and the review-quality
   numbers beyond these 13 small, explicit cases.
+
+## Fixes after the user's review (2026-10-17)
+
+The user asked to fix the two found issues ("fix the issues. Linux can be
+solved later").
+
+- **Silent wait on admission.** When `ExecutionAdmission.admit/4` fails
+  before any decision (no capacity reading for the provider, or the reading
+  cannot be localized), it now records `cobbler.plan.admission.waiting`
+  once per attempt and reason (idempotency key), and `follow` prints "Task
+  T is waiting: no capacity reading for P yet ... check that the P CLI is
+  installed and signed in and that its capacity monitor is enabled". The
+  job still retries every 60 s; nothing is admitted without a reading.
+  `execution_admission_waiting_test` fails on the unfixed code (no event;
+  VERIFIED by reverting the call locally).
+- **Manual `/runs/new` runs.** Claude and Codex manual runs now create their
+  worktree with private per-run Git storage (recording the source
+  repository in the worktree metadata), so Codex gets the Git roots it needs
+  to commit (probed above) and a manual Claude run in such storage is
+  launched with the same sandbox as a plan run (`ElfEffect`). Runs in shared
+  storage (Fake manual runs, and runs created before this change) keep their
+  previous launch, because the sandbox refuses them. The goal page shows the
+  source repository, the private copy and the `git fetch` to take the
+  commits. `run_new_private_storage_test` fails on the unfixed `/runs/new`
+  (no private storage; VERIFIED by restoring the previous file locally).
+  Not verified live: no manual Claude or Codex run was started.
+
+## Acceptance follow-up (2026-10-19)
+
+VERIFIED: the admission/manual-run fix round passed
+`timeout 590 mix precommit < /dev/null`: **4 doctests, 2277 tests, 0 failures,
+1 skipped, 6 excluded**, seed **124889**, 523.4 s for ExUnit. JavaScript:
+**52/52** Gate 0A tests and **8/8** UI tests. This replaces the stale
+2275-test gate figure for the fix round; it does not verify the later
+streaming implementation.
+
+VERIFIED against the `e79fc8d` versions of `execution_admission.ex` and
+`run_new_live.ex`, with both new tests present: **2 tests, 2 failures**, seed
+790774. The waiting test fails because no waiting event exists (`right: []`);
+the manual-run test fails because the source metadata is absent (`left:
+nil`). The fixed files were restored byte-for-byte afterward, and the same
+two files passed: **2 tests, 0 failures**, seed 108170.
+
+VERIFIED (human decision in this handover): the user confirmed all four
+defaults originally recorded as conservative readings above:
+
+- Review stays off by default (`config :shoestring, :plan_review`).
+- Different provider means a different provider family: Claude and Codex;
+  two models from the same vendor do not count.
+- Unavailable review waits for a human waiver, rejection or retry. No
+  self-approval or silent bypass is allowed while review is enabled.
+- The default review-round bound is 2 (maximum 3), with at most 2 calls per
+  review; repairs spend the task's ordinary attempt budget.
+
+UNVERIFIED / pending human acceptance:
+
+- Confirm the 13 review-quality case labels (8 seeded defects, 5 clean
+  controls) in `tools/live_eval/review_quality/cases.json`.
+- Label usefulness in `review-quality/claude/non-blocking-to-label.json`:
+  13 entries (8 non-blocking findings and 5 suggestions). Codex has no
+  entries to label. The agent has not supplied human ground truth.
+- Implement streaming gate output before acceptance (required by the user
+  in this handover). Output is currently stored only when the invocation
+  ends; this is an open implementation item, not an accepted deviation.
+- Authorize explicit budgets before any remaining live provider checks:
+  an unseeded defect, human reject and retry, review-enabled worker fan-out,
+  additional repairs for rate measurements, and a post-fix manual run.
+
+Linux remains deferred and fails closed. Built-in worker checks do not
+accept a task; Shoestring's recorded gates do, with other project commands
+configured through `:project_gates` and cited as `project:NAME`.

@@ -755,6 +755,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
         }
       }
     },
+    "cobbler.plan.admission.waiting" => %{
+      1 => %{
+        required: [:execution_id, :plan_task_id, :attempt, :provider_id, :scope, :reason],
+        optional: [],
+        uuid_fields: [:execution_id],
+        types: %{attempt: :integer}
+      }
+    },
     "cobbler.plan.capacity.confirmed" => %{
       1 => %{
         required: [
@@ -1473,6 +1481,15 @@ defmodule Shoestring.Trajectory.EventRegistry do
   # bound at dispatch time, so a malformed digest, a non-positive
   # revision/attempt, an unknown gate, or an unknown retry state fails the
   # write rather than entering history.
+  defp validate_plan_execution("cobbler.plan.admission.waiting", 1, payload, _opts) do
+    with :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload) do
+      if Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, payload["reason"]),
+        do: :ok,
+        else: Contract.invalid(:reason, "must be a reason code")
+    end
+  end
+
   defp validate_plan_execution("cobbler.plan.capacity.confirmed", 1, payload, _opts) do
     with :ok <- plan_execution_digest(payload),
          :ok <- plan_execution_revision(payload),

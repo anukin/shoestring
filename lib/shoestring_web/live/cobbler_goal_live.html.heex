@@ -514,13 +514,30 @@
             >
               {recorded_or(@worktree.record.base_commit, "Not recorded")}
             </dd>
-            <dt class="text-zinc-500">Source repository</dt>
-            <dd
-              id="cobbler-worktree-repo-path"
-              class={mono_value_class(@worktree.record.repo_path)}
-            >
-              {recorded_or(@worktree.record.repo_path, "Not recorded")}
-            </dd>
+            <%= if @worktree.record.source_path do %>
+              <dt class="text-zinc-500">Source repository</dt>
+              <dd
+                id="cobbler-worktree-source-path"
+                class={mono_value_class(@worktree.record.source_path)}
+              >
+                {@worktree.record.source_path}
+              </dd>
+              <dt class="text-zinc-500">Git storage (private copy)</dt>
+              <dd
+                id="cobbler-worktree-repo-path"
+                class={mono_value_class(@worktree.record.repo_path)}
+              >
+                {recorded_or(@worktree.record.repo_path, "Not recorded")}
+              </dd>
+            <% else %>
+              <dt class="text-zinc-500">Source repository</dt>
+              <dd
+                id="cobbler-worktree-repo-path"
+                class={mono_value_class(@worktree.record.repo_path)}
+              >
+                {recorded_or(@worktree.record.repo_path, "Not recorded")}
+              </dd>
+            <% end %>
             <dt class="text-zinc-500">Repository id</dt>
             <dd id="cobbler-worktree-repo-id" class={mono_value_class(@worktree.record.repo_id)}>
               {recorded_or(@worktree.record.repo_id, "Not recorded")}
@@ -530,6 +547,15 @@
             Read from the durable worktree record for this run. The source repository is
             never modified; Shoestring works only inside the isolated worktree above.
           </p>
+          <%= if @worktree.record.source_path do %>
+            <p id="cobbler-worktree-fetch" class="text-xs text-zinc-500">
+              The run's commits live in its private copy. To take them, run in the source
+              repository:
+              <code class="font-mono">
+                git fetch {@worktree.record.path} {@worktree.record.branch}
+              </code>
+            </p>
+          <% end %>
         <% else %>
           <p
             id="cobbler-worktree-unknown"

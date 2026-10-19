@@ -119,7 +119,17 @@ defmodule ShoestringWeb.RunNewLive do
     base_rev =
       if blank?(run_params["base_revision"]), do: "HEAD", else: run_params["base_revision"]
 
-    case Worktrees.create(repo_path, run_id, base_rev) do
+    # Claude and Codex runs get private per-run Git storage: the Claude
+    # sandbox requires it, and a sandboxed Codex can commit only there. The
+    # source repository is only read; the result is fetched from the worktree.
+    provider_run? = run_params["provider"] in ["codex", "claude"]
+
+    storage =
+      if provider_run?,
+        do: [private_git: true, metadata: %{"shoestring.manual:source" => repo_path}],
+        else: []
+
+    case Worktrees.create(repo_path, run_id, base_rev, storage) do
       {:ok, worktree} ->
         launch_run(run_params, worktree, run_id, socket)
 
@@ -197,7 +207,8 @@ defmodule ShoestringWeb.RunNewLive do
       "shoestring.manual:timeout_seconds" => timeout_seconds,
       "shoestring.manual:max_events" => max_events,
       "shoestring.manual:lease_seconds" => lease_seconds,
-      "shoestring.manual:repo_path" => worktree.repo_path,
+      "shoestring.manual:repo_path" =>
+        worktree.metadata["shoestring.manual:source"] || worktree.repo_path,
       "shoestring.manual:base_revision" => worktree.base_commit
     }
 

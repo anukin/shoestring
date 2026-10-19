@@ -86,10 +86,48 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
           {:ok, event.id}
       end
     else
-      {:error, reason} -> {:error, {:execution_admission_blocked, reason}}
-      _ -> {:error, {:execution_admission_blocked, :execution_profile_required}}
+      {:error, reason} ->
+        waiting(goal_id, execution, task, attempt, profile, scope, now, reason)
+        {:error, {:execution_admission_blocked, reason}}
+
+      _ ->
+        {:error, {:execution_admission_blocked, :execution_profile_required}}
     end
   end
+
+  # A failure before any admission decision (no capacity reading for the
+  # provider, for example) would otherwise leave nothing a human can see:
+  # the job retries every minute without a trace. It is recorded once per
+  # attempt and reason.
+  defp waiting(goal_id, execution, task, attempt, %{} = profile, scope, now, reason) do
+    code = reason_code(reason)
+
+    _ =
+      Trajectory.append(goal_id, %{
+        "type" => "cobbler.plan.admission.waiting",
+        "schema_version" => 1,
+        "actor" => "cobbler",
+        "occurred_at" => now,
+        "idempotency_key" =>
+          "plan-admission-waiting:#{execution.execution_id}:#{task["id"]}:#{attempt}:#{code}",
+        "payload" => %{
+          "execution_id" => execution.execution_id,
+          "plan_task_id" => task["id"],
+          "attempt" => attempt,
+          "provider_id" => to_string(profile["provider"]),
+          "scope" => scope,
+          "reason" => code
+        }
+      })
+
+    :ok
+  end
+
+  defp waiting(_goal_id, _execution, _task, _attempt, _profile, _scope, _now, _reason), do: :ok
+
+  defp reason_code(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_code({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_code(_reason), do: "admission_unavailable"
 
   defp occupied_by_other_goal?(goal_id) do
     case Commands.active_claim() do
