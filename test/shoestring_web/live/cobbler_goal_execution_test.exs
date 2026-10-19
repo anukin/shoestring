@@ -111,6 +111,30 @@ defmodule ShoestringWeb.CobblerGoalExecutionTest do
   end
 
   describe "isolated worktree identity" do
+    test "a manual private copy with spaces has a quoted fetch command", %{conn: conn} do
+      goal = create_goal!(Repo, "Manual worktree goal")
+      run = insert_run!(goal, provider_id: "codex", status: "completed")
+      source = Path.join(Shoestring.State.path(:worktrees), "source with spaces")
+
+      worktree =
+        register_worktree!(run.id,
+          directory: "private copy #{run.id}",
+          metadata: %{"shoestring.manual:source" => source}
+        )
+
+      {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+      assert has_element?(view, "#cobbler-worktree-source-path", source)
+      assert has_element?(view, "#cobbler-worktree-repo-path", worktree.repo_path)
+
+      assert view
+             |> element("#cobbler-worktree-fetch code")
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.text()
+             |> String.trim() ==
+               "git fetch '#{worktree.path}' #{worktree.branch}"
+    end
+
     test "a registered worktree record renders its actual identity and path", %{conn: conn} do
       goal = create_goal!(Repo, "Worktree goal")
       append_admission_event!(goal.id)
@@ -306,7 +330,7 @@ defmodule ShoestringWeb.CobblerGoalExecutionTest do
     records_dir = Path.join(worktrees_dir, ".records")
     File.mkdir_p!(records_dir)
 
-    path = Path.join(worktrees_dir, "run-#{run_id}")
+    path = Path.join(worktrees_dir, Keyword.get(opts, :directory, "run-#{run_id}"))
     repo_path = Path.join(worktrees_dir, "source-#{run_id}")
     File.mkdir_p!(path)
     File.mkdir_p!(repo_path)
@@ -322,7 +346,7 @@ defmodule ShoestringWeb.CobblerGoalExecutionTest do
       "workspace_ref" => "ws-record",
       "status" => Keyword.get(opts, :status, "active"),
       "created_at" => DateTime.to_iso8601(@now),
-      "metadata" => %{}
+      "metadata" => Keyword.get(opts, :metadata, %{})
     }
 
     record_file = Path.join(records_dir, "#{run_id}.json")

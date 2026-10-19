@@ -1,0 +1,29 @@
+{
+  "status": "VERIFIED",
+  "command": "timeout 590 mix precommit < /dev/null",
+  "exit_status": 0,
+  "exunit": {
+    "doctests": 4,
+    "tests": 2300,
+    "failures": 0,
+    "skipped": 1,
+    "excluded": 6,
+    "seed": 830891,
+    "seconds": 548.5
+  },
+  "javascript": {
+    "gate_0a": {
+      "tests": 52,
+      "passed": 52,
+      "failures": 0
+    },
+    "ui": {
+      "tests": 8,
+      "passed": 8,
+      "failures": 0
+    }
+  },
+  "captured_log_sha256": "794dc7c14ff9bf5acd3802cb4ae610af4e5c77b4f6b5d3054d165d35de9e00f7",
+  "captured_log_retained_locally": true,
+  "scope": "Final iteration 8 admission, manual isolation, gate streaming, session ownership, collector bounds, command quoting, redaction and live tooling code."
+}

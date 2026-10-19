@@ -1,0 +1,34 @@
+{
+  "label_source": "human:user",
+  "confirmation": "Yes, mark all 13 useful",
+  "confirmed_on": "2026-10-19",
+  "case_labels": {
+    "seeded_defects": 8,
+    "clean_controls": 5,
+    "human_confirmed": true
+  },
+  "advisory_labels": {
+    "labelled": 13,
+    "useful": 13,
+    "non_blocking": {
+      "labelled": 8,
+      "useful": 8,
+      "precision": 1.0
+    },
+    "suggestion": {
+      "labelled": 5,
+      "useful": 5,
+      "precision": 1.0
+    }
+  },
+  "scope": "Human usefulness judgments for these 13 advisory entries only; not a general review-quality estimate.",
+  "review_policy_defaults": {
+    "review_enabled_by_default": false,
+    "different_provider": "different family: Claude versus Codex",
+    "unavailable_reviewer": "wait for human waiver, reject or retry; never self-approval",
+    "default_review_rounds": 2,
+    "maximum_review_rounds": 3,
+    "maximum_calls_per_round": 2,
+    "repairs_use_task_attempt_budget": true
+  }
+}

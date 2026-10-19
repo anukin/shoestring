@@ -131,4 +131,70 @@ defmodule Shoestring.Cobbler.GateProcessTest do
                output_sink: sink
              )
   end
+
+  test "a blocked output sink cannot delay the deadline or turn a late exit into success" do
+    blocked_sink_result(
+      ["python3", "-c", "print('ready', flush=True)"],
+      1_000,
+      1024,
+      fn result ->
+        assert {:error, {:gate_timeout, %{partial_output: "ready\n"}}} = result
+      end
+    )
+  end
+
+  test "a blocked output sink cannot delay the raw output cap" do
+    blocked_sink_result(
+      ["python3", "-c", "import os; os.write(1, b'x' * 65537)"],
+      30_000,
+      1024,
+      fn result ->
+        assert {:error, {:gate_output_oversized, %{bytes: bytes, partial_output: partial}}} =
+                 result
+
+        assert bytes > 1024
+        assert partial == String.duplicate("x", 1024)
+      end
+    )
+  end
+
+  defp blocked_sink_result(argv, timeout, cap, check) do
+    caller = self()
+
+    sink =
+      {fn
+         {:data, _bytes}, state ->
+           send(caller, {:sink_blocked, self()})
+
+           receive do
+             :release -> {:ok, state}
+           end
+
+         :eof, state ->
+           {:ok, state}
+       end, nil}
+
+    worker =
+      start_supervised!(
+        {Task,
+         fn ->
+           send(
+             caller,
+             {:gate_result, GateProcess.run(argv, File.cwd!(), timeout, cap, output_sink: sink)}
+           )
+         end}
+      )
+
+    monitor = Process.monitor(worker)
+    assert_receive {:sink_blocked, sink_pid}, 5_000
+
+    try do
+      # The callback is deliberately still blocked when the bound is reported.
+      assert_receive {:gate_result, result}, 5_000
+      check.(result)
+    after
+      send(sink_pid, :release)
+      assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 5_000
+    end
+  end
 end

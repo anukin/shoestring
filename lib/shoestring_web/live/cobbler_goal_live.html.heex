@@ -552,7 +552,9 @@
               The run's commits live in its private copy. To take them, run in the source
               repository:
               <code class="font-mono">
-                git fetch {@worktree.record.path} {@worktree.record.branch}
+                git fetch {Shoestring.Shell.argument(@worktree.record.path)} {Shoestring.Shell.argument(
+                  @worktree.record.branch
+                )}
               </code>
             </p>
           <% end %>

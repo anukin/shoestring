@@ -500,9 +500,9 @@ before a decision (no capacity observation for the provider) is silent to
 
 ### Limits
 
-- Output is written to the artifact when the gate ends, not streamed while
-  it runs; a restart mid-gate leaves a start record without completion, and
-  the gate runs again as a new invocation.
+- The original implementation wrote output only when the gate ended.
+  The streaming follow-up below closes that deviation: a restart mid-gate
+  retains recorded chunks without completion; a rerun is a new invocation.
 - No built-in repository-status, lint, typecheck or build gate was added;
   those come from configured project gates. The Mix built-ins are unchanged.
 - The specification's environment is the variable names, not values
@@ -519,8 +519,8 @@ path traversal, shell injection; concurrency: lost update; scope: an
 unowned settings file; error handling: swallowed errors) and **5 clean
 controls** for the same contracts. Every case's tests pass (so only review
 can tell them apart), checked hermetically by `review_quality_cases_test`.
-Labels were written with the cases, by construction, by the agent, not by a
-human; they still need the user's confirmation. Driver:
+Labels were written with the cases, by construction, by the agent. The user
+confirmed all 13 labels on 2026-10-19 (see the human acceptance record below). Driver:
 `tools/live_eval/iter8_review_quality.exs`, one call per (reviewer, case),
 outside the service, with a hard call budget.
 
@@ -539,13 +539,12 @@ What this does and does not show: each contract states the requirement the
 defect breaks in plain words, and every fixture is a few lines. So this
 measures whether a reviewer checks a small diff against an explicit
 contract, which both did perfectly, not recall on subtle or unstated defects
-or on large diffs. Useful non-blocking precision is **not measured**: the 8
-Claude non-blocking findings and 5 suggestions are listed in
-`review-quality/claude/non-blocking-to-label.json` with `useful: null` for a
-human to label (most say the passing test does not cover the stated
-requirement). Repair success and repeated-finding rate come only from the
-live loops above: 1 of 1 seeded repair succeeded; no repeated finding was
-observed live (the repeat path is hermetic).
+or on large diffs. On 2026-10-19 the user explicitly labelled all 8 Claude
+non-blocking findings and 5 suggestions useful. [Human labels](review-quality/human-labels.json)
+record **8/8 useful non-blocking findings**, **5/5 useful suggestions**,
+**13/13 combined**; the original entries have `useful: true`. This is human
+judgment on these entries, not an LLM judge or a general precision estimate.
+The budgeted follow-up below expands the original single repair sample.
 
 ## A Claude reviewer in the full loop (live)
 
@@ -659,14 +658,12 @@ probe admitted exactly 1 of 6 concurrent fake worker invocations, refused
 the other 5, and checked planner/reviewer classification and the shared
 cross-provider reviewer ceiling. No live calls were used by that probe.
 
-UNVERIFIED / pending human acceptance:
-
-- Label usefulness in `review-quality/claude/non-blocking-to-label.json`:
-  13 entries (8 non-blocking findings and 5 suggestions). Codex has no
-  entries to label. The agent has not supplied human ground truth.
-- Run the remaining checks within the authorized budget: an unseeded
-  defect, human reject and retry, review-enabled worker fan-out, additional
-  repairs for rate measurements, and a post-fix manual run.
+VERIFIED (human labels): the user explicitly answered "Yes, mark all 13
+useful" for the Claude advisory entries. Only their `useful` fields changed;
+the captured claims and evidence remain unchanged. Codex has no entries to
+label. The following live records close reject/retry, sibling fan-out,
+additional repair measurements and both post-fix manual runs. The narrower
+unseeded blocking-review check is recorded separately below.
 
 Linux remains deferred and fails closed. Built-in worker checks do not
 accept a task; Shoestring's recorded gates do, with other project commands
@@ -716,7 +713,7 @@ redaction constraint.
 ### Budgeted live follow-up
 
 VERIFIED: [live-budget.json](live-budget.json) records **4/4 planner calls,
-12/12 worker runs, 9/16 reviewer calls**. The failed reviewer delivery and
+12/12 worker runs, 10/16 reviewer calls**. The failed reviewer delivery and
 failed worker are charged. No further worker run is authorized by this
 budget. Installed versions were Claude Code **2.1.303** and Codex **0.163.0**.
 
@@ -785,13 +782,12 @@ failed trial.
 
 The session-index defect was found naturally by the live run and reproduced
 without providers. It is a runtime defect, not a blocking cross-review
-finding after green gates: that narrower unseeded-review item remains
-UNVERIFIED. A tool-free review of the prepared real streaming diff was
-rejected by automatic approval review because authorization was needed for
-that particular real-code payload and Claude destination. The packet was
-prepared locally (digest `43bb3b09a9d0657b3b57fd87bad40ddfcee579c135266745288874929a130c2b`);
-it has not been sent and the payload-specific permission question remains
-pending. The 13 advisory usefulness labels also remain human work.
+finding after green gates. That narrower item is now verified separately
+below by the authorized tool-free review of the real streaming diff.
+Automatic approval review initially rejected that call pending permission
+for its particular real-code payload and Claude destination. The user then
+explicitly authorized this exact packet; it was sent once after that answer.
+The user also supplied all 13 advisory usefulness labels.
 
 VERIFIED: after the ownership fix, `timeout 590 mix precommit < /dev/null`
 passed **4 doctests, 2293 tests, 0 failures, 1 skipped, 6 excluded**, seed
@@ -809,3 +805,92 @@ unchanged. The drivers already replace their own root and home with
 frames or reasoning are included. The reusable quota guard and live drivers
 are under `tools/live_eval/`; the guard's fake-executable coverage passed
 **3 tests, 0 failures**, seed **724750**.
+
+### Collector bounds and integration command quoting
+
+REPO-INSPECTION: streaming initially invoked artifact storage in the raw
+port collector. A stalled sink could prevent it enforcing the execution
+deadline and byte cap. A supervised task now serializes sink writes, with
+queued raw bytes bounded by the same output cap. The collector keeps
+checking its deadline between port messages, stops the owned command before
+waiting for persistence, and requires sink completion before success. A
+failed command gets at most 500 ms to drain partial chunks, then its sink
+is stopped; no sink failure can accept a task.
+
+REPO-INSPECTION: fetch instructions on the manual goal page and cd/fetch
+instructions in `shoestring result` now share POSIX argument quoting.
+Spaces, apostrophes, metacharacters and empty arguments round-trip as one
+argument; safe branch names remain readable.
+
+VERIFIED: focused streaming, shell, goal-page and gate-contract coverage
+passed **37 tests, 0 failures**, seed **876187**. The first focused run
+failed one newly added CLI fixture because the low-level execution request
+omitted the repository path that production persists; that fixture was
+corrected, without changing the CLI assertion. The four final regressions
+against the `967c72a` GateProcess, CLI Result and goal template source
+versions then failed behaviorally: **4 tests, 4 failures, 32 excluded**,
+seed **848779**. Both held callbacks prevented a bound result, and both
+displayed commands lacked quotes. The fixed sources were restored
+byte-for-byte.
+
+### Unseeded review after green gates
+
+VERIFIED: the user authorized the exact [packet](live-unseeded-review/packet.json),
+digest `43bb3b09a9d0657b3b57fd87bad40ddfcee579c135266745288874929a130c2b`,
+for one external Claude Opus review. It contains the real `0cfaa08` →
+`6248bf7` streaming change and its green gate evidence, with no seeded
+mutation and no implementation transcript. The exported packet is
+byte-identical to the input. The [validated result](live-unseeded-review/result.json)
+records **1 blocking finding**, 2 non-blocking findings and 1 suggestion,
+**7063 output tokens**, **68845 ms**, `changes_requested`. The tool-free,
+empty-directory call used `opus`, high effort, no MCP servers or session
+persistence, closed stdin and the shared budget fence. A local wrapper
+required exactly one `structured_output` object before the product findings
+validator ran; no prose fallback or raw provider frames were retained.
+
+The Claude Opus review skill was applied with the user's narrower contract:
+only the authorized packet was exposed, no repository tools; the product's
+findings schema and severities were retained. No additional code or live
+worker call was sent. The reviewer was an independent source of hypotheses,
+not the final authority on those findings.
+
+- **F1 VERIFIED, fixed:** invalid UTF-8 in complete lines bypassed the
+  credential-label hold, losing the label before its value arrived in a later
+  artifact. The hold now uses the byte-mode regex even on invalid UTF-8.
+- **F2 independently checked, adjacent fix:** neither existing whole-output
+  redactor recognizes PEM blocks, so the specific PEM example does not show
+  a new regression. Inspection did identify a real recognized cross-line
+  pattern omitted by streaming: Basic authentication. `Basic` is now held
+  like `Bearer`. Tests check all split points, invalid-byte prefixes and
+  the absence of values while preserving safe text on both sides.
+- **F3 evidence scope:** the frozen diff predates the committed budget guard,
+  guard tests, dated human confirmation and live ledger now present on this
+  branch. The standing contract also permits command output from this run
+  as evidence. This did not establish a code defect. The captured review is
+  retained unchanged, and the human record now has an explicit date/source.
+- **F4 not reproduced:** `field_type/2` defaults to `:string`, and Ecto
+  rejects non-string SHA values before the regex clause. The malformed-chunk
+  test now exercises integer, nil, list and map digests; all fail closed.
+
+VERIFIED regressions against the unchanged `967c72a` streaming-redactor
+source: **2 tests, 2 failures, 3 excluded**, seed **198040**, each leaking the
+synthetic value for the expected behavioral reason. After the two fixes,
+focused coverage passed **42 tests, 0 failures**, seed **209148**. The full
+final gate is recorded below. This is one unseeded review
+sample, not a recall estimate. The fix was implemented and verified
+hermetically; no additional live repair worker or rereview was claimed.
+
+### Final gate and publication
+
+VERIFIED: `timeout 590 mix precommit < /dev/null` passed: 4 doctests, 2300 tests, 0 failures, 1 skipped, 6 excluded, seed 830891; ExUnit 548.5 s. JavaScript Gate 0A 52/52, UI 8/8.
+
+The human decisions, seeded case labels and 13 advisory usefulness labels
+are complete. Remaining scope limits are explicit: Linux is deferred and
+fails closed; the live sibling fan-out did not run its join after the worker
+ceiling; three seeded repairs and one unseeded review are small samples.
+The local milestone completion record is updated in this isolated worktree
+and remains gitignored by design. Acceptance and merges remain human work,
+in order #93 → #94 → #95 → #96.
+
+Publication follows the brief: the PR uses its explicitly requested Claude
+Code footer; Git commit messages have no attribution trailers.

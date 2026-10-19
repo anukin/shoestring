@@ -52,8 +52,12 @@ defmodule Shoestring.CLI.Result do
 
       shell.info("")
       shell.info("To take it into your repository:")
-      shell.info("  cd #{repository}")
-      shell.info("  git fetch #{worktree} #{commit}")
+      shell.info("  cd #{Shoestring.Shell.argument(repository)}")
+
+      shell.info(
+        "  git fetch #{Shoestring.Shell.argument(worktree)} #{Shoestring.Shell.argument(commit)}"
+      )
+
       shell.info("  git merge FETCH_HEAD")
 
       {:ok, %{commit: commit, base: base, worktree: worktree, repository: repository}}

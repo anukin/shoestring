@@ -285,6 +285,10 @@ defmodule Shoestring.Cobbler.PlanGateContractTest do
           %{output | "chunk" => 0},
           %{output | "output_bytes" => -1},
           %{output | "output_sha256" => "bad"},
+          %{output | "output_sha256" => 123},
+          %{output | "output_sha256" => nil},
+          %{output | "output_sha256" => []},
+          %{output | "output_sha256" => %{}},
           %{output | "attempt" => 0},
           Map.delete(output, "artifact_id")
         ] do
@@ -418,6 +422,23 @@ defmodule Shoestring.Cobbler.PlanGateContractTest do
     assert gate["output"] =~ "OK"
   end
 
+  test "result integration commands quote a source path with spaces", c do
+    source = Path.join(Path.dirname(c.source), "source with spaces")
+    assert {_, 0} = System.cmd("git", ["clone", "--quiet", c.source, source])
+    git!(source, ["config", "user.name", "Fixture"])
+    git!(source, ["config", "user.email", "fixture@example.invalid"])
+    c = %{c | source: source}
+    {first, opts} = start!(c, [@unit], "    return a + b\n")
+    assert {:ok, %{disposition: :accepted}} = complete(c, first, opts)
+    assert {:ok, _} = Cobbler.advance_plan_execution(c.goal.id, opts)
+    assert {:ok, _} = Shoestring.CLI.Result.show(c.goal.id, shell: Mix.Shell.Process)
+    lines = collect([])
+    assert lines =~ "  cd '#{source}'\n"
+    command = lines |> String.split("\n") |> Enum.find(&String.starts_with?(&1, "  cd "))
+    assert {pwd, 0} = System.cmd("sh", ["-c", command <> " && pwd -P"])
+    assert String.trim(pwd) == source
+  end
+
   defp start!(c, gates, body) do
     base = head_of!(c.source)
 
@@ -441,6 +462,7 @@ defmodule Shoestring.Cobbler.PlanGateContractTest do
                %{
                  revision_number: rev.revision_number,
                  digest: rev.digest,
+                 repository_path: c.source,
                  admission_event_id: admission.id
                },
                opts

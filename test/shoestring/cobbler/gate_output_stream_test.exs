@@ -45,6 +45,36 @@ defmodule Shoestring.Cobbler.GateOutputStreamTest do
              "ready\n[REDACTED: invalid UTF-8 gate output]\ndone\n"
   end
 
+  test "invalid UTF-8 cannot detach a credential label from its value" do
+    for label <- ["password=", "Bearer", "Basic", "authorization:", "token="] do
+      input = <<255>> <> "\n#{label}\nsynthetic-sensitive-value\n"
+
+      for split <- 0..byte_size(input) do
+        first = binary_part(input, 0, split)
+        second = binary_part(input, split, byte_size(input) - split)
+        output = stream(["before\n", first, second, "after\n"])
+        refute output =~ "synthetic-sensitive-value"
+        refute Security.secret_value?(output)
+        assert output =~ "before\n"
+        assert output =~ "after\n"
+      end
+    end
+  end
+
+  test "Basic authentication split across lines never publishes its value" do
+    input = "Basic\nc3ludGhldGljOmZpeHR1cmU=\n"
+
+    for split <- 0..byte_size(input) do
+      first = binary_part(input, 0, split)
+      second = binary_part(input, split, byte_size(input) - split)
+      output = stream(["before\n", first, second, "after\n"])
+      refute output =~ "c3ludGhldGljOmZpeHR1cmU="
+      refute Security.secret_value?(output)
+      assert output =~ "before\n"
+      assert output =~ "after\n"
+    end
+  end
+
   defp stream(chunks) do
     {callback, state} = sink()
 

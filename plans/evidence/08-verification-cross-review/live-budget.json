@@ -7,7 +7,7 @@
   "used": {
     "planner": 4,
     "worker": 12,
-    "reviewer": 9
+    "reviewer": 10
   },
   "calls": [
     {
@@ -160,8 +160,12 @@
       "provider": "codex",
       "ordinal": 9,
       "at": "2026-10-19T17:51:16.387587+00:00"
+    },
+    {
+      "role": "reviewer",
+      "provider": "claude",
+      "ordinal": 10,
+      "at": "2026-10-19T18:13:12.752825+00:00"
     }
-  ],
-  "scope": "Iteration 8 follow-up; failed launches and the deliberately discarded reviewer delivery are charged. CLI version reads are model-free and uncharged.",
-  "worker_budget_exhausted": true
+  ]
 }

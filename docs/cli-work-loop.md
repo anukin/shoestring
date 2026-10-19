@@ -164,12 +164,19 @@ shoestring review retry GOAL TASK --reason "why"    # one more call
   both reviewers found all 8 defects and blocked none of the 5 clean
   changes; that is not a measure of subtle defects. A fan-out replacement
   after a blocking review starts from the approved base with the findings,
-  not from the reviewed commit; fan-out with review is tested hermetically
-  only.
+  not from the reviewed commit. On 2026-10-19 a live sibling fan-out had two
+  workers concurrently, two separate reviews and both tasks accepted; the
+  join phase was not run after the authorized worker budget was exhausted.
+  Both manual provider paths, human reject/retry and two more seeded repair
+  samples also passed; see iteration 8 evidence for the retained initial
+  fan-out failure and its session-index ownership fix.
 - Check output streams into redacted artifacts as complete lines arrive.
   Incomplete lines and credential labels wait for more bytes or completion.
   `checks --output N` marks output without a complete artifact as partial;
   it remains inspectable if the invocation is interrupted.
+  Artifact writes run separately from the raw output collector, so a stalled
+  write cannot extend command execution or its byte cap. A failed gate gets
+  at most 500 ms to flush partial chunks after its command is stopped.
 - The checks Shoestring runs after a worker finishes run under macOS
   `sandbox-exec`: they can read the worktree and anything outside your home
   directory, write only to the worktree and a temporary directory, make no
