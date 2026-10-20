@@ -64,6 +64,10 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
   @spec env() :: [{String.t(), String.t()}]
   def env, do: [{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"} | @git_env]
 
+  @doc "The home-free Git configuration, without the Claude-specific variables."
+  @spec git_env() :: [{String.t(), String.t()}]
+  def git_env, do: @git_env
+
   defp settings(roots, worktree, repository, home) do
     %{
       "alwaysThinkingEnabled" => false,

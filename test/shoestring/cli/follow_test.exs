@@ -186,6 +186,22 @@ defmodule Shoestring.CLI.FollowTest do
              )
   end
 
+  test "a gate that could not be sandboxed is not reported as failed checks" do
+    failed = %{"plan_task_id" => "add", "gate" => "python_unittest"}
+
+    assert Follow.line(%{
+             type: "cobbler.plan.task.gate_failed",
+             payload:
+               Map.put(failed, "reason", "{:gate_unavailable, %{reason: :no_sandbox_mechanism}}")
+           }) ==
+             "Task add: checks could not run in a sandbox (python_unittest: no_sandbox_mechanism); needs your decision."
+
+    assert Follow.line(%{
+             type: "cobbler.plan.task.gate_failed",
+             payload: Map.put(failed, "reason", "{:gate_failed, %{exit_status: 1}}")
+           }) == "Task add: checks failed (python_unittest)."
+  end
+
   test "an admitted or running task is never prompted for", c do
     admitted = running(c, %{last_admission: %{"result" => "admit", "decision_id" => "d2"}})
 

@@ -46,9 +46,16 @@ defmodule Shoestring.Cobbler.PlanWorkspace do
       with true <- is_binary(source) || {:error, :global_plan_worktree_missing},
            {:ok, worktree} <- integration_worktree(source, id, base, metadata, opts),
            :ok <- require_integrated(worktree.path, accepted, base) do
-        {:ok, Keyword.put(gate_opts, :worktree_path, worktree.path)}
+        {:ok, put_paths(gate_opts, worktree.path, opts)}
       end
     end
+  end
+
+  # The gate sandbox derives its roots from the same worktree registry.
+  defp put_paths(gate_opts, path, opts) do
+    gate_opts
+    |> Keyword.put(:worktree_path, path)
+    |> Keyword.put_new(:worktrees_dir, Keyword.get(opts, :worktrees_dir))
   end
 
   defp integration_worktree(source, id, base, metadata, opts) do
@@ -120,7 +127,7 @@ defmodule Shoestring.Cobbler.PlanWorkspace do
            true <-
              worktree.workspace_ref == run.workspace_ref || {:error, :plan_worktree_mismatch},
            :ok <- same_directory(gate_opts, worktree.path) do
-        {:ok, Keyword.put(gate_opts, :worktree_path, worktree.path)}
+        {:ok, put_paths(gate_opts, worktree.path, opts)}
       end
     end
   end

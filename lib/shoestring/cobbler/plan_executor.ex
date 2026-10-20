@@ -1760,7 +1760,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       attempt: context.attempt,
       plan_task_id: context.plan_task_id,
       commit: get_commit(evidence),
-      duration_ms: get_duration(evidence) + evidences_duration_ms(prior_evidences)
+      duration_ms: get_duration(evidence) + evidences_duration_ms(prior_evidences),
+      unavailable: match?({:gate_unavailable, _}, reason)
     }
   end
 
@@ -1775,7 +1776,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       "worktree" => evidence.worktree,
       "exit_status" => evidence.exit_status,
       "output" => evidence.output,
-      "duration_ms" => evidence.duration_ms
+      "duration_ms" => evidence.duration_ms,
+      "sandbox" => Map.get(evidence, :sandbox)
     }
   end
 
@@ -2015,8 +2017,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     end
   end
 
-  # Bounded outcome: total budget exhaustion needs an operator, task
-  # budget exhaustion escalates, otherwise the executor may retry.
+  # Bounded outcome: a gate that could not be sandboxed or total budget
+  # exhaustion needs an operator, task budget exhaustion escalates, otherwise
+  # the executor may retry. Another attempt cannot make a gate available.
   defp retry_state(contract, projection, execution, dispatched, detail, repo, goal_id, opts) do
     task = task_contract!(contract, dispatched.plan_task_id)
     task_max = get_in(task, ["execution", "max_attempts"]) || 1
@@ -2027,6 +2030,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     duration = PlanBudget.remaining(usage, contract, task, detail.duration_ms)
 
     cond do
+      Map.get(detail, :unavailable, false) -> "needs_user"
       duration == {:error, :total_duration_exhausted} -> "needs_user"
       duration == {:error, :task_duration_exhausted} -> "escalate"
       total >= total_max -> "needs_user"
