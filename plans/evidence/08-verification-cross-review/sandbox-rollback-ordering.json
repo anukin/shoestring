@@ -65,5 +65,38 @@
     "Original CI lock holder was not captured, so exact CI actor remains UNVERIFIED; the harmful ordering and its prevention are reproduced hermetically",
     "Original isolated continuation integration root cause remains UNVERIFIED"
   ],
-  "full_gate": "pending at publication"
+  "full_gate": "pending at publication",
+  "pool_scope": {
+    "shared_sql_sandbox": 1,
+    "isolated_normal_connection_pools": 5,
+    "normal_pool_setup_paths_preserved": 7,
+    "dedicated_concurrency_repositories": "retain their explicit sizes"
+  },
+  "superseded_verification": {
+    "head": "7a30aaa69a42d3a6bdbf8f55c8abf323bb191a43",
+    "reason": "Preserve five independent connections in all seven integration paths that switch away from the SQL sandbox",
+    "local": {
+      "status": "intentionally stopped with SIGTERM; not a full-gate pass",
+      "doctests": 4,
+      "tests": 1272,
+      "failures": 0,
+      "skipped": 1,
+      "excluded": 6,
+      "seed": 143703,
+      "seconds": 233.3,
+      "javascript": "not run",
+      "outer_exit_code": 0,
+      "note": "Partial ExUnit summary and Mix shutdown errors after the deliberate stop; exit code is not acceptance evidence"
+    },
+    "ci": [
+      {
+        "run": 39377548410,
+        "status": "cancelled"
+      },
+      {
+        "run": 39377554765,
+        "status": "cancelled"
+      }
+    ]
+  }
 }

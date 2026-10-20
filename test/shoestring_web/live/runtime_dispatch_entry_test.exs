@@ -30,7 +30,7 @@ defmodule ShoestringWeb.RuntimeDispatchEntryTest do
       Application.put_env(
         :shoestring,
         Repo,
-        Keyword.put(config, :pool, DBConnection.ConnectionPool)
+        Keyword.merge(config, pool: DBConnection.ConnectionPool, pool_size: 5)
       )
 
       assert {:ok, _} = Application.ensure_all_started(:shoestring)

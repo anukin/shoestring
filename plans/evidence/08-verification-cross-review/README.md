@@ -1191,3 +1191,18 @@ was still held. The fixed configuration was restored unconditionally.
 [Exact outcomes and limits](sandbox-rollback-ordering.json).
 Full-gate and new-head CI results remain pending at publication.
 The earlier isolated integration root cause remains UNVERIFIED.
+
+
+Coverage correction before sandbox acceptance: seven isolated-node setup
+paths switch from the SQL sandbox to a normal connection pool. They now
+explicitly retain their previous five connections instead of inheriting the
+shared sandbox's single connection. Dedicated contention repositories also
+retain their explicit sizes. This limits serialization to the shared sandbox.
+
+VERIFIED: superseded head `7a30aaa` was deliberately stopped locally with
+SIGTERM (partial summary: 4 doctests, 1272 tests, 0 failures, 1 skipped,
+6 excluded, seed 143703, 233.3 s). JavaScript did not run; Mix reported
+shutdown errors despite outer exit 0. This is NOT a full-gate pass. Push CI
+39377548410 and PR CI 39377554765 were cancelled, not passed. The complete
+gate will be run on the corrected head. At the user's request, delivery will
+avoid repeated GitHub run polling and rely on the required local full gate.
