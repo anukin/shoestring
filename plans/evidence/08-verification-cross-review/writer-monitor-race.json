@@ -1,0 +1,43 @@
+{
+  "run": 39373948837,
+  "head": "265937ffecd4d807e4bdae4310dd4cf743614547",
+  "command": "mix precommit < /dev/null",
+  "doctests": 4,
+  "tests": 2300,
+  "failures": 1,
+  "skipped": 1,
+  "excluded": 6,
+  "seed": 383203,
+  "seconds": 585.9,
+  "javascript_passed": [
+    52,
+    8
+  ],
+  "release": "skipped",
+  "failure": "Writer normal-exit assertion received DOWN with reason noproc; monitor attached after the writer had already exited",
+  "frequency": "intermittent, 1 of 3 CI runs on the same tree (two pre-merge, one post-merge)",
+  "root_cause": "VERIFIED monitor-after-exit race in test setup; zero-duration idle timer armed in init before the test installs its monitor",
+  "original_integration_root_cause": "UNVERIFIED",
+  "focused": {
+    "command": "timeout 120 mix test test/shoestring/trajectory/writer_test.exs test/shoestring/trajectory/append_test.exs --seed 383203 < /dev/null",
+    "tests": 18,
+    "failures": 0,
+    "seed": 383203,
+    "seconds": 0.4
+  },
+  "mutation": {
+    "baseline": "265937ffecd4d807e4bdae4310dd4cf743614547",
+    "change": "valid idle-timeout handler returns noreply instead of stop normal; restored unconditionally",
+    "command": "timeout 120 mix test test/shoestring/trajectory/writer_test.exs:122 --seed 383203 < /dev/null",
+    "tests": 1,
+    "failures": 1,
+    "excluded": 4,
+    "seed": 383203,
+    "seconds": 1.1,
+    "reason": "normal-exit notification absent because actual idle shutdown is broken",
+    "limit": "Defense check of retained behavior, not a production regression fix or reproduction of the earlier scheduler delay"
+  },
+  "fix": "Test starts with idle timeout infinity, installs monitor, changes test state timeout to zero, and performs a normal append to arm the real timer; approved 1000 ms DOWN assertion and unregistration assertion retained",
+  "production_changes": false,
+  "full_gate": "pending at publication"
+}

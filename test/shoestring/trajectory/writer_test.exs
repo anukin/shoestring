@@ -121,9 +121,29 @@ defmodule Shoestring.Trajectory.WriterTest do
 
   test "a real idle timeout stops and unregisters the writer" do
     goal_id = Ecto.UUID.generate()
-    pid = start_supervised!({Writer, goal_id: goal_id, idle_timeout: 0})
+
+    pid =
+      start_supervised!({
+        Writer,
+        goal_id: goal_id,
+        idle_timeout: :infinity,
+        attempt_fun: fn _input, _references, _state -> {:error, :not_retryable} end
+      })
 
     ref = Process.monitor(pid)
+
+    # Install the monitor before an append arms the real zero-duration timer.
+    # Starting with zero can let the writer exit before monitoring begins.
+    _ = :sys.replace_state(pid, &%{&1 | idle_timeout: 0})
+
+    input = %AppendInput{
+      type: "decision.recorded",
+      schema_version: 1,
+      actor: "system",
+      payload: %{"decision" => "continue"}
+    }
+
+    assert {:error, :not_retryable} = GenServer.call(pid, {:append, input})
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
     assert GenServer.whereis(Writer.via(goal_id)) == nil
   end

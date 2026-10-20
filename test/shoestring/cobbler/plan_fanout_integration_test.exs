@@ -27,7 +27,7 @@ defmodule Shoestring.Cobbler.PlanFanoutIntegrationTest do
       Application.put_env(
         :shoestring,
         Repo,
-        Keyword.put(config, :pool, DBConnection.ConnectionPool)
+        Keyword.merge(config, pool: DBConnection.ConnectionPool, pool_size: 5)
       )
 
       Application.put_env(:shoestring, :dispatch_effect, Shoestring.Harness.Dispatch.ElfEffect)

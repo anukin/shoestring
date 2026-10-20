@@ -1109,3 +1109,100 @@ passed 5 tests, 0 failures, seed 221128 (0.1 s). This is verification of the
 approved test tolerance, not a production regression fix or reproduction
 of GitHub scheduler load. [Exact preceding CI and approval record](writer-idle-wait.json).
 The full gate and new-head CI remain pending at publication.
+
+
+### Post-merge writer monitor race
+
+VERIFIED: PRs #93, #94, #95 and #96 merged in order into `main` after
+the local full gate and both current-head CI runs passed. Main `265937f`
+had exactly the tested `3b6b483` tree. Local: 4 doctests, 2300 tests,
+0 failures, 1 skipped, 6 excluded, seed 221128 (529.9 s), JavaScript
+52/52 and 8/8. Push CI 39372626890 passed the same counts, seed 367701
+(532.2 s); PR CI 39372633293 passed, seed 818134 (659.8 s); both
+JavaScript suites and production releases passed. Merge messages were
+inspected without attribution trailers. The user's explicit merge request
+overrides the standing human-only rule for this iteration's delivery.
+
+VERIFIED: [post-merge main CI](https://github.com/anukin/shoestring/actions/runs/39373948837)
+failed: 4 doctests, 2300 tests, 1 failure, 1 skipped, 6 excluded,
+seed 383203 (585.9 s); JavaScript 52/52 and 8/8 passed, release skipped.
+The sole failure is the writer lifecycle test: its monitor received
+`:noproc`, proving that monitoring started after the writer had exited.
+Intermittent, 1 of 3 CI runs on that tree (two pre-merge, one post-merge).
+This differs from the preceding late-normal-notification failure. Increasing
+the wait again would not address it.
+
+The test now starts the supervised writer with its timer disabled, installs
+the monitor, sets that test writer's idle interval to zero, and performs a
+normal append to arm the real timer. Normal exit and registry unregistration
+remain required; the user's approved 1,000 ms wait is retained unchanged.
+No production code, retry, sleep, skipped test or further timeout extension
+is introduced. The append idle-disappearance/recovery twin was also checked.
+
+VERIFIED focused lifecycle coverage: 18 tests, 0 failures, seed 383203
+(0.4 s). On the `265937f` production source, mutating the valid idle handler
+to ignore expiry made the exact test fail: 1 test, 1 failure, 4 excluded,
+seed 383203 (1.1 s). The mutation was restored. This defends the retained
+real-idle shutdown assertion; it is a test setup correction, not a new
+production regression lock or reproduction of scheduler timing.
+[Exact outcomes and limits](writer-monitor-race.json).
+Full-gate and follow-up PR CI verification remain pending at publication.
+The original isolated integration root cause remains UNVERIFIED.
+
+
+### Shared test sandbox rollback ordering
+
+VERIFIED on `b4fe5e5`: the local full gate with seed 383203 passed
+4 doctests, 2300 tests, 0 failures, 1 skipped, 6 excluded (538.9 s),
+JavaScript 52/52 and 8/8. [PR CI](https://github.com/anukin/shoestring/actions/runs/39375445277)
+passed those counts, seed 913579 (708.5 s), both JavaScript suites and
+the production release. [Push CI](https://github.com/anukin/shoestring/actions/runs/39375414391)
+reported 4 doctests, 2300 tests, 2 failures, 1 skipped, 6 excluded,
+seed 143703 (768.0 s); JavaScript 52/52 and 8/8 passed, release skipped.
+Both failures occurred before reservation behavior, at the handoff fixture's
+first settings update (`Database busy`). The writer lifecycle test passed
+in both runs. Intermittent, 1 of 2 CI runs on that head; neither was rerun.
+
+REPO-INSPECTION: Ecto Sandbox stops its owner Agent while DBConnection's
+separate proxy performs rollback after observing owner exit. Its stop/checkin
+protocol is asynchronous. The test pool previously had five connections,
+allowing a fresh transaction before a preceding rollback released its lock.
+VERIFIED controlled probe: pause the owned proxy, stop its owner, observe
+SQLite refuse a competing write, resume and await proxy exit, then write
+successfully (1 test, 0 failures, seed 143703, 0.08 s). The first probe used
+the wrong expected raw error spelling and failed (1 test, 1 failure, 0.09 s);
+its observed `database is locked` was retained, not rewritten as a pass.
+UNVERIFIED: the original CI lock holder was not captured. This reproduces
+the harmful ordering, not the exact historical actor.
+
+The serial shared test sandbox now uses one connection, so new checkout
+waits behind rollback. Dedicated independent-writer test repositories retain
+their explicitly configured pools. Production configuration, retries, sleeps
+and existing assertion bounds are unchanged. A regression pauses the old
+proxy, verifies a fresh non-queueing checkout is refused, then releases
+rollback and verifies the successor can read the rolled-back value and write.
+Scratch evidence is retained; no fixture deletion or process sweep is added.
+
+VERIFIED: focused sandbox/reservation-continuation coverage passed 10 tests,
+0 failures, seed 143703 (0.7 s). With `config/test.exs` restored from
+pre-fix `b4fe5e5`, the exact new regression failed behaviorally: 1 test,
+1 failure, seed 143703 (0.1 s), receiving successful checkout while rollback
+was still held. The fixed configuration was restored unconditionally.
+[Exact outcomes and limits](sandbox-rollback-ordering.json).
+Full-gate and new-head CI results remain pending at publication.
+The earlier isolated integration root cause remains UNVERIFIED.
+
+
+Coverage correction before sandbox acceptance: seven isolated-node setup
+paths switch from the SQL sandbox to a normal connection pool. They now
+explicitly retain their previous five connections instead of inheriting the
+shared sandbox's single connection. Dedicated contention repositories also
+retain their explicit sizes. This limits serialization to the shared sandbox.
+
+VERIFIED: superseded head `7a30aaa` was deliberately stopped locally with
+SIGTERM (partial summary: 4 doctests, 1272 tests, 0 failures, 1 skipped,
+6 excluded, seed 143703, 233.3 s). JavaScript did not run; Mix reported
+shutdown errors despite outer exit 0. This is NOT a full-gate pass. Push CI
+39377548410 and PR CI 39377554765 were cancelled, not passed. The complete
+gate will be run on the corrected head. At the user's request, delivery will
+avoid repeated GitHub run polling and rely on the required local full gate.

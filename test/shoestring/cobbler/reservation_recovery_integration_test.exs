@@ -21,7 +21,7 @@ defmodule Shoestring.Cobbler.ReservationRecoveryIntegrationTest do
       Application.put_env(
         :shoestring,
         Repo,
-        Keyword.put(config, :pool, DBConnection.ConnectionPool)
+        Keyword.merge(config, pool: DBConnection.ConnectionPool, pool_size: 5)
       )
 
       restart!()
