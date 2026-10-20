@@ -1080,3 +1080,32 @@ check of the retained guards, not a reproduction of scheduler timing against
 a pre-fix commit. An earlier line-selector probe selected the preceding tests
 and is excluded from that claim. Full-gate and new-head CI verification are
 pending at publication; merges remain unclaimed.
+
+
+### Approved writer idle-test wait exception
+
+VERIFIED on `89d2273`: the local full gate with seed 860663 passed
+4 doctests, 2300 tests, 0 failures, 1 skipped, 6 excluded (539.2 s);
+JavaScript 52/52 and 8/8.
+[Push CI](https://github.com/anukin/shoestring/actions/runs/39370825238)
+passed the same counts, seed 674399 (697.8 s), both JavaScript suites and
+the production release.
+[PR CI](https://github.com/anukin/shoestring/actions/runs/39370829648)
+reported 4 doctests, 2300 tests, 1 failure, 1 skipped, 6 excluded,
+seed 221128 (773.3 s); JavaScript 52/52 and 8/8 passed, release skipped.
+Planner restart and isolated integration scenarios passed in both runs.
+The original integration root cause remains UNVERIFIED.
+
+The sole PR failure found the writer's matching normal-exit notification
+just after its 100 ms assertion deadline: intermittent, 1 of 2 CI runs.
+The user explicitly approved “Allow the 1-second test wait”, overriding
+the global prohibition on widening assertions for this single assertion.
+Only that wait changes to 1,000 ms. The product idle timer stays at zero;
+normal exit and registry unregistration remain required. No product behavior,
+other timeout, retry, sleep or skipped test changes.
+
+VERIFIED focused check: `timeout 120 mix test test/shoestring/trajectory/writer_test.exs --seed 221128 < /dev/null`
+passed 5 tests, 0 failures, seed 221128 (0.1 s). This is verification of the
+approved test tolerance, not a production regression fix or reproduction
+of GitHub scheduler load. [Exact preceding CI and approval record](writer-idle-wait.json).
+The full gate and new-head CI remain pending at publication.
