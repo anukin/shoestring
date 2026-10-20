@@ -13,9 +13,11 @@ defmodule Mix.Tasks.Shoestring.Do do
   (`mix shoestring.follow`), then prints the result (`mix shoestring.result`).
 
   Checks come from `--gate` (mix_test, mix_precommit, mix_format_check,
-  mix_compile_strict) and `--test` (tracked test files), or are detected: a Mix
-  project runs `mix_test`; Python with 1-16 `test/**/test_*.py` files runs
-  `python_unittest` over them. The planner never chooses them.
+  mix_compile_strict, or `project:NAME` for a command approved in
+  `config :shoestring, :project_gates`) and `--test` (tracked test files), or
+  are detected: a Mix project runs `mix_test`; Python with 1-16
+  `test/**/test_*.py` files runs `python_unittest` over them. The planner
+  never chooses them.
 
   Requires a saved default agent (or `--agent`) whose Worker role names an
   explicit model, a planner (the agent's Claude Coordinator, or
@@ -100,7 +102,8 @@ defmodule Mix.Tasks.Shoestring.Do do
 
   def message({:unknown_gate, name}),
     do:
-      "Unknown gate #{name}. Use mix_test, mix_precommit, mix_format_check or mix_compile_strict."
+      "Unknown gate #{name}. Use mix_test, mix_precommit, mix_format_check, mix_compile_strict " <>
+        "or project:NAME for a gate in config :shoestring, :project_gates."
 
   def message({:untracked_test_path, path}), do: "#{path} is not a tracked file."
 

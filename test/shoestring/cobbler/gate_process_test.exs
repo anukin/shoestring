@@ -26,6 +26,31 @@ defmodule Shoestring.Cobbler.GateProcessTest do
     assert bytes > 65_536
   end
 
+  test "a timeout or an overflow keeps what arrived before the bound, never more than the cap" do
+    assert {:error, {:gate_timeout, %{partial_output: "before the bound\n"}}} =
+             GateProcess.run(
+               [
+                 "python3",
+                 "-c",
+                 "import time; print('before the bound', flush=True); time.sleep(30)"
+               ],
+               File.cwd!(),
+               1_000,
+               1024
+             )
+
+    assert {:error, {:gate_output_oversized, %{bytes: bytes, partial_output: partial}}} =
+             GateProcess.run(
+               ["python3", "-c", "import os; os.write(1, b'y' * 3000)"],
+               File.cwd!(),
+               5_000,
+               1024
+             )
+
+    assert bytes > 1024
+    assert partial == String.duplicate("y", 1024)
+  end
+
   test "timeout kills the group including a descendant ignoring TERM" do
     marker = Path.join(System.tmp_dir!(), "gate-group-#{Ecto.UUID.generate()}")
 

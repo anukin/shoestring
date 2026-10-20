@@ -360,9 +360,14 @@ defmodule Shoestring.Cobbler.PlanReview do
       "commit" => evidence.commit,
       "worktree" => evidence.worktree,
       "exit_status" => evidence.exit_status,
-      "output" => evidence.output,
+      # Redacted before it is stored or sent to a reviewer.
+      "output" => Shoestring.Cobbler.GateOutput.redact(evidence.output),
       "duration_ms" => evidence.duration_ms,
-      "sandbox" => Map.get(evidence, :sandbox)
+      "sandbox" => Map.get(evidence, :sandbox),
+      "spec" => Map.get(evidence, :spec),
+      "required" => Map.get(evidence, :required, true),
+      "result" => Map.get(evidence, :result, "passed"),
+      "artifact_id" => Map.get(evidence, :artifact_id)
     }
   end
 
@@ -376,7 +381,11 @@ defmodule Shoestring.Cobbler.PlanReview do
         exit_status: item["exit_status"],
         output: item["output"],
         duration_ms: item["duration_ms"],
-        sandbox: item["sandbox"]
+        sandbox: item["sandbox"],
+        spec: item["spec"],
+        required: Map.get(item, "required", true),
+        result: Map.get(item, "result", "passed"),
+        artifact_id: item["artifact_id"]
       }
     end)
   end

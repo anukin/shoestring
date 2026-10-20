@@ -32,7 +32,8 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
 
   Every successful run returns evidence bound to the goal, the plan task,
   the revision id/number/digest, the run/attempt, the actual tested git
-  commit, and the tested worktree. `verify/3` re-checks that binding:
+  commit, the tested worktree, and the identity of the gate's versioned
+  specification (`Shoestring.Cobbler.GateSpec`). `verify/3` re-checks that binding:
   stale (digest moved), missing, or forged evidence is refused, and a
   successful run alone — without bound gate evidence — never unlocks a
   dependent.
@@ -47,11 +48,11 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
   carry no sandbox identity (`sandbox: nil`).
   """
 
-  alias Shoestring.Cobbler.{GateProcess, GateSandbox, PlanGate}
+  alias Shoestring.Cobbler.{GateProcess, GateSandbox, GateSpec, PlanGate}
 
   @default_timeout_ms 120_000
   @max_timeout_ms 300_000
-  @max_output_bytes 65_536
+  @max_output_bytes GateSpec.output_limit_bytes()
   @commit_timeout_ms 15_000
 
   @type context :: %{
@@ -77,7 +78,9 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
           required(:exit_status) => integer(),
           required(:output) => String.t(),
           required(:duration_ms) => non_neg_integer(),
-          required(:sandbox) => GateSandbox.identity() | nil
+          required(:sandbox) => GateSandbox.identity() | nil,
+          required(:spec) => String.t(),
+          required(:required) => boolean()
         }
 
   @doc """
@@ -85,15 +88,19 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
 
   `gate_ref` is a validated `%{"gate" => name}` reference (optionally with
   `test_paths` for `mix_test` or `python_unittest`). `context` binds the run to its plan task.
-  Options: `:worktree_path` (required), `:timeout_ms`, `:worktrees_dir` (the
-  service's worktree root), `:gate_sandbox` (options for
-  `GateSandbox.wrap/3`), `:runner` (test injection, see moduledoc).
+  Options: `:worktree_path` (required), `:timeout_ms`, `:gate_spec` (the
+  specification the caller ordered by; built here when absent, and refused
+  when it does not match the reference), `:worktrees_dir` (the service's
+  worktree root), `:gate_sandbox` (options for `GateSandbox.wrap/3`),
+  `:runner` (test injection, see moduledoc). A project gate that is not
+  configured is unavailable.
   """
   @spec run(map(), context(), keyword()) :: {:ok, evidence()} | {:error, term()}
   def run(gate_ref, context, opts \\ []) do
     with {:ok, normalized_context} <- normalize_context(context),
          {:ok, gate} <- gate_name(gate_ref),
          {:ok, argv} <- trusted_argv(gate_ref, gate),
+         {:ok, spec} <- gate_spec(gate_ref, argv, opts),
          {:ok, worktree} <- resolve_worktree(opts),
          {:ok, commit} <- resolve_commit(worktree, opts),
          :ok <- check_clean(worktree, opts),
@@ -116,8 +123,25 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
          exit_status: result.exit_status,
          output: result.output,
          duration_ms: result.duration_ms,
-         sandbox: Map.get(result, :sandbox)
+         sandbox: Map.get(result, :sandbox),
+         spec: GateSpec.identity(spec),
+         required: spec["required"]
        }}
+    end
+  end
+
+  defp gate_spec(gate_ref, argv, opts) do
+    case Keyword.get(opts, :gate_spec) do
+      nil ->
+        case GateSpec.build(gate_ref, resolve_timeout(opts)) do
+          {:ok, spec} -> {:ok, spec}
+          {:error, reason} -> {:error, {:gate_unavailable, %{reason: reason}}}
+        end
+
+      spec ->
+        if spec["argv"] == argv and spec["gate"] == gate_name_only(gate_ref),
+          do: {:ok, spec},
+          else: {:error, {:invalid_gate_reference, gate_name_only(gate_ref)}}
     end
   end
 
@@ -211,7 +235,7 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
   end
 
   defp gate_name(%{"gate" => gate}) when is_binary(gate) do
-    if gate in PlanGate.names() do
+    if PlanGate.known?(gate) do
       {:ok, gate}
     else
       {:error, {:unknown_gate, gate}}
@@ -222,10 +246,14 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
 
   defp trusted_argv(gate_ref, _gate) do
     with {:ok, reference} <- PlanGate.validate(gate_ref, :gate),
-         {:ok, argv} <- PlanGate.argv(reference) do
+         {:ok, %{argv: argv}} <- PlanGate.spec(reference) do
       {:ok, argv}
     else
-      {:error, _changeset} -> {:error, {:invalid_gate_reference, gate_name_only(gate_ref)}}
+      {:error, :project_gate_not_configured} ->
+        {:error, {:gate_unavailable, %{reason: :project_gate_not_configured}}}
+
+      {:error, _changeset} ->
+        {:error, {:invalid_gate_reference, gate_name_only(gate_ref)}}
     end
   end
 

@@ -81,6 +81,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.SandboxTest do
 
     assert {"GIT_CONFIG_GLOBAL", "/dev/null"} in sandbox.env
     assert {"GIT_CONFIG_VALUE_1", "/dev/null"} in sandbox.env
+    assert {"PYTHONDONTWRITEBYTECODE", "1"} in sandbox.env
   end
 
   test "anything but a registered private run worktree fails closed", ctx do

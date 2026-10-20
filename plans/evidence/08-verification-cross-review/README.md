@@ -402,3 +402,193 @@ and a prompt that says it does not start from the reviewed commit.
   retried on 0.163. The Claude reviewer adapter itself was verified directly.
 - A human `reject` or `retry` live (both hermetic), a held review on known
   capacity, and fan-out with review live.
+
+## Work packages A and B: gate contracts and records
+
+Date: 2026-10-17. Branch `iter8/gate-contracts`, stacked on
+`iter8/cross-review` (`74e4679`). The user said "continue on the work and do
+not wait for me".
+
+### What was built
+
+- **Versioned specification** (`Cobbler.GateSpec`): gate, version, source
+  (`builtin` or `configuration`), kind and run order, the exact argv,
+  working directory, environment allowlist (`GateSandbox.environment_names/0`),
+  timeout, output limit, exit semantics (`exit_status_zero`), required, and
+  artifact policy. Its identity, `<gate>@<version>:sha256:<canonical JSON
+  digest>`, is recorded with every run, in acceptance evidence and in the
+  review packet. Changing argv, parameters or timeout changes the identity.
+- **Project-approved gates** (`config :shoestring, :project_gates`): the user,
+  never a plan or model, approves extra argument-array commands with a kind,
+  an optional `required: false` and timeout (at most 300 s). A plan cites
+  `project:NAME` with no parameters. Entries with a path as program, an
+  empty or NUL argument, a secret-looking argument, an unknown kind or key, or
+  a timeout over the cap are left out. `shoestring do --gate project:NAME`
+  needs the name configured at intake; a cited name no longer configured at
+  run time is **unavailable** (`retry_state` `needs_user`, nothing runs),
+  never passed or skipped.
+- **Order and results:** gates run cheap kinds first (status, format,
+  compile/lint/typecheck, build, test, precommit; plan order within a kind).
+  A failed optional gate is recorded (`result` `failed`, `required` false)
+  and does not block; when all of a task's gates are optional they are all
+  treated as required. A failing required gate stops the run and the
+  `gate_failed` event lists the gates not run (`skipped`) and a distinct
+  `result` (`failed`, `timeout`, `output_oversized`, `unavailable`, `error`);
+  the registry refuses a failure that claims `passed`.
+- **Records** (`Cobbler.PlanGateLog`): `cobbler.plan.gate.started` and
+  `cobbler.plan.gate.completed` per invocation (task and final gates), with
+  spec identity, position, exact result, exit status, commit, duration,
+  sandbox identity and an output artifact (`ArtifactStore`, redacted text,
+  SHA-256 and size in the event). The registry refuses a completion that
+  says `passed` with a nonzero exit, `failed` with exit 0, a spec of another
+  gate or a short digest, an unknown gate, an artifact without digest and
+  size, or task fields on a final-gate record. On a timeout or the output
+  limit the output that arrived before the bound is kept (at most the cap,
+  marked cut), and never enters the reason string.
+- **CLI:** `follow` prints each check's start and result; `result` marks
+  optional checks and names `shoestring checks GOAL`, which lists every
+  invocation (task and attempt or final, kind, required, result, exit,
+  duration, commit, spec) and prints one invocation's stored output with
+  `--output N`.
+
+### Defects found and fixed on the way
+
+- **A secret-looking line in gate output made acceptance impossible.**
+  Acceptance evidence stored the gate output verbatim and the event scan
+  refuses secret-looking text, so a test printing `password=...` left the
+  task unacceptable (`executor_append_failed`, "must not contain secrets").
+  The same output went unredacted into the review packet sent to the other
+  provider. Both now go through `GateOutput.redact/1` (trajectory redaction,
+  then any line the stricter scan still flags is withheld, then all of it if
+  needed). `plan_gate_contract_test` "gate output that looks like a secret…"
+  and `plan_review_test` "gate output is redacted before…" each fail on the
+  unfixed line (VERIFIED by reverting it locally: `executor_append_failed`,
+  and the packet `refute`).
+- **`__pycache__` left by workers** (the over-budget run above). Sandboxed
+  Claude Elves, plan-run Codex Elves and gates now run with
+  `PYTHONDONTWRITEBYTECODE=1`. The Codex launch test fails without the change
+  (`env` nil; VERIFIED by reverting it). The Claude side is asserted on the
+  sandbox's environment list only (documents the setting; no live Elf run
+  since). The live Codex run below predates the Codex change and shows the
+  problem: the worker removed the `__pycache__` it created by itself.
+
+### Tests (hermetic)
+
+`gate_spec_test` (specification fields and identity, ordering, configured
+gates and refusals, all-optional rule), `plan_gate_contract_test` (real
+sandboxed gates through the executor: cheap-first order, events, artifact
+digest and redaction, CLI listing, optional failure, skipped gates, timeout
+with partial output, unconfigured gate, registry refusals, secret-looking
+output), `gate_process_test` (partial output bounds), `plan_run_env_test`,
+and `review_quality_cases_test`. Apart from the two regression locks above
+these are new-functionality tests and do not fail at the base commit for a
+behavioural reason.
+
+### Rehearsals (no provider call)
+
+VERIFIED: `iter7a_work_loop.exs` rehearsal with the fixture reviewer passed
+(1 of 1): `follow` printed "Running check python_unittest." and "Check
+python_unittest: passed in 0.2 s." for the task and the final check, and
+`mix shoestring.checks` against that state listed both invocations and
+printed the stored output. The same with `ITER7A_WORKER=codex` first hung:
+the driver had disabled the Codex capacity monitor, so admission had no
+Codex observation; the execution job snoozed every 60 s and recorded
+nothing, and `follow` printed nothing. Enabling the monitor (the product
+default) fixed the driver. **Found, not fixed:** an admission that fails
+before a decision (no capacity observation for the provider) is silent to
+`follow`.
+
+### Limits
+
+- Output is written to the artifact when the gate ends, not streamed while
+  it runs; a restart mid-gate leaves a start record without completion, and
+  the gate runs again as a new invocation.
+- No built-in repository-status, lint, typecheck or build gate was added;
+  those come from configured project gates. The Mix built-ins are unchanged.
+- The specification's environment is the variable names, not values
+  (`PATH` and the locale come from the service).
+- The planner schema still offers only the built-in names; project gates
+  come from the user at intake (or a human plan edit).
+
+## Review-quality eval (live, authorized)
+
+Cases: `tools/live_eval/review_quality/cases.json`, 13 cases on small Python
+fixtures, **8 seeded defects** (correctness: exclusive range, floor-division
+mean; tests: a deleted out-of-range test with the check missing; security:
+path traversal, shell injection; concurrency: lost update; scope: an
+unowned settings file; error handling: swallowed errors) and **5 clean
+controls** for the same contracts. Every case's tests pass (so only review
+can tell them apart), checked hermetically by `review_quality_cases_test`.
+Labels were written with the cases, by construction, by the agent, not by a
+human; they still need the user's confirmation. Driver:
+`tools/live_eval/iter8_review_quality.exs`, one call per (reviewer, case),
+outside the service, with a hard call budget.
+
+Budget: 13 Codex and 13 Claude calls. Used: **13 Codex calls, 13 Claude
+calls**, every answer schema-valid.
+
+VERIFIED ([codex](review-quality/codex/summary.json),
+[claude](review-quality/claude/summary.json), per call `results.json`):
+
+| Reviewer | Defects found at the labelled path (and line ±2) | Clean controls blocked | Findings with a valid reference | Non-blocking findings | Output tokens | Time |
+| --- | --- | --- | --- | --- | --- | --- |
+| Codex `gpt-6-luna` | 8 / 8 (8 / 8) | 0 / 5 | 9 / 9 | 0 | 2 090 (261 per found defect) | 49.5 s |
+| Claude `opus` | 8 / 8 (8 / 8) | 0 / 5 | 23 / 23 | 8 | 11 098 (1 387 per found defect) | 130.3 s |
+
+What this does and does not show: each contract states the requirement the
+defect breaks in plain words, and every fixture is a few lines. So this
+measures whether a reviewer checks a small diff against an explicit
+contract, which both did perfectly, not recall on subtle or unstated defects
+or on large diffs. Useful non-blocking precision is **not measured**: the 8
+Claude non-blocking findings and 5 suggestions are listed in
+`review-quality/claude/non-blocking-to-label.json` with `useful: null` for a
+human to label (most say the passing test does not cover the stated
+requirement). Repair success and repeated-finding rate come only from the
+live loops above: 1 of 1 seeded repair succeeded; no repeated finding was
+observed live (the repeat path is hermetic).
+
+## A Claude reviewer in the full loop (live)
+
+The Codex commit block from iteration 5 was re-probed first without a model
+call (codex-cli 0.163.0, `codex sandbox` in workspace-write mode, from a
+Shoestring private-storage worktree): `git commit` is **denied** without
+extra writable roots (`index.lock: Operation not permitted`, as in iteration
+5) and **succeeds** with the roots Shoestring gives plan runs
+(`CodexAppServer.GitSandbox`: the worktree's git dir, objects and refs),
+with a warning about `packed-refs.lock`. Manual `/runs/new` Codex runs share
+Git storage, get no such roots, and were not re-tested.
+
+Then one live loop ([live-claude-reviewer](live-claude-reviewer/)), with
+`ITER7A_MODE=live ITER7A_WORKER=codex ITER7A_REVIEW=claude`. Cap: one
+planner call, at most two Codex Elf runs and two Claude review calls (the
+driver approves at most two attempts). Used: **one planner call (Claude, 815
+output tokens), one Codex Elf run, one Claude review call**.
+
+VERIFIED (`transcript.json`, `domain-events.json`, `codex-worker.json`,
+`result.json`):
+
+- The plan was edited once by the driver's rule (attempts capped) and
+  approved; the task was held for capacity (Codex confidence medium),
+  confirmed, and **one Codex Elf run (`gpt-6-luna`) committed** the change
+  itself (`git add calc.py && git commit -m "Implement calc.add"`, exit 0) in
+  its private worktree. It also created `__pycache__/` and removed it before
+  finishing.
+- The gate passed in the sandbox with its spec identity
+  (`python_unittest@1:sha256:20ea1e63…`); review was requested, held
+  (`support_tier_conservative_partial`), confirmed, and **one Claude `opus`
+  call approved it** (236 output tokens, 3.6 s).
+- The task was accepted at `a627eee`, the final gate passed, `result` printed
+  the review; the fixture source was unchanged and the printed merge in a
+  clone passed its tests. 126.3 s overall.
+
+This closes "a Claude reviewer inside the loop" and shows a Codex Worker
+committing in a plan worktree at 0.163.0 for one small task.
+
+### Still not verified
+
+- A defect the worker makes on its own: every live block was seeded, and
+  this loop's worker made none.
+- A human `reject` or `retry` live, a held review on known capacity, and
+  fan-out with review live.
+- Linux gates (fail closed), streaming gate output, and the review-quality
+  numbers beyond these 13 small, explicit cases.

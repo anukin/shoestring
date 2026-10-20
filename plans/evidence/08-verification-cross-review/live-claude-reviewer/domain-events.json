@@ -1,0 +1,987 @@
+[
+  {
+    "type": "cobbler.planner.requested",
+    "payload": {
+      "configuration": {
+        "adapter": "claude",
+        "endpoint_digest": "44965f1c4bf1114100b5927a2b7761d7c27e8d9f449ec563d93e6134d0ab5acd",
+        "max_attempts": 2,
+        "max_charged_output_tokens": 16384,
+        "max_output_tokens": 8192,
+        "model": "opus",
+        "provider_id": "claude",
+        "scope": "subscription",
+        "support_tier": "conservative_partial",
+        "timeout_ms": 240000,
+        "version": "1"
+      },
+      "input_digest": "4f897b0fa63532e6d25b8df6673c6efa4cf2dfe7764a0fc67c8b079553362d0e",
+      "projection_json": "{\"description\":\"Make add(a, b) in calc.py return the sum of its arguments.\",\"evidence_summaries\":{\"items\":[]},\"goal_contract\":{\"acceptance\":{\"evidence\":[\"Every named gate passes at the final commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}]},\"constraints\":[\"Change only what the request needs; leave unrelated files unchanged.\",\"Do not edit or delete existing tests unless the request asks for it.\"],\"non_goals\":[\"Unrelated refactoring, dependency upgrades or formatting changes.\"],\"repository\":{\"base_revision\":\"fc60f7f2782d5a9c1428963828d75d37ef37c31e\"},\"statement\":\"Make add(a, b) in calc.py return the sum of its arguments.\"},\"goal_id\":\"a2cdb3ee-5a58-4c2c-a7d8-ad881667f08c\",\"repository_map\":{\"complete\":true,\"omitted_paths\":0,\"paths\":[\"calc.py\",\"test/__init__.py\",\"test/test_calc.py\"],\"total_paths\":3},\"requested_by\":\"human:user\",\"source_context_refs\":[],\"title\":\"Make add(a, b) in calc.py return the sum of its arguments.\"}",
+      "request_id": "6535a0d8-0fd6-49aa-ae78-efc9ed11766e",
+      "request_key": "initial"
+    },
+    "sequence": 1,
+    "occurred_at": "2026-10-17T18:40:40.572263Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "planner.claude",
+        "compatibility_state": "compatible",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "3477d49a-767c-4aba-ae5f-60805202557a",
+      "evaluated_at": "2026-10-17T18:40:40.575256Z",
+      "explanation": "Candidate support tier 'conservative_partial' requires attributable single-decision confirmation",
+      "extensions": {},
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "c2a730fa-6299-4efb-a3a0-e5f7052ede67",
+        "windows": []
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-17T18:45:40.575256Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "support_tier_conservative_partial",
+      "reobservation_required": true,
+      "requested_capability": "read_only",
+      "result": "require_confirmation",
+      "scope": "subscription"
+    },
+    "sequence": 2,
+    "occurred_at": "2026-10-17T18:40:40.587682Z"
+  },
+  {
+    "type": "cobbler.planner.blocked",
+    "payload": {
+      "admission_event_id": "780d3b31-cf25-45d7-85b0-c929ab1141af",
+      "errors": {
+        "items": [
+          {
+            "code": "support_tier_conservative_partial",
+            "message": "Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+          }
+        ]
+      },
+      "request_id": "6535a0d8-0fd6-49aa-ae78-efc9ed11766e"
+    },
+    "sequence": 3,
+    "occurred_at": "2026-10-17T18:40:40.590496Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "planner.claude",
+        "compatibility_state": "compatible",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "ad0dfa31-3ca2-42b2-99f0-b3c8edb539e1",
+      "evaluated_at": "2026-10-17T18:40:40.592443Z",
+      "explanation": "Admitted via attributable single-decision confirmation by 'human:user' (intent: 'read_only'); not automatically safe (Candidate support tier 'conservative_partial' requires attributable single-decision confirmation)",
+      "extensions": {},
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "c2a730fa-6299-4efb-a3a0-e5f7052ede67",
+        "windows": []
+      },
+      "override": {
+        "confirmed_at": null,
+        "confirmed_by": "human:user",
+        "intent": "read_only",
+        "reason": "valid",
+        "target_provider_id": "claude",
+        "target_scope": "subscription",
+        "valid": true
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-17T18:45:40.592443Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confirmed_support_tier_conservative_partial",
+      "reobservation_required": false,
+      "requested_capability": "read_only",
+      "result": "admit",
+      "scope": "subscription"
+    },
+    "sequence": 4,
+    "occurred_at": "2026-10-17T18:40:40.593296Z"
+  },
+  {
+    "type": "cobbler.planner.attempt.started",
+    "payload": {
+      "admission_event_id": "16c6c6ac-a0f3-4682-b78f-413e93c80d02",
+      "attempt": 1,
+      "charged_output_tokens": 8192,
+      "output_token_allowance": 8192,
+      "request_id": "6535a0d8-0fd6-49aa-ae78-efc9ed11766e"
+    },
+    "sequence": 7,
+    "occurred_at": "2026-10-17T18:40:40.602976Z"
+  },
+  {
+    "type": "cobbler.planner.attempt.finished",
+    "payload": {
+      "attempt": 1,
+      "errors": {
+        "items": []
+      },
+      "output_tokens": 815,
+      "plan_content": "{\"budget\":{\"max_total_attempts\":3,\"max_total_duration_seconds\":1800},\"goal\":{\"acceptance\":{\"evidence\":[\"Every named gate passes at the final commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}]},\"constraints\":[\"Change only what the request needs; leave unrelated files unchanged.\",\"Do not edit or delete existing tests unless the request asks for it.\"],\"non_goals\":[\"Unrelated refactoring, dependency upgrades or formatting changes.\"],\"repository\":{\"base_revision\":\"fc60f7f2782d5a9c1428963828d75d37ef37c31e\"},\"statement\":\"Make add(a, b) in calc.py return the sum of its arguments.\"},\"planner\":{\"identity\":\"claude:opus\",\"source_context_refs\":[\"goal:a2cdb3ee-5a58-4c2c-a7d8-ad881667f08c\"],\"version\":\"1\"},\"tasks\":[{\"acceptance_criteria\":[\"calc.add(a, b) returns a + b.\",\"The python_unittest gate on test/test_calc.py passes.\",\"Only calc.py is modified; existing tests are not edited or deleted.\"],\"checkpoint\":{\"condition\":\"The python_unittest gate on test/test_calc.py passes at the final commit, and the diff touches only calc.py.\",\"evidence\":[\"python_unittest gate result for test/test_calc.py\",\"Diff limited to calc.py\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":3,\"max_duration_seconds\":600},\"expected_artifacts\":[\"calc.py\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}],\"hints\":{\"files\":[\"calc.py\",\"test/test_calc.py\"],\"symbols\":[\"add\"]},\"id\":\"fix-add\",\"inputs\":[\"Goal statement: Make add(a, b) in calc.py return the sum of its arguments.\",\"Base revision fc60f7f2782d5a9c1428963828d75d37ef37c31e\"],\"outcome\":\"add(a, b) in calc.py returns a + b, and test/test_calc.py passes.\",\"risks\":[\"Existing tests may expect behaviour beyond plain addition; tests must not be edited to make them pass.\"],\"title\":\"Make calc.add(a, b) return the sum of its arguments\"}],\"version\":1}",
+      "plan_digest": "35d68f280e5e8f67b90ddc01c676399ea7d56439383465f17094b7f1684993e1",
+      "request_id": "6535a0d8-0fd6-49aa-ae78-efc9ed11766e",
+      "state": "ready"
+    },
+    "sequence": 8,
+    "occurred_at": "2026-10-17T18:40:47.574839Z"
+  },
+  {
+    "type": "cobbler.plan.revision.created",
+    "payload": {
+      "author_kind": "human",
+      "authored_by": "human:user",
+      "ordered_task_ids": [
+        "fix-add"
+      ],
+      "plan_content": "{\"budget\":{\"max_total_attempts\":3,\"max_total_duration_seconds\":1800},\"goal\":{\"acceptance\":{\"evidence\":[\"Every named gate passes at the final commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}]},\"constraints\":[\"Change only what the request needs; leave unrelated files unchanged.\",\"Do not edit or delete existing tests unless the request asks for it.\"],\"non_goals\":[\"Unrelated refactoring, dependency upgrades or formatting changes.\"],\"repository\":{\"base_revision\":\"fc60f7f2782d5a9c1428963828d75d37ef37c31e\"},\"statement\":\"Make add(a, b) in calc.py return the sum of its arguments.\"},\"planner\":{\"identity\":\"claude:opus\",\"source_context_refs\":[\"goal:a2cdb3ee-5a58-4c2c-a7d8-ad881667f08c\"],\"version\":\"1\"},\"tasks\":[{\"acceptance_criteria\":[\"calc.add(a, b) returns a + b.\",\"The python_unittest gate on test/test_calc.py passes.\",\"Only calc.py is modified; existing tests are not edited or deleted.\"],\"checkpoint\":{\"condition\":\"The python_unittest gate on test/test_calc.py passes at the final commit, and the diff touches only calc.py.\",\"evidence\":[\"python_unittest gate result for test/test_calc.py\",\"Diff limited to calc.py\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":3,\"max_duration_seconds\":600},\"expected_artifacts\":[\"calc.py\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}],\"hints\":{\"files\":[\"calc.py\",\"test/test_calc.py\"],\"symbols\":[\"add\"]},\"id\":\"fix-add\",\"inputs\":[\"Goal statement: Make add(a, b) in calc.py return the sum of its arguments.\",\"Base revision fc60f7f2782d5a9c1428963828d75d37ef37c31e\"],\"outcome\":\"add(a, b) in calc.py returns a + b, and test/test_calc.py passes.\",\"risks\":[\"Existing tests may expect behaviour beyond plain addition; tests must not be edited to make them pass.\"],\"title\":\"Make calc.add(a, b) return the sum of its arguments\"}],\"version\":1}",
+      "plan_digest": "35d68f280e5e8f67b90ddc01c676399ea7d56439383465f17094b7f1684993e1",
+      "plan_revision_id": "2d7b9bfe-cf4e-474f-b380-a012b595cf3e",
+      "plan_version": 1,
+      "proposal_id": "planner:6535a0d8-0fd6-49aa-ae78-efc9ed11766e",
+      "revision_number": 1,
+      "task_count": 1
+    },
+    "sequence": 11,
+    "occurred_at": "2026-10-17T18:40:47.579509Z"
+  },
+  {
+    "type": "cobbler.plan.revision.created",
+    "payload": {
+      "author_kind": "human",
+      "authored_by": "human:user",
+      "ordered_task_ids": [
+        "fix-add"
+      ],
+      "parent_revision_number": 1,
+      "plan_content": "{\"budget\":{\"max_total_attempts\":2,\"max_total_duration_seconds\":1800},\"goal\":{\"acceptance\":{\"evidence\":[\"Every named gate passes at the final commit.\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}]},\"constraints\":[\"Change only what the request needs; leave unrelated files unchanged.\",\"Do not edit or delete existing tests unless the request asks for it.\"],\"non_goals\":[\"Unrelated refactoring, dependency upgrades or formatting changes.\"],\"repository\":{\"base_revision\":\"fc60f7f2782d5a9c1428963828d75d37ef37c31e\"},\"statement\":\"Make add(a, b) in calc.py return the sum of its arguments.\"},\"planner\":{\"identity\":\"claude:opus\",\"source_context_refs\":[\"goal:a2cdb3ee-5a58-4c2c-a7d8-ad881667f08c\"],\"version\":\"1\"},\"tasks\":[{\"acceptance_criteria\":[\"calc.add(a, b) returns a + b.\",\"The python_unittest gate on test/test_calc.py passes.\",\"Only calc.py is modified; existing tests are not edited or deleted.\"],\"checkpoint\":{\"condition\":\"The python_unittest gate on test/test_calc.py passes at the final commit, and the diff touches only calc.py.\",\"evidence\":[\"python_unittest gate result for test/test_calc.py\",\"Diff limited to calc.py\"]},\"depends_on\":[],\"execution\":{\"max_attempts\":2,\"max_duration_seconds\":600},\"expected_artifacts\":[\"calc.py\"],\"gates\":[{\"gate\":\"python_unittest\",\"test_paths\":[\"test/test_calc.py\"]}],\"hints\":{\"files\":[\"calc.py\",\"test/test_calc.py\"],\"symbols\":[\"add\"]},\"id\":\"fix-add\",\"inputs\":[\"Goal statement: Make add(a, b) in calc.py return the sum of its arguments.\",\"Base revision fc60f7f2782d5a9c1428963828d75d37ef37c31e\"],\"outcome\":\"add(a, b) in calc.py returns a + b, and test/test_calc.py passes.\",\"risks\":[\"Existing tests may expect behaviour beyond plain addition; tests must not be edited to make them pass.\"],\"title\":\"Make calc.add(a, b) return the sum of its arguments\"}],\"version\":1}",
+      "plan_digest": "169033169e8fcbe7875f90277bdb6e13e0c62786b14c8aae989f11776bb20752",
+      "plan_revision_id": "251e25a7-e118-4c80-a8e8-781e7e217970",
+      "plan_version": 1,
+      "proposal_id": "do-edit-1-6663",
+      "revision_number": 2,
+      "task_count": 1
+    },
+    "sequence": 12,
+    "occurred_at": "2026-10-17T18:40:47.583954Z"
+  },
+  {
+    "type": "cobbler.plan.approved",
+    "payload": {
+      "decided_at": "2026-10-17T18:40:47.585616Z",
+      "decided_by": "human:user",
+      "decision_id": "do-approve-2",
+      "plan_digest": "169033169e8fcbe7875f90277bdb6e13e0c62786b14c8aae989f11776bb20752",
+      "plan_revision_id": "251e25a7-e118-4c80-a8e8-781e7e217970",
+      "revision_number": 2
+    },
+    "sequence": 13,
+    "occurred_at": "2026-10-17T18:40:47.585616Z"
+  },
+  {
+    "type": "cobbler.plan.execution.requested",
+    "payload": {
+      "agent_profile": {
+        "adapter_id": "codex_app_server_stdio",
+        "digest": "df3ec7477384b858a91b91f935019a9fb9990a6142c2e65ea3ad8623aa7fd017",
+        "instructions": "Complete the task within its stated scope and acceptance gates. Commit the result.",
+        "model": "gpt-6-luna",
+        "profile_id": "4fd02532-d06f-4b81-9e7c-22a8393fc477",
+        "provider": "codex",
+        "revision": 1,
+        "role": "Worker"
+      },
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "ordered_task_ids": [
+        "fix-add"
+      ],
+      "plan_digest": "169033169e8fcbe7875f90277bdb6e13e0c62786b14c8aae989f11776bb20752",
+      "repository_path": "$EVALUATION/repos/source",
+      "requested_by": "human:user",
+      "revision_number": 2
+    },
+    "sequence": 14,
+    "occurred_at": "2026-10-17T18:40:47.614240Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "codex_app_server_stdio",
+        "compatibility_state": "degraded",
+        "provider_id": "codex",
+        "support_tier": "proactive"
+      },
+      "decision_id": "834df389-acf3-4964-9641-a74269d92604",
+      "evaluated_at": "2026-10-17T18:40:47.636002Z",
+      "explanation": "Capacity confidence is 'medium'; automatic admission requires high confidence",
+      "extensions": {},
+      "observation": {
+        "age_seconds": 6,
+        "capacity_state": "degraded",
+        "confidence": "medium",
+        "expires_at": "2026-10-17T18:45:40.926693Z",
+        "freshness": "fresh",
+        "observed_at": "2026-10-17T18:40:40.926693Z",
+        "snapshot_id": "1c84b020-2271-5d98-b265-0532c012feac",
+        "windows": [
+          {
+            "kind": "primary",
+            "reason": null,
+            "reset_at": "2026-10-17T23:17:35.000000Z",
+            "state": "observed",
+            "used_percent": 0.0
+          },
+          {
+            "kind": "secondary",
+            "reason": null,
+            "reset_at": "2026-10-23T02:30:37.000000Z",
+            "state": "observed",
+            "used_percent": 4.0
+          }
+        ]
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-17T18:45:47.636002Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confidence_medium",
+      "reobservation_required": true,
+      "requested_capability": "supervised_execution",
+      "result": "require_confirmation",
+      "scope": "subscription"
+    },
+    "sequence": 16,
+    "occurred_at": "2026-10-17T18:40:47.636002Z"
+  },
+  {
+    "type": "cobbler.plan.capacity.confirmed",
+    "payload": {
+      "adapter_id": "codex_app_server_stdio",
+      "attempt": 1,
+      "confirmation_id": "fcad058e-6df2-4c1c-ac9d-b0a7f40f498c",
+      "confirmed_by": "human:user",
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "plan_digest": "169033169e8fcbe7875f90277bdb6e13e0c62786b14c8aae989f11776bb20752",
+      "plan_task_id": "fix-add",
+      "provider_id": "codex",
+      "revision_number": 2,
+      "scope": "subscription"
+    },
+    "sequence": 17,
+    "occurred_at": "2026-10-17T18:40:48.654832Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "codex_app_server_stdio",
+        "compatibility_state": "degraded",
+        "provider_id": "codex",
+        "support_tier": "proactive"
+      },
+      "decision_id": "6ae4ecfd-3f93-43f3-ade0-23604ec77dd3",
+      "evaluated_at": "2026-10-17T18:41:48.498644Z",
+      "explanation": "Admitted via attributable single-decision confirmation by 'human:user' (intent: 'supervised_execution'); not automatically safe (Capacity confidence is 'medium'; automatic admission requires high confidence)",
+      "extensions": {
+        "shoestring.plan:capacity_confirmation_id": "6ae4ecfd-3f93-43f3-ade0-23604ec77dd3"
+      },
+      "observation": {
+        "age_seconds": 67,
+        "capacity_state": "degraded",
+        "confidence": "medium",
+        "expires_at": "2026-10-17T18:45:40.926693Z",
+        "freshness": "fresh",
+        "observed_at": "2026-10-17T18:40:40.926693Z",
+        "snapshot_id": "1c84b020-2271-5d98-b265-0532c012feac",
+        "windows": [
+          {
+            "kind": "primary",
+            "reason": null,
+            "reset_at": "2026-10-17T23:17:35.000000Z",
+            "state": "observed",
+            "used_percent": 0.0
+          },
+          {
+            "kind": "secondary",
+            "reason": null,
+            "reset_at": "2026-10-23T02:30:37.000000Z",
+            "state": "observed",
+            "used_percent": 4.0
+          }
+        ]
+      },
+      "override": {
+        "confirmed_at": "2026-10-17T18:40:48.654832Z",
+        "confirmed_by": "human:user",
+        "intent": "supervised_execution",
+        "reason": "valid",
+        "target_provider_id": "codex",
+        "target_scope": "subscription",
+        "valid": true
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-17T18:46:48.498644Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confirmed_confidence_medium",
+      "reobservation_required": false,
+      "requested_capability": "supervised_execution",
+      "result": "admit",
+      "scope": "subscription"
+    },
+    "sequence": 18,
+    "occurred_at": "2026-10-17T18:41:48.498644Z"
+  },
+  {
+    "type": "cobbler.plan.task.dispatched",
+    "payload": {
+      "attempt": 1,
+      "command_id": "plan-fix-add-1",
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "grant_id": "02241005-0761-408e-8e26-1b15c30bd393",
+      "plan_digest": "169033169e8fcbe7875f90277bdb6e13e0c62786b14c8aae989f11776bb20752",
+      "plan_task_id": "fix-add",
+      "revision_number": 2,
+      "run_id": "5cb735d0-94b0-596c-a797-8292641c6f5d",
+      "trajectory_task_id": "426a9ff8-06fb-565f-87d6-78b2324d680a"
+    },
+    "sequence": 26,
+    "occurred_at": "2026-10-17T18:41:48.856275Z"
+  },
+  {
+    "type": "run.running",
+    "payload": {
+      "run_id": "5cb735d0-94b0-596c-a797-8292641c6f5d"
+    },
+    "sequence": 28,
+    "occurred_at": "2026-10-17T18:41:49.736812Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "codex_app_server_stdio",
+        "compatibility_state": "degraded",
+        "provider_id": "codex",
+        "support_tier": "proactive"
+      },
+      "decision_id": "fe315bd8-222e-417c-9b61-67dfec201806",
+      "evaluated_at": "2026-10-17T18:42:32.787216Z",
+      "explanation": "Capacity confidence is 'medium'; automatic admission requires high confidence",
+      "extensions": {},
+      "observation": {
+        "age_seconds": 111,
+        "capacity_state": "degraded",
+        "confidence": "medium",
+        "expires_at": "2026-10-17T18:45:40.926693Z",
+        "freshness": "fresh",
+        "observed_at": "2026-10-17T18:40:40.926693Z",
+        "snapshot_id": "43395fb5-34f9-57c0-afc7-d6eb3e74f55e",
+        "windows": [
+          {
+            "kind": "primary",
+            "reason": null,
+            "reset_at": "2026-10-17T23:17:35Z",
+            "state": "observed",
+            "used_percent": 0
+          },
+          {
+            "kind": "secondary",
+            "reason": null,
+            "reset_at": "2026-10-23T02:30:37Z",
+            "state": "observed",
+            "used_percent": 4
+          }
+        ]
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-17T18:47:32.787216Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confidence_medium",
+      "reobservation_required": true,
+      "requested_capability": "supervised_execution",
+      "result": "require_confirmation",
+      "run_id": "5cb735d0-94b0-596c-a797-8292641c6f5d",
+      "scope": "subscription"
+    },
+    "sequence": 310,
+    "occurred_at": "2026-10-17T18:42:32.787216Z"
+  },
+  {
+    "type": "run.completed",
+    "payload": {
+      "run_id": "5cb735d0-94b0-596c-a797-8292641c6f5d"
+    },
+    "sequence": 314,
+    "occurred_at": "2026-10-17T18:42:33.022681Z"
+  },
+  {
+    "type": "cobbler.plan.gate.started",
+    "payload": {
+      "attempt": 1,
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "gate": "python_unittest",
+      "invocation_id": "4dcbaaed-71fa-4e80-8d9c-7474ebf4cfd1",
+      "kind": "test",
+      "plan_task_id": "fix-add",
+      "position": 1,
+      "required": true,
+      "run_id": "5cb735d0-94b0-596c-a797-8292641c6f5d",
+      "scope": "task",
+      "spec": "python_unittest@1:sha256:20ea1e637d98dbcc5e25f2a36fe9d8d3859debb1b1a0c1eb156bce52fd1e693b"
+    },
+    "sequence": 315,
+    "occurred_at": "2026-10-17T18:42:36.616696Z"
+  },
+  {
+    "type": "cobbler.plan.gate.completed",
+    "payload": {
+      "artifact_id": "d7c24804-2444-4f9f-b35f-2476f4b4031b",
+      "attempt": 1,
+      "commit": "a627eeee2eb02fcb8d87f026264f34a1337e21ac",
+      "duration_ms": 227,
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "exit_status": 0,
+      "gate": "python_unittest",
+      "invocation_id": "4dcbaaed-71fa-4e80-8d9c-7474ebf4cfd1",
+      "kind": "test",
+      "output_bytes": 100,
+      "output_sha256": "a6707d4eff38012da33ddc34bc6dc076a3b17151cfc9aef223c8790cbe64c3da",
+      "output_truncated": false,
+      "plan_task_id": "fix-add",
+      "position": 1,
+      "required": true,
+      "result": "passed",
+      "run_id": "5cb735d0-94b0-596c-a797-8292641c6f5d",
+      "sandbox": "macos_seatbelt:v1:sha256:44c1c4e2f1aa3c87ba309bd4b023f444e5cc34ebdfa95674595b9f3b7f266b8a",
+      "scope": "task",
+      "spec": "python_unittest@1:sha256:20ea1e637d98dbcc5e25f2a36fe9d8d3859debb1b1a0c1eb156bce52fd1e693b"
+    },
+    "sequence": 316,
+    "occurred_at": "2026-10-17T18:42:36.920170Z"
+  },
+  {
+    "type": "cobbler.plan.task.review_requested",
+    "payload": {
+      "attempt": 1,
+      "base_commit": "fc60f7f2782d5a9c1428963828d75d37ef37c31e",
+      "commit": "a627eeee2eb02fcb8d87f026264f34a1337e21ac",
+      "configuration": {
+        "adapter": "claude",
+        "endpoint_digest": "44965f1c4bf1114100b5927a2b7761d7c27e8d9f449ec563d93e6134d0ab5acd",
+        "implementer_provider": "codex",
+        "max_output_tokens": 4096,
+        "max_rounds": 2,
+        "model": "opus",
+        "provider_id": "claude",
+        "scope": "subscription",
+        "support_tier": "conservative_partial",
+        "timeout_ms": 180000,
+        "version": "1"
+      },
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "packet_digest": "65d9f7553ce432cf5dadb738a986ef5aa82f47604c025617a6adf694203c5d49",
+      "plan_digest": "169033169e8fcbe7875f90277bdb6e13e0c62786b14c8aae989f11776bb20752",
+      "plan_task_id": "fix-add",
+      "review_id": "d327c008-e12f-4dd7-a378-c1ab55bdd13f",
+      "revision_number": 2,
+      "round": 1,
+      "run_id": "5cb735d0-94b0-596c-a797-8292641c6f5d"
+    },
+    "sequence": 317,
+    "occurred_at": "2026-10-17T18:42:37.048576Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "reviewer.claude",
+        "compatibility_state": "compatible",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "dc877175-4324-4f27-af7f-c0d2f95f0010",
+      "evaluated_at": "2026-10-17T18:42:37.114104Z",
+      "explanation": "Candidate support tier 'conservative_partial' requires attributable single-decision confirmation",
+      "extensions": {},
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "c2a730fa-6299-4efb-a3a0-e5f7052ede67",
+        "windows": []
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-17T18:47:37.114104Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "support_tier_conservative_partial",
+      "reobservation_required": true,
+      "requested_capability": "read_only",
+      "result": "require_confirmation",
+      "scope": "subscription"
+    },
+    "sequence": 318,
+    "occurred_at": "2026-10-17T18:42:37.115841Z"
+  },
+  {
+    "type": "cobbler.plan.review.confirmed",
+    "payload": {
+      "attempt": 1,
+      "confirmation_id": "e9bb5c79-c658-455b-86f0-3b149cf53d88",
+      "confirmed_by": "human:user",
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "plan_task_id": "fix-add",
+      "provider_id": "claude",
+      "review_id": "d327c008-e12f-4dd7-a378-c1ab55bdd13f",
+      "scope": "subscription"
+    },
+    "sequence": 319,
+    "occurred_at": "2026-10-17T18:42:37.648486Z"
+  },
+  {
+    "type": "admission.decided",
+    "payload": {
+      "candidate": {
+        "adapter_id": "reviewer.claude",
+        "compatibility_state": "compatible",
+        "provider_id": "claude",
+        "support_tier": "conservative_partial"
+      },
+      "decision_id": "e7687b99-ac45-4ef8-98de-6960e8117939",
+      "evaluated_at": "2026-10-17T18:42:42.714275Z",
+      "explanation": "Admitted via attributable single-decision confirmation by 'human:user' (intent: 'read_only'); not automatically safe (Candidate support tier 'conservative_partial' requires attributable single-decision confirmation)",
+      "extensions": {
+        "shoestring.plan:review_confirmation_id": "e7687b99-ac45-4ef8-98de-6960e8117939"
+      },
+      "observation": {
+        "age_seconds": null,
+        "capacity_state": "unknown",
+        "confidence": "none",
+        "expires_at": null,
+        "freshness": "unknown",
+        "observed_at": null,
+        "snapshot_id": "c2a730fa-6299-4efb-a3a0-e5f7052ede67",
+        "windows": []
+      },
+      "override": {
+        "confirmed_at": "2026-10-17T18:42:37.648486Z",
+        "confirmed_by": "human:user",
+        "intent": "read_only",
+        "reason": "valid",
+        "target_provider_id": "claude",
+        "target_scope": "subscription",
+        "valid": true
+      },
+      "policy": {
+        "candidate_priority": [
+          "codex",
+          "claude"
+        ],
+        "checkpoint_cadence": 1,
+        "deadline_seconds": 300,
+        "delayed_recheck_seconds": 60,
+        "five_hour_max_used_percent": 80,
+        "five_hour_reserve_percent": 20,
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "stale_after_seconds": 300,
+        "supported_capabilities": [
+          "supervised_execution",
+          "read_only"
+        ],
+        "tool_budget": 25,
+        "version": 1,
+        "weekly_max_used_percent": 90,
+        "weekly_reserve_percent": 10
+      },
+      "proposed_bounds": {
+        "checkpoint_cadence": 1,
+        "deadline": "2026-10-17T18:47:42.714275Z",
+        "reserves": {
+          "response": 1,
+          "tool": 1
+        },
+        "response_budget": 10,
+        "tool_budget": 25
+      },
+      "reason_code": "confirmed_support_tier_conservative_partial",
+      "reobservation_required": false,
+      "requested_capability": "read_only",
+      "result": "admit",
+      "scope": "subscription"
+    },
+    "sequence": 320,
+    "occurred_at": "2026-10-17T18:42:42.715699Z"
+  },
+  {
+    "type": "cobbler.plan.review.attempt.started",
+    "payload": {
+      "admission_event_id": "712b3123-6ac6-4782-b531-60dd6b6ac0ee",
+      "call": 1,
+      "output_token_allowance": 4096,
+      "review_id": "d327c008-e12f-4dd7-a378-c1ab55bdd13f"
+    },
+    "sequence": 321,
+    "occurred_at": "2026-10-17T18:42:42.716835Z"
+  },
+  {
+    "type": "cobbler.plan.task.reviewed",
+    "payload": {
+      "attempt": 1,
+      "blocking_count": 0,
+      "commit": "a627eeee2eb02fcb8d87f026264f34a1337e21ac",
+      "duration_ms": 3579,
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "findings_json": "{\"blocking_count\":0,\"findings\":[],\"outcome\":\"approved\",\"summary\":\"The change does what the task asks. At calc.py line 3, `raise NotImplementedError` is replaced with `return a + b`, so add(a, b) now returns the sum. calc.py is the only file changed, and no tests were edited or deleted. The required python_unittest gate on test/test_calc.py passed (exit 0, \\\"Ran 2 tests ... OK\\\"). I found no defects, no scope deviations and no security concerns.\",\"verdict\":\"approve\"}",
+      "outcome": "approved",
+      "output_tokens": 236,
+      "packet_digest": "65d9f7553ce432cf5dadb738a986ef5aa82f47604c025617a6adf694203c5d49",
+      "plan_digest": "169033169e8fcbe7875f90277bdb6e13e0c62786b14c8aae989f11776bb20752",
+      "plan_task_id": "fix-add",
+      "review_id": "d327c008-e12f-4dd7-a378-c1ab55bdd13f",
+      "reviewer": "claude:opus",
+      "revision_number": 2,
+      "round": 1,
+      "run_id": "5cb735d0-94b0-596c-a797-8292641c6f5d"
+    },
+    "sequence": 322,
+    "occurred_at": "2026-10-17T18:42:46.364832Z"
+  },
+  {
+    "type": "cobbler.plan.task.accepted",
+    "payload": {
+      "attempt": 1,
+      "commit": "a627eeee2eb02fcb8d87f026264f34a1337e21ac",
+      "evidence": {
+        "gates": [
+          {
+            "argv": "python3 -B -m unittest test/test_calc.py",
+            "artifact_id": "d7c24804-2444-4f9f-b35f-2476f4b4031b",
+            "commit": "a627eeee2eb02fcb8d87f026264f34a1337e21ac",
+            "duration_ms": 227,
+            "exit_status": 0,
+            "gate": "python_unittest",
+            "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+            "required": true,
+            "result": "passed",
+            "sandbox": "macos_seatbelt:v1:sha256:44c1c4e2f1aa3c87ba309bd4b023f444e5cc34ebdfa95674595b9f3b7f266b8a",
+            "spec": "python_unittest@1:sha256:20ea1e637d98dbcc5e25f2a36fe9d8d3859debb1b1a0c1eb156bce52fd1e693b",
+            "worktree": "$EVALUATION/worktrees/run-5cb735d0-94b0-596c-a797-8292641c6f5d"
+          }
+        ],
+        "run_completed": true
+      },
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "gate": "python_unittest",
+      "gate_argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "test/test_calc.py"
+      ],
+      "plan_digest": "169033169e8fcbe7875f90277bdb6e13e0c62786b14c8aae989f11776bb20752",
+      "plan_task_id": "fix-add",
+      "review": {
+        "blocking_count": 0,
+        "packet_digest": "65d9f7553ce432cf5dadb738a986ef5aa82f47604c025617a6adf694203c5d49",
+        "review_id": "d327c008-e12f-4dd7-a378-c1ab55bdd13f",
+        "reviewer": "claude:opus",
+        "round": 1,
+        "state": "approved"
+      },
+      "revision_number": 2,
+      "run_id": "5cb735d0-94b0-596c-a797-8292641c6f5d",
+      "verification_overhead_ms": 3579
+    },
+    "sequence": 323,
+    "occurred_at": "2026-10-17T18:42:46.365956Z"
+  },
+  {
+    "type": "cobbler.plan.gate.started",
+    "payload": {
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "gate": "python_unittest",
+      "invocation_id": "6f4f9647-fac9-4047-9f24-98b9e818aa75",
+      "kind": "test",
+      "position": 1,
+      "required": true,
+      "scope": "execution",
+      "spec": "python_unittest@1:sha256:20ea1e637d98dbcc5e25f2a36fe9d8d3859debb1b1a0c1eb156bce52fd1e693b"
+    },
+    "sequence": 324,
+    "occurred_at": "2026-10-17T18:42:46.418004Z"
+  },
+  {
+    "type": "cobbler.plan.gate.completed",
+    "payload": {
+      "artifact_id": "29a729f5-9b2e-4aa8-acc0-847dc8648a8a",
+      "commit": "a627eeee2eb02fcb8d87f026264f34a1337e21ac",
+      "duration_ms": 221,
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "exit_status": 0,
+      "gate": "python_unittest",
+      "invocation_id": "6f4f9647-fac9-4047-9f24-98b9e818aa75",
+      "kind": "test",
+      "output_bytes": 100,
+      "output_sha256": "a6707d4eff38012da33ddc34bc6dc076a3b17151cfc9aef223c8790cbe64c3da",
+      "output_truncated": false,
+      "position": 1,
+      "required": true,
+      "result": "passed",
+      "sandbox": "macos_seatbelt:v1:sha256:0a4458e366773d550fc8b5bf20abd6b31fff276c0a7d75d4ab662bf375034a58",
+      "scope": "execution",
+      "spec": "python_unittest@1:sha256:20ea1e637d98dbcc5e25f2a36fe9d8d3859debb1b1a0c1eb156bce52fd1e693b"
+    },
+    "sequence": 325,
+    "occurred_at": "2026-10-17T18:42:46.703847Z"
+  },
+  {
+    "type": "cobbler.plan.execution.completed",
+    "payload": {
+      "commit": "a627eeee2eb02fcb8d87f026264f34a1337e21ac",
+      "evidence": {
+        "gates": [
+          {
+            "argv": "python3 -B -m unittest test/test_calc.py",
+            "artifact_id": "29a729f5-9b2e-4aa8-acc0-847dc8648a8a",
+            "commit": "a627eeee2eb02fcb8d87f026264f34a1337e21ac",
+            "duration_ms": 221,
+            "exit_status": 0,
+            "gate": "python_unittest",
+            "output": "..\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+            "required": true,
+            "result": "passed",
+            "sandbox": "macos_seatbelt:v1:sha256:0a4458e366773d550fc8b5bf20abd6b31fff276c0a7d75d4ab662bf375034a58",
+            "spec": "python_unittest@1:sha256:20ea1e637d98dbcc5e25f2a36fe9d8d3859debb1b1a0c1eb156bce52fd1e693b",
+            "worktree": "$EVALUATION/worktrees/run-5cb735d0-94b0-596c-a797-8292641c6f5d"
+          }
+        ]
+      },
+      "execution_id": "a25fa974-0f91-55ed-be4b-8d23e5cb3f57",
+      "global_gate": "python_unittest",
+      "plan_digest": "169033169e8fcbe7875f90277bdb6e13e0c62786b14c8aae989f11776bb20752",
+      "revision_number": 2
+    },
+    "sequence": 326,
+    "occurred_at": "2026-10-17T18:42:46.704613Z"
+  }
+]

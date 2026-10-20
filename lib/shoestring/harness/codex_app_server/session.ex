@@ -36,6 +36,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
   @default_max_frame_size 10_485_760
   @default_request_timeout 15_000
+  @plan_run_env [{"PYTHONDONTWRITEBYTECODE", "1"}]
   @default_handshake_timeout_ms 15_000
 
   defstruct [
@@ -245,6 +246,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         |> forward_opt(state.opts, :command)
         |> forward_opt(state.opts, :executable)
         |> forward_opt(state.opts, :args)
+        |> plan_run_env(state.opts[:git_sandbox_policy])
 
       case state.transport_mod.start_link(transport_opts) do
         {:ok, pid} ->
@@ -262,6 +264,14 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       end
     end
   end
+
+  # A run in private per-run Git storage (a plan run) writes no Python
+  # bytecode, so its tests leave the worktree clean for the gates; the
+  # Claude sandbox sets the same variable.
+  defp plan_run_env(transport_opts, nil), do: transport_opts
+
+  defp plan_run_env(transport_opts, _policy),
+    do: Keyword.update(transport_opts, :env, @plan_run_env, &(&1 ++ @plan_run_env))
 
   # --- Calls ---
 

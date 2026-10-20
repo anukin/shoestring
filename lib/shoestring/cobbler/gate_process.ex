@@ -18,11 +18,13 @@ defmodule Shoestring.Cobbler.GateProcess do
                duration_ms: System.monotonic_time(:millisecond) - started
              }}
 
-          {:error, :timeout} ->
-            {:error, {:gate_timeout, %{timeout_ms: timeout_ms}}}
+          # What arrived before the bound is kept, at most max_bytes, so the
+          # failure can be inspected; callers keep it out of reason strings.
+          {:error, {:timeout, partial}} ->
+            {:error, {:gate_timeout, %{timeout_ms: timeout_ms, partial_output: partial}}}
 
-          {:error, {:overflow, bytes}} ->
-            {:error, {:gate_output_oversized, %{bytes: bytes}}}
+          {:error, {:overflow, bytes, partial}} ->
+            {:error, {:gate_output_oversized, %{bytes: bytes, partial_output: partial}}}
         end
       after
         # Also terminates owned descendants that outlive the command's direct child.
@@ -42,15 +44,18 @@ defmodule Shoestring.Cobbler.GateProcess do
         total = bytes + byte_size(data)
 
         if total > max_bytes do
-          {:error, {:overflow, total}}
+          kept = binary_part(data, 0, max_bytes - bytes)
+          {:error, {:overflow, total, joined([kept | chunks])}}
         else
           collect(runner, deadline, [data | chunks], total, max_bytes)
         end
 
       {^port, {:exit_status, status}} ->
-        {:ok, status, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
+        {:ok, status, joined(chunks)}
     after
-      remaining -> {:error, :timeout}
+      remaining -> {:error, {:timeout, joined(chunks)}}
     end
   end
+
+  defp joined(chunks), do: chunks |> Enum.reverse() |> IO.iodata_to_binary()
 end

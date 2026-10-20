@@ -15,7 +15,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
   Bash runs sandboxed with no network, no saved session, no inherited settings
   files, MCP servers or slash commands, and without permission bypass. Git
   gets a home-free configuration, without which a sandboxed commit cannot read
-  its global config (live attempt 1).
+  its global config (live attempt 1). Python writes no bytecode: an Elf that
+  ran its tests otherwise left untracked `__pycache__/` directories, and the
+  checks refuse a dirty worktree (iteration 8 live escalation run).
 
   UNVERIFIED until a live run: that `allowRead` for the run's paths takes
   precedence over `denyRead` for the home directory when the state directory
@@ -62,7 +64,11 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
 
   @doc "The environment every sandboxed Claude Elf gets."
   @spec env() :: [{String.t(), String.t()}]
-  def env, do: [{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"} | @git_env]
+  def env,
+    do: [
+      {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"},
+      {"PYTHONDONTWRITEBYTECODE", "1"} | @git_env
+    ]
 
   @doc "The home-free Git configuration, without the Claude-specific variables."
   @spec git_env() :: [{String.t(), String.t()}]

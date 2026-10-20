@@ -35,10 +35,13 @@ defmodule Shoestring.CLI.Result do
       shell.info("  Built on #{String.slice(base, 0, 12)} in #{worktree}")
 
       for gate <- get_in(completed, ["evidence", "gates"]) || [] do
-        shell.info("  Check: #{gate["argv"]} -> exit #{gate["exit_status"]}")
+        optional = if gate["required"] == false, do: " (optional)", else: ""
+        shell.info("  Check: #{gate["argv"]} -> exit #{gate["exit_status"]}#{optional}")
         last = gate["output"] |> to_string() |> String.split("\n", trim: true) |> List.last()
         if last, do: shell.info("    #{last}")
       end
+
+      shell.info("  Every check that ran: shoestring checks #{goal_id}")
 
       reviews(shell, status[:reviews] || [])
 
