@@ -54,8 +54,11 @@ shoestring do "add retry with backoff to the HTTP client" --test test/test_http.
 5. **Waits.** If a task is held because capacity cannot be confirmed, you are
    asked to confirm that one attempt. Failures and scope blockers stop
    following with the command to resolve them.
-6. **Result.** `shoestring result GOAL` prints the final commit, the recorded
-   checks, a diff stat, and:
+6. **Review (optional, off by default).** With cross-review enabled, each task
+   whose checks pass is reviewed by another provider before it is accepted;
+   see [Cross-review](#cross-review).
+7. **Result.** `shoestring result GOAL` prints the final commit, the recorded
+   checks, every review and its blocking findings, a diff stat, and:
 
    ```sh
    cd ~/code/my-project
@@ -63,12 +66,60 @@ shoestring do "add retry with backoff to the HTTP client" --test test/test_http.
    git merge FETCH_HEAD
    ```
 
+## Cross-review
+
+Turn it on with `config :shoestring, :plan_review, enabled: true` (in
+`config/config.exs` or your runtime config) and give the agent a reviewer of
+another provider than its worker:
+
+```sh
+shoestring models add codex gpt-6-luna
+shoestring agents set-role builder Reviewer codex:gpt-6-luna
+```
+
+After a task's checks pass, the reviewer gets one bounded packet: the goal and
+task contract, the diff from the task's base, the changed and tracked files and
+the check results. It never gets the worker's transcript, the worktree or any
+tools: Codex runs `codex exec` read-only and ephemeral with every tool
+disabled, Claude runs the planner's tool-free call. It returns structured
+findings; code, not the reviewer, decides:
+
+- No supported blocking finding: the task is accepted, with the review
+  recorded.
+- Blocking findings: the task is sent back once more, starting from the
+  reviewed commit with the findings in the worker's prompt, and its checks and
+  review run again.
+- The last round (two by default) still blocking, the same finding again, or
+  no attempts left: it waits for you.
+
+A finding about a file the packet does not contain is shown as unsupported and
+never blocks. Each review call is admitted like any provider call; `follow`
+asks you to confirm one held call, as it does for a held task. When a review
+cannot run (no reviewer, a reviewer of the worker's provider, a failed or lost
+call), nothing is accepted until you decide:
+
+```sh
+shoestring review list GOAL
+shoestring review show GOAL TASK
+shoestring review accept GOAL TASK --reason "why"   # waive or dismiss
+shoestring review reject GOAL TASK --reason "why"   # fail the attempt
+shoestring review retry GOAL TASK --reason "why"    # one more call
+```
+
 ## Limits
 
 - Manual runs from `/runs/new` share Git storage and are not sandboxed this
   way; only plan runs are.
 - Planning uses Claude only (or a configured local Ollama planner); Codex
   planning is not available.
+- Cross-review was verified live on 2026-10-17 on one small fixture (Codex and
+  Claude each found a seeded defect and approved a correct change; one full
+  loop with a Codex review approved a real Claude Elf change; one loop with a
+  seeded defect was blocked by Codex, repaired from the reviewed commit and
+  approved on the second round; one escalated and was dismissed with
+  `shoestring review accept`). A fan-out replacement after a blocking review starts from the
+  approved base with the findings, not from the reviewed commit; fan-out with
+  review is tested hermetically only.
 - The checks Shoestring runs after a worker finishes run under macOS
   `sandbox-exec`: they can read the worktree and anything outside your home
   directory, write only to the worktree and a temporary directory, make no

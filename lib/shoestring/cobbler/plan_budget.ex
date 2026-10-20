@@ -5,7 +5,7 @@ defmodule Shoestring.Cobbler.PlanBudget do
   alias Shoestring.Trajectory.TrajectoryEvent
 
   @stops ~w(run.completed run.failed run.interrupted run.cancelled run.suspended)
-  @gates ~w(cobbler.plan.task.accepted cobbler.plan.task.scope_blocked cobbler.plan.task.gate_failed cobbler.plan.execution.completed cobbler.plan.execution.gate_failed)
+  @gates ~w(cobbler.plan.task.accepted cobbler.plan.task.scope_blocked cobbler.plan.task.gate_failed cobbler.plan.task.review_blocked cobbler.plan.execution.completed cobbler.plan.execution.gate_failed)
 
   def usage(repo, goal_id, now) do
     types = Enum.uniq(PlanRunLineage.event_types() ++ @gates ++ ~w(run.starting run.running))

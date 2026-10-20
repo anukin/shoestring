@@ -40,6 +40,8 @@ defmodule Shoestring.CLI.Result do
         if last, do: shell.info("    #{last}")
       end
 
+      reviews(shell, status[:reviews] || [])
+
       case System.cmd("git", ["-C", worktree, "diff", "--stat", base, commit]) do
         {stat, 0} -> Enum.each(String.split(stat, "\n", trim: true), &shell.info("  #{&1}"))
         _ -> shell.info("  (diff unavailable)")
@@ -55,6 +57,28 @@ defmodule Shoestring.CLI.Result do
     else
       {:error, _} = error -> error
       _ -> {:error, :not_completed}
+    end
+  end
+
+  # Every review round, in order: what each found and how it ended, so the
+  # repair history and any waived or dismissed findings are visible.
+  defp reviews(shell, reviews) do
+    for review <- reviews do
+      blocking = Enum.count(review.findings, &Shoestring.Cobbler.Review.Findings.blocking?/1)
+
+      reviewer =
+        if review.reviewer, do: "#{review.reviewer}:#{review.model}", else: review.unavailable
+
+      shell.info(
+        "  Review: #{review.plan_task_id} attempt #{review.attempt} by #{reviewer} -> " <>
+          "#{review.state} (#{blocking} blocking, #{length(review.findings)} total)"
+      )
+
+      for finding <- review.findings, finding["severity"] == "blocking" do
+        shell.info(
+          "    #{finding["id"]} #{finding["path"]}:#{finding["line"]} #{finding["claim"]}"
+        )
+      end
     end
   end
 

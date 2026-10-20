@@ -396,6 +396,7 @@ defmodule Shoestring.Cobbler.Plans do
                 "cobbler.plan.task.accepted",
                 "cobbler.plan.task.scope_blocked",
                 "cobbler.plan.task.gate_failed",
+                "cobbler.plan.task.review_blocked",
                 "cobbler.plan.task.superseded"
               ],
           select: e.payload

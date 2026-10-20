@@ -7,7 +7,7 @@ defmodule Shoestring.Cobbler.PlanChildWorker do
     opts = Application.get_env(:shoestring, :plan_child_inbox_opts, [])
 
     case Shoestring.Cobbler.PlanChildInbox.process(id, opts) do
-      {:ok, %{outcome: :awaiting_quiescence}} ->
+      {:ok, %{outcome: outcome}} when outcome in [:awaiting_quiescence, :awaiting_review] ->
         {:snooze, 5}
 
       {:ok, _} ->

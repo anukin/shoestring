@@ -8,14 +8,15 @@ defmodule Shoestring.CLI.Follow do
   work running, and a later `follow` prints the history again from the start,
   so nothing is lost or duplicated in the record.
 
-  The only decision it records is a capacity confirmation for the one held
-  task attempt, after the human answers `y` (iteration 7A locked decision).
+  The only decisions it records are capacity confirmations: for the one held
+  task attempt (iteration 7A locked decision) and for the one held
+  cross-review call (iteration 8), each after the human answers `y`.
   Everything else that needs a human is described with the command to run.
   """
 
   import Ecto.Query
 
-  alias Shoestring.Cobbler.{ExecutionControl, Plans}
+  alias Shoestring.Cobbler.{ExecutionControl, PlanReview, Plans}
   alias Shoestring.Repo
   alias Shoestring.Trajectory.TrajectoryEvent
 
@@ -38,6 +39,7 @@ defmodule Shoestring.CLI.Follow do
       status: Keyword.get(opts, :status, &ExecutionControl.status/1),
       events: Keyword.get(opts, :events, &events_after/2),
       confirm: Keyword.get(opts, :confirm, &ExecutionControl.confirm_capacity/2),
+      confirm_review: Keyword.get(opts, :confirm_review, &PlanReview.confirm/2),
       sleep:
         Keyword.get(opts, :sleep, fn ->
           Process.sleep(Keyword.get(opts, :interval_ms, @interval_ms))
@@ -72,24 +74,81 @@ defmodule Shoestring.CLI.Follow do
         {:ok, :needs_user}
 
       {:ok, %{} = status} ->
-        case held(state.goal_id, status) do
-          {decision_id, task_id, attempt} ->
-            if MapSet.member?(state.asked, decision_id),
-              do: wait(state),
-              else:
-                confirm(
-                  %{state | asked: MapSet.put(state.asked, decision_id)},
-                  status,
-                  task_id,
-                  attempt
-                )
+        case {held_review(status), held(state.goal_id, status)} do
+          {%{} = review, _} ->
+            key = {review.review_id, review.calls}
 
-          nil ->
-            wait(state)
+            if MapSet.member?(state.asked, key),
+              do: wait(state),
+              else: confirm_review(%{state | asked: MapSet.put(state.asked, key)}, review)
+
+          {nil, held} ->
+            held_task(state, status, held)
         end
 
       {:error, _} = error ->
         error
+    end
+  end
+
+  defp held_task(state, status, held) do
+    case held do
+      {decision_id, task_id, attempt} ->
+        if MapSet.member?(state.asked, decision_id),
+          do: wait(state),
+          else:
+            confirm(
+              %{state | asked: MapSet.put(state.asked, decision_id)},
+              status,
+              task_id,
+              attempt
+            )
+
+      nil ->
+        wait(state)
+    end
+  end
+
+  # A review call held for capacity, while its task waits for it.
+  defp held_review(status) do
+    Enum.find(status[:reviews] || [], &(&1.state == "held"))
+  end
+
+  defp confirm_review(state, review) do
+    state.shell.info(
+      "The review of task #{review.plan_task_id} (attempt #{review.attempt}) by " <>
+        "#{review.reviewer}:#{review.model} is held: #{review.reason}"
+    )
+
+    answer =
+      "Confirm capacity for this one review call? [y/N] "
+      |> state.shell.prompt()
+      |> String.trim()
+      |> String.downcase()
+
+    if answer in ["y", "yes"] do
+      attrs = %{
+        review_id: review.review_id,
+        confirmation_id: Ecto.UUID.generate(),
+        confirmed_by: state.by
+      }
+
+      case state.confirm_review.(state.goal_id, attrs) do
+        {:ok, _} ->
+          state.shell.info("Confirmed. The service makes the call on its next pass.")
+          wait(state)
+
+        {:error, reason} ->
+          state.shell.info("Not confirmed (#{inspect(reason)}); the review stays held.")
+          wait(state)
+      end
+    else
+      state.shell.info(
+        "Left held. Run `shoestring follow #{state.goal_id}` to be asked again; " <>
+          "the work stays queued."
+      )
+
+      {:ok, :held}
     end
   end
 
@@ -171,6 +230,16 @@ defmodule Shoestring.CLI.Follow do
     if failure = status[:global_failure],
       do: state.shell.info("  The execution failed: #{inspect(failure, limit: 8)}")
 
+    for review <- status[:reviews] || [], review.needs_user? do
+      task = review.plan_task_id
+
+      state.shell.info(
+        "  The review of task #{task} (attempt #{review.attempt}) #{review_problem(review)}. " <>
+          "Decide with `shoestring review accept|reject#{if review.state == "failed" and review.calls < 2, do: "|retry"} " <>
+          "#{state.goal_id} #{task} --reason \"...\"`."
+      )
+    end
+
     for blocker <- status[:scope_blockers] || [] do
       state.shell.info(
         "  Scope blocker on #{blocker["plan_task_id"] || inspect(blocker, limit: 6)}"
@@ -182,6 +251,13 @@ defmodule Shoestring.CLI.Follow do
         "`resolve-scope`, `replan` or `cancel` as docs/cli-execution.md describes."
     )
   end
+
+  defp review_problem(%{state: "escalated", reason: reason}),
+    do: "still has blocking findings that will not be repaired automatically (#{reason})"
+
+  defp review_problem(%{state: "failed", reason: reason}), do: "failed (#{reason})"
+  defp review_problem(%{unavailable: reason}) when is_binary(reason), do: "cannot run: #{reason}"
+  defp review_problem(_review), do: "used every allowed call"
 
   # -- Events --------------------------------------------------------------
 
@@ -247,6 +323,29 @@ defmodule Shoestring.CLI.Follow do
           nil ->
             "Task #{task}: checks failed (#{p["gate"]})."
         end
+
+      "cobbler.plan.task.review_requested" ->
+        "Task #{task}: checks passed; cross-review requested (round #{p["round"]})."
+
+      "cobbler.plan.task.reviewed" ->
+        case p["outcome"] do
+          "approved" ->
+            "Task #{task}: review approved (#{p["reviewer"]})."
+
+          "changes_requested" ->
+            "Task #{task}: review found #{p["blocking_count"]} blocking finding(s) (#{p["reviewer"]})."
+
+          _ ->
+            "Task #{task}: the review call failed (#{p["error_code"]})."
+        end
+
+      "cobbler.plan.task.review_blocked" ->
+        if p["retry_state"] == "retry",
+          do: "Task #{task}: sent back for repair: #{p["reason"]}",
+          else: "Task #{task}: review blocked: #{p["reason"]}; needs your decision."
+
+      "cobbler.plan.review.decided" ->
+        "Review of task #{task}: #{p["decision"]} by #{p["decided_by"]}."
 
       "cobbler.plan.task.scope_blocked" ->
         "Task #{task}: changed files outside its scope; needs your decision."

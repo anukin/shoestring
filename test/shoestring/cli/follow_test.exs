@@ -186,6 +186,98 @@ defmodule Shoestring.CLI.FollowTest do
              )
   end
 
+  defp review(extra) do
+    Map.merge(
+      %{
+        review_id: "11111111-1111-4111-8111-111111111111",
+        plan_task_id: "alpha",
+        attempt: 1,
+        round: 1,
+        state: "held",
+        reviewer: "codex",
+        model: "gpt-review",
+        unavailable: nil,
+        reason: "support_tier_conservative_partial",
+        calls: 0,
+        needs_user?: false,
+        findings: []
+      },
+      extra
+    )
+  end
+
+  test "a held review call is confirmed once, after the human says yes", c do
+    test = self()
+    # The task's attempt is still active while its review waits.
+    held = running(c, %{active_run_id: "r1", reviews: [review(%{})]})
+
+    confirm_review = fn goal_id, attrs ->
+      send(test, {:review_confirmed, goal_id, attrs})
+      {:ok, %{}}
+    end
+
+    send(self(), {:mix_shell_input, :prompt, "y"})
+
+    assert {:ok, :completed} =
+             follow(c,
+               events: script([[]]),
+               status: status_script([held, held, held, {:ok, %{completed?: true}}]),
+               confirm_review: confirm_review
+             )
+
+    goal_id = c.goal.id
+    assert_received {:review_confirmed, ^goal_id, attrs}
+    assert attrs.review_id == review(%{}).review_id
+    assert attrs.confirmed_by == "human:operator"
+    assert {:ok, _} = Ecto.UUID.cast(attrs.confirmation_id)
+    refute_received {:review_confirmed, _, _}
+
+    assert ("The review of task alpha (attempt 1) by codex:gpt-review is held: " <>
+              "support_tier_conservative_partial") in infos()
+  end
+
+  test "a review that needs a decision ends following with the commands to decide it", c do
+    escalated =
+      review(%{state: "escalated", reason: "escalated", needs_user?: true, calls: 1})
+
+    assert {:ok, :needs_user} =
+             follow(c,
+               events: script([[]]),
+               status: status_script([running(c, %{needs_user?: true, reviews: [escalated]})])
+             )
+
+    line = Enum.find(infos(), &String.contains?(&1, "The review of task alpha"))
+    assert line =~ "will not be repaired automatically"
+    assert line =~ "shoestring review accept|reject #{c.goal.id} alpha --reason"
+  end
+
+  test "review events read as review progress, not as checks" do
+    task = %{"plan_task_id" => "alpha"}
+
+    lines =
+      [
+        {"cobbler.plan.task.review_requested", %{"round" => 1}},
+        {"cobbler.plan.task.reviewed",
+         %{"outcome" => "changes_requested", "blocking_count" => 2, "reviewer" => "codex:gpt"}},
+        {"cobbler.plan.task.review_blocked",
+         %{"retry_state" => "retry", "reason" => "2 blocking finding(s)."}},
+        {"cobbler.plan.task.reviewed", %{"outcome" => "approved", "reviewer" => "codex:gpt"}},
+        {"cobbler.plan.review.decided",
+         %{"decision" => "accept", "decided_by" => "human:operator"}}
+      ]
+      |> Enum.map(fn {type, payload} ->
+        Follow.line(%{type: type, payload: Map.merge(task, payload)})
+      end)
+
+    assert lines == [
+             "Task alpha: checks passed; cross-review requested (round 1).",
+             "Task alpha: review found 2 blocking finding(s) (codex:gpt).",
+             "Task alpha: sent back for repair: 2 blocking finding(s).",
+             "Task alpha: review approved (codex:gpt).",
+             "Review of task alpha: accept by human:operator."
+           ]
+  end
+
   test "a gate that could not be sandboxed is not reported as failed checks" do
     failed = %{"plan_task_id" => "add", "gate" => "python_unittest"}
 

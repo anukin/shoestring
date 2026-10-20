@@ -1,0 +1,74 @@
+[
+  {
+    "command": "cat calc.py; cat test/test_calc.py; git status --short",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "sed -i '' 's/    raise NotImplementedError/    return a * b/' calc.py && python3 -m unittest test/test_calc.py -v 2>&1; git diff 86e8f048f387ee4e0e0ed0849b7f00538719bf96 --stat; git diff; git commit -qam \"Implement calc.add\" && git log --oneline -1",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "git status --short; git rev-parse HEAD; git log --oneline -2",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "rm -rf __pycache__ test/__pycache__ && git status --short",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "cat calc.py; cat test/test_calc.py; git diff 86e8f04 --stat",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "sed -i '' 's/    return a \\* b/    return a + b/' calc.py && python3 -m unittest test/test_calc.py -v 2>&1; git add calc.py && git commit -qm \"Fix calc.add to return the sum of its arguments\" && git diff 86e8f04 --stat && git diff 86e8f04",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "git log --oneline -3; git status --short",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  },
+  {
+    "command": "rm -rf __pycache__ test/__pycache__; git status --short",
+    "boundary": "start"
+  },
+  {
+    "status": "completed",
+    "boundary": "end",
+    "is_error": false
+  }
+]

@@ -8,6 +8,21 @@
 #   ITER7A_MODE        "rehearsal": fixture planner and Fake Elves, no provider
 #                      call; "live": the agent's Claude Coordinator plans and
 #                      sandboxed Claude Elves work (needs an authorized budget).
+#   ITER7A_REVIEW      optional; "fixture" enables iteration 8 cross-review with
+#                      the deterministic fixture reviewer (no provider call);
+#                      "codex" reviews with Codex (ITER7A_REVIEW_MODEL, default
+#                      gpt-6-luna; one call per review, needs an authorized budget);
+#                      "claude" is the Worker's own provider, so review is
+#                      unavailable and waits for a human decision (no call).
+#   ITER7A_SEED_DEFECT optional; "1" seeds a review defect for the repair path:
+#                      the fixture's test only checks add(2, 2) == 4, the
+#                      agent's instructions tell the worker to implement a * b
+#                      unless its prompt carries cross-review findings, and the
+#                      plan is edited once so the task has exactly two attempts.
+#   ITER7A_REVIEW_MAX_ROUNDS  optional review round limit (default 2).
+#   ITER7A_REVIEW_DECISION    optional "accept" or "reject": when following stops
+#                      because a review needs the human, record that decision
+#                      with `shoestring review` and follow again.
 #
 #     mix run --no-start tools/live_eval/iter7a_work_loop.exs run < /dev/null
 #
@@ -56,6 +71,8 @@ defmodule Iter7aShell do
     {files_ok?, budget} = plan_shown()
 
     cond do
+      seeded?() and files_ok? and not edited?() -> "e"
+      seeded?() -> if(files_ok?, do: "y", else: "n")
       files_ok? and is_integer(budget) and budget <= @max_attempts -> "y"
       files_ok? and not edited?() -> "e"
       true -> "n"
@@ -64,17 +81,20 @@ defmodule Iter7aShell do
 
   defp edited?, do: Enum.any?(transcript(), &match?({:edit, _}, &1))
 
+  def seeded?, do: System.get_env("ITER7A_SEED_DEFECT") == "1"
+
+  # Seeded: exactly two attempts, so one repair can follow a blocking review.
+  defp limit(value), do: if(seeded?(), do: @max_attempts, else: min(value, @max_attempts))
+
   @doc "The human edit: caps the plan's and every task's attempt limit."
   def edit(path) do
     plan = path |> File.read!() |> Jason.decode!()
 
     capped =
       plan
-      |> update_in(["budget", "max_total_attempts"], &min(&1, @max_attempts))
+      |> update_in(["budget", "max_total_attempts"], &limit/1)
       |> Map.update!("tasks", fn tasks ->
-        Enum.map(tasks, fn task ->
-          update_in(task, ["execution", "max_attempts"], &min(&1, @max_attempts))
-        end)
+        Enum.map(tasks, fn task -> update_in(task, ["execution", "max_attempts"], &limit/1) end)
       end)
 
     File.write!(path, Jason.encode!(capped, pretty: true))
@@ -176,6 +196,35 @@ defmodule Iter7aWorkLoop do
       )
     end
 
+    case System.get_env("ITER7A_REVIEW") do
+      "fixture" ->
+        Application.put_env(:shoestring, :plan_review,
+          enabled: true,
+          adapter: :fixture,
+          model: "fixture-reviewer"
+        )
+
+      "codex" ->
+        Application.put_env(:shoestring, :plan_review,
+          enabled: true,
+          adapter: :codex,
+          model: System.get_env("ITER7A_REVIEW_MODEL", "gpt-6-luna"),
+          max_rounds: String.to_integer(System.get_env("ITER7A_REVIEW_MAX_ROUNDS", "2"))
+        )
+
+      # With this driver's Claude Worker a Claude reviewer is the same
+      # provider: review is unavailable and no review call is made.
+      "claude" ->
+        Application.put_env(:shoestring, :plan_review,
+          enabled: true,
+          adapter: :claude,
+          model: "opus"
+        )
+
+      nil ->
+        :ok
+    end
+
     config = Application.fetch_env!(:shoestring, Oban)
 
     Application.put_env(
@@ -229,6 +278,27 @@ defmodule Iter7aWorkLoop do
       unittest.main()
   """
 
+  # Passes for a * b as well: only a review can find that defect.
+  @weak_test """
+  import unittest
+
+  from calc import add
+
+
+  class AddTest(unittest.TestCase):
+      def test_two_and_two(self):
+          self.assertEqual(add(2, 2), 4)
+
+
+  if __name__ == "__main__":
+      unittest.main()
+  """
+
+  @seed_instruction " Evaluation instruction (a deliberately seeded defect for a code-review " <>
+                      "test): if this prompt has no 'Cross-review of attempt' section, implement " <>
+                      "add as `return a * b` and commit it. If it has one, fix exactly what the " <>
+                      "findings describe and commit."
+
   def fixture! do
     false = File.exists?(source())
     File.mkdir_p!(Path.join(source(), "test"))
@@ -242,7 +312,11 @@ defmodule Iter7aWorkLoop do
     )
 
     File.write!(Path.join(source(), "test/__init__.py"), "")
-    File.write!(Path.join(source(), "test/test_calc.py"), @test)
+
+    File.write!(
+      Path.join(source(), "test/test_calc.py"),
+      if(Iter7aShell.seeded?(), do: @weak_test, else: @test)
+    )
 
     git!(source(), ["init", "-q", "-b", "main"])
     git!(source(), ["config", "user.name", "Fixture"])
@@ -269,7 +343,8 @@ defmodule Iter7aWorkLoop do
         "slug" => "builder",
         "purpose" => "Carry out approved plan tasks.",
         "instructions" =>
-          "Complete the task within its stated scope and acceptance gates. Commit the result.",
+          "Complete the task within its stated scope and acceptance gates. Commit the result." <>
+            if(Iter7aShell.seeded?(), do: @seed_instruction, else: ""),
         "roles" => [
           %{"name" => "Coordinator", "provider" => "claude", "model" => "opus"},
           %{"name" => "Worker", "provider" => "claude", "model" => "opus"}
@@ -318,6 +393,40 @@ defmodule Iter7aWorkLoop do
 
   # -- The loop --------------------------------------------------------------
 
+  defp follow(goal_id) do
+    Follow.run(goal_id,
+      by: @by,
+      shell: Iter7aShell,
+      interval_ms: 1_000,
+      max_polls: 900,
+      from_execution: true
+    )
+  end
+
+  # The human's step, through the real command: list, then decide the one
+  # review that waits. Its output joins the transcript.
+  defp decide_review!(goal_id, decision) do
+    {:ok, status} = Shoestring.Cobbler.ExecutionControl.status(goal_id)
+    %{plan_task_id: task} = Enum.find(status.reviews, & &1.needs_user?)
+
+    reason =
+      "Evaluation: #{decision} the seeded finding to verify the human decision path."
+
+    for args <- [
+          ["list", goal_id],
+          ["show", goal_id, task],
+          [decision, goal_id, task, "--reason", reason, "--by", @by]
+        ] do
+      Iter7aShell.info("$ shoestring review " <> Enum.join(Enum.map(args, &inspect_arg/1), " "))
+
+      ExUnit.CaptureIO.capture_io(fn -> Mix.Tasks.Shoestring.Review.run(args) end)
+      |> String.split("\n", trim: true)
+      |> Enum.each(&Iter7aShell.info/1)
+    end
+  end
+
+  defp inspect_arg(arg), do: if(String.contains?(arg, " "), do: inspect(arg), else: arg)
+
   def run! do
     base = fixture!()
     agent_id = configure!()
@@ -343,13 +452,15 @@ defmodule Iter7aWorkLoop do
       case outcome do
         {:ok, %{goal_id: goal_id}} ->
           followed =
-            Follow.run(goal_id,
-              by: @by,
-              shell: Iter7aShell,
-              interval_ms: 1_000,
-              max_polls: 900,
-              from_execution: true
-            )
+            case {follow(goal_id), System.get_env("ITER7A_REVIEW_DECISION")} do
+              {{:ok, :needs_user}, decision} when decision in ["accept", "reject"] ->
+                decide_review!(goal_id, decision)
+                Iter7aShell.info("(following again)")
+                follow(goal_id)
+
+              {followed, _} ->
+                followed
+            end
 
           result =
             case followed do
@@ -462,6 +573,9 @@ defmodule Iter7aWorkLoop do
     cobbler.plan.execution.requested cobbler.plan.capacity.confirmed admission.decided
     cobbler.plan.task.dispatched cobbler.plan.task.accepted cobbler.plan.task.gate_failed
     cobbler.plan.task.scope_blocked cobbler.plan.execution.completed
+    cobbler.plan.task.review_requested cobbler.plan.review.confirmed
+    cobbler.plan.review.attempt.started cobbler.plan.task.reviewed
+    cobbler.plan.review.decided cobbler.plan.task.review_blocked
     run.running run.completed run.failed run.cancelled run.interrupted
   )
 
