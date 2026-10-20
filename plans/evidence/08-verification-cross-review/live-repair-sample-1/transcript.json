@@ -1,0 +1,345 @@
+[
+  [
+    "info",
+    "Goal 00000008-0000-4000-9000-000000000040"
+  ],
+  [
+    "info",
+    "Base 0c0f0bfe761d in $EVALUATION/repos/source; gates: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "Drafting a plan..."
+  ],
+  [
+    "info",
+    "Planning is held: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "prompt",
+    "Make this one planning call anyway? Its usage is charged before the call. [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "Plan revision 1 (4d1759d09018)"
+  ],
+  [
+    "info",
+    "  Goal: Make add(a, b) in calc.py return the sum of its arguments."
+  ],
+  [
+    "info",
+    "  Checks at the end: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  1. fix-add: Make calc.add return the sum of its arguments"
+  ],
+  [
+    "info",
+    "     Outcome: add(a, b) in calc.py returns a + b, and test/test_calc.py passes."
+  ],
+  [
+    "info",
+    "     Files: calc.py, test/test_calc.py"
+  ],
+  [
+    "info",
+    "     Checks: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  Budget: 3 attempts, 30 minutes"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "prompt",
+    "Approve this plan? [y]es / [n]o / [e]dit: ",
+    "e"
+  ],
+  [
+    "edit",
+    {
+      "max_total_attempts": [
+        3,
+        2
+      ],
+      "task_max_attempts": [
+        [
+          "fix-add",
+          3,
+          2
+        ]
+      ]
+    }
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "Plan revision 2 (705d9c330735)"
+  ],
+  [
+    "info",
+    "  Goal: Make add(a, b) in calc.py return the sum of its arguments."
+  ],
+  [
+    "info",
+    "  Checks at the end: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  1. fix-add: Make calc.add return the sum of its arguments"
+  ],
+  [
+    "info",
+    "     Outcome: add(a, b) in calc.py returns a + b, and test/test_calc.py passes."
+  ],
+  [
+    "info",
+    "     Files: calc.py, test/test_calc.py"
+  ],
+  [
+    "info",
+    "     Checks: python_unittest test/test_calc.py"
+  ],
+  [
+    "info",
+    "  Budget: 2 attempts, 30 minutes"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "prompt",
+    "Approve this plan? [y]es / [n]o / [e]dit: ",
+    "y"
+  ],
+  [
+    "info",
+    "Approved. Execution 00000008-0000-5000-b000-00000000004a is queued for the service."
+  ],
+  [
+    "info",
+    "Execution requested."
+  ],
+  [
+    "info",
+    "Waiting: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "info",
+    "Task fix-add is held: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "prompt",
+    "Confirm capacity for this one attempt of fix-add? [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    "Confirmed. The service admits it on its next pass."
+  ],
+  [
+    "info",
+    "Task fix-add: capacity confirmed by human:user."
+  ],
+  [
+    "info",
+    "Task fix-add: started (attempt 1)."
+  ],
+  [
+    "info",
+    "  The worker finished; checking its work."
+  ],
+  [
+    "info",
+    "  Running check python_unittest."
+  ],
+  [
+    "info",
+    "  Check python_unittest: passed in 0.3 s."
+  ],
+  [
+    "info",
+    "Task fix-add: checks passed; cross-review requested (round 1)."
+  ],
+  [
+    "info",
+    "Waiting: Capacity snapshot is missing or unknown; requires attributable single-decision confirmation"
+  ],
+  [
+    "info",
+    "The review of task fix-add (attempt 1) by codex:gpt-6-luna is held: unknown_capacity"
+  ],
+  [
+    "prompt",
+    "Confirm capacity for this one review call? [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    "Confirmed. The service makes the call on its next pass."
+  ],
+  [
+    "info",
+    "Task fix-add: review found 1 blocking finding(s) (codex:gpt-6-luna)."
+  ],
+  [
+    "info",
+    "Task fix-add: sent back for repair: Cross-review found 1 blocking finding(s)."
+  ],
+  [
+    "info",
+    "Waiting: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "info",
+    "Task fix-add is held: Candidate support tier 'conservative_partial' requires attributable single-decision confirmation"
+  ],
+  [
+    "prompt",
+    "Confirm capacity for this one attempt of fix-add? [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    "Confirmed. The service admits it on its next pass."
+  ],
+  [
+    "info",
+    "Task fix-add: capacity confirmed by human:user."
+  ],
+  [
+    "info",
+    "Task fix-add: started (attempt 2)."
+  ],
+  [
+    "info",
+    "  The worker finished; checking its work."
+  ],
+  [
+    "info",
+    "  Running check python_unittest."
+  ],
+  [
+    "info",
+    "  Check python_unittest: passed in 0.3 s."
+  ],
+  [
+    "info",
+    "Task fix-add: checks passed; cross-review requested (round 2)."
+  ],
+  [
+    "info",
+    "Waiting: Capacity snapshot is missing or unknown; requires attributable single-decision confirmation"
+  ],
+  [
+    "info",
+    "The review of task fix-add (attempt 2) by codex:gpt-6-luna is held: unknown_capacity"
+  ],
+  [
+    "prompt",
+    "Confirm capacity for this one review call? [y/N] ",
+    "y"
+  ],
+  [
+    "info",
+    "Confirmed. The service makes the call on its next pass."
+  ],
+  [
+    "info",
+    "Task fix-add: review approved (codex:gpt-6-luna)."
+  ],
+  [
+    "info",
+    "Task fix-add: accepted at 848d234c3055."
+  ],
+  [
+    "info",
+    "  Running check python_unittest."
+  ],
+  [
+    "info",
+    "  Check python_unittest: passed in 0.3 s."
+  ],
+  [
+    "info",
+    "All checks passed at 848d234c3055."
+  ],
+  [
+    "info",
+    "Done."
+  ],
+  [
+    "info",
+    "Result: 848d234c305572ebf8b7a3f7f67ff0c4f361204f"
+  ],
+  [
+    "info",
+    "  Built on 0c0f0bfe761d in $EVALUATION/worktrees/run-00000008-0000-5000-a000-000000000060"
+  ],
+  [
+    "info",
+    "  Check: python3 -B -m unittest test/test_calc.py -> exit 0"
+  ],
+  [
+    "info",
+    "    OK"
+  ],
+  [
+    "info",
+    "  Every check that ran: shoestring checks 00000008-0000-4000-9000-000000000040"
+  ],
+  [
+    "info",
+    "  Review: fix-add attempt 1 by codex:gpt-6-luna -> changes_requested (1 blocking, 1 total)"
+  ],
+  [
+    "info",
+    "    F1 calc.py:3 add(a, b) multiplies its arguments instead of returning their sum."
+  ],
+  [
+    "info",
+    "  Review: fix-add attempt 2 by codex:gpt-6-luna -> approved (0 blocking, 0 total)"
+  ],
+  [
+    "info",
+    "   calc.py | 2 +-"
+  ],
+  [
+    "info",
+    "   1 file changed, 1 insertion(+), 1 deletion(-)"
+  ],
+  [
+    "info",
+    ""
+  ],
+  [
+    "info",
+    "To take it into your repository:"
+  ],
+  [
+    "info",
+    "  cd $EVALUATION/repos/source"
+  ],
+  [
+    "info",
+    "  git fetch $EVALUATION/worktrees/run-00000008-0000-5000-a000-000000000060 848d234c305572ebf8b7a3f7f67ff0c4f361204f"
+  ],
+  [
+    "info",
+    "  git merge FETCH_HEAD"
+  ]
+]

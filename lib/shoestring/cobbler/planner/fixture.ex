@@ -10,6 +10,12 @@ defmodule Shoestring.Cobbler.Planner.Fixture do
       {:ok, json, tokens} ->
         {:ok, %{json: json, output_tokens: tokens}}
 
+      # Checks run at the actual inference boundary, after the reservation
+      # commits. Tests need not race adapter startup or poll shared SQL state.
+      {:check, check, json, tokens} when is_function(check, 0) ->
+        check.()
+        {:ok, %{json: json, output_tokens: tokens}}
+
       {:error, code} when is_atom(code) ->
         {:error, code}
 

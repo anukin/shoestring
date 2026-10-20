@@ -142,6 +142,170 @@ defmodule Shoestring.Cobbler.PlanGateContractTest do
                seconds(style["duration_ms"]) <> " s."
   end
 
+  test "output artifacts are readable before a task gate finishes, and final gates stream too",
+       c do
+    File.write!(Path.join(c.source, ".gitignore"), ".gate-release\n")
+    git!(c.source, ["add", ".gitignore"])
+    git!(c.source, ["-c", "commit.gpgsign=false", "commit", "-m", "Ignore gate barrier"])
+
+    Application.put_env(:shoestring, :project_gates, %{
+      "stream" => %{
+        argv: [
+          "python3",
+          "-c",
+          "import signal; signal.alarm(15); print('visible before completion', flush=True); " <>
+            "print('pass' + 'word' + chr(61) + 'synthetic-live-output', flush=True); " <>
+            "open('.gate-release').read(); print('finished', flush=True)"
+        ],
+        kind: "test"
+      }
+    })
+
+    {first, opts} = start!(c, [%{"gate" => "project:stream"}], "    return a + b\n")
+    {:ok, wt} = Worktrees.get(first.run_id)
+    barrier = Path.join(wt.path, ".gate-release")
+    assert {_, 0} = System.cmd("mkfifo", [barrier])
+    :ok = Phoenix.PubSub.subscribe(Shoestring.PubSub, Trajectory.topic(c.goal.id))
+    caller = self()
+
+    worker =
+      start_supervised!({Task, fn -> send(caller, {:gate_result, complete(c, first, opts)}) end})
+
+    monitor = Process.monitor(worker)
+
+    try do
+      assert_receive {:trajectory_event_committed,
+                      %{type: "cobbler.plan.gate.output", payload: output}},
+                     5_000
+
+      assert output["scope"] == "task"
+      assert output["run_id"] == first.run_id
+      assert {:ok, %{bytes: bytes}} = ArtifactStore.read(output["artifact_id"])
+      assert bytes =~ "visible before completion"
+      refute bytes =~ "synthetic-live-output"
+      assert payloads(c.goal.id, "cobbler.plan.gate.completed") == []
+      shown = checks(c.goal.id, 1)
+      assert shown =~ "Output so far"
+      assert shown =~ "visible before completion"
+      refute shown =~ "synthetic-live-output"
+    after
+      # Bounded even if the gate failed before opening its FIFO. Its own
+      # alarm also bounds the local fixture command if an assertion fails.
+      System.cmd("python3", [
+        "-c",
+        "import subprocess, sys; subprocess.run([sys.executable, '-c', " <>
+          "\"import sys; open(sys.argv[1], 'w').close()\", sys.argv[1]], " <>
+          "stdin=subprocess.DEVNULL, timeout=2)",
+        barrier
+      ])
+
+      assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 5_000
+    end
+
+    assert_receive {:gate_result, {:ok, %{disposition: :accepted}}}
+    shown = checks(c.goal.id, 1)
+    assert shown =~ "finished"
+    refute shown =~ "Output so far"
+    refute shown =~ "synthetic-live-output"
+
+    assert {:ok, _} = Cobbler.advance_plan_execution(c.goal.id, opts)
+
+    assert Enum.any?(
+             payloads(c.goal.id, "cobbler.plan.gate.output"),
+             &(&1["scope"] == "execution")
+           )
+
+    assert Enum.any?(
+             payloads(c.goal.id, "cobbler.plan.gate.completed"),
+             &(&1["scope"] == "execution")
+           )
+  end
+
+  test "a streamed artifact failure fails the gate and never accepts the task", c do
+    {first, opts} = start!(c, [@unit], "    return a + b\n")
+    previous = Application.get_env(:shoestring, :artifact_max_size)
+    Application.put_env(:shoestring, :artifact_max_size, 0)
+
+    try do
+      assert {:ok, %{disposition: :gate_failed}} = complete(c, first, opts)
+      assert payloads(c.goal.id, "cobbler.plan.task.accepted") == []
+      [completed] = payloads(c.goal.id, "cobbler.plan.gate.completed")
+      assert completed["result"] == "error"
+      assert completed["reason"] =~ "gate_output_failed"
+    after
+      if previous,
+        do: Application.put_env(:shoestring, :artifact_max_size, previous),
+        else: Application.delete_env(:shoestring, :artifact_max_size)
+    end
+  end
+
+  test "an interrupted invocation retains its chunks separately from the next invocation", c do
+    alias Shoestring.Cobbler.PlanGateLog
+    log = PlanGateLog.new(Repo, c.goal.id, Ecto.UUID.generate(), "execution", %{}, [])
+    {:ok, spec} = GateSpec.build(@unit, 5_000)
+    interrupted = Ecto.UUID.generate()
+    next = Ecto.UUID.generate()
+
+    for {id, text} <- [{interrupted, "before restart"}, {next, "after restart"}] do
+      assert :ok = PlanGateLog.started(log, id, 1, spec)
+
+      assert {:ok, %{exit_status: 0}} =
+               GateProcess.run(
+                 ["python3", "-c", "print('" <> text <> "')"],
+                 c.source,
+                 5_000,
+                 1024,
+                 output_sink: PlanGateLog.output_sink(log, id, 1, spec)
+               )
+    end
+
+    assert {:ok, _} =
+             PlanGateLog.completed(log, next, 1, spec, %{
+               result: "passed",
+               duration_ms: 1,
+               exit_status: 0,
+               output: "after restart\n"
+             })
+
+    [first, second] = Checks.invocations(c.goal.id)
+    assert first.completed == nil
+    assert second.completed["result"] == "passed"
+    assert checks(c.goal.id, 1) =~ "before restart"
+    refute checks(c.goal.id, 1) =~ "after restart"
+    assert checks(c.goal.id, 2) =~ "after restart"
+    refute checks(c.goal.id, 2) =~ "before restart"
+  end
+
+  test "the registry refuses malformed output-chunk records", c do
+    {first, opts} = start!(c, [@unit], "    return a + b\n")
+    assert {:ok, %{disposition: :accepted}} = complete(c, first, opts)
+    [output | _] = payloads(c.goal.id, "cobbler.plan.gate.output")
+
+    for payload <- [
+          %{output | "chunk" => 0},
+          %{output | "output_bytes" => -1},
+          %{output | "output_sha256" => "bad"},
+          %{output | "output_sha256" => 123},
+          %{output | "output_sha256" => nil},
+          %{output | "output_sha256" => []},
+          %{output | "output_sha256" => %{}},
+          %{output | "attempt" => 0},
+          Map.delete(output, "artifact_id")
+        ] do
+      assert {:error, {:invalid_payload, _, _, _}} =
+               Trajectory.append(
+                 c.goal.id,
+                 %{
+                   "type" => "cobbler.plan.gate.output",
+                   "schema_version" => 1,
+                   "actor" => "test",
+                   "payload" => payload
+                 },
+                 trusted: [run_id: first.run_id]
+               )
+    end
+  end
+
   test "a failed required gate stops the run and lists the gates not run", c do
     Application.put_env(:shoestring, :project_gates, %{
       "style" => %{argv: ["python3", "-c", "import sys; sys.exit(3)"], kind: "lint"}
@@ -258,6 +422,23 @@ defmodule Shoestring.Cobbler.PlanGateContractTest do
     assert gate["output"] =~ "OK"
   end
 
+  test "result integration commands quote a source path with spaces", c do
+    source = Path.join(Path.dirname(c.source), "source with spaces")
+    assert {_, 0} = System.cmd("git", ["clone", "--quiet", c.source, source])
+    git!(source, ["config", "user.name", "Fixture"])
+    git!(source, ["config", "user.email", "fixture@example.invalid"])
+    c = %{c | source: source}
+    {first, opts} = start!(c, [@unit], "    return a + b\n")
+    assert {:ok, %{disposition: :accepted}} = complete(c, first, opts)
+    assert {:ok, _} = Cobbler.advance_plan_execution(c.goal.id, opts)
+    assert {:ok, _} = Shoestring.CLI.Result.show(c.goal.id, shell: Mix.Shell.Process)
+    lines = collect([])
+    assert lines =~ "  cd '#{source}'\n"
+    command = lines |> String.split("\n") |> Enum.find(&String.starts_with?(&1, "  cd "))
+    assert {pwd, 0} = System.cmd("sh", ["-c", command <> " && pwd -P"])
+    assert String.trim(pwd) == source
+  end
+
   defp start!(c, gates, body) do
     base = head_of!(c.source)
 
@@ -281,6 +462,7 @@ defmodule Shoestring.Cobbler.PlanGateContractTest do
                %{
                  revision_number: rev.revision_number,
                  digest: rev.digest,
+                 repository_path: c.source,
                  admission_event_id: admission.id
                },
                opts

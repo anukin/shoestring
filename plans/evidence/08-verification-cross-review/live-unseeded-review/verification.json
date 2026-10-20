@@ -1,0 +1,31 @@
+{
+  "source_commit": "967c72a",
+  "reviewed_commit": "6248bf774f05a7ba03af4c8b0eebe520897ca402",
+  "packet_digest": "43bb3b09a9d0657b3b57fd87bad40ddfcee579c135266745288874929a130c2b",
+  "human_payload_authorization": "Authorize this packet to Claude",
+  "model": "opus",
+  "effort": "high",
+  "tools": [],
+  "strict_structured_output": true,
+  "confirmed_blockers": [
+    "F1"
+  ],
+  "adjacent_fix": "Basic authentication cross-line value protection, identified while checking F2",
+  "not_reproduced": [
+    "F4"
+  ],
+  "evidence_scope_note": "F3 references the older frozen diff; current human records, budget guard and ledger are committed separately.",
+  "pre_fix_regressions": {
+    "tests": 2,
+    "failures": 2,
+    "excluded": 3,
+    "seed": 198040
+  },
+  "focused_after_fix": {
+    "tests": 42,
+    "failures": 0,
+    "seed": 209148
+  },
+  "live_repair_worker_run": false,
+  "live_rereview_run": false
+}

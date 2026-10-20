@@ -124,7 +124,7 @@ defmodule Shoestring.Trajectory.WriterTest do
     pid = start_supervised!({Writer, goal_id: goal_id, idle_timeout: 0})
 
     ref = Process.monitor(pid)
-    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000
     assert GenServer.whereis(Writer.via(goal_id)) == nil
   end
 

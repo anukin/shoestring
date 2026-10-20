@@ -92,6 +92,7 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
   specification the caller ordered by; built here when absent, and refused
   when it does not match the reference), `:worktrees_dir` (the service's
   worktree root), `:gate_sandbox` (options for `GateSandbox.wrap/3`),
+  `:output_sink` (internal streaming artifact sink),
   `:runner` (test injection, see moduledoc). A project gate that is not
   configured is unavailable.
   """
@@ -374,7 +375,10 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
       |> Keyword.put_new(:worktrees_dir, Keyword.get(opts, :worktrees_dir))
 
     with {:ok, sandbox} <- GateSandbox.wrap(argv, worktree, sandbox_opts),
-         {:ok, result} <- GateProcess.run(sandbox.argv, worktree, timeout_ms, @max_output_bytes) do
+         {:ok, result} <-
+           GateProcess.run(sandbox.argv, worktree, timeout_ms, @max_output_bytes,
+             output_sink: opts[:output_sink]
+           ) do
       {:ok, Map.put(result, :sandbox, sandbox.identity)}
     end
   end

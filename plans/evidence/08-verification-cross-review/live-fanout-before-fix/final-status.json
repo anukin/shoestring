@@ -1,0 +1,163 @@
+{
+  "duration_budget": {
+    "reason": null,
+    "remaining_goal_ms": 1475098
+  },
+  "total_attempts": 2,
+  "scope_blockers": [],
+  "active_attempt": 1,
+  "active_children": [
+    {
+      "execution_id": "00000008-0000-5000-b000-00000000009d",
+      "attempt": 1,
+      "command_id": "plan-north-1",
+      "revision_number": 1,
+      "plan_digest": "407e4cac5786851c5c16f667ac917b23ac78e0aba4fa1efb2d163f9ead2892cf",
+      "dispatch_mode": "fanout_v1",
+      "plan_task_id": "north",
+      "run_id": "00000008-0000-5000-8000-0000000000a2",
+      "grant_id": "00000008-0000-4000-9000-0000000000a3",
+      "root_run_id": "00000008-0000-5000-8000-0000000000a2",
+      "trajectory_task_id": "00000008-0000-5000-a000-0000000000a4",
+      "run_ids": [
+        "00000008-0000-5000-8000-0000000000a2"
+      ]
+    }
+  ],
+  "accepted_count": 0,
+  "cancellations": [],
+  "execution": {
+    "execution_id": "00000008-0000-5000-b000-00000000009d",
+    "requested_by": "human:user",
+    "revision_number": 1,
+    "plan_digest": "407e4cac5786851c5c16f667ac917b23ac78e0aba4fa1efb2d163f9ead2892cf",
+    "ordered_task_ids": [
+      "north",
+      "south",
+      "join"
+    ],
+    "repository_path": "$EVALUATION/repos/source",
+    "agent_profile": {
+      "adapter_id": "claude_headless_stream_json",
+      "digest": "715e0dac51b454d1b4497dc0022fad6d12b93f982996703fe2e5b6a8b4941a06",
+      "instructions": "Implement only the current approved task in its assigned worktree. Read the task's module and its named test. Change only the module the task names, preserve signatures, and never edit tests. Do not implement other tasks. Run the named Python gate using python3 -B -m unittest. Commit the change using the configured Git identity, with no authorship or contributor trailers; leave the worktree clean. Do not push, install packages, use network tools, create other agents, delete files or perform cleanup. Report the commit and gate result.",
+      "model": "opus",
+      "profile_id": "00000008-0000-4000-9000-00000000009c",
+      "provider": "claude",
+      "revision": 1,
+      "role": "Worker"
+    }
+  },
+  "children": [
+    {
+      "execution_id": "00000008-0000-5000-b000-00000000009d",
+      "attempt": 1,
+      "command_id": "plan-north-1",
+      "revision_number": 1,
+      "plan_digest": "407e4cac5786851c5c16f667ac917b23ac78e0aba4fa1efb2d163f9ead2892cf",
+      "dispatch_mode": "fanout_v1",
+      "plan_task_id": "north",
+      "run_id": "00000008-0000-5000-8000-0000000000a2",
+      "stop_class": "awaiting_verification",
+      "grant_id": "00000008-0000-4000-9000-0000000000a3",
+      "root_run_id": "00000008-0000-5000-8000-0000000000a2",
+      "retry_state": null,
+      "resolution": null,
+      "resolved?": false,
+      "trajectory_task_id": "00000008-0000-5000-a000-0000000000a4",
+      "run_ids": [
+        "00000008-0000-5000-8000-0000000000a2"
+      ]
+    },
+    {
+      "execution_id": "00000008-0000-5000-b000-00000000009d",
+      "attempt": 1,
+      "command_id": "plan-south-1",
+      "revision_number": 1,
+      "plan_digest": "407e4cac5786851c5c16f667ac917b23ac78e0aba4fa1efb2d163f9ead2892cf",
+      "dispatch_mode": "fanout_v1",
+      "plan_task_id": "south",
+      "run_id": "00000008-0000-5000-8000-0000000000a7",
+      "stop_class": "adapter_failure",
+      "grant_id": "00000008-0000-4000-8000-0000000000a8",
+      "root_run_id": "00000008-0000-5000-8000-0000000000a7",
+      "retry_state": "escalate",
+      "resolution": "gate_failed",
+      "resolved?": true,
+      "trajectory_task_id": "00000008-0000-5000-b000-0000000000a9",
+      "run_ids": [
+        "00000008-0000-5000-8000-0000000000a7"
+      ]
+    }
+  ],
+  "planned?": true,
+  "task_duration_ms": {
+    "north": 12357,
+    "south": 12545
+  },
+  "total_gate_duration_ms": 0,
+  "total_tasks": 3,
+  "active_task": "north",
+  "reviews": [
+    {
+      "reason": "unknown_capacity",
+      "round": 1,
+      "state": "held",
+      "unavailable": null,
+      "model": "gpt-6-luna",
+      "attempt": 1,
+      "review_id": "00000008-0000-4000-8000-0000000000ae",
+      "calls": 0,
+      "needs_user?": false,
+      "plan_task_id": "north",
+      "commit": "dd0612f8eea2dd8040a5dd8907f83fc1d290c7d5",
+      "decision_pending?": false,
+      "findings": [],
+      "reviewer": "codex"
+    }
+  ],
+  "attempts": {
+    "north": 1,
+    "south": 1
+  },
+  "dispatch_mode": "fanout_v1",
+  "child_inbox": {
+    "pending": [
+      {
+        "execution_id": "00000008-0000-5000-b000-00000000009d",
+        "attempt": 1,
+        "event_id": "00000008-0000-4000-a000-0000000000b0",
+        "revision_number": 1,
+        "goal_id": "00000008-0000-4000-a000-0000000000b1",
+        "plan_digest": "407e4cac5786851c5c16f667ac917b23ac78e0aba4fa1efb2d163f9ead2892cf",
+        "plan_task_id": "north",
+        "run_id": "00000008-0000-5000-8000-0000000000a2",
+        "source_sequence": 83,
+        "message_kind": "completed",
+        "root_run_id": "00000008-0000-5000-8000-0000000000a2",
+        "source_type": "run.completed",
+        "last_reason": "awaiting_review"
+      }
+    ],
+    "observed_count": 30,
+    "pending_complete?": true,
+    "pending_count": 1
+  },
+  "integration": null,
+  "retirements": [],
+  "total_verification_overhead_ms": 0,
+  "active_run_id": "00000008-0000-5000-8000-0000000000a2",
+  "global_failure": null,
+  "accepted": [],
+  "active_run_ids": [
+    "00000008-0000-5000-8000-0000000000a2"
+  ],
+  "needs_user?": true,
+  "acknowledged_scope_blockers": [],
+  "total_duration_ms": 24902,
+  "cancelled?": false,
+  "superseded_attempts": [],
+  "completed?": false,
+  "total_run_duration_ms": 24902,
+  "accepted_evidence": []
+}

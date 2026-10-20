@@ -1,0 +1,29 @@
+[
+  {
+    "five_hour_utilization": 0.12,
+    "rate_limit_status": "allowed",
+    "seven_day_utilization": 0.01
+  },
+  {
+    "duration_ms": 15453,
+    "num_turns": 4,
+    "terminal_reason": "completed",
+    "total_cost_usd": 0.07238860000000001
+  },
+  {
+    "five_hour_utilization": 0.12,
+    "rate_limit_status": "allowed",
+    "seven_day_utilization": 0.01
+  },
+  {
+    "five_hour_utilization": 0.13,
+    "rate_limit_status": "allowed",
+    "seven_day_utilization": 0.01
+  },
+  {
+    "duration_ms": 15005,
+    "num_turns": 4,
+    "terminal_reason": "completed",
+    "total_cost_usd": 0.06932160000000001
+  }
+]

@@ -1,0 +1,151 @@
+{
+  "baseline": "d59f0b6beadee164220024f55fc6daf1e5f76fe2",
+  "issue": "Isolated CLI continuation integration expected accepted alpha before restart but got an empty accepted list.",
+  "ci": {
+    "push": {
+      "run": 39342344422,
+      "doctests": 4,
+      "tests": 2300,
+      "failures": 0,
+      "skipped": 1,
+      "excluded": 6,
+      "seed": 475512,
+      "seconds": 727.2,
+      "javascript_passed": [
+        52,
+        8
+      ],
+      "release": "passed"
+    },
+    "pull_request": {
+      "run": 39342348533,
+      "doctests": 4,
+      "tests": 2300,
+      "failures": 1,
+      "skipped": 1,
+      "excluded": 6,
+      "seed": 705933,
+      "seconds": 743.3,
+      "javascript_passed": [
+        52,
+        8
+      ],
+      "release": "skipped"
+    }
+  },
+  "classification": "intermittent, 1 of 2 current-head CI runs",
+  "root_cause": "UNVERIFIED",
+  "local_diagnostics": {
+    "initial_instrumented_child": {
+      "tests": 2,
+      "failures": 0,
+      "seed": 0,
+      "seconds": 8.9
+    },
+    "predefined_scheduler_pressure_trials": {
+      "count": 3,
+      "command": "ERL_FLAGS='+S 3:3' timeout 120 mix test test/shoestring/cobbler/plan_executor_integration_test.exs --seed 705933 < /dev/null",
+      "each_outer_tests": 1,
+      "each_failures": 0,
+      "seed": 705933,
+      "seconds": [
+        11.4,
+        11.4,
+        11.5
+      ]
+    },
+    "new_failure_evidence_focused": {
+      "tests": 1,
+      "failures": 0,
+      "seed": 705933,
+      "seconds": 10.1
+    },
+    "seeded_gate_failure_probe": {
+      "tests": 1,
+      "failures": 1,
+      "child_tests": 2,
+      "child_failures": 1,
+      "seed": 705933,
+      "observations": [
+        "Continuation completed; deliberately wrong fixture assertion failed the real gate with exit 2.",
+        "Gate output, failed result, retry decision and redispatch of alpha appeared in the assertion message."
+      ],
+      "qualification": "Diagnostic fault injection; not a reproduction of the original unseeded CI failure."
+    }
+  },
+  "change": "Retain acceptance assertion, add earlier continuation-completed and beta-dispatch assertions, attach recorded terminal/gate evidence and stored output on failure. No retry, sleep or timeout change.",
+  "full_gate": {
+    "head": "d514ffa98c87e20f6f2564a386c5cc870601b6f5",
+    "command": "ERL_FLAGS='-ex_unit seed 705933' timeout 590 mix precommit < /dev/null",
+    "status": "passed",
+    "exit_code": 0,
+    "doctests": 4,
+    "tests": 2300,
+    "failures": 0,
+    "skipped": 1,
+    "excluded": 6,
+    "seed": 705933,
+    "seconds": 540.4,
+    "javascript_passed": [
+      52,
+      8
+    ]
+  },
+  "merge": "blocked pending diagnosis and verification",
+  "diagnostic_ci": {
+    "push": {
+      "run": 39348799091,
+      "doctests": 4,
+      "tests": 2300,
+      "failures": 0,
+      "skipped": 1,
+      "excluded": 6,
+      "seed": 505749,
+      "seconds": 621.0,
+      "javascript_passed": [
+        52,
+        8
+      ],
+      "release": "passed"
+    },
+    "pull_request": {
+      "run": 39348803521,
+      "doctests": 4,
+      "tests": 2300,
+      "failures": 1,
+      "skipped": 1,
+      "excluded": 6,
+      "seed": 860663,
+      "seconds": 652.5,
+      "javascript_passed": [
+        52,
+        8
+      ],
+      "release": "skipped",
+      "failure": "Lost amendment inference restart test missed 100 ms readiness message; integration passed."
+    },
+    "integration_failure_reproduced": false
+  },
+  "restart_follow_up": {
+    "change": "Kill inference caller from inside the fixture check, await its actual exit, identify the still-supervised adapter, then stop/restart its supervisor. Apply to both initial and amendment lost-result paths. Preserve lifetime-budget, claim, replay and no-duplicate-input assertions.",
+    "focused": {
+      "tests": 43,
+      "failures": 0,
+      "seed": 860663,
+      "seconds": 13.2
+    },
+    "duplicate_inference_mutation": {
+      "baseline": "d514ffa98c87e20f6f2564a386c5cc870601b6f5",
+      "change": "Return started instead of replayed for running planner requests",
+      "tests": 2,
+      "failures": 2,
+      "excluded": 40,
+      "seed": 860663,
+      "seconds": 0.7,
+      "reason": "Both restarted requests performed inference again and returned finished instead of replayed."
+    },
+    "discarded_selector_probe": "An earlier mutation command selected the preceding concurrency tests due to off-by-one line selectors (2 tests, 1 failure); it is not used as restart-test evidence.",
+    "production_behavior_changed": false,
+    "full_gate": "pending at publication"
+  }
+}

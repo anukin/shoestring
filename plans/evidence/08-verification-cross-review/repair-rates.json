@@ -1,0 +1,36 @@
+{
+  "scope": "Three small seeded calc.add repair loops; not a population estimate.",
+  "trials": [
+    {
+      "evidence": "live-repair",
+      "seeded": true,
+      "blocking_rounds": 1,
+      "repair_success": true,
+      "repeated_blocker": false,
+      "review_output_tokens": 198
+    },
+    {
+      "evidence": "live-repair-sample-1",
+      "seeded": true,
+      "blocking_rounds": 1,
+      "repair_success": true,
+      "repeated_blocker": false,
+      "review_output_tokens": 216
+    },
+    {
+      "evidence": "live-repair-sample-2",
+      "seeded": true,
+      "blocking_rounds": 1,
+      "repair_success": true,
+      "repeated_blocker": false,
+      "review_output_tokens": 193
+    }
+  ],
+  "repair_successes": 3,
+  "repair_trials": 3,
+  "repair_success_rate": 1.0,
+  "repeated_blockers": 0,
+  "rereviews": 3,
+  "repeated_blocker_rate": 0.0,
+  "review_output_tokens": 607
+}

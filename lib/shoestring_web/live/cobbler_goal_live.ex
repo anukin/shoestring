@@ -684,10 +684,18 @@ defmodule ShoestringWeb.CobblerGoalLive do
     _kind, reason -> {:error, reason}
   end
 
+  # A manual run in private Git storage records the repository it copied.
+  defp source_path(%Worktree{metadata: %{"shoestring.manual:source" => source}})
+       when is_binary(source),
+       do: RunPresentation.redact_text(source)
+
+  defp source_path(_worktree), do: nil
+
   defp worktree_record(%Worktree{} = worktree) do
     %{
       path: RunPresentation.redact_text(worktree.path),
       repo_path: RunPresentation.redact_text(worktree.repo_path),
+      source_path: source_path(worktree),
       repo_id: recorded_value(worktree.repo_id),
       branch: recorded_value(worktree.branch),
       base_commit: recorded_value(worktree.base_commit),

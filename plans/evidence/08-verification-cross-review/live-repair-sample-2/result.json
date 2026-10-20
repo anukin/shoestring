@@ -1,0 +1,31 @@
+{
+  "mode": "live",
+  "result": {
+    "base": "090ec89838b396448616fa153e92ce8657f81b01",
+    "repository": "$EVALUATION/repos/source",
+    "commit": "ca4852d50f3b583954e8668509cb351eb21b0e5c",
+    "worktree": "$EVALUATION/worktrees/run-00000008-0000-5000-9000-00000000008e"
+  },
+  "base": "090ec89838b396448616fa153e92ce8657f81b01",
+  "agent_id": "00000008-0000-4000-b000-000000000077",
+  "outcome": "{:ok, %{revision: 2, goal_id: \"00000008-0000-4000-8000-00000000006e\", execution_id: \"00000008-0000-5000-9000-000000000078\"}}",
+  "followed": "{:ok, :completed}",
+  "source_unchanged": true,
+  "merge_in_clone": {
+    "head": "ca4852d50f3b583954e8668509cb351eb21b0e5c",
+    "tests_exit": 0,
+    "tests_tail": "OK"
+  },
+  "elapsed_ms": 204829,
+  "runs": 2,
+  "planner_attempts": 1,
+  "final_status": {
+    "needs_user?": false,
+    "completed?": true,
+    "accepted": [
+      "fix-add"
+    ],
+    "total_attempts": 2,
+    "cancelled?": false
+  }
+}

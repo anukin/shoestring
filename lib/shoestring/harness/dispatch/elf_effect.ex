@@ -78,7 +78,7 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
 
   # -- Private helpers --
 
-  defp elf_opts(%RunRecord{provider_id: provider_id, extensions: extensions}) do
+  defp elf_opts(%RunRecord{provider_id: provider_id, extensions: extensions} = run) do
     case provider_defaults(provider_id) do
       {:ok, defaults} ->
         defaults =
@@ -105,7 +105,7 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
         opts =
           case extensions[Shoestring.Cobbler.ExecutionProfile.key()] do
             nil ->
-              opts
+              sandbox_private_run(opts, run)
 
             binding ->
               adapter_opts =
@@ -135,6 +135,35 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
   end
 
   defp sandbox_plan_run(adapter_opts, _adapter), do: adapter_opts
+
+  # A manual Claude run in private per-run Git storage (every manual Claude
+  # or Codex run started since iteration 8) is sandboxed like a plan run.
+  # Runs in shared storage keep their previous launch: the sandbox would
+  # refuse them.
+  defp sandbox_private_run(opts, run) do
+    adapter_opts = Keyword.get(opts, :adapter_opts, %{})
+
+    if Keyword.get(opts, :adapter) == ClaudeHeadless and not Map.has_key?(adapter_opts, :command) and
+         private_storage?(run.workspace_ref),
+       do: Keyword.put(opts, :adapter_opts, Map.put_new(adapter_opts, :sandbox, true)),
+       else: opts
+  end
+
+  defp private_storage?(workspace_ref) when is_binary(workspace_ref) do
+    root = Path.expand(Shoestring.State.path(:worktrees))
+    path = Path.expand(Path.join(root, workspace_ref))
+
+    with true <- String.starts_with?(path, root <> "/"),
+         {:ok, %{}} <- Shoestring.Harness.CodexAppServer.GitSandbox.policy(path, workspace_ref) do
+      true
+    else
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp private_storage?(_workspace_ref), do: false
 
   defp fake_scenario(extensions) do
     case extensions["shoestring.fake:scenario"] do

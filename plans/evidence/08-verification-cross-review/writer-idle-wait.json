@@ -1,0 +1,47 @@
+{
+  "head": "89d22733bb6d6b5c89b24470a4a5c1c8cf581dbc",
+  "push": {
+    "run": 39370825238,
+    "doctests": 4,
+    "tests": 2300,
+    "failures": 0,
+    "skipped": 1,
+    "excluded": 6,
+    "seed": 674399,
+    "seconds": 697.8,
+    "javascript_passed": [
+      52,
+      8
+    ],
+    "release": "passed"
+  },
+  "pr": {
+    "run": 39370829648,
+    "doctests": 4,
+    "tests": 2300,
+    "failures": 1,
+    "skipped": 1,
+    "excluded": 6,
+    "seed": 221128,
+    "seconds": 773.3,
+    "javascript_passed": [
+      52,
+      8
+    ],
+    "release": "skipped",
+    "failure": "Writer idle timeout normal-exit DOWN message found after 100 ms assertion deadline"
+  },
+  "planner_restarts_and_integration": "passed in both runs",
+  "original_integration_cause": "UNVERIFIED; diagnostics passed on both CI runs, no production fix claimed",
+  "writer_wait_proposal_ms": 1000,
+  "proposal_applied": true,
+  "user_exception": "Explicit user approval: Allow the 1-second test wait; scope limited to WriterTest normal-exit assertion",
+  "merged": false,
+  "focused": {
+    "command": "timeout 120 mix test test/shoestring/trajectory/writer_test.exs --seed 221128 < /dev/null",
+    "tests": 5,
+    "failures": 0,
+    "seed": 221128,
+    "seconds": 0.1
+  }
+}

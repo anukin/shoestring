@@ -99,7 +99,7 @@ it is never skipped as passed.
 
 ```sh
 shoestring checks GOAL            # every check run: task, attempt, result, spec
-shoestring checks GOAL --output 3 # the stored output of check 3
+shoestring checks GOAL --output 3 # check 3's output so far, or its complete output
 ```
 
 ## Cross-review
@@ -144,8 +144,14 @@ shoestring review retry GOAL TASK --reason "why"    # one more call
 
 ## Limits
 
-- Manual runs from `/runs/new` share Git storage and are not sandboxed this
-  way; only plan runs are.
+- Manual Claude and Codex runs from `/runs/new` now also get private per-run
+  Git storage, and manual Claude runs the same sandbox as plan runs. Their
+  commits live in that copy: fetch them with the `git fetch` the goal page
+  shows. Fake manual runs, and manual runs started before this change, still
+  share the source repository's Git storage and are not sandboxed.
+- A task that cannot be admitted because there is no capacity reading for
+  its provider yet says so once in `follow` ("is waiting: no capacity
+  reading for ...") and starts when a reading arrives.
 - Planning uses Claude only (or a configured local Ollama planner); Codex
   planning is not available.
 - Cross-review was verified live on 2026-10-17 on one small fixture (Codex and
@@ -158,9 +164,19 @@ shoestring review retry GOAL TASK --reason "why"    # one more call
   both reviewers found all 8 defects and blocked none of the 5 clean
   changes; that is not a measure of subtle defects. A fan-out replacement
   after a blocking review starts from the approved base with the findings,
-  not from the reviewed commit; fan-out with review is tested hermetically
-  only.
-- Check output is stored when the check ends, not streamed while it runs.
+  not from the reviewed commit. On 2026-10-19 a live sibling fan-out had two
+  workers concurrently, two separate reviews and both tasks accepted; the
+  join phase was not run after the authorized worker budget was exhausted.
+  Both manual provider paths, human reject/retry and two more seeded repair
+  samples also passed; see iteration 8 evidence for the retained initial
+  fan-out failure and its session-index ownership fix.
+- Check output streams into redacted artifacts as complete lines arrive.
+  Incomplete lines and credential labels wait for more bytes or completion.
+  `checks --output N` marks output without a complete artifact as partial;
+  it remains inspectable if the invocation is interrupted.
+  Artifact writes run separately from the raw output collector, so a stalled
+  write cannot extend command execution or its byte cap. A failed gate gets
+  at most 500 ms to flush partial chunks after its command is stopped.
 - The checks Shoestring runs after a worker finishes run under macOS
   `sandbox-exec`: they can read the worktree and anything outside your home
   directory, write only to the worktree and a temporary directory, make no

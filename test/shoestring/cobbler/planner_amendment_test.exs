@@ -536,8 +536,7 @@ defmodule Shoestring.Cobbler.PlannerAmendmentTest do
   end
 
   test "an in-flight initial attempt cannot be reset into amendment inference", ctx do
-    ref = make_ref()
-    opts = options(ctx, [{:await, self(), ref, Jason.encode!(chain_plan()), 10}])
+    opts = options(ctx)
 
     assert {:ok, _} =
              Planner.request(
@@ -552,37 +551,43 @@ defmodule Shoestring.Cobbler.PlannerAmendmentTest do
 
     revision = propose_and_approve!(ctx.goal)
 
-    task =
-      Task.Supervisor.async_nolink(ctx.supervisor, fn ->
-        Planner.generate(ctx.goal.id, "initial", opts)
+    observer = self()
+    checked = make_ref()
+
+    check = fn ->
+      assert {:error, :planner_attempt_in_flight} =
+               Planner.request_amendment(ctx.goal.id, attrs(revision), opts)
+
+      assert Planner.get(ctx.goal.id).request_key == "initial"
+      assert Planner.get(ctx.goal.id).charged_output_tokens == 4096
+      send(observer, {:inference_checked, checked})
+    end
+
+    opts =
+      Keyword.update!(opts, :config, fn config ->
+        Keyword.put(config, :responses, [{:check, check, Jason.encode!(chain_plan()), 10}])
       end)
 
-    assert_receive {:planner_waiting, pid, ^ref}
+    assert {:ok, %{request: %{state: "ready"}}} = Planner.generate(ctx.goal.id, "initial", opts)
 
-    assert {:error, :planner_attempt_in_flight} =
-             Planner.request_amendment(ctx.goal.id, attrs(revision), opts)
-
-    assert Planner.get(ctx.goal.id).request_key == "initial"
-    assert Planner.get(ctx.goal.id).charged_output_tokens == 4096
-    send(pid, {:continue, ref})
-    assert {:ok, %{request: %{state: "ready"}}} = Task.await(task)
+    assert_received {:inference_checked, ^checked}
   end
 
   test "lost amendment inference stays owned across supervisor restart without another charge",
        ctx do
     revision = propose_and_approve!(ctx.goal)
-    ref = make_ref()
-    opts = options(ctx, [{:await, self(), ref, Jason.encode!(chain_plan()), 10}])
+    opts = options(ctx)
     assert {:ok, _} = Planner.request_amendment(ctx.goal.id, attrs(revision), opts)
 
-    task =
-      Task.Supervisor.async_nolink(ctx.supervisor, fn ->
-        Planner.generate_amendment(ctx.goal.id, "amendment-1", opts)
-      end)
+    callers = start_supervised!({Task.Supervisor, []}, id: :lost_inference_callers)
 
-    assert_receive {:planner_waiting, pid, ^ref}
+    assert {:exit, :killed} =
+             PlannerFixtures.lose_inference(callers, opts, fn opts ->
+               Planner.generate_amendment(ctx.goal.id, "amendment-1", opts)
+             end)
+
+    assert [pid] = Task.Supervisor.children(ctx.supervisor)
     monitor = Process.monitor(pid)
-    _ = Task.shutdown(task, :brutal_kill)
     :ok = stop_supervised(Task.Supervisor)
     assert_receive {:DOWN, ^monitor, :process, ^pid, _}
     replacement = start_supervised!(Task.Supervisor)

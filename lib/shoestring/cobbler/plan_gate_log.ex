@@ -16,11 +16,14 @@ defmodule Shoestring.Cobbler.PlanGateLog do
 
   The output (complete, or what arrived before a timeout or the output
   limit) is stored as a redacted text artifact (`ArtifactStore`); the event
-  carries its id, SHA-256 and size, and whether it was cut at the limit. It
-  is written when the gate ends, not streamed while it runs.
+  carries its id, SHA-256 and size, and whether it was cut at the limit.
+  Complete lines are also persisted while the gate runs as immutable chunk
+  artifacts, linked by `cobbler.plan.gate.output` events. An incomplete line
+  or credential label waits for more bytes (or the end of the invocation).
 
   An invocation interrupted by a restart keeps its start event with no
-  completion; the executor runs the gate again as a new invocation. These
+  completion and retains its recorded output chunks; the executor runs the
+  gate again as a new invocation. These
   events record what ran: acceptance still comes only from verified evidence,
   and nothing here changes lifecycle state.
   """
@@ -74,6 +77,29 @@ defmodule Shoestring.Cobbler.PlanGateLog do
 
   def started(log, invocation_id, position, spec) do
     append(log, "cobbler.plan.gate.started", invocation_id, position, spec, %{})
+  end
+
+  @doc "A bounded, redacting output sink for a running invocation."
+  def output_sink(nil, _invocation_id, _position, _spec), do: nil
+
+  def output_sink(log, invocation_id, position, spec) do
+    Shoestring.Cobbler.GateOutputStream.new(fn bytes, chunk ->
+      with {:ok, artifact} <-
+             ArtifactStore.put(log.goal_id, bytes, %{media_type: "text/plain", redacted: true},
+               task_id: log.trusted[:task_id]
+             ) do
+        append(
+          log,
+          "cobbler.plan.gate.output",
+          invocation_id,
+          position,
+          spec,
+          Map.put(artifact_fields(artifact), "chunk", chunk)
+        )
+      else
+        {:error, _reason} -> {:error, :gate_output_artifact_unavailable}
+      end
+    end)
   end
 
   @doc """
@@ -166,7 +192,9 @@ defmodule Shoestring.Cobbler.PlanGateLog do
       "schema_version" => 1,
       "actor" => "cobbler",
       "occurred_at" => now(log.opts),
-      "idempotency_key" => "#{type}:#{invocation_id}",
+      "idempotency_key" =>
+        "#{type}:#{invocation_id}" <>
+          if(type == "cobbler.plan.gate.output", do: ":#{fields["chunk"]}", else: ""),
       "payload" => payload
     }
 

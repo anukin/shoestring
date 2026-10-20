@@ -15,14 +15,22 @@ defmodule Shoestring.Cobbler.GateOutput do
 
   @withheld_line "[REDACTED LINE]"
   @withheld "[REDACTED: gate output withheld]"
+  @credential_value ~r/\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret|cookie|authorization)\s*[:=]\s*[^\s,;]+/i
 
   @spec redact(binary() | nil) :: binary() | nil
   def redact(nil), do: nil
 
   def redact(output) when is_binary(output) do
+    if String.valid?(output),
+      do: redact_text(output),
+      else: "[REDACTED: invalid UTF-8 gate output]\n"
+  end
+
+  defp redact_text(output) do
     redacted =
       output
       |> Redaction.redact()
+      |> String.replace(@credential_value, "[REDACTED]")
       |> String.split("\n")
       |> Enum.map_join("\n", &if(Security.secret_value?(&1), do: @withheld_line, else: &1))
 

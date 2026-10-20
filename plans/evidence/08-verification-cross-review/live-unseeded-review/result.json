@@ -1,0 +1,67 @@
+{
+  "result": "validated",
+  "base": "0cfaa08",
+  "commit": "6248bf774f05a7ba03af4c8b0eebe520897ca402",
+  "findings": {
+    "blocking_count": 1,
+    "findings": [
+      {
+        "claim": "The rule that holds back a credential label until its value arrives is skipped when the buffered complete lines contain invalid UTF-8. The label is then emitted alone, and the value arrives in a later chunk where nothing redacts it.",
+        "confidence": "high",
+        "correction": "Apply the hold check whether or not the bytes are valid UTF-8. A regex without the `u` flag matches raw bytes, so the String.valid? guard can be dropped. Alternatively, once invalid bytes are seen, withhold everything until EOF. Add a regression test that splits invalid bytes followed by a label from the label's value across port chunks, and assert the value never appears in any emitted chunk.",
+        "evidence": "`if String.valid?(complete) and Regex.match?(@unfinished_secret, complete)`: if `complete` contains invalid UTF-8, the else branch runs. It emits `complete`, which GateOutput.redact replaces with the invalid-UTF-8 placeholder, and resets `pending` to the remainder. Example: port data `<<255>> <> \"\\npassword=\\n\"` followed by `\"synthetic-value\\n\"`. Chunk 1 is withheld as invalid UTF-8. Chunk 2 is `\"synthetic-value\\n\"`, which has no label for @credential_value to match, so it is written as a redacted:true artifact with the secret in clear text. The final completion artifact is safe only because the whole invalid-UTF-8 output is withheld; the streamed artifacts are not. The UTF-8 test only covers safe content after an invalid byte.",
+        "id": "F1",
+        "line": 25,
+        "path": "lib/shoestring/cobbler/gate_output_stream.ex",
+        "reference": "supported",
+        "severity": "blocking",
+        "violates": "Acceptance: 'Redaction must remain safe across arbitrary port chunk boundaries and newlines'; goal: do not weaken gate safety or evidence integrity."
+      },
+      {
+        "claim": "Streaming redacts each group of complete lines on its own, so any redaction rule in Redaction.redact or Security.secret_value? that needs context across lines (for example, PEM private-key blocks) can be defeated when a gate prints such a block line by line. Only label-then-value splits are held back.",
+        "confidence": "low",
+        "correction": "Confirm that every pattern in Redaction.redact works on a single line, or hold back from a BEGIN marker until its matching END marker. Add a property-style test asserting that the concatenated streamed chunks contain no secret that whole-output redaction removes, for each Redaction pattern.",
+        "evidence": "emit/2 calls GateOutput.redact on each newline-terminated slice independently. The only cross-chunk protection is @unfinished_secret, which covers label suffixes. The equivalence check `stream(bytewise) == GateOutput.redact(input)` is run on a single input that has no multi-line secret.",
+        "id": "F2",
+        "line": 22,
+        "path": "lib/shoestring/cobbler/gate_output_stream.ex",
+        "reference": "supported",
+        "severity": "non_blocking",
+        "violates": "Acceptance: redaction safe across arbitrary chunk boundaries and newlines."
+      },
+      {
+        "claim": "The README labels two claims outside the streaming task as VERIFIED: that the human confirmed the review-quality labels, and that a local budget wrapper's probe admitted 1 of 6 calls. No committed artifact backs either claim. The edit also removes those items from the UNVERIFIED list.",
+        "confidence": "medium",
+        "correction": "Label the wrapper-probe claim UNVERIFIED or REPO-INSPECTION, or commit the probe output. Record the human decisions with an explicit attribution and date rather than as VERIFIED.",
+        "evidence": "The added text 'VERIFIED (live authorization): ... A local, process-safe executable wrapper ... Its hermetic probe admitted exactly 1 of 6 concurrent fake worker invocations' has no corresponding wrapper or probe output in this diff or the repository file list. The UNVERIFIED items 'Confirm the 13 review-quality case labels' and 'Authorize explicit budgets' were removed.",
+        "id": "F3",
+        "line": 649,
+        "path": "plans/evidence/08-verification-cross-review/README.md",
+        "reference": "supported",
+        "severity": "non_blocking",
+        "violates": "Standing contract: use VERIFIED only with a committed artifact or command output from this run, and never quietly soften a recorded limitation. Goal: evidence integrity."
+      },
+      {
+        "claim": "If `output_sha256` is not a string, `Regex.match?` may raise instead of returning an invalid-payload error, because the field is not listed in the types map.",
+        "confidence": "low",
+        "correction": "Guard with `not is_binary(payload[\"output_sha256\"]) or not Regex.match?(...)`, and add a test that sends a non-string digest.",
+        "evidence": "`not Regex.match?(~r/\\A[0-9a-f]{64}\\z/, payload[\"output_sha256\"])`. `types` declares chunk and output_bytes as integers but sets no type for output_sha256. The malformed-record test covers only the string \"bad\".",
+        "id": "F4",
+        "line": 1672,
+        "path": "lib/shoestring/trajectory/event_registry.ex",
+        "reference": "supported",
+        "severity": "suggestion",
+        "violates": "Strict chunk event validation (fail closed with a contract error)."
+      }
+    ],
+    "outcome": "changes_requested",
+    "summary": "Requesting changes for one blocking defect. The streaming hold check is skipped whenever the buffered complete lines contain invalid UTF-8. Because of that, a credential label and its value can be written to separate streamed artifacts, and the value is stored unredacted. This breaks the criterion that redaction stays safe across arbitrary port chunk boundaries.\n\nEverything else checks out. The sink wiring in GateProcess turns a sink failure into a failed gate rather than a silent pass, and it delivers the flush at the end on timeout and overflow. Chunk events are keyed per chunk and validated in the registry. The CLI checks each chunk's ownership, SHA-256, size and redacted flag before showing it, and requires chunks in order. Interrupted invocations keep their own chunks.\n\nThe non-blocking findings are:\n- the per-line streaming redactor has not been shown to match whole-output redaction for multi-line secrets;\n- the README marks claims outside this task as VERIFIED without a committed artifact;\n- the registry's SHA-256 check may raise instead of rejecting a non-string value.\n\nThe gate's results (2288 tests, 0 failures) are not disputed.",
+    "verdict": "request_changes"
+  },
+  "reviewer": "claude",
+  "model": "opus",
+  "packet_digest": "43bb3b09a9d0657b3b57fd87bad40ddfcee579c135266745288874929a130c2b",
+  "output_tokens": 7063,
+  "elapsed_ms": 68845,
+  "defect_seeded": false
+}

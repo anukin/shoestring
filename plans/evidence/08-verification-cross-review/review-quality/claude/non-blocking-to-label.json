@@ -15,7 +15,7 @@
     },
     "label": "blocking",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "correctness-integer-mean",
@@ -33,7 +33,7 @@
     },
     "label": "blocking",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "clean-mean",
@@ -51,7 +51,7 @@
     },
     "label": "clean",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "clean-port-added-test",
@@ -69,7 +69,7 @@
     },
     "label": "clean",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "clean-port-added-test",
@@ -87,7 +87,7 @@
     },
     "label": "clean",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "security-path-traversal",
@@ -105,7 +105,7 @@
     },
     "label": "blocking",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "clean-path-contained",
@@ -123,7 +123,7 @@
     },
     "label": "clean",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "clean-path-contained",
@@ -141,7 +141,7 @@
     },
     "label": "clean",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "security-shell-injection",
@@ -159,7 +159,7 @@
     },
     "label": "blocking",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "concurrency-lost-update",
@@ -177,7 +177,7 @@
     },
     "label": "blocking",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "clean-counter-locked",
@@ -195,7 +195,7 @@
     },
     "label": "clean",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "errors-swallowed",
@@ -213,7 +213,7 @@
     },
     "label": "blocking",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   },
   {
     "case": "errors-swallowed",
@@ -231,6 +231,6 @@
     },
     "label": "blocking",
     "reviewer": "claude",
-    "useful": null
+    "useful": true
   }
 ]

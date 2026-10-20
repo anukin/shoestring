@@ -1,0 +1,11 @@
+[
+  {
+    "sequence": 85,
+    "type": "run.failed",
+    "payload": {
+      "error_category": "transport",
+      "error_code": "session_not_found",
+      "run_id": "00000008-0000-5000-8000-0000000000a7"
+    }
+  }
+]

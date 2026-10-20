@@ -693,6 +693,33 @@ defmodule Shoestring.Trajectory.EventRegistry do
         types: %{position: :integer, attempt: :integer, required: :boolean}
       }
     },
+    "cobbler.plan.gate.output" => %{
+      1 => %{
+        required: [
+          :invocation_id,
+          :execution_id,
+          :scope,
+          :gate,
+          :spec,
+          :kind,
+          :position,
+          :required,
+          :chunk,
+          :artifact_id,
+          :output_sha256,
+          :output_bytes
+        ],
+        optional: [:plan_task_id, :run_id, :attempt],
+        uuid_fields: [:invocation_id, :execution_id, :run_id, :artifact_id],
+        types: %{
+          position: :integer,
+          attempt: :integer,
+          required: :boolean,
+          chunk: :integer,
+          output_bytes: :integer
+        }
+      }
+    },
     "cobbler.plan.gate.completed" => %{
       1 => %{
         required: [
@@ -753,6 +780,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
           attempt: :integer,
           successor_revision_number: :integer
         }
+      }
+    },
+    "cobbler.plan.admission.waiting" => %{
+      1 => %{
+        required: [:execution_id, :plan_task_id, :attempt, :provider_id, :scope, :reason],
+        optional: [],
+        uuid_fields: [:execution_id],
+        types: %{attempt: :integer}
       }
     },
     "cobbler.plan.capacity.confirmed" => %{
@@ -1473,6 +1508,15 @@ defmodule Shoestring.Trajectory.EventRegistry do
   # bound at dispatch time, so a malformed digest, a non-positive
   # revision/attempt, an unknown gate, or an unknown retry state fails the
   # write rather than entering history.
+  defp validate_plan_execution("cobbler.plan.admission.waiting", 1, payload, _opts) do
+    with :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload) do
+      if Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, payload["reason"]),
+        do: :ok,
+        else: Contract.invalid(:reason, "must be a reason code")
+    end
+  end
+
   defp validate_plan_execution("cobbler.plan.capacity.confirmed", 1, payload, _opts) do
     with :ok <- plan_execution_digest(payload),
          :ok <- plan_execution_revision(payload),
@@ -1580,7 +1624,11 @@ defmodule Shoestring.Trajectory.EventRegistry do
   end
 
   defp validate_plan_execution(type, 1, payload, _opts)
-       when type in ["cobbler.plan.gate.started", "cobbler.plan.gate.completed"] do
+       when type in [
+              "cobbler.plan.gate.started",
+              "cobbler.plan.gate.output",
+              "cobbler.plan.gate.completed"
+            ] do
     task? = payload["scope"] == "task"
 
     cond do
@@ -1612,6 +1660,21 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
       type == "cobbler.plan.gate.completed" ->
         gate_completion(payload)
+
+      type == "cobbler.plan.gate.output" ->
+        cond do
+          payload["chunk"] < 1 ->
+            Contract.invalid(:chunk, "must be positive")
+
+          payload["output_bytes"] < 1 ->
+            Contract.invalid(:output_bytes, "must be positive")
+
+          not Regex.match?(~r/\A[0-9a-f]{64}\z/, payload["output_sha256"]) ->
+            Contract.invalid(:output_sha256, "must be a SHA-256 digest")
+
+          true ->
+            :ok
+        end
 
       true ->
         :ok

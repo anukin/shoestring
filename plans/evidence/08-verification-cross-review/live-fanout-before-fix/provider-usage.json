@@ -1,0 +1,58 @@
+[
+  {
+    "task": "north",
+    "ordinal": 3,
+    "five_hour_utilization": 0.14,
+    "rate_limit_status": "allowed",
+    "rate_limit_type": "five_hour",
+    "seven_day_utilization": 0.01
+  },
+  {
+    "task": "south",
+    "ordinal": 3,
+    "five_hour_utilization": 0.14,
+    "rate_limit_status": "allowed",
+    "rate_limit_type": "five_hour",
+    "seven_day_utilization": 0.01
+  },
+  {
+    "task": "north",
+    "ordinal": 6,
+    "five_hour_utilization": 0.15,
+    "rate_limit_status": "allowed",
+    "rate_limit_type": "five_hour",
+    "seven_day_utilization": 0.01
+  },
+  {
+    "task": "south",
+    "ordinal": 6,
+    "five_hour_utilization": 0.15,
+    "rate_limit_status": "allowed",
+    "rate_limit_type": "five_hour",
+    "seven_day_utilization": 0.01
+  },
+  {
+    "task": "south",
+    "ordinal": 9,
+    "five_hour_utilization": 0.15,
+    "rate_limit_status": "allowed",
+    "rate_limit_type": "five_hour",
+    "seven_day_utilization": 0.02
+  },
+  {
+    "task": "north",
+    "ordinal": 11,
+    "five_hour_utilization": 0.15,
+    "rate_limit_status": "allowed",
+    "rate_limit_type": "five_hour",
+    "seven_day_utilization": 0.02
+  },
+  {
+    "task": "north",
+    "ordinal": 12,
+    "duration_ms": 11712,
+    "num_turns": 4,
+    "terminal_reason": "completed",
+    "total_cost_usd": 0.0653598
+  }
+]
