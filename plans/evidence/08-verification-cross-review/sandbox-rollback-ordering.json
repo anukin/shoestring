@@ -1,0 +1,69 @@
+{
+  "baseline_head": "b4fe5e5b2b7fc8dbf44113c8b7ba03a004121ffb",
+  "push_ci": {
+    "run": 39375414391,
+    "command": "mix precommit < /dev/null",
+    "doctests": 4,
+    "tests": 2300,
+    "failures": 2,
+    "skipped": 1,
+    "excluded": 6,
+    "seed": 143703,
+    "seconds": 768.0,
+    "javascript_passed": [
+      52,
+      8
+    ],
+    "release": "skipped",
+    "failure": "ReservationContinuationTest fixture AgentProfiles.save_settings UPDATE raised Database busy in two tests"
+  },
+  "pr_ci": {
+    "run": 39375445277,
+    "command": "mix precommit < /dev/null",
+    "doctests": 4,
+    "tests": 2300,
+    "failures": 0,
+    "skipped": 1,
+    "excluded": 6,
+    "seed": 913579,
+    "seconds": 708.5,
+    "javascript_passed": [
+      52,
+      8
+    ],
+    "release": "passed"
+  },
+  "frequency": "intermittent, 1 of 2 CI runs on b4fe5e5",
+  "writer_test": "passed in both CI runs",
+  "candidate_mechanism": "Sandbox.stop_owner returns before its proxy rolls back SQLite; another connection may begin a read/write transaction while the old write lock remains",
+  "mechanism_verification": {
+    "tests": 1,
+    "failures": 0,
+    "seed": 143703,
+    "seconds": 0.08,
+    "method": "Suspend owned connection proxy, stop owner, observe raw SQLite database is locked on competing write, resume proxy and await exit, competing write succeeds",
+    "initial_probe": "1 test, 1 failure, 0.09 s: incorrect expected raw error spelling Database busy versus actual database is locked; retained and excluded from regression claims"
+  },
+  "fix": "Use one connection for the shared serial test SQL sandbox; dedicated concurrent-writer repositories retain their own configured pools",
+  "focused": {
+    "command": "timeout 120 mix test test/shoestring/sandbox_isolation_test.exs test/shoestring/cobbler/reservation_continuation_test.exs --seed 143703 < /dev/null",
+    "tests": 10,
+    "failures": 0,
+    "seed": 143703,
+    "seconds": 0.7
+  },
+  "regression": {
+    "pre_fix": "b4fe5e5 config/test.exs; restored after the check",
+    "command": "timeout 120 mix test test/shoestring/sandbox_isolation_test.exs --seed 143703 < /dev/null",
+    "tests": 1,
+    "failures": 1,
+    "seed": 143703,
+    "seconds": 0.1,
+    "behavior": "checkout returns ok instead of blocked while prior rollback is held; no missing module or API failure"
+  },
+  "limits": [
+    "Original CI lock holder was not captured, so exact CI actor remains UNVERIFIED; the harmful ordering and its prevention are reproduced hermetically",
+    "Original isolated continuation integration root cause remains UNVERIFIED"
+  ],
+  "full_gate": "pending at publication"
+}

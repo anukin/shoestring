@@ -6,7 +6,10 @@ import Config
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 config :shoestring, Shoestring.Repo,
-  pool_size: 5,
+  # Database cases share one sandbox connection and run synchronously. Keep
+  # the next checkout behind the previous connection's SQLite rollback.
+  # Tests of independent writers use their own explicitly sized repositories.
+  pool_size: 1,
   pool: Ecto.Adapters.SQL.Sandbox
 
 config :shoestring, Oban,

@@ -1148,3 +1148,46 @@ production regression lock or reproduction of scheduler timing.
 [Exact outcomes and limits](writer-monitor-race.json).
 Full-gate and follow-up PR CI verification remain pending at publication.
 The original isolated integration root cause remains UNVERIFIED.
+
+
+### Shared test sandbox rollback ordering
+
+VERIFIED on `b4fe5e5`: the local full gate with seed 383203 passed
+4 doctests, 2300 tests, 0 failures, 1 skipped, 6 excluded (538.9 s),
+JavaScript 52/52 and 8/8. [PR CI](https://github.com/anukin/shoestring/actions/runs/39375445277)
+passed those counts, seed 913579 (708.5 s), both JavaScript suites and
+the production release. [Push CI](https://github.com/anukin/shoestring/actions/runs/39375414391)
+reported 4 doctests, 2300 tests, 2 failures, 1 skipped, 6 excluded,
+seed 143703 (768.0 s); JavaScript 52/52 and 8/8 passed, release skipped.
+Both failures occurred before reservation behavior, at the handoff fixture's
+first settings update (`Database busy`). The writer lifecycle test passed
+in both runs. Intermittent, 1 of 2 CI runs on that head; neither was rerun.
+
+REPO-INSPECTION: Ecto Sandbox stops its owner Agent while DBConnection's
+separate proxy performs rollback after observing owner exit. Its stop/checkin
+protocol is asynchronous. The test pool previously had five connections,
+allowing a fresh transaction before a preceding rollback released its lock.
+VERIFIED controlled probe: pause the owned proxy, stop its owner, observe
+SQLite refuse a competing write, resume and await proxy exit, then write
+successfully (1 test, 0 failures, seed 143703, 0.08 s). The first probe used
+the wrong expected raw error spelling and failed (1 test, 1 failure, 0.09 s);
+its observed `database is locked` was retained, not rewritten as a pass.
+UNVERIFIED: the original CI lock holder was not captured. This reproduces
+the harmful ordering, not the exact historical actor.
+
+The serial shared test sandbox now uses one connection, so new checkout
+waits behind rollback. Dedicated independent-writer test repositories retain
+their explicitly configured pools. Production configuration, retries, sleeps
+and existing assertion bounds are unchanged. A regression pauses the old
+proxy, verifies a fresh non-queueing checkout is refused, then releases
+rollback and verifies the successor can read the rolled-back value and write.
+Scratch evidence is retained; no fixture deletion or process sweep is added.
+
+VERIFIED: focused sandbox/reservation-continuation coverage passed 10 tests,
+0 failures, seed 143703 (0.7 s). With `config/test.exs` restored from
+pre-fix `b4fe5e5`, the exact new regression failed behaviorally: 1 test,
+1 failure, seed 143703 (0.1 s), receiving successful checkout while rollback
+was still held. The fixed configuration was restored unconditionally.
+[Exact outcomes and limits](sandbox-rollback-ordering.json).
+Full-gate and new-head CI results remain pending at publication.
+The earlier isolated integration root cause remains UNVERIFIED.
