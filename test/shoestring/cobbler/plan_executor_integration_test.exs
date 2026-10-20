@@ -483,6 +483,7 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
 
       assert continued.continuation["checkpoint_id"] == checkpoint.id
       finish_worker!(continued.id)
+      assert Repo.get!(RunRecord, continued.id).status == "completed", execution_evidence(goal.id)
       assert :ok = Shoestring.Cobbler.WakeupWorker.perform(wake_job)
       assert {:ok, %{accepted: [], total_attempts: 1}} = Cobbler.plan_execution_status(goal.id)
       assert {:snooze, 5} = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
@@ -494,7 +495,11 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
         )
 
       assert {:ok, accepted_before_restart} = Cobbler.plan_execution_status(goal.id)
-      assert accepted_before_restart.accepted == ["alpha"]
+
+      assert second.extensions["shoestring.plan:binding"]["plan_task_id"] == "beta",
+             execution_evidence(goal.id)
+
+      assert accepted_before_restart.accepted == ["alpha"], execution_evidence(goal.id)
       planner_before_restart = Shoestring.Cobbler.Planner.get(goal.id)
       assert planner_before_restart.attempts == 1
       restart!()
@@ -587,6 +592,41 @@ defmodule Shoestring.Cobbler.PlanExecutorIntegrationTest do
       Mix.Tasks.Shoestring.Plans.run(args)
       assert_receive {:mix_shell, :info, [json]}
       Jason.decode!(json)
+    end
+
+    # Failure diagnostics read the already-recorded evidence. They neither
+    # drive the execution again nor change its acceptance result.
+    defp execution_evidence(goal_id) do
+      events =
+        Repo.all(
+          from event in Shoestring.Trajectory.TrajectoryEvent,
+            where:
+              event.goal_id == ^goal_id and
+                event.type in ^[
+                  "run.completed",
+                  "run.failed",
+                  "cobbler.plan.task.dispatched",
+                  "cobbler.plan.task.gate_failed",
+                  "cobbler.plan.task.accepted",
+                  "cobbler.plan.gate.completed"
+                ],
+            order_by: [asc: event.sequence]
+        )
+
+      evidence =
+        Enum.map(events, fn event ->
+          output =
+            if id = event.payload["artifact_id"] do
+              case Shoestring.Trajectory.ArtifactStore.read(id) do
+                {:ok, %{bytes: bytes}} -> bytes
+                error -> error
+              end
+            end
+
+          %{type: event.type, run_id: event.run_id, payload: event.payload, gate_output: output}
+        end)
+
+      inspect(evidence, limit: :infinity, printable_limit: :infinity)
     end
 
     defp finish_worker!(run_id) do

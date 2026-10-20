@@ -1,0 +1,82 @@
+{
+  "baseline": "d59f0b6beadee164220024f55fc6daf1e5f76fe2",
+  "issue": "Isolated CLI continuation integration expected accepted alpha before restart but got an empty accepted list.",
+  "ci": {
+    "push": {
+      "run": 39342344422,
+      "doctests": 4,
+      "tests": 2300,
+      "failures": 0,
+      "skipped": 1,
+      "excluded": 6,
+      "seed": 475512,
+      "seconds": 727.2,
+      "javascript_passed": [
+        52,
+        8
+      ],
+      "release": "passed"
+    },
+    "pull_request": {
+      "run": 39342348533,
+      "doctests": 4,
+      "tests": 2300,
+      "failures": 1,
+      "skipped": 1,
+      "excluded": 6,
+      "seed": 705933,
+      "seconds": 743.3,
+      "javascript_passed": [
+        52,
+        8
+      ],
+      "release": "skipped"
+    }
+  },
+  "classification": "intermittent, 1 of 2 current-head CI runs",
+  "root_cause": "UNVERIFIED",
+  "local_diagnostics": {
+    "initial_instrumented_child": {
+      "tests": 2,
+      "failures": 0,
+      "seed": 0,
+      "seconds": 8.9
+    },
+    "predefined_scheduler_pressure_trials": {
+      "count": 3,
+      "command": "ERL_FLAGS='+S 3:3' timeout 120 mix test test/shoestring/cobbler/plan_executor_integration_test.exs --seed 705933 < /dev/null",
+      "each_outer_tests": 1,
+      "each_failures": 0,
+      "seed": 705933,
+      "seconds": [
+        11.4,
+        11.4,
+        11.5
+      ]
+    },
+    "new_failure_evidence_focused": {
+      "tests": 1,
+      "failures": 0,
+      "seed": 705933,
+      "seconds": 10.1
+    },
+    "seeded_gate_failure_probe": {
+      "tests": 1,
+      "failures": 1,
+      "child_tests": 2,
+      "child_failures": 1,
+      "seed": 705933,
+      "observations": [
+        "Continuation completed; deliberately wrong fixture assertion failed the real gate with exit 2.",
+        "Gate output, failed result, retry decision and redispatch of alpha appeared in the assertion message."
+      ],
+      "qualification": "Diagnostic fault injection; not a reproduction of the original unseeded CI failure."
+    }
+  },
+  "change": "Retain acceptance assertion, add earlier continuation-completed and beta-dispatch assertions, attach recorded terminal/gate evidence and stored output on failure. No retry, sleep or timeout change.",
+  "full_gate": {
+    "command": "ERL_FLAGS='-ex_unit seed 705933' timeout 590 mix precommit < /dev/null",
+    "status": "running at diagnostic publication"
+  },
+  "merge": "blocked pending diagnosis and verification"
+}

@@ -1006,3 +1006,41 @@ retain that limit. Full-gate and current-head CI results follow when observed.
 
 VERIFIED: `timeout 590 mix precommit < /dev/null` passed: 4 doctests, 2300 tests, 0 failures, 1 skipped, 6 excluded, seed 726040; ExUnit 523.5 s. JavaScript Gate 0A 52/52, UI 8/8.
 New-head GitHub verification and the authorized stack merges remain pending.
+
+
+### Isolated CLI continuation integration investigation
+
+VERIFIED on `d59f0b6`: [push CI](https://github.com/anukin/shoestring/actions/runs/39342344422)
+passed the full gate and production release: 4 doctests, 2300 tests, 0 failures,
+1 skipped, 6 excluded, seed 475512, ExUnit 727.2 s; JavaScript 52/52 and 8/8.
+[PR CI](https://github.com/anukin/shoestring/actions/runs/39342348533)
+reported 4 doctests, 2300 tests, 1 failure, 1 skipped, 6 excluded, seed 705933,
+ExUnit 743.3 s; JavaScript 52/52 and 8/8 passed, release skipped. Both earlier
+planner/Observatory failures passed. Intermittent, 1 of 2 current-head CI runs.
+
+The remaining failure is the isolated CLI integration: the resumed task
+should leave alpha accepted before restart, but the accepted list was empty.
+UNVERIFIED: the original log does not show the terminal/gate reason. No root
+cause or production fix is claimed by this diagnostic change.
+
+VERIFIED local investigation: one instrumented child run passed 2 tests,
+0 failures, seed 0 (8.9 s), showing a completed continuation, passing gate and
+accepted alpha. Three predefined, concurrently isolated scheduler-pressure
+trials each passed their one outer test, seed 705933 (11.4, 11.4, 11.5 s).
+The new failure-evidence assertions passed one outer test, seed 705933
+(10.1 s). These are diagnostic runs, not retry-until-green acceptance or
+proof that the original failure is resolved.
+
+The test now checks continuation completion and dispatch of beta explicitly,
+retains its alpha acceptance assertion, and attaches the scoped canonical
+terminal/gate events and already-recorded output to any failure. A deliberately
+wrong fixture greeting assertion made the real gate fail (exit 2), retried
+alpha, and printed that gate output and retry evidence: one outer test,
+one failure, seed 705933. The fixture mutation was restored. This validates
+the diagnostics; it is not a reproduction of the original CI defect.
+No timeout is increased, and no sleep, retry or skipped test is added.
+
+[Investigation record](integration-diagnosis.json) preserves all outcomes.
+A full `mix precommit` with the failed CI seed configured through the Erlang
+application environment is running at diagnostic publication. No merge is
+claimed while investigation and verification remain open.
