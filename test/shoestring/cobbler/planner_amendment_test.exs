@@ -576,18 +576,18 @@ defmodule Shoestring.Cobbler.PlannerAmendmentTest do
   test "lost amendment inference stays owned across supervisor restart without another charge",
        ctx do
     revision = propose_and_approve!(ctx.goal)
-    ref = make_ref()
-    opts = options(ctx, [{:await, self(), ref, Jason.encode!(chain_plan()), 10}])
+    opts = options(ctx)
     assert {:ok, _} = Planner.request_amendment(ctx.goal.id, attrs(revision), opts)
 
-    task =
-      Task.Supervisor.async_nolink(ctx.supervisor, fn ->
-        Planner.generate_amendment(ctx.goal.id, "amendment-1", opts)
-      end)
+    callers = start_supervised!({Task.Supervisor, []}, id: :lost_inference_callers)
 
-    assert_receive {:planner_waiting, pid, ^ref}
+    assert {:exit, :killed} =
+             PlannerFixtures.lose_inference(callers, opts, fn opts ->
+               Planner.generate_amendment(ctx.goal.id, "amendment-1", opts)
+             end)
+
+    assert [pid] = Task.Supervisor.children(ctx.supervisor)
     monitor = Process.monitor(pid)
-    _ = Task.shutdown(task, :brutal_kill)
     :ok = stop_supervised(Task.Supervisor)
     assert_receive {:DOWN, ^monitor, :process, ^pid, _}
     replacement = start_supervised!(Task.Supervisor)

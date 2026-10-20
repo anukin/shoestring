@@ -457,18 +457,18 @@ defmodule Shoestring.Cobbler.PlannerTest do
 
   test "lost result survives process restart without inference duplication or budget reset",
        context do
-    ref = make_ref()
-    opts = options(context, [{:await, self(), ref, Jason.encode!(plan()), 10}])
+    opts = options(context)
     request!(context, opts)
 
-    task =
-      Task.Supervisor.async_nolink(context.supervisor, fn ->
-        Planner.generate(context.goal.id, "initial-1", opts)
-      end)
+    callers = start_supervised!({Task.Supervisor, []}, id: :lost_inference_callers)
 
-    assert_receive {:planner_waiting, pid, ^ref}
+    assert {:exit, :killed} =
+             Shoestring.Test.PlannerFixtures.lose_inference(callers, opts, fn opts ->
+               Planner.generate(context.goal.id, "initial-1", opts)
+             end)
+
+    assert [pid] = Task.Supervisor.children(context.supervisor)
     monitor = Process.monitor(pid)
-    _ = Task.shutdown(task, :brutal_kill)
     :ok = stop_supervised(Task.Supervisor)
     assert_receive {:DOWN, ^monitor, :process, ^pid, _}
     replacement = start_supervised!(Task.Supervisor)

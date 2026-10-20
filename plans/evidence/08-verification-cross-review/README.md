@@ -1044,3 +1044,39 @@ No timeout is increased, and no sleep, retry or skipped test is added.
 A full `mix precommit` with the failed CI seed configured through the Erlang
 application environment is running at diagnostic publication. No merge is
 claimed while investigation and verification remain open.
+
+
+### Lost-inference restart twin follow-up
+
+VERIFIED on diagnostic head `d514ffa`: local full gate with the failed
+integration seed (`ERL_FLAGS='-ex_unit seed 705933' timeout 590 mix precommit < /dev/null`)
+passed 4 doctests, 2300 tests, 0 failures, 1 skipped, 6 excluded, seed 705933;
+ExUnit 540.4 s; JavaScript 52/52 and 8/8.
+[Push CI](https://github.com/anukin/shoestring/actions/runs/39348799091)
+passed the same counts, seed 505749, ExUnit 621.0 s, both JavaScript suites
+and the release. [PR CI](https://github.com/anukin/shoestring/actions/runs/39348803521)
+reported 4 doctests, 2300 tests, 1 failure, 1 skipped, 6 excluded, seed 860663,
+ExUnit 652.5 s; JavaScript 52/52 and 8/8 passed, release skipped. The
+integration scenario passed in both runs. Its original root cause remains
+UNVERIFIED; passing diagnostics are not a production fix.
+
+The PR failure was another planner readiness race: the lost-amendment restart
+test still waited 100 ms for the fixture to start. Intermittent, 1 of 2 runs
+on that head. The previous fixture-boundary fix had left the two restart
+protocols unchanged. Both are now synchronized on actual caller loss:
+the fixture kills the inference caller after reservation, the test awaits
+its exit, verifies the adapter remains supervised, and then stops/restarts
+the adapter supervisor. Lifetime charge, request state, active claim, replay,
+adapter shutdown and exactly-one-inference checks remain. No readiness timer
+is widened; Task's existing default wait bounds the lifecycle synchronization.
+No sleep, retry or skipped test is added.
+
+VERIFIED: focused planner/amendment/integration coverage passed 43 tests,
+0 failures, seed 860663 (13.2 s). Making a running request start inference
+again on the `d514ffa` planner source fails both exact restart tests:
+2 tests, 2 failures, 40 excluded, seed 860663 (0.7 s), returning `finished`
+instead of `replayed`. The module was restored. This is a behavioral mutation
+check of the retained guards, not a reproduction of scheduler timing against
+a pre-fix commit. An earlier line-selector probe selected the preceding tests
+and is excluded from that claim. Full-gate and new-head CI verification are
+pending at publication; merges remain unclaimed.
