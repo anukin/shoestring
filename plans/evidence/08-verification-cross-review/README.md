@@ -1109,3 +1109,42 @@ passed 5 tests, 0 failures, seed 221128 (0.1 s). This is verification of the
 approved test tolerance, not a production regression fix or reproduction
 of GitHub scheduler load. [Exact preceding CI and approval record](writer-idle-wait.json).
 The full gate and new-head CI remain pending at publication.
+
+
+### Post-merge writer monitor race
+
+VERIFIED: PRs #93, #94, #95 and #96 merged in order into `main` after
+the local full gate and both current-head CI runs passed. Main `265937f`
+had exactly the tested `3b6b483` tree. Local: 4 doctests, 2300 tests,
+0 failures, 1 skipped, 6 excluded, seed 221128 (529.9 s), JavaScript
+52/52 and 8/8. Push CI 39372626890 passed the same counts, seed 367701
+(532.2 s); PR CI 39372633293 passed, seed 818134 (659.8 s); both
+JavaScript suites and production releases passed. Merge messages were
+inspected without attribution trailers. The user's explicit merge request
+overrides the standing human-only rule for this iteration's delivery.
+
+VERIFIED: [post-merge main CI](https://github.com/anukin/shoestring/actions/runs/39373948837)
+failed: 4 doctests, 2300 tests, 1 failure, 1 skipped, 6 excluded,
+seed 383203 (585.9 s); JavaScript 52/52 and 8/8 passed, release skipped.
+The sole failure is the writer lifecycle test: its monitor received
+`:noproc`, proving that monitoring started after the writer had exited.
+Intermittent, 1 of 3 CI runs on that tree (two pre-merge, one post-merge).
+This differs from the preceding late-normal-notification failure. Increasing
+the wait again would not address it.
+
+The test now starts the supervised writer with its timer disabled, installs
+the monitor, sets that test writer's idle interval to zero, and performs a
+normal append to arm the real timer. Normal exit and registry unregistration
+remain required; the user's approved 1,000 ms wait is retained unchanged.
+No production code, retry, sleep, skipped test or further timeout extension
+is introduced. The append idle-disappearance/recovery twin was also checked.
+
+VERIFIED focused lifecycle coverage: 18 tests, 0 failures, seed 383203
+(0.4 s). On the `265937f` production source, mutating the valid idle handler
+to ignore expiry made the exact test fail: 1 test, 1 failure, 4 excluded,
+seed 383203 (1.1 s). The mutation was restored. This defends the retained
+real-idle shutdown assertion; it is a test setup correction, not a new
+production regression lock or reproduction of scheduler timing.
+[Exact outcomes and limits](writer-monitor-race.json).
+Full-gate and follow-up PR CI verification remain pending at publication.
+The original isolated integration root cause remains UNVERIFIED.
