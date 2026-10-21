@@ -138,3 +138,49 @@ guarantee. [Spend authority and pricing assumptions](../../../docs/api-spend.md)
 record exact sources and limits. No credentials were read, and no API call was
 made. Adapter lifecycle integration and the slice 10D shared adapter/failure
 suite are still pending; this foundation alone does not complete 10D.
+
+## Slice 10F: bounded diagnostic preview and export
+
+REPO-INSPECTION: diagnostic format v1 uses an allowlisted projection, local
+goal/run/event aliases and relative timing. It excludes original identities,
+paths, auth material, prompts, source, output and arbitrary prose. Historical
+compatibility metadata and bounded enum/numeric lifecycle evidence remain.
+Policy explanations use local templates instead of copying stored text.
+Selected source is bounded to 8 MiB and exports to 512 KiB; selection is at most
+200 recent events, with explicit omitted counts. This is lossy diagnostic data,
+not replayable history or an anonymity guarantee.
+
+REPO-INSPECTION: preview prints the complete proposed bytes and manifest. Export
+regenerates them and requires the exact preview SHA-256, then creates an
+exclusive file with mode 0600 before writing content. Existing files/symlinks
+are refused. No upload, provider probe, migration or cleanup is performed by the
+diagnostic operation. The CLI opens only existing state; SQLite may create its
+ordinary sidecars. Authentication and actual helper compatibility explicitly
+remain unchecked. The compiled fixture hashes cover two named compatibility
+fixtures, not an exhaustive inventory.
+
+VERIFIED: the focused diagnostics/measurement/shadow/spend suite passed 58
+tests, 0 failures, seed 863710, in 1.5 seconds. Diagnostic tests cover privacy
+exclusions AND retained useful fields; exact-byte confirmation; changed source
+and configuration; selections; oversized source; private/exclusive exports;
+symlink refusal; missing-state inspection; history preservation; and provider
+CLI guards. These are new-feature tests, not behavioral regression locks
+against the pre-feature commit. No live inference call was made.
+
+VERIFIED: `mix shoestring.diagnostics preview --limit 10` completed against
+existing local development state: three selected capacity events, zero omitted,
+and 1,742 canonical bundle bytes. No user diagnostic export was created or
+shared. The preview remained local in ignored `tmp/`. Release packaging and a
+release doctor remain independent, unfinished slice 10E work.
+
+See [diagnostic commands and limits](../../../docs/diagnostics.md).
+
+VERIFIED: `timeout 590 mix precommit < /dev/null` exited 0 after the diagnostic
+slice and integrated measurement/shadow/spend foundations: 4 doctests, 2390
+tests, 0 failures, 1 skipped, 6 excluded; seed 582684. ExUnit completed in 575.3
+seconds (12.1 async, 563.1 sync). Rust formatting/Clippy passed, with 4 unit and
+5 integration tests passing. JavaScript passed 52/52 and 14/14, 0 failures.
+Expected fixture warnings and SQLite warnings occurred; there were no test
+failures. One full gate was run for this slice, without retry. This verifies
+the current independent foundations, not real calibration or unfinished adapter
+and release acceptance.

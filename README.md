@@ -254,6 +254,8 @@ and [shadow forecast reports](docs/shadow-forecasts.md) expose provenance, missi
 data and fallback without changing admission. Forecast-assisted routing remains
 disabled; adapter, release and diagnostic work is tracked separately in the
 [iteration 10 evidence](plans/evidence/10-forecasting-packaging/README.md).
+The repository-only [diagnostic command](docs/diagnostics.md) previews a bounded
+sanitized bundle and requires its exact digest before creating a private export.
 
 ## Production release
 

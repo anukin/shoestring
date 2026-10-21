@@ -3,6 +3,17 @@ defmodule Shoestring.CLI.Repository do
 
   def with_repo(fun) do
     Shoestring.State.ensure_writable_root!()
+    start_repo(fun, true)
+  end
+
+  @doc "Open existing state for inspection without creating the state root or running migrations."
+  def with_existing_repo(fun) do
+    if File.regular?(Shoestring.State.database_path()),
+      do: start_repo(fun, false),
+      else: {:error, :existing_database_required}
+  end
+
+  defp start_repo(fun, migrate?) do
     Shoestring.State.configure_repo!()
     previous = Application.fetch_env!(:shoestring, Shoestring.Repo)
 
@@ -17,7 +28,7 @@ defmodule Shoestring.CLI.Repository do
         Ecto.Migrator.with_repo(
           Shoestring.Repo,
           fn repo ->
-            Ecto.Migrator.run(repo, :up, all: true, log: false)
+            if migrate?, do: Ecto.Migrator.run(repo, :up, all: true, log: false)
             fun.(repo)
           end,
           pool_size: 1
