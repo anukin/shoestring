@@ -249,6 +249,12 @@ milestone needs reconciling with the agreed CLI work interface. Authentication
 also remains necessary before shared/non-loopback exposure. See the
 [current milestone record](plans/milestones/06-cobbler-planning.md).
 
+Iteration 10 is in progress. Repository-only [run measurements](docs/measurements.md)
+and [shadow forecast reports](docs/shadow-forecasts.md) expose provenance, missing
+data and fallback without changing admission. Forecast-assisted routing remains
+disabled; adapter, release and diagnostic work is tracked separately in the
+[iteration 10 evidence](plans/evidence/10-forecasting-packaging/README.md).
+
 ## Production release
 
 Build assets and a self-contained release:

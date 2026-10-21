@@ -81,3 +81,31 @@ completed in 553.6 seconds (11.7 async, 541.8 sync). Rust formatting/Clippy
 passed, with 4 unit and 5 integration tests passing. JavaScript passed 52/52
 and 14/14, 0 failures. SQLite warnings occurred, but the completed run had no
 failures. One full gate was run for this slice, without retry.
+
+## Slice 10B foundation: shadow-only evaluation
+
+REPO-INSPECTION: forecast/evaluator v1 computes a conservative finite-sample
+99% upper order statistic per exact versioned cohort, with minimum 100 training
+and 100 strictly later evaluation rows. Held-out coverage must be at least 99%
+(at most 1% observed underprediction). Sparse, uncertain, mismatched-version,
+future, malformed or undercalibrated cohorts produce explicit fallback. These
+are initial shadow targets, not a real-world calibration or statistical claim.
+Every output retains static policy with no dispatch effect; there is no enable
+switch or production admission integration.
+
+VERIFIED: combined measurement/shadow tests passed 29 tests, 0 failures, seed
+213299. Constructed 200-row cohorts verify interval computation, chronological
+exclusion, sparse/version-shift/contamination fallback and exact underprediction
+counts. Task acceptance and forecast accuracy are separate metrics. The real v1
+extractor still cannot produce eligible consumption labels. Provider tests and
+network calls were not used. This is new-feature coverage, not a regression
+claim against a pre-feature commit.
+
+VERIFIED: the repository-only local shadow report completed with class_count 0,
+forecast_count 0 and fallback no_fully_classified_rows. The development ledger
+still has no run samples. Real calibration (10B) and forecast-assisted policy
+acceptance (10C) remain UNVERIFIED and disabled, by the user's explicit decision.
+The last full gate above belongs to 10A; final full integration verification
+after later independent slices is still required.
+
+See [shadow reporting and limitations](../../../docs/shadow-forecasts.md).
