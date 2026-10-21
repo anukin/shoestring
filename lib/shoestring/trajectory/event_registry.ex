@@ -20,6 +20,25 @@ defmodule Shoestring.Trajectory.EventRegistry do
   alias Shoestring.Trajectory.EventEnvelope
 
   @payload_schemas %{
+    "terminal.session.started" => %{
+      1 => %{
+        required: [:run_id, :protocol_version, :process_group],
+        optional: [],
+        uuid_fields: [:run_id],
+        types: %{protocol_version: :integer, process_group: :integer}
+      }
+    },
+    "terminal.ownership.changed" => %{
+      1 => %{required: [:run_id, :state, :owner_ref], optional: [], uuid_fields: [:run_id]}
+    },
+    "terminal.session.exited" => %{
+      1 => %{
+        required: [:run_id, :reason],
+        optional: [:exit_code, :signal],
+        uuid_fields: [:run_id],
+        types: %{exit_code: :integer}
+      }
+    },
     "cobbler.plan.child.observed" => %{
       1 => %{
         required: [
@@ -1260,7 +1279,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
            :ok <- validate_plan_decision(type, version, validated, opts),
            :ok <- validate_plan_execution(type, version, validated, opts),
            :ok <- Shoestring.Cobbler.Planner.Events.validate(type, validated),
-           :ok <- Shoestring.Cobbler.Review.Events.validate(type, validated) do
+           :ok <- Shoestring.Cobbler.Review.Events.validate(type, validated),
+           :ok <- Shoestring.Terminal.Events.validate(type, validated) do
         {:ok, validated}
       else
         {:error, changeset} -> {:error, {:invalid_payload, type, version, changeset}}

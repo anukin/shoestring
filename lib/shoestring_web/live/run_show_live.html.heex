@@ -23,6 +23,14 @@
       >
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
+            <.link
+              :if={ShoestringWeb.TerminalAccess.interactive?(@run)}
+              id="open-run-terminal"
+              navigate={~p"/runs/#{@run.id}/terminal"}
+              class="ss-button ss-primary"
+            >
+              Open terminal
+            </.link>
             <span class="inline-flex items-center justify-center p-2 rounded-md bg-amber-200 text-amber-900">
               <.icon name="hero-wrench-screwdriver" class="w-5 h-5" />
             </span>
@@ -39,7 +47,12 @@
                 </span>
               </div>
               <p class="text-xs text-amber-800 mt-0.5">
-                Explicit manual execution flow. Cobbler automated admission, quota routing, and takeover are inactive.
+                <%= if ShoestringWeb.TerminalAccess.interactive?(@run) do %>
+                  Manual interactive execution. Open the terminal to manage input ownership.
+                  Cobbler automated admission and quota routing are inactive.
+                <% else %>
+                  Explicit manual execution flow. Cobbler automated admission, quota routing, and takeover are inactive.
+                <% end %>
               </p>
             </div>
           </div>

@@ -8,6 +8,9 @@ defmodule ShoestringWeb.BrowserClientTest do
     assert sources == [
              "/assets/vendor/phoenix/phoenix.js",
              "/assets/vendor/live_view/phoenix_live_view.js",
+             "/assets/vendor/xterm/xterm.js",
+             "/assets/vendor/xterm/addon-fit.js",
+             "/assets/js/terminal.js",
              "/assets/js/app.js"
            ]
 
@@ -17,10 +20,13 @@ defmodule ShoestringWeb.BrowserClientTest do
     assert document |> LazyHTML.query("#agent-form") |> LazyHTML.attribute("method") == ["post"]
   end
 
-  test "both locked browser assets are served", %{conn: conn} do
+  test "all locked browser and terminal assets are served", %{conn: conn} do
     for path <- [
           "/assets/vendor/phoenix/phoenix.js",
-          "/assets/vendor/live_view/phoenix_live_view.js"
+          "/assets/vendor/live_view/phoenix_live_view.js",
+          "/assets/vendor/xterm/xterm.js",
+          "/assets/vendor/xterm/addon-fit.js",
+          "/assets/js/terminal.js"
         ] do
       response = get(conn, path)
       assert response.status == 200

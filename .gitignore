@@ -99,3 +99,10 @@ plans/evidence/06-cobbler-planning/*
 
 # Python bytecode (tools/live_eval exporters)
 __pycache__/
+
+# Iteration 9's separately supervised native PTY helper.
+/native/terminal_helper/target/
+/priv/bin/shoestring-terminal
+!/priv/static/assets/vendor/xterm/addon-fit.js
+!/plans/evidence/09-interactive-terminal/
+!/plans/evidence/09-interactive-terminal/**

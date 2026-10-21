@@ -4,6 +4,7 @@ defmodule ShoestringWeb.Router do
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
+    plug ShoestringWeb.TerminalBrowser
     plug :fetch_live_flash
     plug :put_root_layout, html: {ShoestringWeb.Layouts, :root}
     plug :protect_from_forgery
@@ -31,6 +32,7 @@ defmodule ShoestringWeb.Router do
     live "/goals/:goal_id/timeline", TrajectoryTimelineLive, :show
     live "/runs/new", RunNewLive, :new
     live "/runs/:run_id", RunShowLive, :show
+    live "/runs/:run_id/terminal", TerminalLive, :show
   end
 
   scope "/", ShoestringWeb do

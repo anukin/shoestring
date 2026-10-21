@@ -152,6 +152,7 @@
   var csrf = document.querySelector("meta[name='csrf-token']");
   if (root.Phoenix && root.LiveView && csrf) {
     var liveSocket = new root.LiveView.LiveSocket("/live", root.Phoenix.Socket, {
+      hooks: root.ShoestringTerminal ? { Terminal: root.ShoestringTerminal.Hook } : {},
       params: { _csrf_token: csrf.getAttribute("content") }
     });
     liveSocket.connect();

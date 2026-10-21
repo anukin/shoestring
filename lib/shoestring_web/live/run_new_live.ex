@@ -122,7 +122,14 @@ defmodule ShoestringWeb.RunNewLive do
     # Claude and Codex runs get private per-run Git storage: the Claude
     # sandbox requires it, and a sandboxed Codex can commit only there. The
     # source repository is only read; the result is fetched from the worktree.
-    provider_run? = run_params["provider"] in ["codex", "claude"]
+    provider_run? =
+      run_params["provider"] in [
+        "codex",
+        "claude",
+        "codex_interactive",
+        "claude_interactive",
+        "terminal_fixture"
+      ]
 
     storage =
       if provider_run?,
@@ -213,7 +220,13 @@ defmodule ShoestringWeb.RunNewLive do
     }
 
     extensions =
-      if provider in ["codex", "claude"] do
+      if provider in [
+           "codex",
+           "claude",
+           "codex_interactive",
+           "claude_interactive",
+           "terminal_fixture"
+         ] do
         extensions
       else
         Map.put(
@@ -252,6 +265,16 @@ defmodule ShoestringWeb.RunNewLive do
 
     {identity, adapter, command, adapter_opts, process_owner} =
       case provider do
+        interactive
+        when interactive in ["claude_interactive", "codex_interactive", "terminal_fixture"] ->
+          name =
+            interactive
+            |> String.replace_suffix("_interactive", "")
+            |> String.replace("terminal_fixture", "fixture")
+
+          {Shoestring.Harness.Interactive.identity(name), Shoestring.Harness.Interactive, [],
+           %{provider: name}, :adapter}
+
         "codex" ->
           {Shoestring.Harness.CodexAppServer.identity(), Shoestring.Harness.CodexAppServer,
            ["codex", "app-server", "--stdio"], %{live: true}, :adapter}
@@ -408,6 +431,15 @@ defmodule ShoestringWeb.RunNewLive do
 
   defp candidate_for("claude"),
     do: %{"provider_id" => "claude", "adapter_id" => "claude_headless_stream_json"}
+
+  defp candidate_for("codex_interactive"),
+    do: %{"provider_id" => "codex", "adapter_id" => "codex_interactive_pty"}
+
+  defp candidate_for("claude_interactive"),
+    do: %{"provider_id" => "claude", "adapter_id" => "claude_interactive_pty"}
+
+  defp candidate_for("terminal_fixture"),
+    do: %{"provider_id" => "fixture", "adapter_id" => "fixture_interactive_pty"}
 
   defp candidate_for(_fake),
     do: %{"provider_id" => "fake", "adapter_id" => "shoestring.harness.fake"}

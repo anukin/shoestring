@@ -1,0 +1,17 @@
+.ss-terminal-heading { margin-top:24px; margin-bottom:24px; }
+.ss-terminal-heading code { font-size:14px; font-variant-numeric:tabular-nums; }
+.ss-terminal-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.ss-terminal-toolbar .ss-terminal-danger { margin-left:auto; color:var(--ss-error); }
+.ss-terminal-status { min-height:24px; margin:16px 0 12px!important; }
+.ss-terminal-screen { height:clamp(320px,60vh,640px); padding:16px; background:#172821; border-radius:10px; overflow:hidden; }
+.ss-terminal-screen .xterm { height:100%; }
+.ss-terminal-screen .xterm-viewport { scrollbar-color:#90ad9c #172821; }
+.ss-terminal-screen .xterm:focus-within { outline:2px solid #b0d3a9; outline-offset:3px; }
+.ss-terminal-page .ss-notice { margin-top:12px; }
+.ss-terminal-toolbar [hidden] { display:none; }
+@media(max-width:700px) {
+  .ss-terminal-toolbar { gap:8px; }
+  .ss-terminal-toolbar .ss-button { flex:1 1 auto; font-size:13px; padding:8px 10px; }
+  .ss-terminal-toolbar .ss-terminal-danger { margin-left:0; }
+  .ss-terminal-screen { padding:10px; height:60vh; min-height:320px; }
+}

@@ -180,6 +180,23 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
     {:ok, [adapter: Fake, process_owner: :runner, command: ["sleep", "30"]]}
   end
 
+  defp provider_defaults(provider_id)
+       when provider_id in [
+              "fixture_interactive_pty",
+              "claude_interactive_pty",
+              "codex_interactive_pty"
+            ] do
+    provider = String.replace_suffix(provider_id, "_interactive_pty", "")
+
+    {:ok,
+     [
+       adapter: Shoestring.Harness.Interactive,
+       process_owner: :adapter,
+       command: [],
+       adapter_opts: %{provider: provider}
+     ]}
+  end
+
   defp provider_defaults("codex_app_server_stdio") do
     {:ok,
      [

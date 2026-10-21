@@ -15,6 +15,14 @@ defmodule ShoestringWeb.Endpoint do
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
 
+  socket "/terminal/socket", ShoestringWeb.TerminalSocket,
+    websocket: [
+      check_origin: :conn,
+      max_frame_size: 16_384,
+      connect_info: [:peer_data, :uri, session: @session_options]
+    ],
+    longpoll: false
+
   # Serve the browser clients from the locked OTP dependencies. Only these
   # JavaScript assets are exposed; no provider or external CDN is involved.
   plug Plug.Static,

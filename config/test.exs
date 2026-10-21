@@ -23,6 +23,7 @@ config :shoestring, handoff_reconciler: false
 config :shoestring, plan_execution_reconciler: false
 config :shoestring, reservation_control_reconciler: false
 config :shoestring, plan_child_inbox_reconciler: false
+config :shoestring, terminal_recovery: false
 
 # Supervised capacity monitors must NOT auto-start in test and must never
 # shell out to a provider CLI there. Tests start monitors explicitly via

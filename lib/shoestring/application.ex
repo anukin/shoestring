@@ -21,6 +21,7 @@ defmodule Shoestring.Application do
         {Registry, keys: :unique, name: Shoestring.Trajectory.WriterRegistry},
         Shoestring.Trajectory.WriterSupervisor,
         {Phoenix.PubSub, name: Shoestring.PubSub},
+        Shoestring.Terminal.Supervisor,
         {Oban, Application.fetch_env!(:shoestring, Oban)}
       ] ++
         dispatch_reconciler_children() ++

@@ -1,0 +1,1 @@
+Pinned first-party xterm.js assets, served locally. Published npm SHA-512 integrity was verified before extracting only these assets and MIT licenses. Exact versions, sources and asset SHA-256 digests are in provenance.json. No CDN or other addons are used.
