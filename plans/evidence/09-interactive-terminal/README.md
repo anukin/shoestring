@@ -42,7 +42,7 @@ image/clipboard addons are loaded. Terminal rendering follows the
 
 ## Protocol and process ownership
 
-REPO-INSPECTION: protocol v1, helper 0.1.0, is a four-byte big-endian length
+REPO-INSPECTION: protocol v1, helper 0.1.1, is a four-byte big-endian length
 followed by JSON. Terminal bytes are base64 and remain binary end to end.
 Hello/version negotiation precedes one spawn. Dispatch/request correlation is
 separate from the canonical run ID. Unknown versions, wrong sessions, invalid
@@ -209,3 +209,62 @@ ceiling is 120 seconds. Never invoke vendor mode from automated tests.
 Acceptance remains open until the user resolves the remaining authenticated
 vendor verification. This is not an iteration 9
 completion declaration.
+
+## Authentication continuation
+
+VERIFIED: after the user refreshed Claude sign-in and explicitly authorized a
+read-only diagnostic, unrestricted `claude auth status` recognized the login,
+but the terminal's environment allowlist did not. Adding only `USER` restored
+login recognition. Tested `LOGNAME`, `SECURITYSESSIONID` and
+`__CF_USER_TEXT_ENCODING` individually did not. Only variable names, exit codes
+and login booleans were displayed; credential values and account details were
+not printed or saved. No inference calls were made by this diagnostic.
+
+UNVERIFIED: optional `auth status --json` probes through the real PTY exited 0
+but their TTY output did not parse as an authentication JSON object. Raw account
+output was withheld, and these probes are not evidence of successful TUI
+authentication. The positive login-recognition result above is from the plain
+CLI status diagnostic, not a vendor model response.
+
+The earlier logged-out conclusion from a filesystem-sandboxed status command
+was too strong. The original TUI did display `Login expired`, but actual prior
+credential expiry remains UNVERIFIED. The verified implementation defect was
+the missing `USER` environment key.
+
+REPO-INSPECTION: launch profiles and the Rust helper now allow `USER`; credential
+environment variables remain excluded. Helper 0.1.1 is required so an old 0.1.0
+binary is visibly rejected before spawn. Protocol version remains 1. Rebuild
+development binaries with `mix terminal.check` and packaged binaries with
+`mix terminal.build`.
+
+VERIFIED against unchanged implementation files at `22d3d08`: the new launch
+test failed with `profile.env["USER"] == nil` (2 tests, 1 failure, seed 698058).
+The new Rust integration test failed with `invalid_spawn` instead of `spawned`
+when passing `USER` (1 test, 1 failure, 4 filtered). These are behavioral
+regression failures, not missing-module or signature failures. After the fix,
+Rust formatting/Clippy and all 4 unit + 5 integration tests passed; the focused
+launch/compatibility suite passed 4 tests, 0 failures, seed 342616. The tests
+also assert unrelated inherited values stay absent while user identity remains
+available, across Claude, Codex and fixture profiles.
+
+VERIFIED: the user authorized a fresh ceiling of one Claude session and one
+Codex session, one exact tool-free `TERMINAL_OK` prompt each, at most five
+minutes per session including trust prompts, no retries. The Claude attempt
+reached its folder-trust prompt and hit its bound while action-time confirmation
+was pending. It produced no model response and was not retried. The Codex
+attempt also rendered its folder-trust prompt and hit its five-minute bound
+while action-time confirmation was pending. No model response was verified and
+no retry was made. Both new session allowances are consumed. The original
+fixture-specific trust approval did not apply to these newly allocated paths.
+VERIFIED: `timeout 590 mix precommit < /dev/null` exited 0 for this fix:
+4 doctests, 2332 tests, 0 failures, 1 skipped, 6 excluded, seed 738591;
+549.1 seconds (11.8 async, 537.2 sync). Rust formatting/Clippy passed with
+4 unit + 5 integration tests, 0 failures. JavaScript passed 52/52 and 14/14.
+The earlier 2330-test result belongs to `22d3d08`, not this fix.
+
+VERIFIED: the optimized 0.1.1 helper negotiated protocol v1, accepted a
+synthetic `USER`, spawned `/usr/bin/true`, reported exactly one exit 0, then
+exited 0 with empty stderr. `MIX_ENV=test timeout 120 mix terminal.build
+< /dev/null` exited 0 and packaged that helper. Authenticated vendor response
+acceptance remains open; this fix does not convert the bounded trust-prompt
+attempts into successful model verification.

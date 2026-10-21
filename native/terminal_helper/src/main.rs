@@ -33,6 +33,7 @@ fn allowed_env(key: &str) -> bool {
         key,
         "PATH"
             | "HOME"
+            | "USER"
             | "TMPDIR"
             | "LANG"
             | "LC_ALL"

@@ -15,8 +15,10 @@ defmodule Shoestring.Terminal.Launch do
            Shoestring.Harness.CodexAppServer.GitSandbox.policy(workdir, request.workspace_ref),
          {:ok, executable, args, extra_env} <- command(provider, request, workdir),
          executable when is_binary(executable) <- System.find_executable(executable) do
+      # Claude's macOS credential lookup needs USER even when HOME is set.
+      # Preserve that identity without inheriting credential variables.
       env =
-        ~w(PATH HOME TMPDIR LANG LC_ALL LC_CTYPE)
+        ~w(PATH HOME USER TMPDIR LANG LC_ALL LC_CTYPE)
         |> Enum.flat_map(fn name ->
           case System.get_env(name) do
             nil -> []

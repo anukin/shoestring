@@ -13,6 +13,7 @@ struct Helper {
 impl Helper {
     fn new() -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_shoestring-terminal"))
+            .env("SHOESTRING_TERMINAL_UNAPPROVED", "synthetic-private-value")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -92,6 +93,40 @@ impl Helper {
         }
         panic!("output limit reached");
     }
+}
+
+#[test]
+fn user_identity_survives_without_unapproved_inherited_environment() {
+    let mut h = Helper::new();
+    h.send(json!({"op":"hello","version":1}));
+    assert_eq!(h.event()["version"], 1);
+    h.send(json!({"op":"spawn","request_id":"request","session_id":"fixture",
+        "executable":"/bin/sh",
+        "argv":["-c", "printf 'USER=%s\\nUNAPPROVED=%s\\n' \"$USER\" \"${SHOESTRING_TERMINAL_UNAPPROVED:-absent}\""],
+        "cwd":std::env::temp_dir().canonicalize().unwrap(),
+        "env":{"USER":"terminal-fixture-user","PATH":"/usr/bin:/bin","TERM":"xterm-256color"},
+        "rows":24,"cols":80}));
+    let spawned = h.event();
+    assert_eq!(spawned["op"], "spawned", "{spawned:?}");
+    let output = h.until_bytes(b"UNAPPROVED=absent");
+    assert!(
+        output
+            .windows(b"USER=terminal-fixture-user".len())
+            .any(|v| v == b"USER=terminal-fixture-user")
+    );
+    assert!(
+        !output
+            .windows(b"synthetic-private-value".len())
+            .any(|v| v == b"synthetic-private-value")
+    );
+    loop {
+        let event = h.event();
+        if event["op"] == "exited" {
+            assert_eq!(event["exit_code"], 0);
+            break;
+        }
+    }
+    assert!(h.child.wait().unwrap().success());
 }
 impl Drop for Helper {
     fn drop(&mut self) {

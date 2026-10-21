@@ -3,7 +3,13 @@ defmodule Shoestring.Terminal.CompatibilityTest do
   alias Shoestring.Test.TerminalHelpers
   alias Shoestring.Terminal.Session
 
-  test "an incompatible helper is visible and cannot spawn a session" do
+  for {version, helper_version} <- [{99, "99.0.0"}, {1, "0.1.0"}] do
+    test "helper #{helper_version} with protocol #{version} is visibly incompatible and cannot spawn" do
+      assert_incompatible!(unquote(version), unquote(helper_version))
+    end
+  end
+
+  defp assert_incompatible!(version, helper_version) do
     fixture = TerminalHelpers.create!()
     path = Path.join(System.tmp_dir!(), "terminal-incompatible-#{Ecto.UUID.generate()}")
     python = System.find_executable("python3")
@@ -11,7 +17,7 @@ defmodule Shoestring.Terminal.CompatibilityTest do
     File.write!(path, """
     #!#{python}
     import json, struct, sys
-    body = json.dumps({"op":"hello","version":99,"helper_version":"99.0.0","max_frame":65536}).encode()
+    body = json.dumps({"op":"hello","version":#{version},"helper_version":"#{helper_version}","max_frame":65536}).encode()
     sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
     sys.stdout.buffer.flush()
     sys.stdin.buffer.read()
