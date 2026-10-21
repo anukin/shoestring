@@ -109,3 +109,32 @@ The last full gate above belongs to 10A; final full integration verification
 after later independent slices is still required.
 
 See [shadow reporting and limitations](../../../docs/shadow-forecasts.md).
+
+## Slice 10D foundation: durable API spend authority
+
+REPO-INSPECTION: API policy defaults to disabled and zero cap. Positive allowance
+also needs an accepted effective price version. A run request cannot choose its
+cap/prices. Immediate SQLite transactions reserve a whole-call maximum against
+a durable dispatch/run identity. Duplicate delivery cannot authorize another
+call. Reconciliation uses the immutable quote; ambiguous usage retains the full
+maximum across restart and month rollover. Cross-month calls conservatively
+occupy both endpoints. This is upper-bound bookkeeping, not exact billing.
+
+VERIFIED: the first focused invocation stopped before tests because SQLite
+rejects ALTER TABLE ADD CONSTRAINT. The migration was corrected to define
+checks inline in CREATE TABLE, following the repository convention. The next
+focused run passed 42 combined measurement/shadow/spend tests, 0 failures, seed
+177781, in 1.4 seconds. No assertion was skipped, slept, widened or retried.
+Eight independent SQLite connections could reserve only three maxima; duplicate
+delivery, restart, uncertainty, month rollover, lower caps, price drift, invalid
+usage, immutable settlement and database constraints are covered. No provider
+CLI or API request is used. These are new-feature tests, not pre-feature
+regression locks.
+
+REPO-INSPECTION: official OpenAI documentation was fetched for Responses usage,
+model bounds and pricing. The built-in dated schedule is conservative and
+requires operator acceptance; commercial prices remain assumptions, not a bill
+guarantee. [Spend authority and pricing assumptions](../../../docs/api-spend.md)
+record exact sources and limits. No credentials were read, and no API call was
+made. Adapter lifecycle integration and the slice 10D shared adapter/failure
+suite are still pending; this foundation alone does not complete 10D.
