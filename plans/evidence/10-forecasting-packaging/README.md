@@ -184,3 +184,33 @@ Expected fixture warnings and SQLite warnings occurred; there were no test
 failures. One full gate was run for this slice, without retry. This verifies
 the current independent foundations, not real calibration or unfinished adapter
 and release acceptance.
+
+## Slice 10E preflight: local release candidate
+
+VERIFIED: `MIX_ENV=prod mix assets.deploy` exited 0. The initial release command
+found an existing default output and stopped at its overwrite prompt with
+closed stdin; that output was not reused or overwritten. A subsequent
+`MIX_ENV=prod mix release --path tmp/iter10-release-cfd28ad` assembled a fresh
+candidate from `cfd28ad`, exiting 0. All commands were bounded and foreground.
+Generated extensionless digested license copies now have explicit ignore rules;
+the original vendored license files remain tracked. No files were deleted.
+
+VERIFIED: the candidate contains ERTS 16.2 and the native PTY helper. A bounded
+hello-only handshake returned protocol 1, helper version 0.1.1 and max_frame
+65536; control EOF ended the helper. No provider session was started. Mach-O
+link inspection found a runtime dependency on Homebrew's OpenSSL 3; the build
+is not independent of that library. The SQLite NIF also carries a build-host
+install-name label; this is not proof of a runtime dependency on that path.
+Neither path nor other machine details are copied into this evidence record.
+
+VERIFIED: a bounded release `eval` with only system tools on PATH, distribution
+disabled, an isolated unused state directory and no endpoint secret exited 1:
+runtime configuration requires SECRET_KEY_BASE. The eval marker did not run.
+This verifies bundled-runtime invocation and the current first-run failure,
+not successful first-run initialization, migration or UI startup. No endpoint,
+worker or provider was started; no credentials were read or created.
+
+UNVERIFIED/open: clean-machine installation; automatic private first-run
+initialization; release manifest and doctor; upgrade/backup/rollback; Homebrew
+formula; final archive/checksums; and signing/notarization. No release has been
+published. The local candidate is an inspection artifact, not 10E acceptance.

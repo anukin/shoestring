@@ -40,6 +40,9 @@ shoestring-*.tar
 /priv/static/cache_manifest.json
 /priv/static/**/*.gz
 /priv/static/**/*-*.*
+# Phoenix digest also hashes extensionless vendored license files.
+/priv/static/assets/vendor/xterm/LICENSE-addon-fit-*
+/priv/static/assets/vendor/xterm/LICENSE-xterm-*
 
 # Planning documents are intentionally local to this workspace.
 /plans/*
