@@ -1,7 +1,8 @@
 # Iteration 9: interactive terminal evidence
 
-Implementation passes automated and fixture verification. Vendor response acceptance remains open;
-neither vendor returned the requested smoke response in the authorized attempts.
+Implementation passes automated and fixture verification. Authenticated Claude
+and Codex smoke responses were verified in Firefox on 2026-10-20; iteration 9
+acceptance is complete on the supported macOS arm64 target.
 
 ## Scope and instructions
 
@@ -160,12 +161,13 @@ fixture trust action, then displayed the exact smoke prompt and `Login expired`.
 The session was explicitly terminated without retry. Codex 0.163.0 rendered its
 folder-trust screen, then reached its 120-second session bound while approval
 was pending. No trust bypass or retry was attempted. Vendor model responses
-remain UNVERIFIED; neither attempt produced `TERMINAL_OK`.
+were UNVERIFIED at that point; neither original attempt produced `TERMINAL_OK`.
+The successful final continuation is recorded below.
 
-UNVERIFIED: successful authenticated vendor responses, vendor-specific tools,
-commits or permission workflows beyond those startup screens. Do not treat
-fixture coverage as proof of those paths. Further live attempts require a new
-named budget; Claude also requires a working login.
+UNVERIFIED: vendor-specific tools, commits or permission workflows beyond the
+fixture trust/startup and tool-free response checks. Do not treat fixture
+coverage or a tool-free response as proof of those broader paths. Further live
+attempts require a new named budget.
 
 VERIFIED: the first completed `timeout 590 mix precommit < /dev/null` was red:
 4 doctests, 2330 tests, 1 failure, 1 skipped, 6 excluded, seed 913840; 549.9
@@ -206,9 +208,8 @@ The driver prints a loopback URL and records local fixture metadata under
 requires explicit user authorization and its named session budget; its driver
 ceiling is 120 seconds. Never invoke vendor mode from automated tests.
 
-Acceptance remains open until the user resolves the remaining authenticated
-vendor verification. This is not an iteration 9
-completion declaration.
+The local demo and automated fixtures are supplemented by the authenticated
+vendor verification in the final acceptance continuation below.
 
 ## Authentication continuation
 
@@ -265,6 +266,47 @@ The earlier 2330-test result belongs to `22d3d08`, not this fix.
 VERIFIED: the optimized 0.1.1 helper negotiated protocol v1, accepted a
 synthetic `USER`, spawned `/usr/bin/true`, reported exactly one exit 0, then
 exited 0 with empty stderr. `MIX_ENV=test timeout 120 mix terminal.build
-< /dev/null` exited 0 and packaged that helper. Authenticated vendor response
-acceptance remains open; this fix does not convert the bounded trust-prompt
+< /dev/null` exited 0 and packaged that helper. At this stage, authenticated
+vendor response acceptance remained open; the fix did not convert the bounded trust-prompt
 attempts into successful model verification.
+
+## Final acceptance continuation — 2026-10-20
+
+VERIFIED: the user explicitly requested rerunning both sessions and confirmed
+the remaining actions. This renewed the same named ceiling: one Claude session
+and one Codex session, one exact tool-free prompt each, five minutes per
+session, no retries. No planner or reviewer calls were authorized or used.
+The initial restricted launch failed before application startup because Mix
+could not open its local PubSub socket; it launched no provider. The two actual
+sessions then ran with the required local-socket permission.
+
+VERIFIED in Firefox: Claude Code 2.1.304 and Codex 0.163.0 each rendered the
+synthetic fixture trust prompt. The user-confirmed trust actions applied only
+to their respective fresh fixture repositories, containing a harmless README.
+Both then displayed the submitted prompt and a separate assistant response
+`TERMINAL_OK`. Claude displayed completion after 1 second; Codex after 3 seconds.
+These are displayed response durations, not measured end-to-end session times.
+No tool request or execution was visible in either session. Sandbox and
+customization restrictions were unchanged; Shoestring terminal-log retention
+remained disabled. Raw vendor output, local paths and generated identifiers
+are not published in this evidence.
+
+VERIFIED: each session was explicitly ended using Terminate run after its
+response. Firefox showed Session ended; each driver reported a cancelled
+terminal outcome and exited 0, before its five-minute bound. Both allowances
+are consumed, with no retries. A displayed response verifies authenticated TUI
+operation, not a billed inference count or broader vendor tool workflows.
+
+VERIFIED: the vendor smoke requirement is now satisfied alongside the automated
+and fixture checks above. Iteration 9 is accepted for macOS arm64. Linux and
+other architectures remain unsupported/deferred; full distribution packaging
+belongs to iteration 10. Human screen-reader testing and broader vendor tool/
+commit workflows remain UNVERIFIED, without being promoted by these smokes.
+
+VERIFIED: final acceptance gate `timeout 590 mix precommit < /dev/null` exited
+0: 4 doctests, 2332 tests, 0 failures, 1 skipped, 6 excluded; seed 538665.
+ExUnit completed in 560.9 seconds (12.2 async, 548.7 sync). Rust formatting and
+Clippy passed, with 4 unit and 5 integration tests passing. JavaScript passed
+52/52 and 14/14, with 0 failures. SQLite connection warnings appeared, but the
+completed test run had no failures. There was one full-gate run in this
+continuation, with no retry. This continuation changes evidence only.
