@@ -209,6 +209,11 @@ runtime configuration requires SECRET_KEY_BASE. The eval marker did not run.
 This verifies bundled-runtime invocation and the current first-run failure,
 not successful first-run initialization, migration or UI startup. No endpoint,
 worker or provider was started; no credentials were read or created.
+Correction to that last scope: no provider credentials were inspected and no
+endpoint secret was created. Standard Mix assembly generated a candidate-local
+distribution cookie, which its launcher reads even with distribution disabled.
+Its value was not printed or copied into tracked evidence. Per-install cookie
+handling must be resolved before publishing an archive.
 
 UNVERIFIED/open: clean-machine installation; automatic private first-run
 initialization; release manifest and doctor; upgrade/backup/rollback; Homebrew
