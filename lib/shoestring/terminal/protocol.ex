@@ -5,6 +5,7 @@ defmodule Shoestring.Terminal.Protocol do
   @max_chunk 262_144
 
   def version, do: @version
+  def helper_version, do: "0.1.1"
   def max_frame, do: @max_frame
 
   def encode(%{} = message) do

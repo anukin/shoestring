@@ -185,7 +185,10 @@ failures. One full gate was run for this slice, without retry. This verifies
 the current independent foundations, not real calibration or unfinished adapter
 and release acceptance.
 
-## Slice 10E preflight: local release candidate
+## Historical slice 10E preflight: baseline local release candidate
+
+The following preflight describes `cfd28ad`, before the remainder implementation
+recorded below. Its implementation gaps are historical, not current status.
 
 VERIFIED: `MIX_ENV=prod mix assets.deploy` exited 0. The initial release command
 found an existing default output and stopped at its overwrite prompt with
@@ -208,14 +211,132 @@ disabled, an isolated unused state directory and no endpoint secret exited 1:
 runtime configuration requires SECRET_KEY_BASE. The eval marker did not run.
 This verifies bundled-runtime invocation and the current first-run failure,
 not successful first-run initialization, migration or UI startup. No endpoint,
-worker or provider was started; no credentials were read or created.
-Correction to that last scope: no provider credentials were inspected and no
+worker or provider was started; no provider credentials were inspected and no
 endpoint secret was created. Standard Mix assembly generated a candidate-local
 distribution cookie, which its launcher reads even with distribution disabled.
 Its value was not printed or copied into tracked evidence. Per-install cookie
 handling must be resolved before publishing an archive.
 
-UNVERIFIED/open: clean-machine installation; automatic private first-run
+At that preflight, UNVERIFIED/open items were clean-machine installation; automatic private first-run
 initialization; release manifest and doctor; upgrade/backup/rollback; Homebrew
 formula; final archive/checksums; and signing/notarization. No release has been
 published. The local candidate is an inspection artifact, not 10E acceptance.
+
+## Remainder implementation: optional text adapters (10D)
+
+REPO-INSPECTION: two optional text-only adapters now implement the existing
+identity/capability/lifecycle/error/artifact contract. `openai_responses` uses
+the durable spend guard before reading its credential or sending a request;
+`ollama_local` checks operator local-only attestation, exact server version,
+preinstalled tag/digest, local GGUF metadata and absence of remote-model fields.
+Neither supports repository tools, resume or interactive input. They are manual
+text-response paths, not new repository-editing workers or task acceptance.
+Both remain disabled by default. Subscription forecasts are unchanged.
+
+REPO-INSPECTION: a durable once-only HTTP claim fences replay across process
+death and restart. Temporary sessions own linked HTTP tasks. Elves use a
+request-owner path with no invented process group, nonblocking buffered event
+polling, canonical completion/cancellation and explicit task cancellation.
+Missing/ambiguous API usage retains the full reservation. No transport retries,
+redirects, decompression, downloads, provider fallback or inference replacement
+are introduced. Request/response size and connection setup are bounded. Quiet
+model work has no receive timer; explicit cancellation or actual transport/size
+failure ends the local request. The completion-wait helper likewise has no
+silence deadline.
+
+REPO-INSPECTION: operator environment configuration and queue-only manual text
+commands support new or existing goal/task records. Named Oban insertion is
+applied to new, recovered and missing-job delivery paths. Normalized API events
+expose price version, reserved maximum and output bound. Only visible final text
+is stored as an artifact after credential-pattern redaction; raw HTTP envelopes,
+separate hidden reasoning, provider IDs and raw errors are not persisted here.
+Local metadata is not an egress/security guarantee for a separately owned
+daemon; its configuration and concurrent mutation remain operator concerns.
+
+VERIFIED: the focused combined measurement/shadow/spend/diagnostic/release/HTTP
+suite passed 79 tests, 0 failures, seed 371839, in 2.1 seconds. Shared adapter
+identity, lifecycle, secret-free and terminal assertions run for both adapters;
+unsupported resume and missing-capacity behavior are explicit. Local subscription
+quota is explicitly unsupported, not simulated. Additional tests cover actual
+Elf completion/cancellation, owned-task crash fencing, no duplicate inference,
+ambiguous spend, cloud refusal, both write-policy key forms, queue-only delivery,
+manual goal/task creation, raw HTTP response bounds and redirect refusal.
+
+VERIFIED: earlier focused runs found a missing bootstrap arity, atom/string JSON
+policy comparison and a nil boolean in the synthetic transport. Those were fixed
+before subsequent runs. These are new-feature tests, not claimed regression locks
+against a commit that lacks the features. No tests were skipped, slept, widened
+or retried to hide an intermittent failure.
+
+UNVERIFIED: live inference against either new provider. All inference transports
+in tests are synthetic; no live inference budget was used. Dated pricing and
+local daemon assumptions remain explicit in [text adapter documentation](../../../docs/text-adapters.md).
+
+## Remainder implementation: native release tooling (10E)
+
+REPO-INSPECTION: native macOS arm64 production releases now build assets/helper,
+bundle ERTS and write a manifest binding application/helper/protocol versions,
+helper and complete file hashes, target, tested OS, source revision/dirty status,
+runtime dependencies and unsigned status. A local packager creates an archive, exact checksums and
+matching Homebrew formula, refusing overwrite, external symlinks, changed/added
+files, unexpected cookies and dirty source unless explicitly verifying locally.
+The launcher refuses a different macOS major before loading ERTS.
+No upload or release publication is performed.
+
+REPO-INSPECTION: first-run initialization creates a private persistent endpoint
+secret, retaining operator overrides without copying them to state or generated
+runtime configuration. Invalid,
+public or symlinked secret files are refused. Upgrade migrations take a private,
+consistent SQLite backup first; backup failure blocks migration. Current schemas
+do not generate repeated upgrade backups. No backup/state is deleted or reaped.
+The foreground launcher takes an OS advisory state lock and refuses an occupied
+port before initialization. Distribution/RPC is disabled, with a public sentinel
+cookie replacing the historical build-generated credential.
+
+VERIFIED: synthetic upgrade tests exercise `Release.migrate` itself against the
+previous iteration's schema, compare canonical events and goal data before/after,
+reopen the pre-migration backup, verify integrity and private modes, and check
+that repeat migration does not create another backup. Private first-run secret,
+override, invalid file, permission and symlink paths are tested. Helper version,
+protocol, application version and checksum mismatches refuse compatibility.
+
+REPO-INSPECTION: passive doctor checks runtime target/manifest, actual helper
+hello, executable presence, secret privacy, SQLite health and port availability.
+Explicit metadata-only provider probes have bounded owned commands and discard
+raw output, keeping numeric versions and reported authentication only. Synthetic
+probe tests check privacy exclusion AND retained useful status. No real provider
+probe was run during this implementation.
+
+VERIFIED: an extracted local 0.2.0 candidate was relocated and smoke-tested with
+synthetic state and a guarded system-tools-only PATH: initialization, persistent
+0600 secret, compatible helper, SQLite health, exact-confirmed private diagnostic
+export, HTTP 200 health and UI. A concurrent launcher initialization was refused.
+Zero provider/system-toolchain launches were recorded. Generated Homebrew Ruby
+syntax passed. Local build/package/smoke logs remain under ignored `tmp/`.
+
+UNVERIFIED: a fresh-machine/Homebrew installation, published release URL, live
+provider authentication/inference and Developer ID signing/notarization. OpenSSL,
+Git and Python remain declared runtime dependencies. Linux remains deferred.
+Real calibration (10B) and forecast-assisted policy acceptance (10C) remain open
+and disabled by the user's explicit prior decision. Implementation and external
+acceptance are distinct; no complete iteration 10 acceptance is declared here.
+
+See [release, upgrade, rollback and uninstall instructions](../../../docs/releases.md).
+VERIFIED: after the last lifecycle/privacy/integrity changes, the focused suite
+passed 79 tests, 0 failures, seed 675791, in 2.2 seconds. The updated extracted
+candidate passed the same guarded relocation smoke and generated formula Ruby
+syntax check. A separate synthetic packaging fixture accepted its intact file
+set, refused an added file, and refused an untested macOS major before invoking
+the runtime. These checks did not contact a provider.
+
+VERIFIED: the first remainder full gate, `timeout 590 mix precommit < /dev/null`,
+passed 4 doctests, 2411 tests, 0 failures, 1 skipped, 6 excluded, seed 529400,
+in 552.8 seconds. Rust formatting/Clippy, 4 unit and 5 integration tests passed;
+JavaScript passed 52/52 and 14/14 tests. That snapshot preceded removal of the
+quiet-response timeout and the final secret-cache/file-integrity safeguards.
+VERIFIED: the final `timeout 590 mix precommit < /dev/null` passed after those
+changes: 4 doctests, 2411 tests, 0 failures, 1 skipped, 6 excluded, seed 160896,
+in 566.2 seconds (11.9 async, 554.2 sync). Rust formatting/Clippy, 4 unit and
+5 integration tests passed; JavaScript passed 52/52 and 14/14 with zero failures.
+The gate was repeated because product code changed after the first run, not to
+hide an intermittent result.

@@ -4,15 +4,87 @@ defmodule Shoestring.MixProject do
   def project do
     [
       app: :shoestring,
-      version: "0.1.0",
+      version: "0.2.0",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      releases: [
+        shoestring: [
+          include_erts: true,
+          include_executables_for: [:unix],
+          cookie: "shoestring_distribution_disabled",
+          steps: [&prepare_release/1, :assemble, &seal_release/1]
+        ]
+      ]
     ]
+  end
+
+  defp prepare_release(release) do
+    unless :os.type() == {:unix, :darwin} and
+             String.starts_with?(to_string(:erlang.system_info(:system_architecture)), "aarch64") do
+      Mix.raise("Only natively built macOS arm64 releases are supported")
+    end
+
+    Mix.Task.run("assets.deploy", [])
+    release
+  end
+
+  defp seal_release(release) do
+    helper =
+      Path.join([
+        release.path,
+        "lib",
+        "shoestring-#{release.version}",
+        "priv",
+        "bin",
+        "shoestring-terminal"
+      ])
+
+    {os_version, 0} = System.cmd("/usr/bin/sw_vers", ["-productVersion"])
+    {revision, status} = System.cmd("git", ["rev-parse", "HEAD"], stderr_to_stdout: true)
+
+    {_, dirty_status} =
+      System.cmd("git", ["diff", "--quiet", "HEAD", "--"], stderr_to_stdout: true)
+
+    revision =
+      if status == 0 and Regex.match?(~r/\A[0-9a-f]{40}\s*\z/, revision),
+        do: String.trim(revision),
+        else: "unknown"
+
+    manifest = %{
+      "format" => "shoestring-release",
+      "version" => 1,
+      "application_version" => release.version,
+      "target" => "aarch64-apple-darwin",
+      "tested_macos" => String.trim(os_version),
+      "source_revision" => revision,
+      "source_dirty" => dirty_status != 0,
+      "erts" => to_string(:erlang.system_info(:version)),
+      "terminal_protocol" => Shoestring.Terminal.Protocol.version(),
+      "helper_version" => Shoestring.Terminal.Protocol.helper_version(),
+      "helper_sha256" => :crypto.hash(:sha256, File.read!(helper)) |> Base.encode16(case: :lower),
+      "files_sha256" =>
+        Path.wildcard(Path.join(release.path, "**/*"), match_dot: true)
+        |> Enum.filter(&File.regular?/1)
+        |> Enum.reject(
+          &(Path.basename(&1) == "manifest.json" and Path.dirname(&1) == release.path)
+        )
+        |> Map.new(fn path ->
+          {Path.relative_to(path, release.path),
+           :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)}
+        end),
+      "external_runtime_dependencies" => ["openssl@3", "git", "python3"],
+      "distribution" => "disabled",
+      "signing" => "no_developer_id_or_notarization"
+    }
+
+    File.write!(Path.join(release.path, "manifest.json"), Jason.encode!(manifest, pretty: true))
+    File.chmod!(Path.join(release.path, "bin/shoestringctl"), 0o755)
+    release
   end
 
   # Configuration for the OTP application.

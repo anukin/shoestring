@@ -219,8 +219,14 @@ defmodule Shoestring.Terminal.Session do
 
   defp frame(_frame, %{terminal: terminal} = state) when terminal != nil, do: state
 
+  @helper_version Shoestring.Terminal.Protocol.helper_version()
   defp frame(
-         %{"op" => "hello", "version" => 1, "helper_version" => "0.1.1", "max_frame" => 65_536},
+         %{
+           "op" => "hello",
+           "version" => 1,
+           "helper_version" => @helper_version,
+           "max_frame" => 65_536
+         },
          %{phase: :hello} = state
        ) do
     message =

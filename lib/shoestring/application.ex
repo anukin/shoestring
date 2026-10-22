@@ -10,6 +10,22 @@ defmodule Shoestring.Application do
     Shoestring.State.ensure_writable_root!()
     Shoestring.State.configure_repo!()
 
+    if Application.get_env(:shoestring, :environment) == :prod do
+      secret =
+        Shoestring.Release.Bootstrap.endpoint_secret!(
+          Shoestring.State.root(),
+          System.get_env("SECRET_KEY_BASE")
+        )
+
+      endpoint = Application.fetch_env!(:shoestring, ShoestringWeb.Endpoint)
+
+      Application.put_env(
+        :shoestring,
+        ShoestringWeb.Endpoint,
+        Keyword.put(endpoint, :secret_key_base, secret)
+      )
+    end
+
     children =
       [
         ShoestringWeb.Telemetry,

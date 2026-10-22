@@ -256,6 +256,11 @@ disabled; adapter, release and diagnostic work is tracked separately in the
 [iteration 10 evidence](plans/evidence/10-forecasting-packaging/README.md).
 The repository-only [diagnostic command](docs/diagnostics.md) previews a bounded
 sanitized bundle and requires its exact digest before creating a private export.
+Optional [local and capped API text adapters](docs/text-adapters.md) use durable
+once-only requests and operator policy. [Release tooling](docs/releases.md)
+provides native packaging, private initialization, backup-before-upgrade,
+doctor checks and a foreground launcher. Real calibration and external
+clean-machine installation remain separate acceptance checks.
 
 ## Production release
 
@@ -266,25 +271,24 @@ MIX_ENV=prod mix assets.deploy
 MIX_ENV=prod mix release
 ```
 
-Choose a writable state directory and generate the endpoint cookie secret
-while the development toolchain is available:
+Choose a private writable state directory and use the foreground release launcher:
 
 ```sh
 export SHOESTRING_STATE_DIR="$PWD/.state"
-export SECRET_KEY_BASE="$(mix phx.gen.secret)"
+_build/prod/rel/shoestring/bin/shoestringctl doctor
+_build/prod/rel/shoestring/bin/shoestringctl start
 ```
 
-Initialize or migrate SQLite without starting the endpoint:
+The launcher initializes a persistent private endpoint secret and migrates
+SQLite before starting the loopback UI. Initialize without the endpoint with:
 
 ```sh
-_build/prod/rel/shoestring/bin/shoestring eval "Shoestring.Release.migrate()"
+_build/prod/rel/shoestring/bin/shoestringctl init
 ```
 
-Start the loopback endpoint:
+Check the running endpoint:
 
 ```sh
-export PHX_SERVER=true
-_build/prod/rel/shoestring/bin/shoestring start
 curl --fail http://127.0.0.1:4000/health
 ```
 

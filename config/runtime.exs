@@ -107,12 +107,28 @@ if config_env() == :prod do
   # default (`missing_observe_fun`) as the wake probe.
   config :shoestring, :handoff_observe, {Shoestring.Cobbler.WakeupObserve, :observe, []}
 
-  secret_key_base =
-    present_env.("SECRET_KEY_BASE") ||
-      raise """
-      environment variable SECRET_KEY_BASE is missing.
-      Generate one at build time with: mix phx.gen.secret
-      """
+  # Application startup initializes a private persistent fallback. Eval/doctor
+  # remain usable before initialization and never need a placeholder secret.
+  # Read overrides only in application/bootstrap code, after runtime config
+  # evaluation, so a release's generated sys.config never caches the secret.
+  secret_key_base = nil
+
+  if present_env.("SHOESTRING_AUTOMATION") == "off" do
+    config :shoestring, :capacity_monitors, claude: [enabled: false], codex: [enabled: false]
+    config :shoestring, Oban, queues: false, plugins: false
+
+    for key <- [
+          :dispatch_reconciler,
+          :wakeup_reconciler,
+          :handoff_reconciler,
+          :plan_execution_reconciler,
+          :reservation_control_reconciler,
+          :plan_child_inbox_reconciler,
+          :terminal_recovery
+        ] do
+      config :shoestring, key, false
+    end
+  end
 
   bind_address = present_env.("SHOESTRING_BIND") || "127.0.0.1"
 

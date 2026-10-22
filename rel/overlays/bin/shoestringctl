@@ -1,0 +1,51 @@
+#!/bin/sh
+set -eu
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64) ;;
+  *) echo "This release supports macOS arm64 only." >&2; exit 1 ;;
+esac
+runtime="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/shoestring"
+root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+command -v python3 > /dev/null || { echo "Python 3 is a required runtime dependency." >&2; exit 1; }
+python3 - "$root/manifest.json" <<'PY'
+import json, subprocess, sys
+try:
+    with open(sys.argv[1]) as source:
+        manifest = json.load(source)
+    actual = subprocess.check_output(["/usr/bin/sw_vers", "-productVersion"], text=True).strip()
+    if actual.split(".")[0] != manifest["tested_macos"].split(".")[0]:
+        sys.exit("Unsupported macOS major version; use a release natively tested for this OS.")
+except (OSError, ValueError, KeyError):
+    sys.exit("Release manifest unavailable or invalid; use an intact release.")
+PY
+launcher=$(find "$root/lib" -path '*/shoestring-*/priv/release_launcher.py' -type f)
+case "${1:-}" in
+  start)
+    exec python3 "$launcher" "$runtime" start
+    ;;
+  init) exec python3 "$launcher" "$runtime" init < /dev/null ;;
+  doctor)
+    if test "$#" -eq 2 && test "$2" = "--probe-providers"; then export SHOESTRING_DOCTOR_PROBE_PROVIDERS=1;
+    elif test "$#" -ne 1; then echo "Usage: shoestringctl doctor [--probe-providers]" >&2; exit 1; fi
+    exec "$runtime" eval 'Shoestring.Release.doctor()' < /dev/null
+    ;;
+  diagnostics-preview) exec "$runtime" eval 'Shoestring.Release.diagnostics_preview()' < /dev/null ;;
+  diagnostics-export)
+    test "$#" -eq 3 || { echo "Usage: shoestringctl diagnostics-export PATH PREVIEW_SHA256" >&2; exit 1; }
+    export SHOESTRING_DIAGNOSTIC_PATH="$2" SHOESTRING_DIAGNOSTIC_CONFIRM="$3"
+    exec "$runtime" eval 'Shoestring.Release.diagnostics_export()' < /dev/null
+    ;;
+  text)
+    if test "$#" -ne 3 && test "$#" -ne 5; then echo "Usage: shoestringctl text local|api [GOAL_UUID TASK_UUID] PROMPT_FILE" >&2; exit 1; fi
+    export SHOESTRING_TEXT_PROVIDER="$2"
+    if test "$#" -eq 3; then
+      unset SHOESTRING_TEXT_GOAL SHOESTRING_TEXT_TASK
+      export SHOESTRING_TEXT_PATH="$3"
+    elif test "$#" -eq 5; then
+      export SHOESTRING_TEXT_GOAL="$3" SHOESTRING_TEXT_TASK="$4" SHOESTRING_TEXT_PATH="$5"
+    else echo "Usage: shoestringctl text local|api [GOAL_UUID TASK_UUID] PROMPT_FILE" >&2; exit 1; fi
+    exec "$runtime" eval 'Shoestring.Release.text_enqueue()' < /dev/null
+    ;;
+  version) exec "$runtime" version ;;
+  *) echo "Usage: shoestringctl {start|init|doctor|version|text PROVIDER GOAL TASK FILE|diagnostics-preview|diagnostics-export PATH SHA256}" >&2; exit 1 ;;
+esac
