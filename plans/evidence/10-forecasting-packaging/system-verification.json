@@ -1,0 +1,114 @@
+{
+  "automation": "disabled",
+  "capacity_compatibility": {
+    "inference_calls": 0,
+    "method": "pure product compatibility lookup using observed local CLI versions",
+    "providers": {
+      "claude": {
+        "automatic_capacity_eligibility_possible": false,
+        "capacity_mode": "interactive_status_line",
+        "compatibility_state": "degraded",
+        "installed_version": "2.1.307",
+        "support_tier": "conservative_partial",
+        "tested_capacity_versions": [
+          "2.1.251"
+        ]
+      },
+      "codex": {
+        "automatic_capacity_eligibility_possible": false,
+        "capacity_mode": "app_server_stdio",
+        "compatibility_state": "degraded",
+        "installed_version": "0.163.0",
+        "support_tier": "proactive",
+        "tested_capacity_versions": [
+          "0.150.1",
+          "0.162.0",
+          "0.162.1"
+        ]
+      }
+    }
+  },
+  "findings": [
+    {
+      "code": "installed_capacity_versions_unverified",
+      "impact": "Current installed provider versions are degraded for capacity compatibility; they cannot establish unconfirmed automatic admission. TUI historical success is not capacity-protocol verification.",
+      "product_changed": false,
+      "status": "verified"
+    }
+  ],
+  "fixture": "synthetic",
+  "full_gate": {
+    "async_seconds": 12.6,
+    "command": "timeout 590 mix precommit < /dev/null",
+    "doctests": 4,
+    "excluded": 6,
+    "exit_code": 0,
+    "exunit_seconds": 564.1,
+    "failures": 0,
+    "javascript_failures": 0,
+    "javascript_passed": [
+      52,
+      14
+    ],
+    "rust_format_and_clippy": "passed",
+    "rust_integration_passed": 5,
+    "rust_unit_passed": 4,
+    "seed": 645636,
+    "skipped": 1,
+    "status": "passed",
+    "sync_seconds": 551.5,
+    "tests": 2411
+  },
+  "installed_cli_metadata": {
+    "authentication_probed": false,
+    "inference_calls": 0,
+    "metadata_only": true,
+    "providers": {
+      "claude": {
+        "compatibility": "requires_fixture_review",
+        "fixture_version": "2.1.261",
+        "version": "2.1.307"
+      },
+      "codex": {
+        "compatibility": "requires_fixture_review",
+        "fixture_version": "0.153.2",
+        "version": "0.163.0"
+      }
+    }
+  },
+  "limitations": [
+    "no_live_inference",
+    "no_semantic_memory_store_verification",
+    "no_rss_or_soak_measurement",
+    "no_fresh_machine_install",
+    "forecast_enforcement_disabled"
+  ],
+  "phases": [
+    {
+      "checkpoint_persisted": true,
+      "event_count": 4,
+      "phase": "write",
+      "provider_calls": 0
+    },
+    {
+      "artifact_hash_verified": true,
+      "checkpoint_replay_idempotent": true,
+      "continuation_reconstructed": true,
+      "event_identity_preserved": true,
+      "fresh_beam": true,
+      "goal_and_task_preserved": true,
+      "next_sequence_preserved": true,
+      "phase": "read",
+      "provider_calls": 0,
+      "required_handoff_context_present": true
+    }
+  ],
+  "probe_sha256": "320ac82e85e681837cb0a5a21de8dd6a25258ca792593ab2295e35ebb87092d0",
+  "provider_and_system_toolchain_launches": 0,
+  "release_source_dirty": false,
+  "release_source_revision": "2a14f99255b2e0b4a64db794e5dafe26affee78d",
+  "runtime_exit": "orderly",
+  "separate_beam_invocations": 3,
+  "verified_product_revision": "2a14f99255b2e0b4a64db794e5dafe26affee78d",
+  "version": 1
+}

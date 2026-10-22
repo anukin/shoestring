@@ -340,3 +340,15 @@ in 566.2 seconds (11.9 async, 554.2 sync). Rust formatting/Clippy, 4 unit and
 5 integration tests passed; JavaScript passed 52/52 and 14/14 with zero failures.
 The gate was repeated because product code changed after the first run, not to
 hide an intermittent result.
+
+## System and structured-memory verification
+
+VERIFIED: a fresh full gate and separate packaged-process durable-context probe
+passed on product revision `2a14f99`. The audit also found that locally installed
+Claude/Codex versions are degraded in the capacity compatibility registry, so
+these results do not establish unconfirmed automatic quota admission on the
+current installations. See the [system verification report](system-verification.md)
+and [aggregate command evidence](system-verification.json) for exact counts,
+required-context checks, test mappings and remaining limits. Semantic memory,
+current live capacity protocols, RSS/soak testing and external install acceptance
+are not inferred from the passing hermetic gate.
