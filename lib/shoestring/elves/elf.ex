@@ -643,7 +643,7 @@ defmodule Shoestring.Elves.Elf do
       %{
         "run_id" => state.run_id,
         "provider_session_id" => state.provider_session_id,
-        "process_id" => "pgid:#{pgid}"
+        "process_id" => if(pgid, do: "pgid:#{pgid}", else: nil)
       },
       "elf-running:"
     )
@@ -812,6 +812,7 @@ defmodule Shoestring.Elves.Elf do
   defp maybe_mark_elf_owned_group(adapter_opts, _process_owner), do: adapter_opts
 
   defp prepare_adapter_workdir(%{process_owner: :runner} = state), do: {:ok, state}
+  defp prepare_adapter_workdir(%{process_owner: :request} = state), do: {:ok, state}
 
   defp prepare_adapter_workdir(%{process_owner: :adapter} = state) do
     with {:ok, path} <- resolve_worktree_path(state) do
@@ -861,6 +862,12 @@ defmodule Shoestring.Elves.Elf do
       {:ok, runner} -> {:ok, %{state | runner: runner}}
       {:error, _reason} = error -> error
     end
+  end
+
+  defp attach_owned_process(%{process_owner: :request} = state, %{process_id: nil}) do
+    if state.adapter.identity().invocation_mode == :api,
+      do: {:ok, state},
+      else: {:error, :request_adapter_required}
   end
 
   defp attach_owned_process(%{process_owner: :adapter} = state, identity) do
@@ -2206,7 +2213,7 @@ defmodule Shoestring.Elves.Elf do
           Classifier.classify(state.adapter_verdict, state.os_exit, state.cancel_requested?)
         )
 
-      state.process_owner == :adapter ->
+      state.process_owner in [:adapter, :request] ->
         Process.send_after(self(), :poll_adapter, state.adapter_poll_ms)
         {:noreply, state}
 
@@ -2236,7 +2243,7 @@ defmodule Shoestring.Elves.Elf do
           Classifier.classify(state.adapter_verdict, state.os_exit, state.cancel_requested?)
         )
 
-      state.process_owner == :adapter ->
+      state.process_owner in [:adapter, :request] ->
         Process.send_after(self(), :poll_adapter, state.adapter_poll_ms)
         {:noreply, state}
 
@@ -2331,8 +2338,8 @@ defmodule Shoestring.Elves.Elf do
     end
   end
 
-  defp cancel_adapter(%{process_owner: :adapter, adapter_identity: identity} = state, opts)
-       when not is_nil(identity) do
+  defp cancel_adapter(%{process_owner: owner, adapter_identity: identity} = state, opts)
+       when owner in [:adapter, :request] and not is_nil(identity) do
     if function_exported?(state.adapter, :cancel, 2) do
       adapter_opts =
         state.adapter_opts
@@ -2351,8 +2358,8 @@ defmodule Shoestring.Elves.Elf do
 
   defp cancel_adapter(_state, _opts), do: :ok
 
-  defp release_adapter(%{process_owner: :adapter, adapter_identity: identity} = state)
-       when not is_nil(identity) do
+  defp release_adapter(%{process_owner: owner, adapter_identity: identity} = state)
+       when owner in [:adapter, :request] and not is_nil(identity) do
     if function_exported?(state.adapter, :release, 1) do
       state.adapter.release(identity)
     else

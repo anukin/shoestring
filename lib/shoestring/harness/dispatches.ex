@@ -42,6 +42,9 @@ defmodule Shoestring.Harness.Dispatches do
   ]
   @live_job_states ["available", "scheduled", "executing", "retryable", "suspended"]
 
+  defp insert_job(multi, opts, changeset),
+    do: Oban.insert(Keyword.get(opts, :oban, Oban), multi, :job, changeset)
+
   @spec enqueue(RunRequest.t(), Identity.t(), keyword()) ::
           {:ok, DispatchRecord.t(), Job.t() | nil} | {:error, term()}
   def enqueue(%RunRequest{} = request, %Identity{} = identity, opts \\ []) do
@@ -104,7 +107,7 @@ defmodule Shoestring.Harness.Dispatches do
       |> Multi.insert(:dispatch, fn %{run: run} ->
         DispatchRecord.intent_changeset(%DispatchRecord{dispatch_id: run.dispatch_id}, run, now)
       end)
-      |> Oban.insert(:job, fn %{dispatch: dispatch} -> job_changeset(dispatch, now) end)
+      |> insert_job(opts, fn %{dispatch: dispatch} -> job_changeset(dispatch, now) end)
       |> Multi.run(:job_link, fn transaction_repo, %{dispatch: dispatch, job: job} ->
         transaction_repo.update(DispatchRecord.job_changeset(dispatch, job.id, now))
       end)
@@ -519,7 +522,7 @@ defmodule Shoestring.Harness.Dispatches do
       Shoestring.Cobbler.PlanBinding.transaction_check(transaction_repo, run)
     end)
     |> Multi.insert(:dispatch, DispatchRecord.intent_changeset(dispatch, run, now))
-    |> Oban.insert(:job, fn %{dispatch: dispatch} -> job_changeset(dispatch, now) end)
+    |> insert_job(opts, fn %{dispatch: dispatch} -> job_changeset(dispatch, now) end)
     |> Multi.run(:job_link, fn transaction_repo, %{dispatch: dispatch, job: job} ->
       transaction_repo.update(DispatchRecord.job_changeset(dispatch, job.id, now))
     end)
@@ -577,7 +580,7 @@ defmodule Shoestring.Harness.Dispatches do
       run = transaction_repo.get!(RunRecord, dispatch.run_id)
       Shoestring.Cobbler.PlanBinding.transaction_check(transaction_repo, run)
     end)
-    |> Oban.insert(:job, job_changeset(dispatch, now))
+    |> insert_job(opts, job_changeset(dispatch, now))
     |> Multi.run(:job_link, fn transaction_repo, %{job: job} ->
       dispatch = transaction_repo.get!(DispatchRecord, dispatch.dispatch_id)
       transaction_repo.update(DispatchRecord.job_changeset(dispatch, job.id, now))

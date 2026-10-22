@@ -207,6 +207,12 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
      ]}
   end
 
+  defp provider_defaults("openai_responses"),
+    do: {:ok, [adapter: Shoestring.Harness.OpenAIResponses, process_owner: :request, command: []]}
+
+  defp provider_defaults("ollama_local"),
+    do: {:ok, [adapter: Shoestring.Harness.OllamaLocal, process_owner: :request, command: []]}
+
   defp provider_defaults("claude_headless_stream_json") do
     {:ok,
      [

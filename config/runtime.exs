@@ -46,6 +46,41 @@ config :shoestring,
 
 config :shoestring, Shoestring.Repo, database: Path.join(state_dir, "shoestring.db")
 
+integer_env = fn name, default ->
+  case present_env.(name) do
+    nil ->
+      default
+
+    text ->
+      case Integer.parse(text) do
+        {value, ""} -> value
+        _ -> raise "Invalid numeric configuration for #{name}"
+      end
+  end
+end
+
+if config_env() != :test and present_env.("SHOESTRING_API_ENABLED") == "1" do
+  config :shoestring, :api_execution, %{
+    enabled: true,
+    monthly_cap_microusd: integer_env.("SHOESTRING_API_MONTHLY_CAP_MICROUSD", 0),
+    accepted_price_version: present_env.("SHOESTRING_API_PRICE_VERSION"),
+    model: "gpt-6-luna",
+    max_output_tokens: integer_env.("SHOESTRING_API_MAX_OUTPUT_TOKENS", 4096)
+  }
+end
+
+if config_env() != :test and present_env.("SHOESTRING_LOCAL_ENABLED") == "1" do
+  config :shoestring, :local_execution, %{
+    enabled: true,
+    cloud_disabled_confirmed: present_env.("SHOESTRING_LOCAL_CLOUD_DISABLED_CONFIRMED") == "1",
+    model: present_env.("SHOESTRING_LOCAL_MODEL"),
+    model_digest: present_env.("SHOESTRING_LOCAL_MODEL_DIGEST"),
+    server_version: present_env.("SHOESTRING_LOCAL_SERVER_VERSION"),
+    context_tokens: integer_env.("SHOESTRING_LOCAL_CONTEXT_TOKENS", 8192),
+    max_output_tokens: integer_env.("SHOESTRING_LOCAL_MAX_OUTPUT_TOKENS", 512)
+  }
+end
+
 if present_env.("PHX_SERVER") do
   config :shoestring, ShoestringWeb.Endpoint, server: true
 end

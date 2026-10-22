@@ -81,6 +81,7 @@ defmodule Shoestring.Harness.ContractSuite do
            "start/2 must return {:ok, %RunIdentity{}}, got: #{inspect(start_result)}"
 
     {:ok, run_identity} = start_result
+    if is_function(config[:await_completion], 1), do: config[:await_completion].(run_identity)
 
     assert is_struct(run_identity, RunIdentity),
            "start/2 {:ok, value} must be a %RunIdentity{}, got: #{inspect(run_identity)}"

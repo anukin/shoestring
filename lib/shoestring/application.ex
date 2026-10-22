@@ -15,6 +15,7 @@ defmodule Shoestring.Application do
         ShoestringWeb.Telemetry,
         Shoestring.Repo,
         Shoestring.Harness.SessionTables,
+        Shoestring.Harness.HTTP.Supervisor,
         Shoestring.Cobbler.ReservationWriter,
         {Task.Supervisor, name: Shoestring.Cobbler.PlannerTasks},
         {Task.Supervisor, name: Shoestring.Cobbler.GateOutputTasks},
