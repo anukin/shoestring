@@ -364,3 +364,12 @@ registry/support tier was not promoted. See the [compatibility report](capacity-
 for exact scope, regression proof, gate results and outstanding limits. This
 follow-up supersedes the earlier installed-Codex mismatch finding only; no
 full iteration acceptance or forecast enablement is inferred.
+
+## Fresh-machine install — 2026-10-23
+
+VERIFIED: the Homebrew-installed release ran on two clean macOS 15.7.7 VMs
+without Elixir, Erlang or Rust: doctor, init, start, health and UI, refusal of
+a second instance, clean stop, `brew test`, and uninstall keeping user state.
+The first VM exposed a crash when OpenSSL 3 was missing; `04ca7d9` replaces it
+with an install instruction, re-verified on a second clean VM. See the
+[install record](fresh-machine-install.md). Signing and publication remain open.
