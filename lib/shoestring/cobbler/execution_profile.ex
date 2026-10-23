@@ -20,18 +20,21 @@ defmodule Shoestring.Cobbler.ExecutionProfile do
          role when is_binary(role) <- value(attrs, :role),
          %{} = selected <- Enum.find(roles, &(&1["name"] == role)),
          {:ok, adapter} <- adapter(selected["provider"]),
-         model when is_binary(model) and model != "default" <- selected["model"] do
-      {:ok,
-       %{
-         "profile_id" => id,
-         "revision" => number,
-         "digest" => revision.digest,
-         "instructions" => configuration["instructions"],
-         "role" => role,
-         "provider" => selected["provider"],
-         "adapter_id" => adapter.identity().adapter_id,
-         "model" => model
-       }}
+         model when is_binary(model) and model != "default" <- selected["model"],
+         {:ok, effort} <- effort(selected) do
+      binding = %{
+        "profile_id" => id,
+        "revision" => number,
+        "digest" => revision.digest,
+        "instructions" => configuration["instructions"],
+        "role" => role,
+        "provider" => selected["provider"],
+        "adapter_id" => adapter.identity().adapter_id,
+        "model" => model
+      }
+
+      # Bindings recorded before effort existed have no key; keep them equal.
+      {:ok, if(effort, do: Map.put(binding, "effort", effort), else: binding)}
     else
       "default" -> {:error, :explicit_execution_model_required}
       _ -> {:error, :invalid_execution_profile}
@@ -39,6 +42,16 @@ defmodule Shoestring.Cobbler.ExecutionProfile do
   end
 
   def resolve(_, _repo), do: {:error, :invalid_execution_profile}
+
+  defp effort(%{"effort" => nil}), do: {:ok, nil}
+
+  defp effort(%{"provider" => provider, "effort" => effort}) do
+    if effort in Map.get(Shoestring.AgentProfiles.efforts(), provider, []),
+      do: {:ok, effort},
+      else: :invalid_effort
+  end
+
+  defp effort(_selected), do: {:ok, nil}
 
   def validate(nil, _repo), do: :ok
 

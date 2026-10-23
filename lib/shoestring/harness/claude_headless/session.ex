@@ -713,6 +713,12 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
         _ -> []
       end
 
+    model_args =
+      case Keyword.get(state.opts, :effort) do
+        effort when is_binary(effort) and effort != "" -> model_args ++ ["--effort", effort]
+        _ -> model_args
+      end
+
     # Sandboxed launches carry their settings and flags before the prompt
     # (`Shoestring.Harness.ClaudeHeadless.Sandbox`), and never the bypass.
     sandbox_options = Keyword.get(state.opts, :sandbox_options, [])

@@ -47,6 +47,47 @@ defmodule Shoestring.AgentProfilesTest do
     assert snapshot["revision"] == 1
   end
 
+  test "effort is validated per provider and recorded only when chosen" do
+    roles = [
+      %{"name" => "Coordinator", "provider" => "claude", "model" => "default", "effort" => "max"},
+      %{"name" => "Worker", "provider" => "codex", "model" => "default", "effort" => "high"},
+      %{"name" => "Reviewer", "provider" => "claude", "model" => "default", "effort" => ""}
+    ]
+
+    assert {:ok, agent} = AgentProfiles.create(agent_attrs(%{"roles" => roles}))
+    assert {:ok, snapshot} = AgentProfiles.snapshot_by_id(agent.id)
+    [coordinator, worker, reviewer] = snapshot["configuration"]["roles"]
+    assert coordinator["effort"] == "max"
+    assert worker["effort"] == "high"
+    refute Map.has_key?(reviewer, "effort")
+
+    for {provider, effort} <- [{"codex", "max"}, {"claude", "extreme"}, {"codex", "HIGH"}] do
+      invalid = [
+        %{
+          "name" => "Coordinator",
+          "provider" => provider,
+          "model" => "default",
+          "effort" => effort
+        }
+      ]
+
+      assert {:error, changeset} =
+               AgentProfiles.create(agent_attrs(%{"roles" => invalid, "slug" => "x"}))
+
+      refute changeset.valid?
+    end
+  end
+
+  test "a revision without effort keeps its pre-effort configuration shape" do
+    {:ok, agent} = AgentProfiles.create(agent_attrs())
+    {:ok, snapshot} = AgentProfiles.snapshot_by_id(agent.id)
+
+    assert Enum.all?(
+             snapshot["configuration"]["roles"],
+             &(Map.keys(&1) |> Enum.sort() == ["model", "name", "provider"])
+           )
+  end
+
   test "duplicate names, coordinator order and unsupported models are rejected" do
     for roles <- [
           [],

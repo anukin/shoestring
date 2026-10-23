@@ -189,8 +189,48 @@ defmodule Shoestring.Cobbler.ExecutionProfileTest do
   end
 
   test "delivery pins the stored model after runtime options change", c do
+    deliver!(c, c.profile, fn opts, delivered ->
+      assert opts.model == "fixture-model-v1"
+      refute Map.has_key?(opts, :args)
+      # A role left at provider default must not inherit a runtime effort.
+      refute Map.has_key?(opts, :effort)
+      refute Map.has_key?(delivered.extensions["shoestring.agent:binding"], "effort")
+      assert delivered.extensions["shoestring.agent:binding"]["digest"] == c.profile["digest"]
+    end)
+  end
+
+  test "a pinned effort is part of the binding and reaches the adapter", c do
+    {:ok, agent} =
+      AgentProfiles.update(c.agent, %{
+        "roles" =>
+          c.agent.roles
+          |> Enum.with_index()
+          |> Map.new(fn {role, index} ->
+            effort = if role.name == "Worker", do: "high", else: ""
+
+            {to_string(index),
+             %{
+               "name" => role.name,
+               "provider" => role.provider,
+               "model" => role.model,
+               "effort" => effort
+             }}
+          end)
+      })
+
+    {:ok, snapshot} = AgentProfiles.snapshot_by_id(agent.id)
+    profile = Map.put(Map.take(snapshot, ["profile_id", "revision", "digest"]), "role", "Worker")
+
+    deliver!(c, profile, fn opts, delivered ->
+      assert opts.model == "fixture-model-v1"
+      assert opts.effort == "high"
+      assert delivered.extensions["shoestring.agent:binding"]["effort"] == "high"
+    end)
+  end
+
+  defp deliver!(c, profile, assertions) do
     admission = admitted(c.goal)
-    assert {:ok, _} = request(c.goal, c.revision, c.profile, admission)
+    assert {:ok, _} = request(c.goal, c.revision, profile, admission)
 
     assert {:ok, run} =
              Cobbler.advance_plan_execution(
@@ -212,6 +252,7 @@ defmodule Shoestring.Cobbler.ExecutionProfileTest do
       notify: self(),
       adapter_opts: %{
         model: "wrong-model",
+        effort: "low",
         args: ["--model", "wrong-model"],
         observer: self(),
         scenario: Shoestring.Harness.Fake.Scenario.normal_completion()
@@ -228,9 +269,7 @@ defmodule Shoestring.Cobbler.ExecutionProfileTest do
     assert :ok = Shoestring.Harness.Dispatch.ElfEffect.perform(stored, dispatch)
     assert_receive {:profile_started, pid, ref, delivered, opts}, 2000
     monitor = Process.monitor(pid)
-    assert opts.model == "fixture-model-v1"
-    refute Map.has_key?(opts, :args)
-    assert delivered.extensions["shoestring.agent:binding"]["digest"] == c.profile["digest"]
+    assertions.(opts, delivered)
     send(pid, {:continue_profile, ref})
     id = stored.id
     assert_receive {:elf_terminal, ^id, %{class: :completed}}, 2000

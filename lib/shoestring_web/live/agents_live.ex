@@ -112,6 +112,7 @@ defmodule ShoestringWeb.AgentsLive do
       assign(socket,
         form: to_form(changeset, as: :agent),
         catalog: AgentProfiles.catalog(),
+        efforts: AgentProfiles.efforts(),
         form_errors: if(changeset.action, do: changeset.errors, else: []),
         role_count: length(Ecto.Changeset.get_field(changeset, :roles) || [])
       )
@@ -122,7 +123,9 @@ defmodule ShoestringWeb.AgentsLive do
         put_in(
           attrs,
           ["roles", index],
-          Map.put(role, "model", List.first(Map.get(AgentProfiles.catalog(), provider, [])) || "")
+          role
+          |> Map.put("model", List.first(Map.get(AgentProfiles.catalog(), provider, [])) || "")
+          |> Map.put("effort", "")
         )
 
       _ ->
@@ -162,7 +165,11 @@ defmodule ShoestringWeb.AgentsLive do
             <dl class="ss-roles">
               <div :for={role <- agent.roles} class="ss-row">
                 <dt>{role.name}</dt>
-                <dd>{provider(role.provider)} · {role.model}</dd>
+                <dd>
+                  {provider(role.provider)} · {role.model}{if(role.effort,
+                    do: " · #{role.effort} effort"
+                  )}
+                </dd>
               </div>
             </dl>
             <div class="ss-actions">
@@ -235,6 +242,14 @@ defmodule ShoestringWeb.AgentsLive do
                 type="select"
                 label="Model identifier"
                 options={Map.get(@catalog, role[:provider].value, [])}
+                class="ss-input"
+              />
+              <.input
+                field={role[:effort]}
+                type="select"
+                label="Effort"
+                prompt="Provider default"
+                options={Map.get(@efforts, role[:provider].value, [])}
                 class="ss-input"
               />
               <button

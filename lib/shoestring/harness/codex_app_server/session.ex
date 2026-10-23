@@ -1002,7 +1002,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   end
 
   defp turn_params(state, params) do
-    params = model_params(state, params)
+    params = effort_params(state, model_params(state, params))
 
     case state.opts[:git_sandbox_policy] do
       nil ->
@@ -1020,6 +1020,15 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   defp model_params(state, params) do
     case Keyword.get(state.opts, :model) do
       model when is_binary(model) and model != "" -> Map.put(params, "model", model)
+      _ -> params
+    end
+  end
+
+  # Thread start/resume take no effort; turn/start applies it to this and
+  # subsequent turns, on fresh and resumed threads alike.
+  defp effort_params(state, params) do
+    case Keyword.get(state.opts, :effort) do
+      effort when is_binary(effort) and effort != "" -> Map.put(params, "effort", effort)
       _ -> params
     end
   end

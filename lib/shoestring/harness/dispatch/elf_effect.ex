@@ -112,6 +112,12 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
                 Keyword.get(opts, :adapter_opts, %{})
                 |> Map.drop([:args, :argv])
                 |> Map.put(:model, binding["model"])
+                # The binding is authoritative for effort too: a runtime value
+                # never survives a binding that left effort at provider default.
+                |> Map.delete(:effort)
+                |> then(
+                  &if(binding["effort"], do: Map.put(&1, :effort, binding["effort"]), else: &1)
+                )
                 |> sandbox_plan_run(Keyword.get(opts, :adapter))
 
               Keyword.put(opts, :adapter_opts, adapter_opts)

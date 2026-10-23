@@ -18,6 +18,17 @@ defmodule Shoestring.AgentProfiles do
     }
   end
 
+  # Explicit reasoning effort per provider CLI. A role without one runs at the
+  # provider's own default, which the role cannot pin. Claude 2.1.309 lists
+  # these values for `--effort`; Codex turn/start takes a model-advertised
+  # value, so only the widely advertised levels are offered.
+  @efforts %{
+    "claude" => ~w(low medium high xhigh max),
+    "codex" => ~w(low medium high xhigh)
+  }
+
+  def efforts, do: @efforts
+
   def template do
     catalog = catalog()
 
@@ -110,7 +121,10 @@ defmodule Shoestring.AgentProfiles do
             "instructions" => agent.instructions,
             "roles" =>
               Enum.map(agent.roles, fn role ->
+                # Effort is added only when chosen, so revisions without one
+                # keep the configuration shape (and digest) they always had.
                 %{"name" => role.name, "provider" => role.provider, "model" => role.model}
+                |> then(&if(role.effort, do: Map.put(&1, "effort", role.effort), else: &1))
               end)
           }
 

@@ -53,6 +53,7 @@ defmodule Shoestring.Harness.ProviderModelSelectionTest do
              auto_handshake: false,
              owner: self(),
              model: "fixture-model-v1",
+             effort: "high",
              resume: unquote(resumed?),
              thread_id: if(unquote(resumed?), do: "01950000-0000-7000-8000-000000000001")
            ]}
@@ -66,6 +67,9 @@ defmodule Shoestring.Harness.ProviderModelSelectionTest do
       turn = Enum.find(frames, &(&1["method"] == "turn/start"))
       assert thread["params"]["model"] == "fixture-model-v1"
       assert turn["params"]["model"] == "fixture-model-v1"
+      assert turn["params"]["effort"] == "high"
+      # Thread start/resume have no effort field in the 0.163 schema.
+      refute Map.has_key?(thread["params"], "effort")
       assert turn["params"]["input"] == [%{"type" => "text", "text" => "Check the fixture"}]
     end
   end
@@ -79,6 +83,7 @@ defmodule Shoestring.Harness.ProviderModelSelectionTest do
            owner: self(),
            transport: Shoestring.Test.ArgvCaptureTransport,
            model: "fixture-claude-v1",
+           effort: "max",
            permission_bypass: false
          ]}
       )
@@ -89,6 +94,9 @@ defmodule Shoestring.Harness.ProviderModelSelectionTest do
     index = Enum.find_index(args, &(&1 == "--model"))
     assert is_integer(index)
     assert Enum.at(args, index + 1) == "fixture-claude-v1"
+    effort = Enum.find_index(args, &(&1 == "--effort"))
+    assert is_integer(effort)
+    assert Enum.at(args, effort + 1) == "max"
     assert List.last(args) == "Check the fixture"
     refute "--dangerously-skip-permissions" in args
   end
