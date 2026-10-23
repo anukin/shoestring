@@ -10,7 +10,7 @@ defmodule Shoestring.Release do
 
     unless Shoestring.Release.Doctor.port_check() == "available",
       do:
-        raise(
+        refuse(
           "Initialization refused: configured endpoint port is unavailable; stop the old service before upgrading"
         )
 
@@ -46,7 +46,7 @@ defmodule Shoestring.Release do
             if existed? and pending? do
               case Shoestring.Release.Backup.create(started_repo, Shoestring.State.root()) do
                 {:ok, _name} -> :ok
-                {:error, reason} -> raise "Migration refused: #{reason}"
+                {:error, reason} -> refuse("Migration refused: #{reason}")
               end
             end
 
@@ -120,12 +120,21 @@ defmodule Shoestring.Release do
         )
 
       _ ->
-        raise "Text dispatch refused; check operator policy and bounded input."
+        refuse("Text dispatch refused; check operator policy and bounded input.")
     end
   end
 
   defp print_result({:ok, result}), do: result |> Jason.encode!(pretty: true) |> IO.puts()
-  defp print_result({:error, reason}), do: raise("Operation refused: #{reason}")
+  defp print_result({:error, reason}), do: refuse("Operation refused: #{reason}")
+
+  # These run under `bin/shoestring eval`, where a raise prints an Elixir
+  # stack trace. A refusal is an expected outcome: say why and exit 1.
+  defp refuse(message) do
+    IO.puts(:stderr, message)
+    Application.get_env(@app, :release_halt, &System.halt/1).(1)
+    # Reached only when tests inject a halt that returns.
+    exit(:release_refused)
+  end
 
   defp repos, do: Application.fetch_env!(@app, :ecto_repos)
 
