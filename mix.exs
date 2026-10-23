@@ -78,6 +78,7 @@ defmodule Shoestring.MixProject do
            :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)}
         end),
       "external_runtime_dependencies" => ["openssl@3", "git", "python3"],
+      "openssl_library" => openssl_library!(release.path),
       "distribution" => "disabled",
       "signing" => "no_developer_id_or_notarization"
     }
@@ -85,6 +86,18 @@ defmodule Shoestring.MixProject do
     File.write!(Path.join(release.path, "manifest.json"), Jason.encode!(manifest, pretty: true))
     File.chmod!(Path.join(release.path, "bin/shoestringctl"), 0o755)
     release
+  end
+
+  # The bundled crypto NIF links OpenSSL 3 at an absolute path. Record it so
+  # the launcher can name a missing dependency instead of crashing at load.
+  defp openssl_library!(path) do
+    [nif] = Path.wildcard(Path.join(path, "lib/crypto-*/priv/lib/crypto.so"))
+    {output, 0} = System.cmd("/usr/bin/otool", ["-L", nif])
+
+    case Regex.run(~r{^\s+(/\S+/libcrypto\.3\.dylib)\s}m, output) do
+      [_, library] -> library
+      _ -> Mix.raise("The crypto NIF does not link a recognised OpenSSL 3 library")
+    end
   end
 
   # Configuration for the OTP application.

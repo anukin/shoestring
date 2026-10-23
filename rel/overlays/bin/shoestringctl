@@ -8,15 +8,19 @@ runtime="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/shoestring"
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 command -v python3 > /dev/null || { echo "Python 3 is a required runtime dependency." >&2; exit 1; }
 python3 - "$root/manifest.json" <<'PY'
-import json, subprocess, sys
+import json, os, subprocess, sys
 try:
     with open(sys.argv[1]) as source:
         manifest = json.load(source)
     actual = subprocess.check_output(["/usr/bin/sw_vers", "-productVersion"], text=True).strip()
     if actual.split(".")[0] != manifest["tested_macos"].split(".")[0]:
         sys.exit("Unsupported macOS major version; use a release natively tested for this OS.")
+    library = manifest.get("openssl_library")
 except (OSError, ValueError, KeyError):
     sys.exit("Release manifest unavailable or invalid; use an intact release.")
+if library is not None and not os.path.isfile(library):
+    sys.exit("OpenSSL 3 is a required runtime dependency and was not found at "
+             + library + ". Install it with Homebrew: brew install openssl@3")
 PY
 launcher=$(find "$root/lib" -path '*/shoestring-*/priv/release_launcher.py' -type f)
 case "${1:-}" in
