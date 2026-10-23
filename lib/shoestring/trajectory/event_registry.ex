@@ -20,6 +20,29 @@ defmodule Shoestring.Trajectory.EventRegistry do
   alias Shoestring.Trajectory.EventEnvelope
 
   @payload_schemas %{
+    "measurement.collection.opened" => %{
+      1 => %{
+        required: [
+          :window_id,
+          :provider_id,
+          :scope,
+          :attestation_version,
+          :attested_by,
+          :opened_at
+        ],
+        optional: [],
+        uuid_fields: [:window_id],
+        types: %{attestation_version: :integer, opened_at: :utc_datetime}
+      }
+    },
+    "measurement.collection.closed" => %{
+      1 => %{
+        required: [:window_id, :provider_id, :scope, :reason, :closed_at],
+        optional: [],
+        uuid_fields: [:window_id],
+        types: %{closed_at: :utc_datetime}
+      }
+    },
     "terminal.session.started" => %{
       1 => %{
         required: [:run_id, :protocol_version, :process_group],
@@ -1280,7 +1303,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
            :ok <- validate_plan_execution(type, version, validated, opts),
            :ok <- Shoestring.Cobbler.Planner.Events.validate(type, validated),
            :ok <- Shoestring.Cobbler.Review.Events.validate(type, validated),
-           :ok <- Shoestring.Terminal.Events.validate(type, validated) do
+           :ok <- Shoestring.Terminal.Events.validate(type, validated),
+           :ok <- Shoestring.Measurement.Events.validate(type, validated) do
         {:ok, validated}
       else
         {:error, changeset} -> {:error, {:invalid_payload, type, version, changeset}}

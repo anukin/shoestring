@@ -34,3 +34,29 @@ none. The configuration-shape test passes on the base and is a boundary check.
 VERIFIED: `timeout 590 mix precommit < /dev/null`, exit 0: Rust 4 + 5; ExUnit
 4 doctests, 2424 tests, 0 failures, 1 skipped, 6 excluded, seed 7093,
 505.7 seconds; Node 52/52 and 14/14.
+
+## Step 2: operator-attested collection windows
+
+REPO-INSPECTION: `measurement.collection.opened` / `.closed` (schema 1) are
+canonical events in the protected Observatory stream, beside the capacity
+readings they qualify, so no second protected goal or UI exclusion was
+needed. A window names a provider, scope, attestation version and an operator
+label (a slug, not an identity). At most one window is open per provider and
+scope; open and close each run in one immediate SQLite transaction, and an
+ordinal idempotency key makes racing opens collide. Close reasons are
+`operator_closed` or `external_use_reported`. Membership opens inclusively
+and closes exclusively; a close naming no open window is ignored.
+
+`mix shoestring.measurements collection status|open|close` exposes them.
+`open` prints the attestation (nothing other than this installation uses the
+provider account until the window is closed) and requires typing `I attest`.
+An agent must never open a window: it cannot know what else uses the account.
+No window has been opened by this work.
+
+VERIFIED: `collection_test.exs`, 6 tests, 0 failures. This is a new
+capability: on the base commit these tests fail only because the module does
+not exist, so they are behaviour documentation, not a regression lock.
+
+VERIFIED: `timeout 590 mix precommit < /dev/null`, exit 0: Rust 4 + 5; ExUnit
+4 doctests, 2430 tests, 0 failures, 1 skipped, 6 excluded, seed 408391,
+506.3 seconds; Node 52/52 and 14/14.
