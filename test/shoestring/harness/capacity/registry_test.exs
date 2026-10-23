@@ -33,7 +33,7 @@ defmodule Shoestring.Harness.Capacity.RegistryTest do
       assert %Entry{} = claude_statusline
       assert claude_statusline.supported_tier == :conservative_partial
       assert claude_statusline.compatibility_outcome == :compatible
-      assert claude_statusline.tested_versions == ["2.1.251"]
+      assert claude_statusline.tested_versions == ["2.1.251", "2.1.309"]
       assert "rate_limits" in claude_statusline.required_semantic_fields
 
       claude_headless_json =

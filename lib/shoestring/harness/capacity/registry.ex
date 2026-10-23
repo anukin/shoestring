@@ -24,7 +24,7 @@ defmodule Shoestring.Harness.Capacity.Registry do
       provider: :claude,
       invocation_mode: :interactive_status_line,
       supported_tier: :conservative_partial,
-      tested_versions: ["2.1.251"],
+      tested_versions: ["2.1.251", "2.1.309"],
       required_semantic_fields: ["rate_limits", "used_percentage"],
       compatibility_outcome: :compatible,
       description: "Claude interactive official statusLine command callback"

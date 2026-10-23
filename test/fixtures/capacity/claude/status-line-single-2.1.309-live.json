@@ -1,0 +1,44 @@
+{
+  "fixture_kind": "status_line_normal",
+  "evidence_status": "live_observed",
+  "captured_at": "2026-10-23T17:23:27.950Z",
+  "payload": {
+    "version": "2.1.309",
+    "rate_limits": {
+      "five_hour": {
+        "used_percentage": 4,
+        "resets_at": 1792792800
+      },
+      "seven_day": {
+        "used_percentage": 6,
+        "resets_at": 1792872000
+      },
+      "spend_limit": null
+    }
+  },
+  "observations": [
+    {
+      "probe_run": "single",
+      "observed_at": "2026-10-23T17:23:26.076Z",
+      "rate_limit_signal": "absent",
+      "rate_limits": null
+    },
+    {
+      "probe_run": "single",
+      "observed_at": "2026-10-23T17:23:27.950Z",
+      "rate_limit_signal": "observed",
+      "rate_limits": {
+        "five_hour": {
+          "used_percentage": 4,
+          "resets_at": 1792792800
+        },
+        "seven_day": {
+          "used_percentage": 6,
+          "resets_at": 1792872000
+        },
+        "spend_limit": null
+      }
+    }
+  ],
+  "comparison": "callbacks_received"
+}

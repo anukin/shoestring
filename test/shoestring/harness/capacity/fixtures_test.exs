@@ -10,7 +10,7 @@ defmodule Shoestring.Harness.Capacity.FixturesTest do
   describe "secret scanning over all tracked fixtures" do
     test "every tracked test fixture is 100% free of secrets, tokens, and user paths" do
       assert {:ok, count} = CapacityFixtures.scan_all_fixtures()
-      assert count == 22
+      assert count == 23
     end
 
     test "scanner successfully flags forbidden patterns with safe diagnostics" do

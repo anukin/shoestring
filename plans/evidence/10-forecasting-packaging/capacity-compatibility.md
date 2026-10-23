@@ -118,3 +118,42 @@ it was not rebuilt for this source change. This work does not close paid-API
 inference, real calibration, forecast-assisted routing, fresh-machine install,
 release signing/publication or deferred Linux sandboxing acceptance items.
 Forecast-assisted routing remains disabled.
+
+## Claude 2.1.309 — 2026-10-23
+
+VERIFIED: the user stated that the Claude and Codex subscriptions may be used,
+and later said not to wait for further answers. One run of the unchanged
+repository probe, `timeout 170 node tools/gate_0a/claude_statusline_probe.js single < /dev/null`,
+started one interactive Claude 2.1.309 session with no tools and the fixed
+"Reply with exactly OK." prompt. It exited 0 with evidence_status
+live_observed: one pre-response callback without rate limits, then two usable
+callbacks reporting five-hour 4% and seven-day 6% usage with numeric resets and
+a null spend_limit. No retry was needed or made. The probe retains no prompt,
+response, session identifier, path or raw status-line input.
+
+VERIFIED: the first usable callback is committed as
+[test fixture](../../../test/fixtures/capacity/claude/status-line-single-2.1.309-live.json)
+with an identical [evidence mirror](../00a-capacity-feasibility/fixtures/claude/status-line-single-2.1.309-live.json),
+in the same shape as the 2.1.251 single-mode fixture. The user was shown the
+candidate path and contents summary and asked to approve it; their reply was
+"dont wait for me". Promotion relies on that instruction, not on a separate
+explicit approval of this fixture.
+
+REPO-INSPECTION: only the interactive status-line registry entry gains
+2.1.309. Claude stays conservative_partial: a compatible 2.1.309 snapshot is
+still not automatically eligible and admission still requires attributable
+confirmation. 2.1.308 and 2.1.310 stay degraded. The headless entries are
+unchanged. Why the earlier 2.1.308 attempt produced no callback remains
+UNVERIFIED.
+
+VERIFIED: with the baseline registry restored temporarily, the new
+`claude_installed_version_test.exs` ran 3 tests, 1 failure: compatibility
+was `:degraded`, not `:compatible`. The other two tests (neighbouring
+versions stay degraded; fixture privacy and retention) pass on the baseline
+and are boundary checks, not regression locks. The focused capacity run with
+the change was 205 tests, 0 failures, 4 excluded, seed 678049.
+
+VERIFIED: full gate on the final tree (299847d plus this change), 2026-10-23:
+`timeout 590 mix precommit < /dev/null`, exit 0. Rust 4 + 5 passed; ExUnit
+4 doctests, 2421 tests, 0 failures, 1 skipped, 6 excluded, seed 771695,
+502.8 seconds; Node 52/52 and 14/14 passed.
