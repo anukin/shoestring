@@ -492,6 +492,14 @@ defmodule Shoestring.Harness.Capacity do
 
     extensions = extract_codex_extensions(rate_limits, payload)
 
+    # The canonical version key had no producer, so every recorded reading
+    # lost which CLI produced it. Record the version the reading was
+    # normalized against.
+    extensions =
+      if is_binary(compat.version) and Regex.match?(~r/\A\d+(\.\d+){0,3}\z/, compat.version),
+        do: Map.put(extensions, CapacitySnapshot.cli_version_extension_key(), compat.version),
+        else: extensions
+
     # 0.163's schema explicitly makes null spend-control state unavailable.
     # A known protocol version must not promote that uncertainty to clear.
     spend_state_unknown? =

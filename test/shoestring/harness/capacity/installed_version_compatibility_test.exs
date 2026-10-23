@@ -30,6 +30,21 @@ defmodule Shoestring.Harness.Capacity.InstalledVersionCompatibilityTest do
     assert decision.reason_code == "automatic_admission_eligible"
   end
 
+  test "a normalized reading records the CLI version it was read against", c do
+    assert {:ok, snapshot} = normalize(c.fixture, c.now)
+    assert CapacitySnapshot.cli_version(snapshot) == "0.163.0"
+
+    assert {:ok, drift} =
+             Capacity.normalize(:codex, :app_server_stdio, c.fixture,
+               version: "0.164.0",
+               now: c.now
+             )
+
+    # Drift is still degraded; the version is recorded, not trusted.
+    assert drift.compatibility_state == :degraded
+    assert CapacitySnapshot.cli_version(drift) == "0.164.0"
+  end
+
   test "version adoption does not grant authority to stale, partial or unknown-version reads",
        c do
     assert {:ok, stale} = normalize(c.fixture, DateTime.add(c.now, 301, :second))

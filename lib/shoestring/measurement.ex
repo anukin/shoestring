@@ -1,7 +1,7 @@
 defmodule Shoestring.Measurement do
   @moduledoc "Explicit local measurement rebuild, report, export and derived-data deletion."
   import Ecto.Query
-  alias Shoestring.Measurement.Dataset
+  alias Shoestring.Measurement.{Dataset, DatasetV2}
   alias Shoestring.Repo
   alias Shoestring.Trajectory.TrajectoryEvent
 
@@ -24,7 +24,7 @@ defmodule Shoestring.Measurement do
             limit: ^(Dataset.max_events() + 1)
         )
 
-      case Dataset.build(events, opts) do
+      case builder(opts).build(events, Keyword.delete(opts, :dataset_version)) do
         {:ok, dataset} -> dataset
         {:error, reason} -> Repo.rollback(reason)
       end
@@ -34,8 +34,8 @@ defmodule Shoestring.Measurement do
   @doc "Explicitly replace only the disposable measurement cache. History is untouched."
   def rebuild(opts \\ []) do
     with {:ok, dataset} <- snapshot(opts),
-         :ok <- File.mkdir_p(Path.dirname(cache_path())),
-         :ok <- replace_cache(Dataset.encode(dataset)) do
+         :ok <- File.mkdir_p(Path.dirname(cache_path(opts))),
+         :ok <- replace_cache(cache_path(opts), Dataset.encode(dataset)) do
       {:ok, summary(dataset)}
     end
   end
@@ -54,16 +54,32 @@ defmodule Shoestring.Measurement do
 
   @doc "Delete only the fixed derived cache after explicit confirmation; never canonical history."
   def delete_cache(confirm: true) do
-    case File.rm(cache_path()) do
-      :ok -> :ok
-      {:error, :enoent} -> :ok
-      {:error, _} -> {:error, :measurement_cache_delete_failed}
-    end
+    Enum.reduce_while([1, 2], :ok, fn version, :ok ->
+      case File.rm(cache_path(dataset_version: version)) do
+        :ok -> {:cont, :ok}
+        {:error, :enoent} -> {:cont, :ok}
+        {:error, _} -> {:halt, {:error, :measurement_cache_delete_failed}}
+      end
+    end)
   end
 
   def delete_cache(_), do: {:error, :confirmation_required}
 
-  def cache_path, do: Path.join([Shoestring.State.root(), "measurements", "dataset-v1.json"])
+  @doc "The disposable cache for one dataset version (v1 unless `dataset_version: 2`)."
+  def cache_path(opts \\ []),
+    do:
+      Path.join([
+        Shoestring.State.root(),
+        "measurements",
+        "dataset-v#{Keyword.get(opts, :dataset_version, 1)}.json"
+      ])
+
+  defp builder(opts) do
+    case Keyword.get(opts, :dataset_version, 1) do
+      1 -> Dataset
+      2 -> DatasetV2
+    end
+  end
 
   def summary(dataset) do
     dataset
@@ -73,11 +89,11 @@ defmodule Shoestring.Measurement do
     |> Map.put("dataset_digest", Dataset.digest(dataset))
   end
 
-  defp replace_cache(bytes) do
-    temporary = cache_path() <> ".rebuild-" <> Ecto.UUID.generate()
+  defp replace_cache(path, bytes) do
+    temporary = path <> ".rebuild-" <> Ecto.UUID.generate()
 
     with :ok <- write_exclusive(temporary, bytes) do
-      case File.rename(temporary, cache_path()) do
+      case File.rename(temporary, path) do
         :ok -> :ok
         {:error, _} -> {:error, :measurement_cache_replace_failed}
       end

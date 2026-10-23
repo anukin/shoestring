@@ -95,3 +95,50 @@ lock a regression.
 VERIFIED: `timeout 590 mix precommit < /dev/null`, exit 0: Rust 4 + 5; ExUnit
 4 doctests, 2438 tests, 0 failures, 1 skipped, 6 excluded, seed 556800,
 505.8 seconds; Node 52/52 and 14/14.
+
+## Step 4: dataset v2
+
+REPO-INSPECTION: `Shoestring.Measurement.DatasetV2` builds on the unchanged v1
+extractor and adds the pinned class, bracket attribution, window membership,
+between-run consistency and overlap checks described in
+[docs/measurements.md](../../../docs/measurements.md#version-2-attested-collection).
+`report`, `rebuild` and `export` take `--dataset-version 2` (separate cache
+file); `mix shoestring.forecasts report --dataset-version 2` evaluates it; the
+shadow evaluator accepts version 2 datasets and is otherwise unchanged.
+Routing remains disabled.
+
+Found and fixed while building it:
+
+- No producer set the canonical `capacity:cli_version` snapshot extension, so
+  every recorded reading had lost its CLI version (v1 reported it missing).
+  Codex normalization now records the version it normalized against.
+  VERIFIED regression: the new test in
+  `installed_version_compatibility_test.exs`, run on a detached worktree of
+  `c34a862`, fails with `cli_version` nil instead of `"0.163.0"`. Twin not
+  changed: Claude snapshots and Codex refusal/unknown snapshots still carry
+  no version; neither can become a v2 example.
+- Approved plan content is stored as canonical JSON text; task-class
+  derivation decodes it (found by the v2 tests, never shipped).
+- Bracket readings stamp the Shoestring version
+  (`measurement:shoestring_version`) as the adapter version.
+
+VERIFIED: `dataset_v2_test.exs`, 12 tests, 0 failures. History is built
+through the real plan approval, profile-bound dispatch, collection and reading
+paths with injected times and readings: an attested, tightly bracketed,
+classified run becomes an example with consumption 2 in the 300-minute window;
+rebuilds are byte-identical and v1 is unchanged; no window means no readings;
+early, late and after-start readings, external-use closure, overlapping runs,
+an unexplained between-run change (voids the window) and provider-default
+effort are each excluded; consistent consecutive runs both remain examples.
+Two test-only corrections were needed and are not product changes: readings
+use future reset times (the captured fixture's resets are now past, which the
+extractor correctly rejects), and the executor is given the test clock so
+`run.requested` is not stamped by the system clock. The overlap rule was not
+loosened.
+
+VERIFIED: `timeout 590 mix precommit < /dev/null`, exit 0: Rust 4 + 5; ExUnit
+4 doctests, 2451 tests, 0 failures, 1 skipped, 6 excluded, seed 909947,
+507.6 seconds; Node 52/52 and 14/14.
+
+UNVERIFIED: no live run has been measured. No collection window exists, and
+none will be opened by an agent.

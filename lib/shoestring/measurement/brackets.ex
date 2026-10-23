@@ -87,6 +87,8 @@ defmodule Shoestring.Measurement.Brackets do
       (snapshot.extensions || %{})
       |> Map.put("measurement:bracket", String.replace_prefix(flow, "measurement-", ""))
       |> Map.put("measurement:context", context)
+      # The Shoestring build whose adapter code ran this attempt.
+      |> Map.put("measurement:shoestring_version", to_string(Application.spec(:shoestring, :vsn)))
 
     %{snapshot | extensions: extensions}
   end

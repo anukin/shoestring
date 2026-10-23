@@ -2,9 +2,9 @@ defmodule Mix.Tasks.Shoestring.Measurements do
   use Mix.Task
   @shortdoc "Rebuild and inspect privacy-safe run measurements; no providers are started"
   @moduledoc """
-      mix shoestring.measurements report [--split-at ISO8601]
-      mix shoestring.measurements rebuild [--split-at ISO8601]
-      mix shoestring.measurements export PATH [--split-at ISO8601]
+      mix shoestring.measurements report [--split-at ISO8601] [--dataset-version 1|2]
+      mix shoestring.measurements rebuild [--split-at ISO8601] [--dataset-version 1|2]
+      mix shoestring.measurements export PATH [--split-at ISO8601] [--dataset-version 1|2]
       mix shoestring.measurements delete --confirm
       mix shoestring.measurements collection status
       mix shoestring.measurements collection open --provider codex --by LABEL [--scope SCOPE]
@@ -41,6 +41,7 @@ defmodule Mix.Tasks.Shoestring.Measurements do
       OptionParser.parse(args,
         strict: [
           split_at: [:string, :keep],
+          dataset_version: [:integer, :keep],
           confirm: [:boolean, :keep],
           provider: [:string, :keep],
           scope: [:string, :keep],
@@ -104,9 +105,12 @@ defmodule Mix.Tasks.Shoestring.Measurements do
   defp valid?(["delete"], opts), do: opts == [confirm: true]
 
   defp valid?([action], opts) when action in ~w(report rebuild),
-    do: Keyword.keys(opts) -- [:split_at] == []
+    do: Keyword.keys(opts) -- [:split_at, :dataset_version] == [] and version?(opts)
 
-  defp valid?(["export", path], opts), do: path != "" and Keyword.keys(opts) -- [:split_at] == []
+  defp valid?(["export", path], opts),
+    do:
+      path != "" and Keyword.keys(opts) -- [:split_at, :dataset_version] == [] and version?(opts)
+
   defp valid?(["collection", "status"], opts), do: opts == []
 
   defp valid?(["collection", "open"], opts),
@@ -119,8 +123,10 @@ defmodule Mix.Tasks.Shoestring.Measurements do
 
   defp valid?(_, _), do: false
 
+  defp version?(opts), do: Keyword.get(opts, :dataset_version, 1) in [1, 2]
+
   defp options(opts) do
-    passthrough = Keyword.take(opts, [:provider, :scope, :by, :reason])
+    passthrough = Keyword.take(opts, [:provider, :scope, :by, :reason, :dataset_version])
 
     case opts[:split_at] do
       nil ->

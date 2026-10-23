@@ -87,5 +87,69 @@ underprediction, drift and baseline comparisons must still be evaluated under
 slice 10B; policy enforcement needs slice 10C's separate acceptance evidence.
 
 VERIFIED in the initial local inventory: three capacity observations, zero run
-samples. Forecast readiness is false. No live provider calls were used to build
+samples. Forecast readiness is false. Codex readings did not record their CLI
+version until version 2's change, so historical rows have none. No live provider calls were used to build
 or test this slice.
+
+## Version 2: attested collection
+
+Version 2 adds the prerequisites version 1 lacks. It reuses version 1's
+history validation and row provenance unchanged, and v1 output is unchanged.
+
+```sh
+mix shoestring.measurements collection open --provider codex --by operator
+mix shoestring.measurements collection status
+mix shoestring.measurements collection close --provider codex [--reason external_use_reported]
+mix shoestring.measurements report --dataset-version 2 [--split-at ISO8601]
+mix shoestring.forecasts report --dataset-version 2 --split-at ISO8601 --at ISO8601
+```
+
+**Pinned class.** Agent-profile roles can pin a reasoning effort. Model and
+effort travel in the immutable execution binding on `run.requested`, so they
+are recorded before dispatch. A role left at provider default has no effort
+and its rows miss a class feature. The task class is the sorted set of gate
+names the approved plan assigned to the task (`gates:mix_test`), a coarse
+structural class known before dispatch; gate parameters are not used. The
+Shoestring version and the provider CLI version come from the before reading.
+
+**Collection windows.** A person opens a window per provider and scope,
+attesting that nothing outside this installation uses the account until it is
+closed. Opening requires typing the attestation; an agent must never open one.
+Close with `external_use_reported` if the account was used elsewhere: every row
+in that window is then excluded. Windows are canonical events in the protected
+Observatory stream.
+
+**Readings around each run.** Inside a window, Shoestring takes an explicit
+Codex `account/rateLimits/read` right after an attempt is admitted and right
+after its run terminates. These run no model turn. Claude's only capacity
+signal comes from an inference session, which would spend the quota being
+measured, so Claude runs are never read and never become examples. Fan-out
+siblings get no after reading; they overlap each other and are excluded.
+Readings are evidence only and never change admission, dispatch or gates.
+
+**Attribution.** A row is assignable only when all of these hold:
+
+- every class feature is present;
+- the before reading is at most 120 seconds before the run started, the after
+  reading at most 120 seconds after it finished, both explicit reads;
+- both readings are observed, from the same provider bucket and CLI version,
+  with identical window resets that are still in the future, and no window
+  decreased;
+- both readings fall in one window not closed for external use;
+- within that window, every after reading equals the next run's before
+  reading — any difference is usage nobody accounted for, and the whole window
+  loses its examples;
+- no other Shoestring run of the provider, in any goal, overlapped (from its
+  request to its finish).
+
+The consumption value is the change in the shortest window (Codex's five-hour
+window), in the provider's whole-percent units; every window's change is kept.
+A one-point change is the smallest step the provider reports, so short tasks
+often measure zero. Rows still need 100 training and 100 later evaluation
+examples per class before a shadow forecast can be evaluated, and routing stays
+disabled whatever the shadow report says.
+
+**What this cannot see.** Usage outside Shoestring that happens during a run
+and is not followed by a between-run mismatch is invisible; the attestation is
+what excludes it. The between-run check only works when consecutive runs fall
+in one window.

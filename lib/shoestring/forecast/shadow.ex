@@ -131,10 +131,10 @@ defmodule Shoestring.Forecast.Shadow do
   end
 
   defp valid_window(
-         %{"dataset_version" => 1, "extractor_version" => 1, "rows" => rows, "split_at" => split},
+         %{"dataset_version" => v, "extractor_version" => v, "rows" => rows, "split_at" => split},
          %DateTime{} = at
        )
-       when is_list(rows) and length(rows) <= 10_000 do
+       when v in [1, 2] and is_list(rows) and length(rows) <= 10_000 do
     cond do
       is_nil(time(split)) -> {:error, "explicit_chronological_split_required"}
       DateTime.compare(time(split), at) != :lt -> {:error, "invalid_chronological_window"}
