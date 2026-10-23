@@ -352,3 +352,15 @@ and [aggregate command evidence](system-verification.json) for exact counts,
 required-context checks, test mappings and remaining limits. Semantic memory,
 current live capacity protocols, RSS/soak testing and external install acceptance
 are not inferred from the passing hermetic gate.
+
+## Installed capacity compatibility follow-up — 2026-10-22
+
+VERIFIED: an explicitly budgeted Codex 0.163.0 session returned two capacity
+reads with zero inference turns. The user approved the sanitized fixture. New
+regression coverage defends automatic admission against true, unavailable and
+sparse spend-control state. Claude 2.1.308 produced no callback before its
+authorized deadline and remains UNVERIFIED; its budget was not retried and its
+registry/support tier was not promoted. See the [compatibility report](capacity-compatibility.md)
+for exact scope, regression proof, gate results and outstanding limits. This
+follow-up supersedes the earlier installed-Codex mismatch finding only; no
+full iteration acceptance or forecast enablement is inferred.

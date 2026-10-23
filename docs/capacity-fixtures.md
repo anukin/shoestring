@@ -59,8 +59,8 @@ mix shoestring.capacity.fixtures --live-smoke
 
 This runs `<cli> --version` only — no sessions, no prompts, no inference —
 and compares the result against the tested registry versions
-(Codex `0.150.1`, Claude `2.1.251`). Exit `0` means the local providers match
-what the fixtures were captured against (or a provider is absent and skipped).
+(Codex `0.150.1`, `0.162.0`, `0.162.1`, `0.163.0`; Claude `2.1.251`).
+Exit `0` means the local providers match what the fixtures were captured against (or a provider is absent and skipped).
 Non-zero means environment/version mismatch: investigate before capturing.
 
 ### Step 1 — capture with the allowlist-projecting probes
@@ -144,7 +144,7 @@ Fixture tests cover all required states; live smoke tests are optional:
   `test/shoestring/harness/contract_suite_test.exs` (adapter contract),
   `test/shoestring/harness/capacity_test.exs` (`Capacity.normalize/4`
   across modes, drift, staleness, bounds).
-* Provider parsers, every tracked fixture: `fixtures_test.exs` (all 21
+* Provider parsers, every tracked fixture: `fixtures_test.exs` (all 22
   fixtures normalize deterministically), `claude_monitor_test.exs`,
   `codex_monitor_test.exs`, plus the Gate 0A parser suite in
   `test/gate_0a_capacity_parser_test.exs`.
@@ -185,3 +185,26 @@ mix test test/shoestring/harness/capacity/codex_live_smoke_test.exs:32 --include
   assert (via SHA-256 snapshots before/after the probe) that the tracked
   fixtures are byte-identical after the run. To adopt a new version, follow
   §2–§3 as a separate reviewed change.
+
+## Installed-version follow-up — iteration 10
+
+Codex 0.163.0 has two matching live `account/rateLimits/read` captures without
+a thread or model turn. `codex/normal-read-0.163.0-live.json` preserves the first
+allowlisted response and its receipt time; the evidence mirror is identical.
+Only percentages, durations, reset times and explicit limit flags are retained.
+The capture does not establish live push-notification or real refusal behavior;
+those transitions have constructed hermetic coverage.
+
+The CLI-generated 0.163.0 schema marks `spendControlReached` as nullable and
+explains that unavailable state is not recovery. Shoestring treats true as a
+hard refusal; missing/null/malformed state prevents automatic eligibility on
+0.163 and later protocols. Sparse omission preserves prior state, explicit null
+invalidates a prior clear reading, and an existing block requires explicit false
+to recover. Legacy pre-0.163 fixtures keep their prior absent-field contract.
+
+Claude updated to 2.1.308 before the bounded probe. Its single authorized
+status-line attempt produced no callback before the deadline. It remains
+unverified and is not added to the tested registry. Claude's conservative
+partial tier continues to require attributable confirmation even on a tested
+version. See the [iteration 10 compatibility evidence](../plans/evidence/10-forecasting-packaging/capacity-compatibility.md)
+for exact scope and gates.

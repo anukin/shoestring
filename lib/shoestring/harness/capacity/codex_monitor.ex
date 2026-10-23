@@ -996,6 +996,11 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
     |> Map.merge(new_rl, fn
       "primary", _v1, _v2 -> primary
       "secondary", _v1, _v2 -> secondary
+      # An explicit null means unavailable, not a sparse omission. Inherit a
+      # prior clear only when the field is absent entirely. A known block
+      # requires an explicit false; unavailable state is not recovery.
+      "spendControlReached", true, value when value != false -> true
+      "spendControlReached", _v1, v2 -> v2
       _key, v1, v2 -> if is_nil(v2), do: v1, else: v2
     end)
     |> Map.put("primary", primary)

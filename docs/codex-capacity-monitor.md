@@ -32,7 +32,7 @@ flowchart TD
 On initialization, the monitor discovers the installed CLI version via injectable
 `Shoestring.Harness.Capacity.discover_version/2`. The version is evaluated against the
 Gate 0A support matrix via `Shoestring.Harness.Capacity.compatibility/3`:
-- Tested version `0.150.1`: `:compatible` outcome, `:proactive` support tier.
+- Tested versions `0.150.1`, `0.162.0`, `0.162.1`, `0.163.0`: `:compatible` outcome, `:proactive` support tier.
 - Untested versions (e.g. `0.151.0`): degrades to `:degraded` with diagnostic reason
   `"untested_cli_version: <version>"`, failing closed.
 - Missing executable or incompatible mode: halts in `:incompatible` state.
@@ -68,6 +68,10 @@ the secondary window, reset credits, or spend control metadata.
 - Merges updated window values (`usedPercent`, `resetsAt`) without erasing omitted windows.
 - Retains existing secondary window if omitted in a sparse update.
 - Retains provider metadata (`planType`, `rateLimitResetCredits`) if omitted.
+- A true `spendControlReached` is a hard refusal. For 0.163+ schemas, missing,
+  null or malformed state keeps automatic admission unavailable. Explicit null
+  does not inherit a previous clear reading; a known block clears only on
+  explicit false. Sparse omission keeps the previous state.
 - Feeds merged payload into `Shoestring.Harness.Capacity.normalize/4`.
 - On transport disconnect or parse failure, calls `Capacity.preserve_last_known/3` so known
   windows are never zeroed out or fabricated.

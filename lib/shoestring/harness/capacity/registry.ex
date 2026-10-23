@@ -14,7 +14,7 @@ defmodule Shoestring.Harness.Capacity.Registry do
       provider: :codex,
       invocation_mode: :app_server_stdio,
       supported_tier: :proactive,
-      tested_versions: ["0.150.1", "0.162.0", "0.162.1"],
+      tested_versions: ["0.150.1", "0.162.0", "0.162.1", "0.163.0"],
       required_semantic_fields: ["rateLimits", "primary", "secondary", "usedPercent"],
       compatibility_outcome: :compatible,
       description:

@@ -1,0 +1,14 @@
+{
+  "evidence_status": "SCHEMA-ONLY",
+  "cli_version": "0.163.0",
+  "command": "codex app-server generate-json-schema --out <scratch-directory>",
+  "source_file": "v2/GetAccountRateLimitsResponse.json",
+  "property": "spendControlReached",
+  "schema": {
+    "description": "Backend-reported spend-control state. `None` is unavailable, not a sparse-update recovery.",
+    "type": [
+      "boolean",
+      "null"
+    ]
+  }
+}

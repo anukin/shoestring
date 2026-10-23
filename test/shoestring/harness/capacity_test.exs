@@ -15,8 +15,11 @@ defmodule Shoestring.Harness.CapacityTest do
       assert %{compatibility_state: :compatible, version: "0.162.0"} =
                Capacity.compatibility(:codex, :app_server_stdio, "0.162.0")
 
-      assert %{compatibility_state: :degraded} =
+      assert %{compatibility_state: :compatible, version: "0.163.0"} =
                Capacity.compatibility(:codex, :app_server_stdio, "0.163.0")
+
+      assert %{compatibility_state: :degraded} =
+               Capacity.compatibility(:codex, :app_server_stdio, "0.164.0")
     end
 
     test "evaluates supported Codex stdio with tested version" do

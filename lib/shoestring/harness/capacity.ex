@@ -455,6 +455,9 @@ defmodule Shoestring.Harness.Capacity do
       not is_map(rate_limits) ->
         {:error, "malformed_rate_limits"}
 
+      Map.get(rate_limits, "spendControlReached") == true ->
+        {:refusal, "spend_control_reached"}
+
       codex_refusal?(rate_limits) ->
         {:refusal, Map.get(rate_limits, "rateLimitReachedType")}
 
@@ -488,6 +491,31 @@ defmodule Shoestring.Harness.Capacity do
       parse_window("secondary", Map.get(rate_limits, "secondary"), "usedPercent", "resetsAt")
 
     extensions = extract_codex_extensions(rate_limits, payload)
+
+    # 0.163's schema explicitly makes null spend-control state unavailable.
+    # A known protocol version must not promote that uncertainty to clear.
+    spend_state_unknown? =
+      case Version.parse(compat.version || "") do
+        {:ok, version} ->
+          Version.compare(version, "0.163.0") != :lt and
+            not is_boolean(Map.get(rate_limits, "spendControlReached"))
+
+        :error ->
+          false
+      end
+
+    compat =
+      if spend_state_unknown? do
+        %{
+          compat
+          | compatibility_state: :degraded,
+            reason:
+              Enum.reject([compat.reason, "spend_control_state_unknown"], &is_nil/1)
+              |> Enum.join("; ")
+        }
+      else
+        compat
+      end
 
     cond do
       match?({:malformed, _}, primary_res) or match?({:malformed, _}, secondary_res) ->

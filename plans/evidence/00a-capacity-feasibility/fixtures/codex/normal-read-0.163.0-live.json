@@ -1,0 +1,25 @@
+{
+  "fixture_kind": "normal",
+  "evidence_status": "live_observed",
+  "cli_version": "0.163.0",
+  "captured_at": "2026-10-22T07:24:26.764394Z",
+  "payload": {
+    "id": 3,
+    "result": {
+      "rateLimits": {
+        "primary": {
+          "usedPercent": 54,
+          "resetsAt": 1792670198,
+          "windowDurationMins": 300
+        },
+        "secondary": {
+          "usedPercent": 67,
+          "resetsAt": 1793136167,
+          "windowDurationMins": 10080
+        },
+        "rateLimitReachedType": null,
+        "spendControlReached": false
+      }
+    }
+  }
+}
