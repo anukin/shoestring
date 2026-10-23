@@ -83,6 +83,14 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
           {:error, {:execution_admission_blocked, event.payload["reason_code"]}}
 
         true ->
+          _ =
+            Shoestring.Measurement.Brackets.before(
+              goal_id,
+              to_string(profile["provider"]),
+              scope,
+              Shoestring.Measurement.Brackets.context(execution.execution_id, task["id"], attempt)
+            )
+
           {:ok, event.id}
       end
     else

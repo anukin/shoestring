@@ -60,3 +60,38 @@ not exist, so they are behaviour documentation, not a regression lock.
 VERIFIED: `timeout 590 mix precommit < /dev/null`, exit 0: Rust 4 + 5; ExUnit
 4 doctests, 2430 tests, 0 failures, 1 skipped, 6 excluded, seed 408391,
 506.3 seconds; Node 52/52 and 14/14.
+
+## Step 3: before and after readings
+
+REPO-INSPECTION: while a collection window is open for the provider and
+scope, an admitted plan attempt gets an explicit capacity reading right after
+its admit decision, and the sequential executor takes another right after
+the run's terminal is confirmed, before gates. Both are goal-local
+`capacity.snapshot_observed` events (new GoalLocalObservation flows
+`measurement-before` / `measurement-after`), actor `measurement`, marked with
+`measurement:bracket` and `measurement:context` (execution, task, attempt),
+which `cobbler.plan.task.dispatched` maps to the run. Idempotency is per side
+and attempt, so a retry keeps the first reading. An after reading needs a
+before reading for the same attempt.
+
+Only Codex is read: `account/rateLimits/read` runs no model turn. Claude's
+only capacity signal comes from an inference session, which would spend the
+quota being measured, so Claude runs are never bracketed and cannot become
+calibration examples. Fan-out siblings complete through a different path and
+get no after reading; they overlap each other and are excluded anyway.
+
+Readings are evidence only: any failure records nothing and never changes
+admission, dispatch, gates or the outcome. They are not projected when
+appended, because a goal projector failing on an unrelated event must not
+make a durable reading look lost (found while testing: the test's synthetic
+terminal left the goal's projector failed, and the earlier version reported
+a recorded reading as not recorded).
+
+VERIFIED: `brackets_test.exs` 7 tests and the executor completion test in
+`execution_profile_test.exs`, all passing. New capability: on the base commit
+they fail only on the missing module, so they document behaviour rather than
+lock a regression.
+
+VERIFIED: `timeout 590 mix precommit < /dev/null`, exit 0: Rust 4 + 5; ExUnit
+4 doctests, 2438 tests, 0 failures, 1 skipped, 6 excluded, seed 556800,
+505.8 seconds; Node 52/52 and 14/14.

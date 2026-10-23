@@ -228,6 +228,69 @@ defmodule Shoestring.Cobbler.ExecutionProfileTest do
     end)
   end
 
+  test "sequential completion takes the after reading for a bracketed attempt", c do
+    previous = Application.get_env(:shoestring, :measurement_capacity_reader)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:shoestring, :measurement_capacity_reader, previous),
+        else: Application.delete_env(:shoestring, :measurement_capacity_reader)
+    end)
+
+    Application.put_env(:shoestring, :measurement_capacity_reader, fn "codex" ->
+      now = DateTime.utc_now()
+
+      Shoestring.Harness.Capacity.normalize(
+        :codex,
+        :app_server_stdio,
+        Shoestring.Harness.Capacity.Fixtures.load_fixture!("codex/normal-read-0.163.0-live.json"),
+        version: "0.163.0",
+        now: now,
+        captured_at: now,
+        source_event: :explicit_read
+      )
+    end)
+
+    admission = admitted(c.goal)
+    assert {:ok, _} = request(c.goal, c.revision, c.profile, admission)
+
+    assert {:ok, run} =
+             Cobbler.advance_plan_execution(
+               c.goal.id,
+               exec_opts(admission_event_id: admission.id)
+             )
+
+    dispatched =
+      Repo.one!(
+        from e in Shoestring.Trajectory.TrajectoryEvent,
+          where: e.goal_id == ^c.goal.id and e.type == "cobbler.plan.task.dispatched"
+      )
+
+    context =
+      Shoestring.Measurement.Brackets.context(
+        dispatched.payload["execution_id"],
+        dispatched.payload["plan_task_id"],
+        dispatched.payload["attempt"]
+      )
+
+    {:ok, _} = Shoestring.Measurement.Collection.open("codex", "subscription", "operator")
+
+    assert :recorded =
+             Shoestring.Measurement.Brackets.before(c.goal.id, "codex", "subscription", context)
+
+    complete_run!(c.goal, run.run_id)
+
+    assert {:ok, %{disposition: :accepted}} =
+             Cobbler.complete_plan_task_run(c.goal.id, run.run_id, exec_opts())
+
+    key = "measurement-after:#{context}"
+
+    assert Repo.exists?(
+             from e in Shoestring.Trajectory.TrajectoryEvent,
+               where: e.goal_id == ^c.goal.id and e.idempotency_key == ^key
+           )
+  end
+
   defp deliver!(c, profile, assertions) do
     admission = admitted(c.goal)
     assert {:ok, _} = request(c.goal, c.revision, profile, admission)

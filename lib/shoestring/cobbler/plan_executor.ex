@@ -454,6 +454,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
   defp complete_fresh_dispatch(repo, goal_id, projection, execution, dispatched, run_id, opts) do
     with {:ok, terminal} <- require_run_terminal(repo, goal_id, run_id),
+         _ <- measure_after(goal_id, execution, dispatched),
          {:ok, {_liveness, contract}} <- contract_for(repo, goal_id, execution),
          {:ok, task_contract} <- plan_task(contract, dispatched.plan_task_id) do
       context = %{
@@ -2855,6 +2856,25 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       %{type: "run.completed"} -> true
       %{type: "run.failed", payload: payload} -> payload["error_category"] != "quota_refused"
       _ -> false
+    end
+  end
+
+  # Evidence only: a missing or failed reading never changes the outcome.
+  defp measure_after(goal_id, execution, dispatched) do
+    case execution[:agent_profile] do
+      %{"provider" => provider} ->
+        Shoestring.Measurement.Brackets.after_run(
+          goal_id,
+          provider,
+          Shoestring.Measurement.Brackets.context(
+            execution.execution_id,
+            dispatched.plan_task_id,
+            dispatched.attempt
+          )
+        )
+
+      _ ->
+        :skipped
     end
   end
 
