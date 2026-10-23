@@ -77,3 +77,47 @@ health `instance` value is a fingerprint of the database path, so both VMs
 
 Signing/notarization (no Developer ID) and publishing the archive at the
 formula's release URL. Linux remains deferred.
+
+## Rerun from scratch — 2026-10-23
+
+The user asked to rerun everything until it passed without issues, keeping
+the VMs until then.
+
+1. Full gate on `a7a2334`: exit 0; ExUnit 4 doctests, 2453 tests, 0 failures,
+   1 skipped, 6 excluded, seed 202632; Rust 4 + 5; Node 52/52 and 14/14.
+2. Clean build `a7a2334` (SHA-256 `4fdb5ead…eca99`) on a third fresh VM:
+   the OpenSSL message held for doctor, init, version and start with no state
+   written, and the Homebrew sequence passed again, now also covering the
+   diagnostics preview and export.
+3. **Defect found**: `diagnostics-export` with a wrong confirmation hash
+   correctly wrote nothing but printed `** (RuntimeError) Operation refused:
+   diagnostic_confirmation_mismatch` with a stack trace. Every release
+   refusal raised under `bin/shoestring eval`.
+4. Fix `6700058`: refusals print one line to stderr and exit 1 (diagnostics
+   preview/export, text dispatch, busy port before init, failed pre-migration
+   backup). VERIFIED: `test/shoestring/release/refusal_test.exs`, 2 tests, 0
+   failures; on a worktree of `c34a862` both fail with the `RuntimeError`.
+   Full gate: exit 0; 4 doctests, 2455 tests, 0 failures, 1 skipped, 6
+   excluded, seed 94637; Rust 4 + 5; Node 52/52 and 14/14.
+5. Clean build `6700058` (SHA-256
+   `a30a1760f96e1a17921ef99c9a09b6cc84df914623f1d802e9547ea2cf98d62f`) under
+   [`tools/release/fresh_vm_acceptance.sh`](../../../tools/release/fresh_vm_acceptance.sh)
+   on a fourth fresh VM: 0 failures. Two checks there had their PASS lines
+   suppressed by a script redirect, so the script was corrected and the whole
+   run repeated on a fifth fresh VM.
+
+Final run, fifth fresh VM, build `6700058`: **32 PASS, 0 FAIL**, script
+exit 0. Checks: clean machine (no Homebrew/toolchains); checksum; without
+OpenSSL 3 each of doctor/init/version/start exits 1 with the exact
+instruction and no state is written; Homebrew installs; formula installs
+without any language toolchain; version; doctor before init; init refuses a
+busy port in one line; init; idempotent init; doctor after init; state
+directory 0700 and secret 0600; diagnostics preview; wrong-hash export
+refused in one line with nothing written; export (0600, no home path);
+health 200 in 3 s; UI 200; second start refused in one line; SIGTERM stop in
+3 s; no errors logged; reinstall over existing state; restart healthy; second
+stop; no backup when the schema is current; `brew test`; uninstall removes
+the binary; uninstall keeps the database byte-identical and the secret.
+
+The VMs, the Tart image cache and Tart itself were removed after this run
+at the user's request.
