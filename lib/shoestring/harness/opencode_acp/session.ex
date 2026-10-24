@@ -53,6 +53,7 @@ defmodule Shoestring.Harness.OpencodeAcp.Session do
     :elf_owned_process_group,
     :message,
     tool_kinds: %{},
+    tool_commands: %{},
     known_groups: MapSet.new(),
     buffered_events: [],
     event_ordinal: 0,
@@ -509,19 +510,37 @@ defmodule Shoestring.Harness.OpencodeAcp.Session do
           state
       end
 
+    # The shell command arrives on a later update than the tool start, so it
+    # is remembered for the end event.
+    state =
+      case get_in(update, ["rawInput", "command"]) do
+        command when is_binary(command) ->
+          %{state | tool_commands: Map.put(state.tool_commands, update["toolCallId"], command)}
+
+        _ ->
+          state
+      end
+
     state =
       buffer(state, fn ordinal ->
         EventNormalizer.normalize(
           frame,
           state.run_id,
           ordinal,
-          Map.put(event_opts(state), :tool_kinds, state.tool_kinds)
+          Map.merge(event_opts(state), %{
+            tool_kinds: state.tool_kinds,
+            tool_commands: state.tool_commands
+          })
         )
       end)
 
     if update["sessionUpdate"] == "tool_call_update" and
          update["status"] in ["completed", "failed"],
-       do: %{state | tool_kinds: Map.delete(state.tool_kinds, update["toolCallId"])},
+       do: %{
+         state
+         | tool_kinds: Map.delete(state.tool_kinds, update["toolCallId"]),
+           tool_commands: Map.delete(state.tool_commands, update["toolCallId"])
+       },
        else: state
   end
 

@@ -99,10 +99,15 @@ defmodule Shoestring.Harness.OpencodeAcp.SessionTest do
     assert message.extensions["opencode-acp:text"] == "Working in $HOME/x"
 
     [start, finish] = Enum.filter(events, &(&1.kind == :command))
+    # The command arrives after the start (opencode 2.0.31), so the end
+    # event carries it, with the exit status.
     assert start.extensions["opencode-acp:boundary"] == "start"
-    assert start.extensions["opencode-acp:command"] == "printf hello"
+    refute Map.has_key?(start.extensions, "opencode-acp:command")
     assert finish.extensions["opencode-acp:boundary"] == "end"
     assert finish.extensions["opencode-acp:tool_call_id"] == "call_1"
+    assert finish.extensions["opencode-acp:command"] == "printf hello"
+    assert finish.extensions["opencode-acp:exit_code"] == 0
+    assert List.last(events).extensions["opencode-acp:output_tokens"] == 10
 
     assert List.last(events).result == %{status: "completed", artifact_id: nil}
     assert Enum.map(events, & &1.ordinal) == Enum.to_list(1..length(events))
@@ -175,6 +180,23 @@ defmodule Shoestring.Harness.OpencodeAcp.SessionTest do
     [error] = identity |> events_until_terminal() |> Enum.filter(&(&1.kind == :error))
     assert %Error{code: "oversized_frame"} = error.error
     OpencodeAcp.release(identity)
+  end
+
+  test "resume continues the earlier provider session in a new process", context do
+    {:ok, first} = OpencodeAcp.start(request(), opts(context, "complete"))
+    _ = events_until_terminal(first)
+    OpencodeAcp.release(first)
+    File.rm!(context.log)
+
+    {:ok, resumed} = OpencodeAcp.resume(first, request(), opts(context, "complete"))
+    assert resumed.provider_session_id == first.provider_session_id
+    _ = events_until_terminal(resumed)
+
+    assert ["initialize", "session/resume", "session/set_config_option", "session/prompt"] =
+             Enum.map(sent(context), & &1["method"])
+
+    assert Enum.at(sent(context), 1)["params"]["sessionId"] == first.provider_session_id
+    OpencodeAcp.release(resumed)
   end
 
   describe "permission requests" do

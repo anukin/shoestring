@@ -1,8 +1,7 @@
 defmodule Shoestring.Harness.OpencodeAcpContractTest do
   @moduledoc """
   Shoestring.Harness.OpencodeAcp against the shared ContractSuite on its
-  simulated paths, like the other adapters. Resume is withheld (a resumed
-  prompt's completion is UNVERIFIED), so that test is skipped.
+  simulated paths, like the other adapters.
   """
   use Shoestring.Harness.ContractSuite,
     adapter: Shoestring.Harness.OpencodeAcp,

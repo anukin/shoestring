@@ -127,16 +127,22 @@ for line in sys.stdin:
             update({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "private reasoning"}})
             update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Working "}})
             update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "in /Users/someone/x"}})
-            update({"sessionUpdate": "tool_call", "toolCallId": "call_1", "kind": "execute", "status": "pending",
-                    "title": "printf", "rawInput": {"command": "printf hello"}})
-            update({"sessionUpdate": "tool_call_update", "toolCallId": "call_1", "status": "in_progress"})
-            update({"sessionUpdate": "tool_call_update", "toolCallId": "call_1", "status": "completed"})
+            # opencode 2.0.31 shapes: the start has an empty rawInput, the
+            # command arrives in progress, the exit status on completion.
+            update({"sessionUpdate": "tool_call", "toolCallId": "call_1", "name": "shell", "kind": "execute",
+                    "status": "pending", "title": "shell", "locations": [], "rawInput": {}})
+            update({"sessionUpdate": "tool_call_update", "toolCallId": "call_1", "status": "in_progress",
+                    "kind": "execute", "title": "printf hello", "rawInput": {"command": "printf hello"}})
+            update({"sessionUpdate": "tool_call_update", "toolCallId": "call_1", "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": "hello"}}],
+                    "rawOutput": {"metadata": {"status": "completed", "truncated": False, "exit": 0}}})
             update({"sessionUpdate": "tool_call", "toolCallId": "call_2", "kind": "edit", "status": "pending",
                     "title": "edit a.txt", "locations": [{"path": "a.txt"}]})
             update({"sessionUpdate": "tool_call_update", "toolCallId": "call_2", "status": "completed"})
             update({"sessionUpdate": "plan", "entries": [{"content": "x", "priority": "high", "status": "completed"}]})
             update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Done."}})
-            result(rid, {"stopReason": "end_turn"})
+            update({"sessionUpdate": "usage_update", "used": 100, "size": 200000, "cost": {"amount": 0, "currency": "USD"}})
+            result(rid, {"stopReason": "end_turn", "usage": {"inputTokens": 90, "outputTokens": 10, "totalTokens": 100}})
     elif method == "session/cancel":
         if prompt_id is not None:
             result(prompt_id, {"stopReason": "cancelled"})

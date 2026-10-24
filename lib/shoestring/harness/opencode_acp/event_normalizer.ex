@@ -3,12 +3,14 @@ defmodule Shoestring.Harness.OpencodeAcp.EventNormalizer do
   Normalizes `opencode acp` (Agent Client Protocol, JSON-RPC over stdio)
   frames into canonical `Shoestring.Harness.HarnessEvent` structs.
 
-  Evidence: `plans/evidence/13-opencode-harness/README.md`. The handshake,
-  session and error shapes are VERIFIED against opencode 2.0.31. The
-  `session/update` prompt-stream shapes (`agent_message_chunk`, `tool_call`,
-  `tool_call_update`, `plan`) and the `session/prompt` stop reasons follow the
-  published Agent Client Protocol schema and are SCHEMA-ONLY until a live
-  prompt is recorded.
+  Evidence: `plans/evidence/13-opencode-harness/README.md`. Handshake,
+  session, error, prompt-stream (`agent_message_chunk`, `tool_call`,
+  `tool_call_update`, `usage_update`) and stop-reason shapes are VERIFIED
+  against opencode 2.0.31 with a free model. A tool call starts with an empty
+  `rawInput`; the shell command arrives on an `in_progress` update and the
+  exit status on the completed one, so the end event carries both (the
+  session passes the command it saw as `:tool_commands`). `plan` updates
+  follow the published schema only.
 
   - Hidden reasoning (`agent_thought_chunk`) is never kept.
   - Provider fields are namespaced `opencode-acp:*`.
@@ -115,14 +117,18 @@ defmodule Shoestring.Harness.OpencodeAcp.EventNormalizer do
         "tool_call_id" => id,
         "tool_kind" => kind,
         "status" => status,
-        "boundary" => "end"
+        "boundary" => "end",
+        "command" =>
+          command(update) || sanitize_string(get_in(opts, [:tool_commands, update["toolCallId"]])),
+        "exit_code" => exit_code(update)
       })
     else
       # Progress on an open call (`in_progress`, new content) is not a
       # boundary and never spends.
       build(base, "tool-call-progress-#{base.ordinal}", :lifecycle, %{
         "tool_call_id" => id,
-        "status" => status
+        "status" => status,
+        "command" => command(update)
       })
     end
   end
@@ -181,15 +187,12 @@ defmodule Shoestring.Harness.OpencodeAcp.EventNormalizer do
           {:ok, HarnessEvent.t()} | {:error, term()}
   def prompt_outcome(outcome, run_id, ordinal, opts \\ %{})
 
-  def prompt_outcome({:ok, %{"stopReason" => "end_turn"}}, run_id, ordinal, opts) do
+  def prompt_outcome({:ok, %{"stopReason" => "end_turn"} = result}, run_id, ordinal, opts) do
     build(
       base(run_id, ordinal, opts),
       "prompt-completed-#{ordinal}",
       :result,
-      %{
-        "stop_reason" => "end_turn",
-        "status" => "completed"
-      },
+      Map.merge(%{"stop_reason" => "end_turn", "status" => "completed"}, usage(result)),
       result: %{status: "completed", artifact_id: nil}
     )
   end
@@ -324,6 +327,21 @@ defmodule Shoestring.Harness.OpencodeAcp.EventNormalizer do
     do: sanitize_string(command)
 
   defp command(_update), do: nil
+
+  defp exit_code(%{"rawOutput" => %{"metadata" => %{"exit" => code}}}) when is_integer(code),
+    do: code
+
+  defp exit_code(_update), do: nil
+
+  # Token counts the prompt result reports (VERIFIED, 2.0.31); text never.
+  defp usage(%{"usage" => %{} = usage}) do
+    for {key, name} <- [{"inputTokens", "input_tokens"}, {"outputTokens", "output_tokens"}],
+        is_integer(usage[key]),
+        into: %{},
+        do: {name, usage[key]}
+  end
+
+  defp usage(_result), do: %{}
 
   defp now(opts) do
     case Map.get(opts, :clock) do

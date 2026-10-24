@@ -1029,6 +1029,14 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
         status = if ext["claude-headless:is_error"] == true, do: "failed", else: "completed"
         {status, Map.fetch!(started, ext["claude-headless:tool_use_id"])}
 
+      ext["opencode-acp:boundary"] == "end" and is_integer(ext["opencode-acp:exit_code"]) and
+          is_binary(ext["opencode-acp:command"]) ->
+        {"exit #{ext["opencode-acp:exit_code"]}", ext["opencode-acp:command"]}
+
+      ext["opencode-acp:boundary"] == "end" and is_binary(ext["opencode-acp:command"]) ->
+        status = if ext["opencode-acp:status"] == "failed", do: "failed", else: "completed"
+        {status, ext["opencode-acp:command"]}
+
       ext["opencode-acp:boundary"] == "end" and
           is_binary(Map.get(started, ext["opencode-acp:tool_call_id"])) ->
         status = if ext["opencode-acp:status"] == "failed", do: "failed", else: "completed"

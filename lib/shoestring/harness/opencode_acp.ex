@@ -8,11 +8,12 @@ defmodule Shoestring.Harness.OpencodeAcp do
 
   1. Identity and compatibility reporting — implemented.
   2. Normalized start, stream, completion, failure, cancellation —
-     implemented. The handshake is VERIFIED against opencode 2.0.31; the
-     prompt stream is SCHEMA-ONLY until a live prompt is recorded.
-  3. Resume — NOT declared. `session/resume` is VERIFIED to restore a
-     session's model and effort, but a resumed prompt's completion is
-     UNVERIFIED, so `:resume` is withheld (the Claude adapter's precedent).
+     implemented and VERIFIED against opencode 2.0.31 with a free model (an
+     edit and a shell command completed; `session/cancel` during a running
+     `sleep` returned `cancelled`).
+  3. Resume — declared. A new acp process resumed a finished session with
+     `session/resume` (model kept) and its prompt completed with the earlier
+     turn in context (VERIFIED, 2.0.31).
   4. Quota refusal classification — no opencode limit refusal has been
      observed, so nothing maps to `:quota_refused`; an expired login maps to
      `:authentication_required` (VERIFIED, arrives before any model call).
@@ -65,7 +66,7 @@ defmodule Shoestring.Harness.OpencodeAcp do
   end
 
   @impl Shoestring.Harness.Adapter
-  def capabilities, do: MapSet.new([:cancel])
+  def capabilities, do: MapSet.new([:resume, :cancel])
 
   @impl Shoestring.Harness.Adapter
   @spec probe(map()) :: {:ok, CapacitySnapshot.t()} | {:error, Error.t()}
@@ -109,6 +110,37 @@ defmodule Shoestring.Harness.OpencodeAcp do
         if live_or_transport?(opts),
           do: start_session(request, opts),
           else: start_simulated(request)
+    end
+  end
+
+  @doc """
+  Resumes the provider session of an earlier run in a new `opencode acp`
+  process: `session/resume`, the model again, then a prompt carrying the
+  original request and the continuation.
+  """
+  @impl Shoestring.Harness.Adapter
+  @spec resume(RunIdentity.t(), RunRequest.t(), map()) ::
+          {:ok, RunIdentity.t()} | {:error, Error.t()}
+  def resume(%RunIdentity{} = prior, %RunRequest{} = request, opts \\ %{}) do
+    ensure_table()
+
+    cond do
+      Map.get(opts, :simulate) == :failure ->
+        {:error, Error.new(:task_failed, "resume_failed", "Simulated resume failure")}
+
+      live_or_transport?(opts) ->
+        start_session(
+          request,
+          Map.merge(opts, %{resume: true, session_id: prior.provider_session_id})
+        )
+
+      true ->
+        RunIdentity.new(%{
+          run_id: request.dispatch_id || prior.run_id,
+          harness_id: @adapter_id,
+          process_id: "os-pid-resumed-#{System.unique_integer([:positive])}",
+          provider_session_id: prior.provider_session_id
+        })
     end
   end
 

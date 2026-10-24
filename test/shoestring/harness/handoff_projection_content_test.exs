@@ -345,6 +345,26 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
       assert evidence =~ "not completed: tool edit a.go item-3 ordinal 3"
       refute evidence =~ "not completed: command"
     end
+
+    # opencode 2.0.31 names the command only after the start; the end event
+    # carries it with the exit status.
+    test "an opencode command end names its command and exit status" do
+      %{state: state} =
+        recorded_run!([
+          opencode_tool(1, "command", "start", "call_1", []),
+          {2, "command",
+           %{
+             "opencode-acp:boundary" => "end",
+             "opencode-acp:tool_call_id" => "call_1",
+             "opencode-acp:status" => "completed",
+             "opencode-acp:command" => "go test ./...",
+             "opencode-acp:exit_code" => 1
+           }}
+        ])
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :completed})
+      assert Enum.join(inputs.evidence, "\n") =~ "exit 1: go test ./..."
+    end
   end
 
   defp exec_id(n),
