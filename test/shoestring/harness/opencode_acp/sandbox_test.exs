@@ -3,7 +3,8 @@ defmodule Shoestring.Harness.OpencodeAcp.SandboxTest do
   The OS sandbox an opencode Elf runs under: a profile derived from a real
   private run worktree, refusals that fail closed, enforcement checked with
   the real `sandbox-exec` on a shell (never opencode), and the plan-run
-  default. Local git only; no provider CLI. Scratch directories are kept.
+  default. Local git only; no provider CLI. Each test removes its scratch
+  directory.
   """
   # Not async: one case changes the :elf_dispatch_opts application config.
   use ExUnit.Case, async: false
@@ -15,6 +16,7 @@ defmodule Shoestring.Harness.OpencodeAcp.SandboxTest do
 
   setup do
     base = Path.join(System.tmp_dir!(), "shoestring-opencode-sandbox-#{Ecto.UUID.generate()}")
+    on_exit(fn -> File.rm_rf(base) end)
     source = Path.join(base, "source")
     File.mkdir_p!(source)
     git!(source, ["init", "-q", "-b", "main"])
