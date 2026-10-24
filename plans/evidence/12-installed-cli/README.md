@@ -102,9 +102,30 @@ they are not regression locks.
 `mix precommit`, seed 307302: 4 doctests, 2489 tests, 0 failures, 1 skipped
 (6 excluded); Rust 4 + 5; Node 52/52 and 14/14.
 
+## Fresh-VM acceptance (VERIFIED, 2026-10-24)
+
+The user approved the Tart run. Tart 2.41.1 (signed GitHub release, checksum
+matched, Cirrus Labs Developer ID, notarized); image
+`ghcr.io/cirruslabs/macos-sequoia-vanilla`, 4 CPUs, 8 GiB; macOS 15.7.7 with
+PATH `/usr/bin:/bin:/usr/sbin:/sbin` and no Homebrew, Elixir, Erlang, Rust or
+Node. Package built from clean main `d88d2aa` (iterations 12 and 13), archive
+SHA-256 `5bf0be6e75f6eae1cee5e483fe9d2d689d92ca0a56247e1165a542689d992522`;
+`tools/release/smoke.py` passed on the host first.
+
+`tools/release/fresh_vm_acceptance.sh` on the fresh VM: **38 PASS, 0 FAIL**,
+script exit 0. Beyond the 32 iteration-10 checks, the work-command section
+passed all six: `goals create --json` prints JSON on stdout with nothing on
+stderr; `goals list --json` lists it; `do --help` prints usage on stdout; an
+unknown command exits 2 with nothing on stdout; `do` without an agent refuses
+in one line, exit 1; `follow` with the service stopped prints exactly "The
+Shoestring service is not running. Start it in another terminal: shoestring
+start", exit 1.
+
 ## Not done
 
-- UNVERIFIED: the fresh-VM Homebrew acceptance run with the new work-command
-  checks (`tools/release/fresh_vm_acceptance.sh`). It needs Tart reinstalled
-  and Local Network access granted by the user.
+- `shoestring do` through to `shoestring result` inside the VM: the VM has no
+  signed-in agent CLI, so the acceptance run covers the work commands up to
+  the agent (refusals, goals, help, exit statuses). The full `do` → `result`
+  path through the installed release was VERIFIED on the host earlier in this
+  milestone (real Sonnet planner and worker).
 - Interactive session commands, remote hosts and opencode are out of scope.
