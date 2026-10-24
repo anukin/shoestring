@@ -63,11 +63,12 @@ refused; there is no unsandboxed fallback.
 and leave it running, so Shoestring never runs them; sign-in is not detectable
 and a tested opencode reports `unknown`, never `ready`. Tested version: 2.0.31.
 
-## Not verified yet
+## What has been checked
 
-The prompt stream (agent messages, tool calls, permission requests), a
-completed task, cancellation of a running tool and resume follow the published
-Agent Client Protocol schema and the hermetic tests, but have not been
-observed with a real model: the login on the development machine had expired.
-Resume is therefore not declared. See
+With opencode 2.0.31 and a free model: a sandboxed task created a file and ran
+a shell command; cancelling during a running `sleep` stopped it and ended the
+turn as cancelled; a new process resumed a finished session with its earlier
+turn in context; reads elsewhere in your home folder and writes outside the
+worktree were refused. opencode asked no permission questions in these runs,
+so the permission policy is covered by tests only. See
 `plans/evidence/13-opencode-harness/README.md`.

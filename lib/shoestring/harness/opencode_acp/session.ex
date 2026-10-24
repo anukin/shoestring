@@ -3,12 +3,12 @@ defmodule Shoestring.Harness.OpencodeAcp.Session do
   Coordinates one execution run over `opencode acp` (Agent Client Protocol,
   JSON-RPC 2.0 over stdio, one object per line).
 
-  Sequence (VERIFIED against opencode 2.0.31 up to the prompt):
+  Sequence (VERIFIED against opencode 2.0.31 with a free model):
   `initialize` → `session/new` (or `session/resume`) →
   `session/set_config_option` for the model (and effort when the role pins
   one) → `session/prompt`. The prompt's response is the turn outcome;
-  `session/update` notifications stream the work while it runs. The prompt
-  stream shapes are SCHEMA-ONLY (see `EventNormalizer`).
+  `session/update` notifications stream the work while it runs (shapes in
+  `EventNormalizer`).
 
   - Events are normalized and buffered live; there is no provider backfill.
   - ACP streams agent messages only as chunks, so a message's completion is

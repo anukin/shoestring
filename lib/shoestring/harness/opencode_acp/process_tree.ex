@@ -5,8 +5,10 @@ defmodule Shoestring.Harness.OpencodeAcp.ProcessTree do
   `opencode acp` starts `opencode serve --stdio` as a child that leads its own
   process group (VERIFIED, 2.0.31), so a `killpg` of the acp group alone does
   not signal it. The child exited within 0.5 s of the acp group being killed
-  in every observed run, but the groups of the tools the agent runs under it
-  are UNVERIFIED. Cancellation therefore snapshots the descendant tree first
+  in every observed run, but a shell tool runs as the server's child in a
+  process group of its own (VERIFIED: a `sleep 45` had pgid = its pid), and
+  nothing guarantees it dies with its parent. Cancellation therefore
+  snapshots the descendant tree first
   and signals each distinct group in it, then the root group, with a bounded
   TERM → KILL escalation. The caller's own group is never signalled.
 

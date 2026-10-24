@@ -29,8 +29,10 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
 
   Anything else (another platform, a worktree that is not a private run
   worktree, a path the profile cannot quote) refuses the launch; there is no
-  unsandboxed fallback. Write confinement of tools opencode runs is
-  UNVERIFIED until a live prompt (see the iteration 13 evidence).
+  unsandboxed fallback. VERIFIED live (2.0.31): a sandboxed task wrote its
+  file in the worktree and ran `ls`; asked to read a file elsewhere in home
+  and to write outside the worktree, both shell commands got "Operation not
+  permitted".
   """
 
   alias Shoestring.Harness.ClaudeHeadless.Sandbox, as: ClaudeSandbox

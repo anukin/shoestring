@@ -7,17 +7,15 @@ replaced with `REPO`.
 
 ## Status
 
-Packages A–F are implemented and the gate is green. Everything that needs no
-inference is VERIFIED against the real opencode 2.0.31, including the
-sandboxed launch through the real adapter. The prompt stream (agent messages,
-tool calls, permission requests), a completed task, cancellation of a running
-tool, the process groups of opencode's tools and resume after a prompt are
-UNVERIFIED with a real model: every provider integration on this machine is
-rejected (see "Authentication"), and Shoestring never signs in for opencode.
-They are built against the published ACP schema and covered by hermetic tests
-over real stdio against a scripted stand-in.
+Packages A–F are implemented, the gate is green, and the live verification
+is done: after the user renewed opencode's login on 2026-10-24, one edit, one
+cancellation during a running tool and one resume ran with
+`opencode/glm-5.3-flash-free` (an OpenCode free model), plus two tasks through
+the real sandboxed adapter path.
 
-Inference used: none. Every prompt attempt was refused before any model call.
+Inference used: 5 prompts on a free model (cost reported by opencode:
+`{"amount": 0, "currency": "USD"}`). Before the login was renewed every prompt
+was refused before any model call.
 
 ## Transport choice: `opencode acp`
 
@@ -88,6 +86,58 @@ This is also the needs-sign-in signal the adapter classifies
 any model call, so it costs no inference. Detecting it without a prompt was
 not found.
 
+## Live runs (VERIFIED, opencode 2.0.31, `opencode/glm-5.3-flash-free`)
+
+Session ids are replaced with `ses_SYNTHETIC`, tool call ids with
+`call_SYNTHETIC_n`, paths with `REPO`.
+
+1. **Edit over raw ACP** — "create b.txt containing hello, run `ls`, reply
+   done": `stopReason: end_turn` after 7.1 s; `b.txt` contained `hello`.
+   Frames (abridged):
+
+   ```json
+   {"sessionUpdate":"tool_call","toolCallId":"call_SYNTHETIC_1","name":"write","title":"write","kind":"edit","status":"pending","locations":[],"rawInput":{}}
+   {"sessionUpdate":"tool_call_update","toolCallId":"call_SYNTHETIC_1","status":"in_progress","kind":"edit","title":"write","locations":[{"path":"REPO/b.txt"}],"rawInput":{"path":"b.txt","content":"hello"}}
+   {"sessionUpdate":"tool_call_update","toolCallId":"call_SYNTHETIC_1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"Created file successfully: b.txt"}}],"rawOutput":{"metadata":{"truncated":false}}}
+   {"sessionUpdate":"tool_call","toolCallId":"call_SYNTHETIC_2","name":"shell","title":"shell","kind":"execute","status":"pending","rawInput":{"cwd":"REPO"}}
+   {"sessionUpdate":"tool_call_update","toolCallId":"call_SYNTHETIC_2","status":"in_progress","kind":"execute","title":"ls","rawInput":{"command":"ls","cwd":"REPO"}}
+   {"sessionUpdate":"tool_call_update","toolCallId":"call_SYNTHETIC_2","status":"completed","content":[{"type":"content","content":{"type":"text","text":"a.txt\nb.txt\n"}}],"rawOutput":{"metadata":{"status":"completed","truncated":false,"exit":0}}}
+   {"sessionUpdate":"agent_message_chunk","messageId":"msg_SYNTHETIC","content":{"type":"text","text":"done"}}
+   {"sessionUpdate":"usage_update","used":10265,"size":200000,"cost":{"amount":0,"currency":"USD"}}
+   ```
+
+   Prompt result: `{"stopReason":"end_turn","usage":{"inputTokens":11096,"outputTokens":32,...}}`.
+   Also seen: `agent_thought_chunk` (never kept) and `available_commands_update`.
+   No permission request arrived (opencode's defaults allow these tools).
+   Two corrections followed: the start frame has an empty `rawInput`, so the
+   command and the exit status are carried on the end event; the result's
+   token counts are kept.
+2. **Cancel during a running tool** — "run `sleep 45`": the process tree
+   during the sleep was acp (own group) → `serve --stdio` (own group) →
+   `sleep 45` (**its own group**, pgid = pid). After `session/cancel` opencode
+   sent `tool_call_update` `status: failed` and the prompt returned
+   `stopReason: cancelled` 4.9 s after it started; the `sleep` was gone 2 s
+   later. A `killpg` of the acp group alone would not have reached it, which is
+   why cancellation reaps every group in the tree.
+3. **Resume from a new process** — a new `opencode acp` sent `session/resume`
+   for run 1's session (model kept: `opencode/glm-5.3-flash-free`) and asked,
+   without tools, which file it created: reply `b.txt`, `end_turn` in 0.9 s.
+   `:resume` is now declared.
+4. **Task through the real adapter, sandboxed** (`OpencodeAcp.start/2`,
+   `sandbox: true`, scratch private run worktree): 10 normalized events —
+   edit start/end, shell start, progress with `command: "ls"`, shell end with
+   `command: "ls"`, `exit_code: 0`, message `done`, result `completed` with
+   `input_tokens: 2379`, `output_tokens: 32` — in 5.3 s. The worktree held
+   `b.txt` = `hello`; `git status` showed `?? b.txt`.
+5. **Confinement through the real adapter** — asked to run
+   `cat <home>/canary-file` (a file created for the test outside opencode's
+   paths, then deleted) and `echo escaped > <home>/escape-file`: both ended
+   `exit_code: 1` with "Operation not permitted"; no escape file existed
+   afterwards. The command text in the events reads `$HOME/…` (scrubbed).
+
+opencode's own background server (`opencode serve --service`, started by the
+user's login, not by these runs) was left running.
+
 ## Sandbox findings (VERIFIED, real opencode 2.0.31, no inference)
 
 The adapter wraps `opencode acp` in `sandbox-exec` with a profile built from
@@ -130,9 +180,7 @@ binary under the generated profile in a scratch private run worktree:
   remembered groups).
 - Permission requests: allowed once only when the adapter built the sandbox,
   refused otherwise; a caller cannot claim a sandbox through options.
-- Resume is implemented (`session/resume`) but `:resume` is not declared:
-  a resumed prompt's completion is unverified (the Claude adapter's
-  precedent).
+- Resume (`session/resume` in a new acp process) is declared after live run 3.
 - Effort: opencode's effort values differ per model (VERIFIED above), so a
   role cannot pin one; the session applies an effort only when the model
   offers it.
@@ -165,7 +213,8 @@ UI tests exercise new modules and are new-feature tests.
 
 ## Not done
 
-- A live prompt, cancellation of a running tool, the tools' process groups
-  and resume: UNVERIFIED until the user renews an opencode login
-  (`opencode auth login`; an OpenCode Console key covers the free models).
+- No permission request was observed live (opencode's defaults allow its
+  tools), so the fixed permission policy is covered by tests only.
+- A quota or rate-limit refusal from opencode has not been observed, so
+  nothing maps to `quota_refused`.
 - Manual runs from the Runs page do not offer opencode (plan tasks only).
