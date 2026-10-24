@@ -234,6 +234,7 @@ defmodule Shoestring.Harness.OpencodeAcp do
           end
 
         {:error, reason} ->
+          _ = Sandbox.release(Keyword.get(launch, :sandbox_temp_dir))
           {:error, Error.new(:transport, "session_start_failed", inspect(reason))}
       end
     end
@@ -258,14 +259,15 @@ defmodule Shoestring.Harness.OpencodeAcp do
              executable: sandbox.command,
              args: sandbox.args,
              env: sandbox.env ++ Map.get(opts, :env, []),
-             sandboxed: true
+             sandboxed: true,
+             sandbox_temp_dir: sandbox.temp_dir
            ]}
 
         {:error, reason} ->
           {:error, Error.new(:transport, "sandbox_unavailable", "Sandbox refused: #{reason}")}
       end
     else
-      {:ok, [sandboxed: false]}
+      {:ok, [sandboxed: false, sandbox_temp_dir: nil]}
     end
   end
 

@@ -199,6 +199,30 @@ defmodule Shoestring.Harness.OpencodeAcp.SessionTest do
     OpencodeAcp.release(resumed)
   end
 
+  # Base: an opencode run's sandbox temporary directory was never removed.
+  test "shutdown removes the run's sandbox temporary directory after reaping", context do
+    {:ok, temp} = Shoestring.SandboxTemp.create("shoestring-opencode")
+    File.write!(Path.join(temp, "cache"), "x")
+
+    session_opts =
+      context
+      |> opts("hang", %{sandbox_temp_dir: temp})
+      |> Map.to_list()
+      |> Keyword.merge(run_request: request(), run_id: Ecto.UUID.generate())
+
+    {:ok, pid} = OpencodeAcp.Session.start_link(session_opts)
+    {:ok, _identity} = OpencodeAcp.Session.await_run_identity(pid, 10_000)
+
+    {:ok, %{"sleeper_pid" => sleeper}} =
+      wait_until(fn ->
+        File.exists?(context.log) && Enum.find(sent(context), &Map.has_key?(&1, "sleeper_pid"))
+      end)
+
+    OpencodeAcp.Session.shutdown(pid)
+    refute File.exists?(temp)
+    assert {:ok, true} = wait_until(fn -> not alive?(sleeper) end)
+  end
+
   describe "permission requests" do
     test "an unsandboxed run refuses every permission request", context do
       {:ok, identity} = OpencodeAcp.start(request(), opts(context, "permission"))

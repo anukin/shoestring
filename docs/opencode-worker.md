@@ -43,7 +43,8 @@ opencode has no sandbox of its own, so every opencode task runs under macOS
 
 - writes: the task worktree and its private Git storage, opencode's own data,
   state and cache directories (its session database lives there), and a
-  temporary directory for the run;
+  temporary directory for the run, removed once the run's processes have been
+  stopped;
 - reads under your home directory: only those, opencode's configuration
   directory (and what symlinks at its top level point to) and its install
   directory;

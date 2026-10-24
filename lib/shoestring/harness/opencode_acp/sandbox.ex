@@ -46,8 +46,11 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
           command: String.t(),
           args: [String.t()],
           env: [{String.t(), String.t()}],
-          identity: String.t()
+          identity: String.t(),
+          temp_dir: Path.t()
         }
+
+  @temp_prefix "shoestring-opencode"
 
   @doc """
   Builds the sandboxed launch for `opencode acp` in `workdir`. Options:
@@ -66,12 +69,14 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
          {:ok, roots} <- roots(workdir, workspace_ref, root),
          paths = opencode_paths(home, env),
          {:ok, tmp} <- temp_dir(),
-         {:ok, profile} <- profile(roots, paths, install_dir(executable), tmp, home) do
+         {:ok, profile} <-
+           release_on_error(profile(roots, paths, install_dir(executable), tmp, home), tmp) do
       {:ok,
        %{
          command: sandbox_exec,
          args: ["-p", profile, executable, "acp"],
          env: env(tmp, paths),
+         temp_dir: tmp,
          identity:
            "macos_seatbelt:v#{@profile_version}:sha256:" <>
              (:crypto.hash(:sha256, profile) |> Base.encode16(case: :lower))
@@ -137,17 +142,18 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
       )
   end
 
-  defp temp_dir do
-    dir =
-      System.tmp_dir!()
-      |> GitSandbox.physical_path()
-      |> Path.join("shoestring-opencode-#{Ecto.UUID.generate()}")
+  defp temp_dir, do: Shoestring.SandboxTemp.create(@temp_prefix)
 
-    case File.mkdir(dir) do
-      :ok -> {:ok, dir}
-      {:error, _} -> {:error, :temp_dir_unavailable}
-    end
+  @doc "Removes a run's temporary directory once its process tree has been reaped."
+  @spec release(Path.t() | nil) :: :ok | {:error, :not_a_sandbox_temp_dir}
+  def release(dir), do: Shoestring.SandboxTemp.remove(dir, @temp_prefix)
+
+  defp release_on_error({:error, _} = error, tmp) do
+    _ = release(tmp)
+    error
   end
+
+  defp release_on_error(ok, _tmp), do: ok
 
   # opencode follows the XDG base directories (`opencode debug paths`).
   defp opencode_paths(home, env) do

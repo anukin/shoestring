@@ -52,12 +52,16 @@ defmodule Shoestring.Harness.OpencodeAcp.SandboxTest do
   end
 
   defp prepare(ctx, wt, ref \\ nil) do
-    Sandbox.prepare(wt.path, ref || wt.workspace_ref,
-      worktrees_dir: ctx.worktrees,
-      home: ctx.home,
-      env: %{},
-      executable: Path.join(ctx.home, ".opencode/bin/opencode")
-    )
+    result =
+      Sandbox.prepare(wt.path, ref || wt.workspace_ref,
+        worktrees_dir: ctx.worktrees,
+        home: ctx.home,
+        env: %{},
+        executable: Path.join(ctx.home, ".opencode/bin/opencode")
+      )
+
+    with {:ok, %{temp_dir: dir}} <- result, do: on_exit(fn -> Sandbox.release(dir) end)
+    result
   end
 
   defp physical(path), do: Shoestring.Harness.CodexAppServer.GitSandbox.physical_path(path)

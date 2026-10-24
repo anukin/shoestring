@@ -58,6 +58,7 @@ defmodule Shoestring.Cobbler.GateSandboxTest do
           report["token"] = os.environ.get(cfg["token_var"])
           report["path"] = bool(os.environ.get("PATH"))
           report["home_is_tmp"] = os.environ.get("HOME") == os.environ.get("TMPDIR")
+          report["tmpdir"] = os.environ.get("TMPDIR")
           print("PROBE " + json.dumps(report), flush=True)
   """
 
@@ -169,6 +170,14 @@ defmodule Shoestring.Cobbler.GateSandboxTest do
     assert report["write_worktree"] == "written"
     assert File.read!(Path.join(ctx.worktree, "scratch/ok.txt")) == "probe"
     assert report["write_tmp"] == "written"
+  end
+
+  # Base: every gate left its temporary directory behind (880 had piled up).
+  test "a gate's temporary directory is removed once the gate has finished", ctx do
+    {_evidence, report} = probe!(ctx)
+
+    assert Path.basename(report["tmpdir"]) =~ ~r/\Ashoestring-gate-/
+    refute File.exists?(report["tmpdir"])
   end
 
   test "a gate cannot connect anywhere, even to a localhost listener", ctx do

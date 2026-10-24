@@ -374,12 +374,18 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
       |> Keyword.get(:gate_sandbox, [])
       |> Keyword.put_new(:worktrees_dir, Keyword.get(opts, :worktrees_dir))
 
-    with {:ok, sandbox} <- GateSandbox.wrap(argv, worktree, sandbox_opts),
-         {:ok, result} <-
-           GateProcess.run(sandbox.argv, worktree, timeout_ms, @max_output_bytes,
-             output_sink: opts[:output_sink]
-           ) do
-      {:ok, Map.put(result, :sandbox, sandbox.identity)}
+    with {:ok, sandbox} <- GateSandbox.wrap(argv, worktree, sandbox_opts) do
+      # The gate's temporary directory goes once the command has finished,
+      # whatever its outcome.
+      try do
+        with {:ok, result} <-
+               GateProcess.run(sandbox.argv, worktree, timeout_ms, @max_output_bytes,
+                 output_sink: opts[:output_sink]
+               ),
+             do: {:ok, Map.put(result, :sandbox, sandbox.identity)}
+      after
+        GateSandbox.release(sandbox)
+      end
     end
   end
 

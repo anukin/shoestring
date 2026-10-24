@@ -19,7 +19,8 @@ defmodule Shoestring.Cobbler.GateSandbox do
     lock listens there; nothing can reach a gate's own listener from inside.
   - **Environment.** Nothing is inherited from the service except `PATH` and
     the locale. `HOME` and `TMPDIR` point at the gate's own temporary
-    directory, and Git gets the home-free configuration Elves use.
+    directory, and Git gets the home-free configuration Elves use. The
+    runner removes that directory when the gate finishes (`release/1`).
 
   The roots come from `GitSandbox.policy/3`: the worktree must be a
   registered run worktree with its own private Git storage. Anything else,
@@ -45,7 +46,9 @@ defmodule Shoestring.Cobbler.GateSandbox do
 
   @typedoc "`macos_seatbelt:v<profile version>:sha256:<digest of the exact profile>`."
   @type identity :: String.t()
-  @type t :: %{argv: [String.t()], identity: identity()}
+  @type t :: %{argv: [String.t()], identity: identity(), temp_dir: Path.t()}
+
+  @temp_prefix "shoestring-gate"
 
   @doc """
   Wraps a trusted gate `argv` for `worktree`. Options: `:worktrees_dir` (the
@@ -63,12 +66,13 @@ defmodule Shoestring.Cobbler.GateSandbox do
          {:ok, path, store} <- roots(worktree, root),
          :ok <- toolchain(executable, home),
          {:ok, tmp} <- temp_dir(),
-         {:ok, profile} <- profile(path, store, tmp, home) do
+         {:ok, profile} <- release_on_error(profile(path, store, tmp, home), tmp) do
       pairs = Enum.map(env(tmp), fn {key, value} -> key <> "=" <> value end)
 
       {:ok,
        %{
          argv: [sandbox_exec, "-p", profile, @env_exec, "-i" | pairs] ++ argv,
+         temp_dir: tmp,
          identity:
            "macos_seatbelt:v#{@profile_version}:sha256:" <>
              (:crypto.hash(:sha256, profile) |> Base.encode16(case: :lower))
@@ -108,17 +112,18 @@ defmodule Shoestring.Cobbler.GateSandbox do
     end
   end
 
-  defp temp_dir do
-    dir =
-      System.tmp_dir!()
-      |> GitSandbox.physical_path()
-      |> Path.join("shoestring-gate-#{Ecto.UUID.generate()}")
+  defp temp_dir, do: Shoestring.SandboxTemp.create(@temp_prefix)
 
-    case File.mkdir(dir) do
-      :ok -> {:ok, dir}
-      {:error, _} -> {:error, :temp_dir_unavailable}
-    end
+  defp release_on_error({:error, _} = error, tmp) do
+    _ = Shoestring.SandboxTemp.remove(tmp, @temp_prefix)
+    error
   end
+
+  defp release_on_error(ok, _tmp), do: ok
+
+  @doc "Removes the gate's temporary directory once its command has finished."
+  @spec release(t()) :: :ok | {:error, :not_a_sandbox_temp_dir}
+  def release(%{temp_dir: dir}), do: Shoestring.SandboxTemp.remove(dir, @temp_prefix)
 
   @doc """
   The names of the only environment variables a gate can see (a locale

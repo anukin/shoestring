@@ -28,7 +28,7 @@ defmodule Shoestring.Harness.OpencodeAcp.Session do
 
   alias Shoestring.Harness.{Continuation, Error, HarnessEvent, RunIdentity}
   alias Shoestring.Harness.Capacity.Codex.StdioTransport
-  alias Shoestring.Harness.OpencodeAcp.{EventNormalizer, ProcessTree}
+  alias Shoestring.Harness.OpencodeAcp.{EventNormalizer, ProcessTree, Sandbox}
 
   @default_max_frame_size 10_485_760
   @default_request_timeout 15_000
@@ -224,9 +224,12 @@ defmodule Shoestring.Harness.OpencodeAcp.Session do
       }}, state}
   end
 
+  # The run's sandbox temporary directory goes only after its process tree
+  # has been reaped, so nothing is still writing into it.
   def handle_call(:shutdown, _from, state) do
     reap(state)
     close_transport(state)
+    _ = Sandbox.release(Keyword.get(state.opts, :sandbox_temp_dir))
     {:stop, :normal, :ok, state}
   end
 

@@ -198,7 +198,8 @@ shoestring review retry GOAL TASK --reason "why"    # one more call
   at most 500 ms to flush partial chunks after its command is stopped.
 - The checks Shoestring runs after a worker finishes run under macOS
   `sandbox-exec`: they can read the worktree and anything outside your home
-  directory, write only to the worktree and a temporary directory, make no
+  directory, write only to the worktree and a temporary directory (removed
+  when the check finishes), make no
   outbound connection (not even to localhost), and see only `PATH`, the locale
   and their own `HOME`/`TMPDIR`. So a check fails if its tests need the
   network, a service on localhost, or a client connection to a server they
