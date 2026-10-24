@@ -85,6 +85,10 @@ execution does not release it either. Every later goal's planning and
 admission then refuses with "Candidate scope 'subscription' is currently
 occupied by active execution". Claims of earlier attempts were released only
 by the next attempt's sequential advance.
+Fixed later on 2026-10-24 ("Release a plan's task claim when its chain stops
+or is cancelled"): stopped attempts, failed global checks and goal
+cancellation now release the claim; regression tests in
+`test/shoestring/cobbler/plan_claim_release_test.exs` fail without the fix.
 
 ## Regression check
 
