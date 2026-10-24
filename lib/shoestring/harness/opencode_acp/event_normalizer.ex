@@ -189,7 +189,9 @@ defmodule Shoestring.Harness.OpencodeAcp.EventNormalizer do
       %{
         "stop_reason" => "end_turn",
         "status" => "completed"
-      }, result: %{status: "completed", artifact_id: nil})
+      },
+      result: %{status: "completed", artifact_id: nil}
+    )
   end
 
   def prompt_outcome({:ok, %{"stopReason" => "cancelled"}}, run_id, ordinal, opts) do
@@ -201,7 +203,9 @@ defmodule Shoestring.Harness.OpencodeAcp.EventNormalizer do
         "stop_reason" => "cancelled",
         "status" => "interrupted",
         "interrupted" => true
-      }, result: %{status: "interrupted", artifact_id: nil})
+      },
+      result: %{status: "interrupted", artifact_id: nil}
+    )
   end
 
   def prompt_outcome({:ok, %{"stopReason" => reason}}, run_id, ordinal, opts)
@@ -216,7 +220,9 @@ defmodule Shoestring.Harness.OpencodeAcp.EventNormalizer do
       %{
         "stop_reason" => sanitize_string(reason),
         "status" => "failed"
-      }, error: error)
+      },
+      error: error
+    )
   end
 
   def prompt_outcome({:ok, _other}, run_id, ordinal, opts) do
@@ -226,7 +232,9 @@ defmodule Shoestring.Harness.OpencodeAcp.EventNormalizer do
       base(run_id, ordinal, opts),
       "prompt-unshaped-#{ordinal}",
       :error,
-      %{"status" => "failed"}, error: error)
+      %{"status" => "failed"},
+      error: error
+    )
   end
 
   def prompt_outcome({:error, rpc_error}, run_id, ordinal, opts) do
@@ -239,7 +247,9 @@ defmodule Shoestring.Harness.OpencodeAcp.EventNormalizer do
       %{
         "status" => "failed",
         "rpc_code" => rpc_code(rpc_error)
-      }, error: error)
+      },
+      error: error
+    )
   end
 
   @doc """

@@ -251,6 +251,41 @@ defmodule Shoestring.Harness.OpencodeAcp.SessionTest do
       OpencodeAcp.release(identity)
     end
 
+    # Base: the Elf kills the acp group first on a verdict, then releases the
+    # adapter; by then the tool's process was reparented and the tree walk
+    # could not find it, so it outlived the run.
+    test "release after the Elf killed the acp group still reaps tools in other groups",
+         context do
+      session_opts =
+        context
+        |> opts("hang", %{elf_owned_process_group: true})
+        |> Map.to_list()
+        |> Keyword.merge(run_request: request(), run_id: Ecto.UUID.generate())
+
+      {:ok, pid} = OpencodeAcp.Session.start_link(session_opts)
+      {:ok, identity} = OpencodeAcp.Session.await_run_identity(pid, 10_000)
+
+      {:ok, %{"sleeper_pid" => sleeper}} =
+        wait_until(fn ->
+          File.exists?(context.log) && Enum.find(sent(context), &Map.has_key?(&1, "sleeper_pid"))
+        end)
+
+      # The session has seen the tool call (and so the tool's group).
+      {:ok, _} =
+        wait_until(fn ->
+          {:ok, events} = OpencodeAcp.Session.stream_events(pid)
+          Enum.any?(events, &(&1.kind == :command))
+        end)
+
+      pgid = String.to_integer(identity.process_id)
+      System.cmd("kill", ["-KILL", "-#{pgid}"])
+      assert {:ok, true} = wait_until(fn -> not alive?(pgid) end)
+      assert alive?(sleeper)
+
+      OpencodeAcp.Session.shutdown(pid)
+      assert {:ok, true} = wait_until(fn -> not alive?(sleeper) end)
+    end
+
     test "a safe stop only pends; nothing is sent until the outcome", context do
       {:ok, identity} = OpencodeAcp.start(request(), opts(context, "hang"))
 

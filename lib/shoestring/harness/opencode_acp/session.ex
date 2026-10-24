@@ -53,6 +53,7 @@ defmodule Shoestring.Harness.OpencodeAcp.Session do
     :elf_owned_process_group,
     :message,
     tool_kinds: %{},
+    known_groups: MapSet.new(),
     buffered_events: [],
     event_ordinal: 0,
     malformed_lines: 0,
@@ -481,7 +482,7 @@ defmodule Shoestring.Harness.OpencodeAcp.Session do
     cancel_timer(state)
 
     state = %{
-      state
+      remember_groups(state)
       | prompt_id: state.next_request_id - 1,
         status: :turn_in_progress,
         handshake_timer: nil
@@ -498,8 +499,11 @@ defmodule Shoestring.Harness.OpencodeAcp.Session do
           if is_binary(text), do: %{state | message: (state.message || "") <> text}, else: state
 
         "tool_call" ->
-          state = flush_message(state)
+          state = state |> flush_message() |> remember_groups()
           %{state | tool_kinds: Map.put(state.tool_kinds, update["toolCallId"], update["kind"])}
+
+        "tool_call_update" ->
+          remember_groups(state)
 
         _ ->
           state
@@ -639,8 +643,20 @@ defmodule Shoestring.Harness.OpencodeAcp.Session do
     end
   end
 
-  defp reap(%{transport_os_pid: pid}) when is_integer(pid), do: ProcessTree.reap(pid)
+  defp reap(%{transport_os_pid: pid} = state) when is_integer(pid),
+    do: ProcessTree.reap(pid, known: state.known_groups)
+
   defp reap(_state), do: []
+
+  # The process groups under the acp process while it is alive, so a reap
+  # after it has died (the Elf kills its group first on a verdict) still
+  # reaches tools left in other groups.
+  defp remember_groups(%{transport_os_pid: pid} = state) when is_integer(pid) do
+    groups = MapSet.new(ProcessTree.groups(pid))
+    %{state | known_groups: MapSet.union(state.known_groups, groups)}
+  end
+
+  defp remember_groups(state), do: state
 
   defp close_transport(state) do
     if is_nil(Keyword.get(state.opts, :transport_pid)) and is_pid(state.transport_pid) and

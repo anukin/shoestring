@@ -9,6 +9,11 @@ defmodule Shoestring.Harness.OpencodeAcp.ProcessTree do
   are UNVERIFIED. Cancellation therefore snapshots the descendant tree first
   and signals each distinct group in it, then the root group, with a bounded
   TERM → KILL escalation. The caller's own group is never signalled.
+
+  Groups seen earlier can be passed as `:known`: once the acp process has
+  died its descendants are reparented and no longer reachable through the
+  tree, but processes still in a dead leader's group can be signalled by the
+  group id.
   """
 
   @grace_ms 2_000
@@ -38,7 +43,14 @@ defmodule Shoestring.Harness.OpencodeAcp.ProcessTree do
   def reap(nil, _opts), do: []
 
   def reap(root, opts) when is_integer(root) and root > 1 do
-    groups = groups(root, Keyword.get(opts, :table, &table/0))
+    own = own_group()
+
+    groups =
+      (groups(root, Keyword.get(opts, :table, &table/0)) ++
+         Enum.to_list(Keyword.get(opts, :known, [])))
+      |> Enum.reject(&(&1 <= 1 or &1 == own))
+      |> Enum.uniq()
+
     Enum.each(groups, &signal(&1, "TERM"))
     deadline = System.monotonic_time(:millisecond) + Keyword.get(opts, :grace_ms, @grace_ms)
 
