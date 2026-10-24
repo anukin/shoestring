@@ -353,7 +353,28 @@ defmodule Shoestring.Cobbler.PlanCancellation do
     end)
   end
 
-  defp complete(_repo, goal_id, request, outcomes, opts) do
+  defp complete(repo, goal_id, request, outcomes, opts) do
+    with :ok <- release_claim(repo, goal_id, request, opts),
+         do: append_completed(goal_id, request, outcomes, opts)
+  end
+
+  # A cancelled execution never dispatches again, so the sequential task
+  # claim it may still hold (a retry waiting for its next attempt, say) is
+  # released once every target has stopped. Child cancellation leaves the
+  # execution running and keeps it.
+  defp release_claim(repo, goal_id, %{"scope" => "goal"} = request, opts) do
+    PlanExecutor.release_goal_claim(
+      repo,
+      goal_id,
+      "plan-cancel-release-#{request["cancellation_id"]}",
+      "execution cancelled",
+      Keyword.merge(opts, repo: repo, now: now(opts))
+    )
+  end
+
+  defp release_claim(_repo, _goal_id, _request, _opts), do: :ok
+
+  defp append_completed(goal_id, request, outcomes, opts) do
     payload = %{
       "cancellation_id" => request["cancellation_id"],
       "execution_id" => request["execution_id"],

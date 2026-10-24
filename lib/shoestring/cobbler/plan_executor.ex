@@ -641,6 +641,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
                 else: "No attempt budget remains to repair the findings."
 
             with {:ok, _} <- PlanReview.escalate(record, reason),
+                 :ok <- release_if_stopped(repo, goal_id, dispatched, "escalate", opts),
                  do: review_pending(dispatched, :review_escalated)
         end
 
@@ -726,7 +727,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              payload,
              "plan-task-review-blocked:#{dispatched.plan_task_id}:#{dispatched.attempt}",
              opts
-           ) do
+           ),
+         :ok <- release_if_stopped(repo, goal_id, dispatched, retry_state, opts) do
       {:ok,
        %{
          disposition: :review_blocked,
@@ -1977,6 +1979,51 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     end
   end
 
+  # A sequential task that stops for a human decision (no attempt left, a
+  # check that cannot run, a blocked or escalated review, a scope block) has
+  # no run in flight, and nothing else would release its claim until a next
+  # attempt starts: meanwhile every other goal's planning and admission is
+  # refused as occupied. The stopped attempt therefore releases it, through
+  # the explicit release command the claim design requires. A retry keeps the
+  # claim for the next attempt; fan-out children never hold it.
+  defp release_if_stopped(_repo, _goal_id, _dispatched, "retry", _opts), do: :ok
+  defp release_if_stopped(_repo, _goal_id, %{dispatch_mode: "fanout_v1"}, _state, _opts), do: :ok
+
+  defp release_if_stopped(repo, goal_id, dispatched, state, opts) do
+    release_goal_claim(
+      repo,
+      goal_id,
+      "plan-stop-release-#{dispatched.plan_task_id}-#{dispatched.attempt}",
+      "plan task #{dispatched.plan_task_id} stopped (#{state})",
+      opts
+    )
+  end
+
+  @doc false
+  # Releases this goal's active task claim, if it holds one. `command_id` makes
+  # the release idempotent.
+  def release_goal_claim(repo, goal_id, command_id, reason, opts) do
+    case Commands.active_claim(repo: repo) do
+      %{goal_id: ^goal_id} ->
+        Commands.submit(
+          goal_id,
+          %{
+            "type" => "task.release",
+            "command_id" => command_id,
+            "payload" => %{"reason" => reason}
+          },
+          Keyword.take(opts, [:repo, :now, :writer_opts, :publish_fun])
+        )
+        |> case do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      _other ->
+        :ok
+    end
+  end
+
   # ----------------------------------------------------------------------------
   # Gates
   # ----------------------------------------------------------------------------
@@ -2369,6 +2416,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              payload,
              "#{key}:#{dispatched.plan_task_id}:#{dispatched.attempt}",
              opts
+           ),
+         :ok <-
+           if(disposition == :scope_blocked,
+             do: release_if_stopped(repo, goal_id, dispatched, "scope_blocked", opts),
+             else: :ok
            ) do
       {:ok,
        %{
@@ -2421,7 +2473,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              payload,
              "plan-task-gate-failed:#{dispatched.plan_task_id}:#{dispatched.attempt}",
              opts
-           ) do
+           ),
+         :ok <- release_if_stopped(repo, goal_id, dispatched, retry_state, opts) do
       {:ok,
        %{
          disposition: :gate_failed,
@@ -2514,6 +2567,14 @@ defmodule Shoestring.Cobbler.PlanExecutor do
                  |> maybe_put("result", detail[:result])
                  |> maybe_put("skipped", detail[:skipped]),
                  "plan-global-failed:#{execution.execution_id}",
+                 opts
+               ),
+             :ok <-
+               release_goal_claim(
+                 repo,
+                 goal_id,
+                 "plan-global-failed-release-#{execution.execution_id}",
+                 "global check failed",
                  opts
                ) do
           {:error, {:global_gate_failed, Map.take(detail, [:gate, :reason, :duration_ms])}}
