@@ -196,10 +196,10 @@ binary under the generated profile in a scratch private run worktree:
 
 ## Gate
 
-`mix precommit` in the worktree (`9daa7fb` plus the CLI test commit), seed
-893299: 4 doctests, 2534 tests, 0 failures, 3 skipped (the existing one plus
-the two withheld-resume contract tests), 6 excluded; Rust 4 + 5; Node 52/52
-and 14/14.
+`mix precommit` in the worktree after the live corrections, seed 174797:
+4 doctests, 2536 tests, 0 failures, 1 skipped (the existing one; the resume
+contract tests now run), 6 excluded; Rust 4 + 5; Node 52/52 and 14/14.
+Before the live runs: seed 893299, 2534 tests, 0 failures, 3 skipped.
 
 ## Regression check (base `1b9a2ed`)
 
