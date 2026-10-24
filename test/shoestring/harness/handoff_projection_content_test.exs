@@ -327,6 +327,26 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
     end
   end
 
+  describe "TerminalCheckpoint reads opencode tool calls" do
+    # Base: opencode boundaries were not read, so a finished command carried
+    # no text or outcome and an unfinished call was never named.
+    test "an opencode command end is joined to its start and an open call is named" do
+      %{state: state} =
+        recorded_run!([
+          opencode_tool(1, "command", "start", "call_1", command: "go test ./..."),
+          opencode_tool(2, "command", "end", "call_1", status: "failed"),
+          opencode_tool(3, "tool", "start", "call_2", title: "edit a.go")
+        ])
+
+      assert {:ok, inputs} = TerminalCheckpoint.collect(state, %{class: :interrupted})
+      evidence = Enum.join(inputs.evidence, "\n")
+
+      assert evidence =~ "failed: go test ./..."
+      assert evidence =~ "not completed: tool edit a.go item-3 ordinal 3"
+      refute evidence =~ "not completed: command"
+    end
+  end
+
   defp exec_id(n),
     do: "item-completed-exec-019b7758-2372-4c3f-953b-#{String.pad_leading("#{n}", 12, "0")}"
 
@@ -433,5 +453,19 @@ defmodule Shoestring.Harness.HandoffProjectionContentTest do
       end
 
     {ordinal, "command", extensions}
+  end
+
+  defp opencode_tool(ordinal, kind, boundary, id, opts) do
+    extensions =
+      %{
+        "opencode-acp:boundary" => boundary,
+        "opencode-acp:tool_call_id" => id,
+        "opencode-acp:status" => Keyword.get(opts, :status, "pending"),
+        "opencode-acp:command" => Keyword.get(opts, :command),
+        "opencode-acp:title" => Keyword.get(opts, :title)
+      }
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+    {ordinal, kind, extensions}
   end
 end

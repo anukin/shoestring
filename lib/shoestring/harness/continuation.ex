@@ -300,6 +300,51 @@ defmodule Shoestring.Harness.Continuation do
   def validate_attrs(_attrs), do: {:error, {:invalid_continuation, :must_be_a_map}}
 
   @doc """
+  Turn input for a resumed provider session (P4): the original prompt plus
+  the continuation content. Only the three continuation keys
+  (`checkpoint_id`/`next_action`/`decision_refs`) are read, so raw transcript
+  terms never enter. Fresh starts keep the plain prompt.
+  """
+  @spec resume_prompt(map() | nil) :: String.t()
+  def resume_prompt(nil), do: "Continue task."
+
+  def resume_prompt(%{prompt: prompt, continuation: nil}) when is_binary(prompt),
+    do: prompt
+
+  def resume_prompt(%{prompt: prompt, continuation: continuation} = _request)
+      when is_binary(prompt) do
+    case continuation_text(continuation) do
+      nil -> prompt
+      suffix -> prompt <> "\n\n[Resume from checkpoint " <> suffix
+    end
+  end
+
+  def resume_prompt(%{prompt: prompt}) when is_binary(prompt), do: prompt
+  def resume_prompt(_request), do: "Continue task."
+
+  defp continuation_text(nil), do: nil
+
+  defp continuation_text(continuation) when is_map(continuation) do
+    checkpoint_id = continuation[:checkpoint_id] || continuation["checkpoint_id"]
+    next_action = continuation[:next_action] || continuation["next_action"]
+    refs = continuation[:decision_refs] || continuation["decision_refs"] || []
+
+    if is_binary(checkpoint_id) and is_binary(next_action) do
+      refs_text =
+        case Enum.filter(List.wrap(refs), &is_binary/1) do
+          [] -> "none"
+          list -> Enum.join(list, ", ")
+        end
+
+      "#{checkpoint_id}]\nNext action: #{next_action}\nDecision refs: #{refs_text}"
+    else
+      nil
+    end
+  end
+
+  defp continuation_text(_continuation), do: nil
+
+  @doc """
   Fail-fast resume validation: checkpoint match, decision freshness,
   confirmation state, lease allowlist, then session binding.
 

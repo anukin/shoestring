@@ -155,6 +155,67 @@ defmodule Shoestring.Cobbler.LeaseBoundsTest do
     assert state.tools == 1
   end
 
+  # Base: opencode boundaries and statuses were not read, so a finished
+  # opencode command or edit never counted against the tool budget.
+  test "opencode tool calls count once per START→END, messages once per completion" do
+    alias Shoestring.Harness.OpencodeAcp.EventNormalizer
+
+    run_id = bounds().run_id
+    update = &%{"method" => "session/update", "params" => %{"update" => &1}}
+    kinds = %{"call_1" => "execute", "call_2" => "edit"}
+
+    events =
+      [
+        update.(%{
+          "sessionUpdate" => "agent_message_chunk",
+          "content" => %{"type" => "text", "text" => "a"}
+        }),
+        update.(%{
+          "sessionUpdate" => "tool_call",
+          "toolCallId" => "call_1",
+          "kind" => "execute",
+          "status" => "pending"
+        }),
+        update.(%{
+          "sessionUpdate" => "tool_call_update",
+          "toolCallId" => "call_1",
+          "status" => "in_progress"
+        }),
+        update.(%{
+          "sessionUpdate" => "tool_call_update",
+          "toolCallId" => "call_1",
+          "status" => "completed"
+        }),
+        update.(%{
+          "sessionUpdate" => "tool_call_update",
+          "toolCallId" => "call_1",
+          "status" => "completed"
+        }),
+        update.(%{
+          "sessionUpdate" => "tool_call",
+          "toolCallId" => "call_2",
+          "kind" => "edit",
+          "status" => "pending"
+        }),
+        update.(%{
+          "sessionUpdate" => "tool_call_update",
+          "toolCallId" => "call_2",
+          "status" => "failed"
+        })
+      ]
+      |> Enum.with_index(1)
+      |> Enum.map(fn {frame, ordinal} ->
+        {:ok, event} = EventNormalizer.normalize(frame, run_id, ordinal, %{tool_kinds: kinds})
+        event
+      end)
+
+    {:ok, message} = EventNormalizer.message_completed("a", run_id, 8)
+    {state, _effects} = LeaseBounds.drain(bounds(), run_id, events ++ [message])
+
+    assert state.tools == 2
+    assert state.responses == 1
+  end
+
   # ----------------------------------------------------------------------------
   # `tool_identity/1` surface (observability keying only)
   #

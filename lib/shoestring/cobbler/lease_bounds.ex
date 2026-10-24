@@ -204,8 +204,8 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   Shared tool-identity resolver over string-keyed maps (raw provider items
   and normalized extensions alike).
   Returns the first present provider-native identity —
-  `claude-headless:tool_use_id`, `codex-app-server:item_id`, `item_id`, or
-  raw `id` — skipping blank values consistently, or `nil` when no usable
+  `claude-headless:tool_use_id`, `codex-app-server:item_id`,
+  `opencode-acp:tool_call_id`, `item_id`, or raw `id` — skipping blank values consistently, or `nil` when no usable
   identity exists. Used for observability keying only: no safe-stop or
   renewal decision consults it (terminal-only resolution never consults
   open-tool state).
@@ -215,6 +215,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
     [
       map["claude-headless:tool_use_id"],
       map["codex-app-server:item_id"],
+      map["opencode-acp:tool_call_id"],
       map["item_id"],
       map["id"]
     ]
@@ -420,7 +421,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   defp tool_start?(extensions) when is_map(extensions) do
     status =
       extensions["claude-headless:status"] || extensions["codex-app-server:status"] ||
-        extensions["status"]
+        extensions["opencode-acp:status"] || extensions["status"]
 
     boundary(extensions) == "start" or status in @start_statuses
   end
@@ -432,13 +433,14 @@ defmodule Shoestring.Cobbler.LeaseBounds do
   end
 
   defp boundary(extensions) do
-    extensions["claude-headless:boundary"] || extensions["boundary"]
+    extensions["claude-headless:boundary"] || extensions["opencode-acp:boundary"] ||
+      extensions["boundary"]
   end
 
   defp completion_status?(extensions) do
     status =
       extensions["claude-headless:status"] || extensions["codex-app-server:status"] ||
-        extensions["status"]
+        extensions["opencode-acp:status"] || extensions["status"]
 
     status in ["completed", "complete", "success", "failed", "error"]
   end
@@ -452,7 +454,7 @@ defmodule Shoestring.Cobbler.LeaseBounds do
 
   defp correlation_id(%HarnessEvent{extensions: extensions, source_event_id: source_id}) do
     extensions["claude-headless:tool_use_id"] || extensions["codex-app-server:item_id"] ||
-      extensions["item_id"] || source_id
+      extensions["opencode-acp:tool_call_id"] || extensions["item_id"] || source_id
   end
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""

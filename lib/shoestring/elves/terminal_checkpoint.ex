@@ -974,6 +974,13 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
           _other -> nil
         end
 
+      is_binary(ext["opencode-acp:tool_call_id"]) ->
+        case ext["opencode-acp:boundary"] do
+          "start" -> {:start, ext["opencode-acp:tool_call_id"]}
+          "end" -> {:end, ext["opencode-acp:tool_call_id"]}
+          _other -> nil
+        end
+
       true ->
         nil
     end
@@ -982,7 +989,8 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   defp item_boundary(_payload), do: nil
 
   defp item_label(%{"extensions" => ext}) do
-    case ext["codex-app-server:tool"] || ext["claude-headless:tool_name"] do
+    case ext["codex-app-server:tool"] || ext["claude-headless:tool_name"] ||
+           ext["opencode-acp:title"] do
       name when is_binary(name) and name != "" -> name <> " "
       _other -> ""
     end
@@ -994,14 +1002,13 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
   @spec max_command_chars() :: pos_integer()
   def max_command_chars, do: @max_command_chars
 
-  # Claude tool starts by tool-use id, so an END can name its command.
+  # Claude and opencode tool starts by call id, so an END can name its command.
   defp started_commands(rows) do
     Enum.reduce(rows, %{}, fn
       {_sequence, %{"kind" => "command", "extensions" => %{} = ext}}, acc ->
-        with "start" <- ext["claude-headless:boundary"],
-             id when is_binary(id) <- ext["claude-headless:tool_use_id"],
-             command when is_binary(command) and command != "" <-
-               ext["claude-headless:command"] do
+        with {"start", id, command} <- command_start(ext),
+             true <- is_binary(id),
+             true <- is_binary(command) and command != "" do
           Map.put(acc, id, command)
         else
           _other -> acc
@@ -1022,12 +1029,25 @@ defmodule Shoestring.Elves.TerminalCheckpoint do
         status = if ext["claude-headless:is_error"] == true, do: "failed", else: "completed"
         {status, Map.fetch!(started, ext["claude-headless:tool_use_id"])}
 
+      ext["opencode-acp:boundary"] == "end" and
+          is_binary(Map.get(started, ext["opencode-acp:tool_call_id"])) ->
+        status = if ext["opencode-acp:status"] == "failed", do: "failed", else: "completed"
+        {status, Map.fetch!(started, ext["opencode-acp:tool_call_id"])}
+
       true ->
         nil
     end
   end
 
   defp command_outcome(_payload, _started), do: nil
+
+  defp command_start(%{"claude-headless:boundary" => boundary} = ext),
+    do: {boundary, ext["claude-headless:tool_use_id"], ext["claude-headless:command"]}
+
+  defp command_start(%{"opencode-acp:boundary" => boundary} = ext),
+    do: {boundary, ext["opencode-acp:tool_call_id"], ext["opencode-acp:command"]}
+
+  defp command_start(_ext), do: nil
 
   defp bounded_command(command) do
     command = command |> String.replace(~r/\s+/, " ") |> String.trim()

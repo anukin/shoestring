@@ -10,7 +10,7 @@ defmodule Shoestring.Harness.SessionTables do
   """
   use GenServer
 
-  @tables [:claude_headless_sessions, :codex_app_server_sessions]
+  @tables [:claude_headless_sessions, :codex_app_server_sessions, :opencode_acp_sessions]
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
