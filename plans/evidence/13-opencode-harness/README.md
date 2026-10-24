@@ -7,11 +7,15 @@ replaced with `REPO`.
 
 ## Status
 
-Package A is **incomplete**. Everything that needs no inference is recorded
-below (VERIFIED, command output from this run). The prompt stream, permission
-requests, tool-call process tree, cancellation of a running tool and resume
-after a prompt are UNVERIFIED: the stored OpenAI integration is rejected by the
-provider (see "Authentication"), and Shoestring never signs in for opencode.
+Packages A–F are implemented and the gate is green. Everything that needs no
+inference is VERIFIED against the real opencode 2.0.31, including the
+sandboxed launch through the real adapter. The prompt stream (agent messages,
+tool calls, permission requests), a completed task, cancellation of a running
+tool, the process groups of opencode's tools and resume after a prompt are
+UNVERIFIED with a real model: every provider integration on this machine is
+rejected (see "Authentication"), and Shoestring never signs in for opencode.
+They are built against the published ACP schema and covered by hermetic tests
+over real stdio against a scripted stand-in.
 
 Inference used: none. Every prompt attempt was refused before any model call.
 
@@ -73,13 +77,95 @@ VERIFIED.
 VERIFIED. `opencode auth list` shows `OpenAI  OAuth  stored`. A prompt on
 `openai/gpt-5.4-mini` over ACP returns error `-32000` "Authentication
 required: provider authentication required" in 0.3 s; `opencode run
---standalone` returns `provider.auth` "Request failed: 401". The stored login
-is stale. This is also the needs-sign-in signal the adapter should classify:
-it arrives before any model call, so it costs no inference. Detecting it
-without a prompt was not found.
+--standalone` returns `provider.auth` "Request failed: 401". The free models
+(`opencode/…-free`) fail the same way: opencode's own providers go through an
+OpenCode Console API key, and the provider answers `401 api_key_expired`
+("Create a new API key in OpenCode Console … Signing in again will not renew
+this key"). So no model is usable here until the user renews a login.
 
-## Next
+This is also the needs-sign-in signal the adapter classifies
+(`:authentication_required`, code `provider_auth_required`): it arrives before
+any model call, so it costs no inference. Detecting it without a prompt was
+not found.
 
-The user re-signs in (`opencode auth login`, OpenAI). Then, within a stated
-budget: one small edit, one cancellation during a running `sleep`, one resume
-from a new acp process; record redacted frames and the tool process tree.
+## Sandbox findings (VERIFIED, real opencode 2.0.31, no inference)
+
+The adapter wraps `opencode acp` in `sandbox-exec` with a profile built from
+Shoestring's paths (`OpencodeAcp.Sandbox`). Checked by running the real
+binary under the generated profile in a scratch private run worktree:
+
+- With home reads denied, `session/new` failed (`-32603` "Internal service
+  failure"). Removing rules one at a time, then dropping home entries one at a
+  time until only the required ones remained, showed opencode reads
+  `~/.claude` and `~/.agents` when a session starts. Allowing those would
+  expose Claude's settings and transcripts to the agent's shell, so instead
+  `HOME` points at the run's temporary directory and the XDG variables at
+  opencode's real data, state, cache and config directories
+  (`OPENCODE_DISABLE_CLAUDE_CODE` and `OPENCODE_DISABLE_AUTOUPDATE` are also
+  set). `initialize`, `session/new` and the model selection then succeed.
+- A prompt under the profile then hung with no response:
+  opencode's log showed `EPERM … lstat` on its global `AGENTS.md`, which on
+  this machine is a symlink to a file elsewhere under home, followed by
+  "Instruction initialization blocked by unavailable sources" and no reply.
+  The profile now allows reading the resolved targets of symlinks at the top
+  of opencode's config directory, and nothing else under home.
+- Through the real adapter (`OpencodeAcp.start/2` with `sandbox: true`, model
+  `opencode/glm-5.3-flash-free`): the run reported one `:error` event,
+  `authentication_required/provider_auth_required`, 612 ms after the prompt
+  was sent, and no opencode process remained afterwards.
+- Hermetic enforcement check (`sandbox_test.exs`, real `sandbox-exec` on a
+  shell): writes to the worktree, opencode's data directory and the run's
+  temporary directory succeed; writes to the source repository, elsewhere in
+  home and the shared temporary directory are refused; `git status` inside the
+  worktree reads its private store (fails without the store rule, checked by
+  removing it).
+
+## Design decisions
+
+- Transport `opencode acp`; the Elf adopts the acp process group
+  (`process_owner: :adapter`). Cancellation and release reap every process
+  group under it, plus groups remembered while it was alive, because the
+  server child leads its own group and the Elf kills the acp group before
+  releasing the adapter on a verdict (regression test fails without the
+  remembered groups).
+- Permission requests: allowed once only when the adapter built the sandbox,
+  refused otherwise; a caller cannot claim a sandbox through options.
+- Resume is implemented (`session/resume`) but `:resume` is not declared:
+  a resumed prompt's completion is unverified (the Claude adapter's
+  precedent).
+- Effort: opencode's effort values differ per model (VERIFIED above), so a
+  role cannot pin one; the session applies an effort only when the model
+  offers it.
+- Capacity: honest unknown, tier `reactive_only`. Admission records that
+  reading, so opencode tasks ask for the usual confirmation. Nothing maps to
+  `quota_refused`.
+- Collection windows (package F decision): an opencode task on an `openai/…`
+  model waits while a Codex collection window is open, and starts once it is
+  closed. opencode runs are never bracketed, so never calibration examples.
+- Doctor reads only `opencode --version` (VERIFIED not to start the
+  background server); sign-in is not detectable, so a tested opencode is
+  `unknown`, never `ready`.
+
+## Gate
+
+`mix precommit` in the worktree (`9daa7fb` plus the CLI test commit), seed
+893299: 4 doctests, 2534 tests, 0 failures, 3 skipped (the existing one plus
+the two withheld-resume contract tests), 6 excluded; Rust 4 + 5; Node 52/52
+and 14/14.
+
+## Regression check (base `1b9a2ed`)
+
+The tests that use only pre-existing modules were copied onto the base and
+fail there for behavioural reasons (5 of 5): the dataset row's provider is
+`unknown`; `models add opencode` is refused as an unknown provider; the
+catalog has no `opencode` list; `agents create` with an opencode worker gives
+no coordinator refusal; the checkpoint names no opencode command outcome or
+unfinished call. The adapter, session, sandbox, admission, lease-spend and
+UI tests exercise new modules and are new-feature tests.
+
+## Not done
+
+- A live prompt, cancellation of a running tool, the tools' process groups
+  and resume: UNVERIFIED until the user renews an opencode login
+  (`opencode auth login`; an OpenCode Console key covers the free models).
+- Manual runs from the Runs page do not offer opencode (plan tasks only).
