@@ -1508,6 +1508,9 @@ defmodule Shoestring.Cobbler.Handoffs do
         id when id in ["claude", "claude_headless_stream_json"] ->
           {:ok, Shoestring.Harness.ClaudeHeadless.identity()}
 
+        id when id in ["opencode", "opencode_acp"] ->
+          {:ok, Shoestring.Harness.OpencodeAcp.identity()}
+
         id when id in ["fake", "shoestring.harness.fake"] ->
           {:ok, Shoestring.Harness.Fake.identity()}
 

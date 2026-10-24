@@ -390,6 +390,11 @@ defmodule Shoestring.CLI.Follow do
       "(config :shoestring, :capacity_monitors)."
   end
 
+  defp waiting_reason(%{"reason" => "codex_collection_window_open"}),
+    do:
+      "its openai/ opencode model shares the ChatGPT subscription a Codex collection " <>
+        "window is measuring. It starts once that window is closed."
+
   defp waiting_reason(%{"reason" => reason, "provider_id" => provider}),
     do:
       "capacity for #{provider} could not be checked (#{reason}); the service retries every minute."

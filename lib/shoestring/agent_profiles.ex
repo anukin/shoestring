@@ -14,20 +14,29 @@ defmodule Shoestring.AgentProfiles do
 
     %{
       "claude" => Settings.model_ids(settings.claude_models),
-      "codex" => Settings.model_ids(settings.codex_models)
+      "codex" => Settings.model_ids(settings.codex_models),
+      "opencode" => Settings.model_ids(settings.opencode_models)
     }
   end
 
   # Explicit reasoning effort per provider CLI. A role without one runs at the
   # provider's own default, which the role cannot pin. Claude 2.1.309 lists
   # these values for `--effort`; Codex turn/start takes a model-advertised
-  # value, so only the widely advertised levels are offered.
+  # value, so only the widely advertised levels are offered. opencode's effort
+  # values differ per model (iteration 13 preflight), so it has no stable set
+  # and a role cannot pin one.
   @efforts %{
     "claude" => ~w(low medium high xhigh max),
-    "codex" => ~w(low medium high xhigh)
+    "codex" => ~w(low medium high xhigh),
+    "opencode" => []
   }
 
   def efforts, do: @efforts
+
+  # Providers that may run plan tasks only: planning and review stay on the
+  # Claude and Codex paths.
+  @worker_only ~w(opencode)
+  def worker_only, do: @worker_only
 
   def template do
     catalog = catalog()

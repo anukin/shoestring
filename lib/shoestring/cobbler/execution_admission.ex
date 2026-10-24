@@ -20,6 +20,8 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
     scope = Application.get_env(:shoestring, :run_submission_scope, "subscription")
 
     with %{} <- profile,
+         :ok <- codex_collection_clear(profile, scope),
+         :ok <- record_unobservable(profile, scope),
          {:ok, observed} <-
            WakeupObserve.observe(%{provider_id: profile["provider"], scope: scope}),
          {:ok, snapshot} <-
@@ -102,6 +104,35 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
         {:error, {:execution_admission_blocked, :execution_profile_required}}
     end
   end
+
+  # opencode exposes no capacity reading and has no monitor, so the
+  # Observatory would never hold one and admission would wait forever. The
+  # adapter's honest unknown reading is recorded instead; admission then asks
+  # for the usual attributable confirmation, never admitting on its own.
+  defp record_unobservable(%{"provider" => "opencode"}, scope) do
+    {:ok, snapshot} = Shoestring.Harness.OpencodeAcp.probe(%{scope: scope})
+
+    case Shoestring.Harness.Observatory.ingest(snapshot) do
+      {:ok, _outcome, _snapshot} -> :ok
+      {:error, _reason} -> {:error, :observation_unavailable}
+    end
+  end
+
+  defp record_unobservable(_profile, _scope), do: :ok
+
+  # An `openai/…` opencode model draws on the ChatGPT subscription Codex
+  # measures, and Shoestring cannot see that use. While a Codex collection
+  # window is open such a run would be unattributed external use inside it, so
+  # it waits until the window is closed.
+  defp codex_collection_clear(%{"provider" => "opencode", "model" => "openai/" <> _}, scope) do
+    open =
+      Shoestring.Measurement.Collection.list()
+      |> Enum.any?(&(&1.provider == "codex" and &1.scope == scope and is_nil(&1.closed_at)))
+
+    if open, do: {:error, :codex_collection_window_open}, else: :ok
+  end
+
+  defp codex_collection_clear(_profile, _scope), do: :ok
 
   # A failure before any admission decision (no capacity reading for the
   # provider, for example) would otherwise leave nothing a human can see:

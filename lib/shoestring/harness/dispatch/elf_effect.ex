@@ -54,7 +54,15 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
   @behaviour Shoestring.Harness.Dispatch.Effect
 
   alias Shoestring.Elves
-  alias Shoestring.Harness.{ClaudeHeadless, CodexAppServer, DispatchRecord, Fake, RunRecord}
+
+  alias Shoestring.Harness.{
+    ClaudeHeadless,
+    CodexAppServer,
+    DispatchRecord,
+    Fake,
+    OpencodeAcp,
+    RunRecord
+  }
 
   @impl true
   def perform(%RunRecord{} = run, %DispatchRecord{} = dispatch) do
@@ -135,6 +143,14 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
   # configured an explicit launch (`:command`, as the live drivers do). Manual
   # runs share Git storage and keep their previous launch.
   defp sandbox_plan_run(adapter_opts, ClaudeHeadless) do
+    if Map.has_key?(adapter_opts, :command),
+      do: adapter_opts,
+      else: Map.put_new(adapter_opts, :sandbox, true)
+  end
+
+  # opencode has no sandbox of its own: every plan-bound opencode run is
+  # OS-sandboxed unless the operator configured an explicit launch.
+  defp sandbox_plan_run(adapter_opts, OpencodeAcp) do
     if Map.has_key?(adapter_opts, :command),
       do: adapter_opts,
       else: Map.put_new(adapter_opts, :sandbox, true)
@@ -225,6 +241,16 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
        adapter: ClaudeHeadless,
        process_owner: :adapter,
        command: ["claude", "--print", "--verbose", "--output-format", "stream-json"],
+       adapter_opts: %{live: true}
+     ]}
+  end
+
+  defp provider_defaults("opencode_acp") do
+    {:ok,
+     [
+       adapter: OpencodeAcp,
+       process_owner: :adapter,
+       command: ["opencode", "acp"],
        adapter_opts: %{live: true}
      ]}
   end

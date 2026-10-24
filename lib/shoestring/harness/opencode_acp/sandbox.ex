@@ -8,15 +8,24 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
   - **Writes.** The run worktree and its private Git storage (the roots
     `GitSandbox.policy/3` returns for a registered run worktree), opencode's
     own data, state and cache directories (its session database lives there),
-    the temporary directory, and the standard `/dev` sinks. The source
-    repository is never writable.
+    a fresh temporary directory for this run (`TMPDIR` points at it), and the
+    standard `/dev` sinks. The source repository is never writable.
   - **Reads.** The rest of the home directory is unreadable except those
-    paths, opencode's configuration directory and its install directory.
+    paths, opencode's configuration directory (and the targets of symlinks at
+    its top level: an `AGENTS.md` linked elsewhere is read through its real
+    path, and a denied read makes opencode hang the prompt — VERIFIED, 2.0.31)
+    and its install directory.
     opencode reads its own login from its data directory; Shoestring never
     opens it.
   - **Network.** Allowed: opencode must reach its model provider.
-  - **Environment.** Git gets the home-free configuration Elves use and
-    Python writes no bytecode.
+  - **Environment.** `HOME` and `TMPDIR` are the run's temporary directory
+    and the XDG variables name opencode's real directories, so opencode keeps
+    its own login and configuration while home-relative lookups find nothing.
+    opencode otherwise reads `~/.claude` and `~/.agents` when a session starts
+    (VERIFIED, 2.0.31: `session/new` fails with those reads denied) — Claude's
+    settings and transcripts must not be readable by the agent. Claude Code
+    compatibility and self-update are switched off, Git gets the home-free
+    configuration Elves use, and Python writes no bytecode.
 
   Anything else (another platform, a worktree that is not a private run
   worktree, a path the profile cannot quote) refuses the launch; there is no
@@ -54,15 +63,13 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
          {:ok, executable} <- executable(Keyword.get(opts, :executable)),
          {:ok, roots} <- roots(workdir, workspace_ref, root),
          paths = opencode_paths(home, env),
-         tmp = GitSandbox.physical_path(System.tmp_dir!()),
+         {:ok, tmp} <- temp_dir(),
          {:ok, profile} <- profile(roots, paths, install_dir(executable), tmp, home) do
       {:ok,
        %{
          command: sandbox_exec,
          args: ["-p", profile, executable, "acp"],
-         env:
-           ClaudeSandbox.env()
-           |> Enum.reject(&(elem(&1, 0) == "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")),
+         env: env(tmp, paths),
          identity:
            "macos_seatbelt:v#{@profile_version}:sha256:" <>
              (:crypto.hash(:sha256, profile) |> Base.encode16(case: :lower))
@@ -93,10 +100,59 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
     end
   end
 
+  # Symlinks at the top of opencode's configuration directory, resolved to
+  # their real paths. opencode follows them; nothing else under home becomes
+  # readable.
+  defp config_links(config) do
+    case File.ls(config) do
+      {:ok, names} ->
+        for name <- names,
+            path = Path.join(config, name),
+            {:ok, %File.Stat{type: :symlink}} <- [File.lstat(path)],
+            target = GitSandbox.physical_path(path),
+            File.exists?(target),
+            do: target
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  defp env(tmp, paths) do
+    [
+      {"HOME", tmp},
+      {"TMPDIR", tmp},
+      {"XDG_DATA_HOME", Path.dirname(paths.data)},
+      {"XDG_STATE_HOME", Path.dirname(paths.state)},
+      {"XDG_CACHE_HOME", Path.dirname(paths.cache)},
+      {"XDG_CONFIG_HOME", Path.dirname(paths.config)},
+      {"OPENCODE_DISABLE_CLAUDE_CODE", "1"},
+      {"OPENCODE_DISABLE_AUTOUPDATE", "1"}
+    ] ++
+      Enum.reject(
+        ClaudeSandbox.env(),
+        &(elem(&1, 0) == "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
+      )
+  end
+
+  defp temp_dir do
+    dir =
+      System.tmp_dir!()
+      |> GitSandbox.physical_path()
+      |> Path.join("shoestring-opencode-#{Ecto.UUID.generate()}")
+
+    case File.mkdir(dir) do
+      :ok -> {:ok, dir}
+      {:error, _} -> {:error, :temp_dir_unavailable}
+    end
+  end
+
   # opencode follows the XDG base directories (`opencode debug paths`).
   defp opencode_paths(home, env) do
     xdg = fn name, default ->
-      Path.join(Map.get(env, name) || Path.join(home, default), "opencode")
+      (Map.get(env, name) || Path.join(home, default))
+      |> Path.join("opencode")
+      |> GitSandbox.physical_path()
     end
 
     %{
@@ -112,8 +168,11 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
   defp install_dir(executable), do: executable |> Path.dirname() |> Path.dirname()
 
   defp profile(roots, paths, install, tmp, home) do
+    # Roots are the worktree, its gitdir, then <store>/objects and refs; Git
+    # reads the rest of the private store (config, HEAD) too.
+    store = roots |> Enum.at(2) |> Path.dirname()
     writable = roots ++ [paths.data, paths.state, paths.cache, tmp]
-    readable = writable ++ [paths.config, install]
+    readable = writable ++ [store, paths.config, install] ++ config_links(paths.config)
 
     if Enum.all?([home | readable], &quotable?/1) do
       sinks = Enum.map_join(@dev_sinks, " ", &"(literal #{q(&1)})")

@@ -1,7 +1,7 @@
 defmodule Shoestring.Cobbler.ExecutionProfile do
   @moduledoc "Immutable saved-agent selection for one approved execution."
   alias Shoestring.AgentProfiles.Revision
-  alias Shoestring.Harness.{ClaudeHeadless, CodexAppServer}
+  alias Shoestring.Harness.{ClaudeHeadless, CodexAppServer, OpencodeAcp}
 
   @key "shoestring.agent:binding"
   def key, do: @key
@@ -98,6 +98,7 @@ defmodule Shoestring.Cobbler.ExecutionProfile do
 
   defp adapter("codex"), do: {:ok, CodexAppServer}
   defp adapter("claude"), do: {:ok, ClaudeHeadless}
+  defp adapter("opencode"), do: {:ok, OpencodeAcp}
   defp adapter(_), do: {:error, :unsupported_execution_provider}
   defp value(attrs, key), do: Map.get(attrs, key, Map.get(attrs, Atom.to_string(key)))
 

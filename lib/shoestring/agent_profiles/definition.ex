@@ -43,6 +43,17 @@ defmodule Shoestring.AgentProfiles.Definition do
       Enum.any?(roles, &(&1.model not in Map.get(catalog, &1.provider, []))) ->
         add_error(changeset, :roles, "choose models from the current provider configuration")
 
+      Enum.any?(
+        roles,
+        &(&1.name in ["Coordinator", "Reviewer"] and
+              &1.provider in Shoestring.AgentProfiles.worker_only())
+      ) ->
+        add_error(
+          changeset,
+          :roles,
+          "opencode runs plan tasks only; plan and review with Claude or Codex"
+        )
+
       true ->
         changeset
     end

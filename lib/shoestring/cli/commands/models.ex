@@ -10,12 +10,14 @@ defmodule Shoestring.CLI.Commands.Models do
 
   The same provider model lists as Settings in the web UI. Agent roles may only
   name a listed model, and execution needs one other than `default`. PROVIDER
-  is `claude` or `codex`; MODEL is the name the provider CLI accepts (for
-  example `opus`). Starts only the repository; nothing runs. Output is JSON on
-  stdout (`--json` is accepted and changes nothing).
+  is `claude`, `codex` or `opencode`; MODEL is the name the provider CLI
+  accepts (for example `opus`, or `provider/model` for opencode, as
+  `opencode models` lists them). opencode runs plan tasks only. Starts only
+  the repository; nothing runs. Output is JSON on stdout (`--json` is accepted
+  and changes nothing).
   """
 
-  @fields %{"claude" => :claude_models, "codex" => :codex_models}
+  @fields %{"claude" => :claude_models, "codex" => :codex_models, "opencode" => :opencode_models}
 
   def help, do: @help
 

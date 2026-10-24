@@ -1532,12 +1532,17 @@ defmodule Shoestring.Elves.Elf do
     else
       case resolve_session(state) do
         nil ->
-          # No Codex session: a live Claude session gets a direct safe-stop
-          # request (the Codex-typed LeaseBoundary cannot carry it); with
-          # neither, the stop stays virtual as before (Fake/test legs).
+          # No Codex session: a live Claude or opencode session gets a direct
+          # safe-stop request (the Codex-typed LeaseBoundary cannot carry
+          # it); with neither, the stop stays virtual as before (Fake/test
+          # legs).
           case resolve_live_session(state) do
             {:claude, pid} ->
               _ = safe_session_stop(Shoestring.Harness.ClaudeHeadless.Session, pid)
+              %{state | lease_stop_requested?: true}
+
+            {:opencode, pid} ->
+              _ = safe_session_stop(Shoestring.Harness.OpencodeAcp.Session, pid)
               %{state | lease_stop_requested?: true}
 
             _other ->
@@ -1593,7 +1598,7 @@ defmodule Shoestring.Elves.Elf do
 
   # Adapter-covering session resolution for paths that stop either
   # provider's session directly (decline, quiet-exit liveness): Codex
-  # first, then Claude, dispatch id before run id within each.
+  # first, then Claude, then opencode, dispatch id before run id within each.
   defp resolve_live_session(state) do
     cond do
       pid = lookup_session_ids(state, &Shoestring.Harness.CodexAppServer.lookup_session/1) ->
@@ -1601,6 +1606,9 @@ defmodule Shoestring.Elves.Elf do
 
       pid = lookup_session_ids(state, &Shoestring.Harness.ClaudeHeadless.lookup_session/1) ->
         {:claude, pid}
+
+      pid = lookup_session_ids(state, &Shoestring.Harness.OpencodeAcp.lookup_session/1) ->
+        {:opencode, pid}
 
       true ->
         :none
@@ -1868,8 +1876,8 @@ defmodule Shoestring.Elves.Elf do
 
   # A declined run sleeps durably — no further execution may start. Ask a
   # live session to stop (it only pends at the session and resolves at the
-  # turn outcome, so nothing is interrupted). Either provider (Codex
-  # or Claude); virtual when no live session is resolvable (Fake/test
+  # turn outcome, so nothing is interrupted). Any provider (Codex,
+  # Claude or opencode); virtual when no live session is resolvable (Fake/test
   # legs): there is nothing to stop, and the quiet-exit below ends
   # supervision once the buffer drains.
   defp request_decline_stop(state) do
@@ -1880,6 +1888,10 @@ defmodule Shoestring.Elves.Elf do
 
       {:claude, pid} ->
         _ = safe_session_stop(Shoestring.Harness.ClaudeHeadless.Session, pid)
+        state
+
+      {:opencode, pid} ->
+        _ = safe_session_stop(Shoestring.Harness.OpencodeAcp.Session, pid)
         state
 
       :none ->

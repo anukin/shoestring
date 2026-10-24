@@ -337,7 +337,7 @@ defmodule Shoestring.Harness.OpencodeAcp do
 
     {tier, compatibility, confidence, reason} =
       case state do
-        :unknown -> {:reactive_only, :compatible, :low, "opencode_no_capacity_signal"}
+        :unknown -> {:reactive_only, :compatible, :none, "opencode_no_capacity_signal"}
         :incompatible -> {:unsupported, :incompatible, :none, "cli_incompatible"}
       end
 

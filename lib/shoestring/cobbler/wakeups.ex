@@ -1485,6 +1485,8 @@ defmodule Shoestring.Cobbler.Wakeups do
   defp identity_for_provider("codex_app_server_stdio"), do: {:ok, CodexAppServer.identity()}
   defp identity_for_provider("claude"), do: {:ok, ClaudeHeadless.identity()}
   defp identity_for_provider("claude_headless_stream_json"), do: {:ok, ClaudeHeadless.identity()}
+  defp identity_for_provider("opencode"), do: {:ok, Shoestring.Harness.OpencodeAcp.identity()}
+  defp identity_for_provider("opencode_acp"), do: {:ok, Shoestring.Harness.OpencodeAcp.identity()}
   defp identity_for_provider("fake"), do: {:ok, Fake.identity()}
   defp identity_for_provider("shoestring.harness.fake"), do: {:ok, Fake.identity()}
   defp identity_for_provider(other), do: {:error, {:unknown_provider, other}}
