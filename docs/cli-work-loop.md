@@ -7,8 +7,21 @@ anything runs, and you take the result into your repository yourself.
 
 ## One-time setup
 
+With an installed release (Homebrew), `shoestring` is already on your `PATH`:
+
 ```sh
-# 1. Put the wrapper on your PATH (it runs this checkout's Mix tasks).
+shoestring init                 # create the state directory
+shoestring doctor --probe-providers   # is the claude CLI installed, signed in, tested?
+shoestring models add claude opus
+shoestring agents create builder --worker claude:opus --default
+shoestring start                # in another terminal; leave it running
+```
+
+From a source checkout, the wrapper runs the same commands with this
+checkout's code and state:
+
+```sh
+# 1. Put the wrapper on your PATH.
 ln -s "$PWD/bin/shoestring" /usr/local/bin/shoestring   # or add bin/ to PATH
 
 # 2. Allow a Claude model for agents (Settings in the web UI does the same).
@@ -23,7 +36,9 @@ mix phx.server
 
 `do` refuses to queue work unless the service it reaches reports the same
 database it uses (`/health` carries a fingerprint of the database path), so
-run both from this checkout or give both the same `SHOESTRING_STATE_DIR`.
+give both the same state directory: the installation's default, or the same
+`SHOESTRING_STATE_DIR`. Output streams, `--json` and exit statuses are in
+[the CLI output contract](cli-output.md).
 
 ## Using it
 

@@ -37,6 +37,17 @@ def smoke(release, state):
         assert result.returncode == 0, f"Release {args[0]} failed (see local smoke logs)"
         return result.stdout.decode()
 
+    def refused(*args):
+        """A work command's refusal: exit 1, one line on stderr, nothing on stdout."""
+        result = subprocess.run([command, *args], env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        lines = result.stderr.decode().splitlines()
+        assert result.returncode == 1 and result.stdout == b"" and len(lines) == 1, \
+            f"Release {args[0]} did not refuse in one line"
+        return lines[0]
+
+    assert refused("goals", "list").startswith("No Shoestring database in the state directory.")
+    assert not (state / "shoestring.db").exists(), "A work command created state"
     before = json.loads(run("doctor"))
     assert before["database"] == "needs_init"
     assert before["endpoint_secret"] == "missing_or_invalid"
@@ -48,6 +59,11 @@ def smoke(release, state):
     doctor = json.loads(run("doctor"))
     assert doctor["database"] == "ok" and doctor["helper"] == "compatible"
     assert doctor["endpoint_secret"] == "private"
+    assert doctor["agents"]["claude"]["readiness"] in ("not_checked", "binary_missing")
+    goal = json.loads(run("goals", "create", "--title", "Smoke goal", "--json"))
+    assert [item["id"] for item in json.loads(run("goals", "list", "--json"))] == [goal["id"]]
+    assert json.loads(run("agents", "list", "--json")) == []
+    assert "shoestring do" in run("do", "--help")
     preview = json.loads(run("diagnostics-preview"))
     export = state / "diagnostics.json"
     run("diagnostics-export", str(export), preview["confirmation_sha256"])
@@ -84,10 +100,12 @@ def smoke(release, state):
         finally:
             process.terminate()
             process.wait(timeout=30)
+    assert refused("follow", goal["id"]).startswith("The Shoestring service is not running.")
     assert not (state / "unexpected.log").exists(), "A provider or system toolchain was invoked"
     print(json.dumps({"initialized": True, "secret_private_and_persistent": True,
                       "helper": doctor["helper"], "database": doctor["database"],
                       "health_http": 200, "ui_http": 200, "diagnostic_export": "confirmed_private",
+                      "work_commands": "goals_agents_refusals",
                       "provider_or_toolchain_launches": 0, "clean_machine": "not_verified"}, sort_keys=True))
 
 

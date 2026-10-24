@@ -15,7 +15,15 @@ defmodule Shoestring.Release.LauncherTest do
     File.cp!(@launcher, Path.join(dir, "bin/shoestringctl"))
     File.chmod!(Path.join(dir, "bin/shoestringctl"), 0o755)
     runtime = Path.join(dir, "bin/shoestring")
-    File.write!(runtime, "#!/bin/sh\necho runtime-ran \"$@\"\n")
+
+    File.write!(runtime, """
+    #!/bin/sh
+    echo runtime-ran "$@"
+    echo probe="${SHOESTRING_DOCTOR_PROBE_PROVIDERS:-}"
+    read -r line && echo stdin="$line"
+    exit 0
+    """)
+
     File.chmod!(runtime, 0o755)
     File.write!(Path.join(dir, "lib/shoestring-0.0.0/priv/release_launcher.py"), "")
 
@@ -52,5 +60,40 @@ defmodule Shoestring.Release.LauncherTest do
       assert status == 0
       assert output =~ "runtime-ran eval"
     end
+  end
+
+  test "work commands run the shared CLI with their arguments and an open stdin", %{tmp_dir: dir} do
+    ctl = release!(dir, %{})
+
+    for args <- [["do", "fix the bug", "--no-follow"], ["follow", "GOAL"], [], ["help"]] do
+      quoted = Enum.map_join([ctl | args], " ", &Shoestring.Shell.argument/1)
+      {output, 0} = System.cmd("sh", ["-c", "printf 'y\\n' | " <> quoted], stderr_to_stdout: true)
+
+      expected =
+        Enum.join(["runtime-ran eval Shoestring.CLI.Main.main(System.argv())" | args], " ")
+
+      assert output =~ expected <> "\n"
+
+      assert output =~ "stdin=y"
+    end
+  end
+
+  test "doctor takes --probe-providers and --json in any order, nothing else", %{tmp_dir: dir} do
+    ctl = release!(dir, %{})
+
+    for {args, probe} <- [
+          {["doctor"], ""},
+          {["doctor", "--json"], ""},
+          {["doctor", "--probe-providers", "--json"], "1"},
+          {["doctor", "--json", "--probe-providers"], "1"}
+        ] do
+      {output, 0} = run(ctl, args)
+      assert output =~ "runtime-ran eval Shoestring.Release.doctor()"
+      assert output =~ "probe=#{probe}\n"
+      refute output =~ "stdin="
+    end
+
+    {output, 2} = run(ctl, ["doctor", "--verbose"])
+    assert output == "Usage: shoestring doctor [--probe-providers] [--json]\n"
   end
 end

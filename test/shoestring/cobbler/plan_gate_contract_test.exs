@@ -439,6 +439,62 @@ defmodule Shoestring.Cobbler.PlanGateContractTest do
     assert String.trim(pwd) == source
   end
 
+  test "result and checks print data on stdout, descriptions on stderr, and the same as JSON",
+       c do
+    {first, opts} = start!(c, [@unit], "    return a + b\n")
+    assert {:ok, %{disposition: :accepted}} = complete(c, first, opts)
+    assert {:ok, _} = Cobbler.advance_plan_execution(c.goal.id, opts)
+    cli = fn argv -> Shoestring.CLI.Main.run(argv, shell: Mix.Shell.Process) end
+
+    assert cli.(["result", c.goal.id, "--json"]) == 0
+    assert {[json], []} = streams()
+    result = Jason.decode!(json)
+    assert result["commit"] =~ ~r/\A[0-9a-f]{40}\z/
+    assert result["take"] |> List.last() == "git merge FETCH_HEAD"
+    assert [%{"exit_status" => 0, "required" => true}] = result["checks"]
+
+    assert cli.(["result", c.goal.id]) == 0
+    assert {text, []} = streams()
+    assert "Result: #{result["commit"]}" in text
+    assert "  git merge FETCH_HEAD" in text
+
+    assert cli.(["checks", c.goal.id, "--json"]) == 0
+    assert {[json], []} = streams()
+    assert %{"goal_id" => goal_id, "checks" => [check | _] = checks} = Jason.decode!(json)
+    assert goal_id == c.goal.id
+    assert Enum.map(checks, & &1["number"]) == Enum.to_list(1..length(checks))
+    assert check["result"] == "passed" and check["scope"] == "task"
+
+    assert cli.(["checks", c.goal.id]) == 0
+    assert {lines, []} = streams()
+    assert length(lines) == length(checks)
+
+    # --output: the recorded bytes alone on stdout; what they are on stderr.
+    assert cli.(["checks", c.goal.id, "--output", "1"]) == 0
+    assert {[bytes], [line, label]} = streams()
+    assert line =~ "1. task alpha attempt 1: "
+    assert label =~ ~r/\AOutput \(\d+ bytes, redacted, sha256 [0-9a-f]{64}\):\z/
+    refute bytes =~ "sha256"
+    refute bytes =~ "task alpha attempt 1"
+    assert bytes =~ "OK"
+
+    assert cli.(["checks", c.goal.id, "--output", "1", "--json"]) == 0
+    assert {[json], []} = streams()
+    output = Jason.decode!(json)
+    assert output["output"] == bytes and output["encoding"] == "utf-8"
+    assert output["sha256"] == Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
+    assert output["check"] == check
+  end
+
+  defp streams(stdout \\ [], stderr \\ []) do
+    receive do
+      {:mix_shell, :info, [line]} -> streams([line | stdout], stderr)
+      {:mix_shell, :error, [line]} -> streams(stdout, [line | stderr])
+    after
+      0 -> {Enum.reverse(stdout), Enum.reverse(stderr)}
+    end
+  end
+
   defp start!(c, gates, body) do
     base = head_of!(c.source)
 
@@ -485,19 +541,14 @@ defmodule Shoestring.Cobbler.PlanGateContractTest do
     do: Cobbler.complete_plan_task_run(c.goal.id, dispatched.run_id, opts)
 
   defp checks(goal_id, output \\ nil) do
-    Mix.shell(Mix.Shell.Process)
-
-    try do
-      :ok = Checks.show(goal_id, output: output)
-      collect([])
-    after
-      Mix.shell(Mix.Shell.IO)
-    end
+    :ok = Checks.show(goal_id, output: output, shell: Mix.Shell.Process)
+    collect([])
   end
 
+  # stdout and stderr lines, in the order they were written.
   defp collect(acc) do
     receive do
-      {:mix_shell, :info, [line]} -> collect([line | acc])
+      {:mix_shell, stream, [line]} when stream in [:info, :error] -> collect([line | acc])
     after
       0 -> acc |> Enum.reverse() |> Enum.join("\n")
     end

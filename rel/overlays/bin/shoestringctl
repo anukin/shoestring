@@ -29,8 +29,15 @@ case "${1:-}" in
     ;;
   init) exec python3 "$launcher" "$runtime" init < /dev/null ;;
   doctor)
-    if test "$#" -eq 2 && test "$2" = "--probe-providers"; then export SHOESTRING_DOCTOR_PROBE_PROVIDERS=1;
-    elif test "$#" -ne 1; then echo "Usage: shoestringctl doctor [--probe-providers]" >&2; exit 1; fi
+    shift
+    unset SHOESTRING_DOCTOR_PROBE_PROVIDERS
+    for flag in "$@"; do
+      case $flag in
+        --probe-providers) export SHOESTRING_DOCTOR_PROBE_PROVIDERS=1 ;;
+        --json) ;;
+        *) echo "Usage: shoestring doctor [--probe-providers] [--json]" >&2; exit 2 ;;
+      esac
+    done
     exec "$runtime" eval 'Shoestring.Release.doctor()' < /dev/null
     ;;
   diagnostics-preview) exec "$runtime" eval 'Shoestring.Release.diagnostics_preview()' < /dev/null ;;
@@ -51,5 +58,7 @@ case "${1:-}" in
     exec "$runtime" eval 'Shoestring.Release.text_enqueue()' < /dev/null
     ;;
   version) exec "$runtime" version ;;
-  *) echo "Usage: shoestringctl {start|init|doctor|version|text PROVIDER GOAL TASK FILE|diagnostics-preview|diagnostics-export PATH SHA256}" >&2; exit 1 ;;
+  # The work commands (do, follow, result, ...), help and usage. stdin stays
+  # open: `do` asks for approval and `follow` for capacity confirmations.
+  *) exec "$runtime" eval 'Shoestring.CLI.Main.main(System.argv())' "$@" ;;
 esac

@@ -12,6 +12,9 @@ defmodule Shoestring.CLI.Follow do
   task attempt (iteration 7A locked decision) and for the one held
   cross-review call (iteration 8), each after the human answers `y`.
   Everything else that needs a human is described with the command to run.
+
+  All of its output is progress, so it goes to stderr (`error/1`); the
+  command prints the result.
   """
 
   import Ecto.Query
@@ -34,7 +37,7 @@ defmodule Shoestring.CLI.Follow do
   def run(goal_id, opts \\ []) do
     state = %{
       goal_id: goal_id,
-      shell: Keyword.get(opts, :shell, Mix.shell()),
+      shell: Keyword.get(opts, :shell, Shoestring.CLI.Shell),
       by: Keyword.fetch!(opts, :by),
       status: Keyword.get(opts, :status, &ExecutionControl.status/1),
       events: Keyword.get(opts, :events, &events_after/2),
@@ -62,11 +65,11 @@ defmodule Shoestring.CLI.Follow do
 
     case state.status.(state.goal_id) do
       {:ok, %{completed?: true}} ->
-        state.shell.info("Done.")
+        state.shell.error("Done.")
         {:ok, :completed}
 
       {:ok, %{cancelled?: true}} ->
-        state.shell.info("The goal was cancelled.")
+        state.shell.error("The goal was cancelled.")
         {:ok, :cancelled}
 
       {:ok, %{needs_user?: true} = status} ->
@@ -115,7 +118,7 @@ defmodule Shoestring.CLI.Follow do
   end
 
   defp confirm_review(state, review) do
-    state.shell.info(
+    state.shell.error(
       "The review of task #{review.plan_task_id} (attempt #{review.attempt}) by " <>
         "#{review.reviewer}:#{review.model} is held: #{review.reason}"
     )
@@ -135,15 +138,15 @@ defmodule Shoestring.CLI.Follow do
 
       case state.confirm_review.(state.goal_id, attrs) do
         {:ok, _} ->
-          state.shell.info("Confirmed. The service makes the call on its next pass.")
+          state.shell.error("Confirmed. The service makes the call on its next pass.")
           wait(state)
 
         {:error, reason} ->
-          state.shell.info("Not confirmed (#{inspect(reason)}); the review stays held.")
+          state.shell.error("Not confirmed (#{inspect(reason)}); the review stays held.")
           wait(state)
       end
     else
-      state.shell.info(
+      state.shell.error(
         "Left held. Run `shoestring follow #{state.goal_id}` to be asked again; " <>
           "the work stays queued."
       )
@@ -187,7 +190,7 @@ defmodule Shoestring.CLI.Follow do
 
   defp confirm(state, status, task_id, attempt) do
     decision = status.last_admission
-    state.shell.info("Task #{task_id} is held: #{decision["explanation"]}")
+    state.shell.error("Task #{task_id} is held: #{decision["explanation"]}")
 
     answer =
       "Confirm capacity for this one attempt of #{task_id}? [y/N] "
@@ -207,15 +210,15 @@ defmodule Shoestring.CLI.Follow do
 
       case state.confirm.(state.goal_id, attrs) do
         {:ok, _} ->
-          state.shell.info("Confirmed. The service admits it on its next pass.")
+          state.shell.error("Confirmed. The service admits it on its next pass.")
           wait(state)
 
         {:error, reason} ->
-          state.shell.info("Not confirmed (#{inspect(reason)}); the task stays held.")
+          state.shell.error("Not confirmed (#{inspect(reason)}); the task stays held.")
           wait(state)
       end
     else
-      state.shell.info(
+      state.shell.error(
         "Left held. Run `shoestring follow #{state.goal_id}` to be asked again; " <>
           "the work stays queued."
       )
@@ -225,15 +228,15 @@ defmodule Shoestring.CLI.Follow do
   end
 
   defp needs_user(state, status) do
-    state.shell.info("The work needs you:")
+    state.shell.error("The work needs you:")
 
     if failure = status[:global_failure],
-      do: state.shell.info("  The execution failed: #{inspect(failure, limit: 8)}")
+      do: state.shell.error("  The execution failed: #{inspect(failure, limit: 8)}")
 
     for review <- status[:reviews] || [], review.needs_user? do
       task = review.plan_task_id
 
-      state.shell.info(
+      state.shell.error(
         "  The review of task #{task} (attempt #{review.attempt}) #{review_problem(review)}. " <>
           "Decide with `shoestring review accept|reject#{if review.state == "failed" and review.calls < 2, do: "|retry"} " <>
           "#{state.goal_id} #{task} --reason \"...\"`."
@@ -241,13 +244,13 @@ defmodule Shoestring.CLI.Follow do
     end
 
     for blocker <- status[:scope_blockers] || [] do
-      state.shell.info(
+      state.shell.error(
         "  Scope blocker on #{blocker["plan_task_id"] || inspect(blocker, limit: 6)}"
       )
     end
 
-    state.shell.info(
-      "  See `mix shoestring.execution status #{state.goal_id}`; resolve with " <>
+    state.shell.error(
+      "  See `shoestring execution status #{state.goal_id}`; resolve with " <>
         "`resolve-scope`, `replan` or `cancel` as docs/cli-execution.md describes."
     )
   end
@@ -376,7 +379,7 @@ defmodule Shoestring.CLI.Follow do
   defp describe(shell, event) do
     case line(event) do
       nil -> :ok
-      text -> shell.info(text)
+      text -> shell.error(text)
     end
   end
 

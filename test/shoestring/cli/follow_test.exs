@@ -61,6 +61,7 @@ defmodule Shoestring.CLI.FollowTest do
       Keyword.merge(
         [
           by: "human:operator",
+          shell: Mix.Shell.Process,
           sleep: fn -> :ok end,
           max_polls: 20,
           confirm: fn _, _ -> flunk("no confirmation expected") end
@@ -70,10 +71,11 @@ defmodule Shoestring.CLI.FollowTest do
     )
   end
 
-  defp infos do
+  # Follow's progress goes to stderr (`error`).
+  defp stderr_lines do
     Stream.repeatedly(fn ->
       receive do
-        {:mix_shell, :info, [line]} -> line
+        {:mix_shell, :error, [line]} -> line
       after
         0 -> nil
       end
@@ -103,7 +105,7 @@ defmodule Shoestring.CLI.FollowTest do
     status = status_script([running(c), {:ok, %{completed?: true}}])
     assert {:ok, :completed} = follow(c, events: events, status: status)
 
-    assert infos() == [
+    assert stderr_lines() == [
              "Execution requested.",
              "Task alpha: started (attempt 1).",
              "  The worker finished; checking its work.",
@@ -148,7 +150,7 @@ defmodule Shoestring.CLI.FollowTest do
     assert attrs.requested_by == "human:operator"
     assert {:ok, _} = Ecto.UUID.cast(attrs.command_id)
     refute_received {:confirmed, _, _}
-    assert "Task alpha is held: Capacity is unknown." in infos()
+    assert "Task alpha is held: Capacity is unknown." in stderr_lines()
   end
 
   test "declining leaves the attempt held and records nothing", c do
@@ -175,9 +177,9 @@ defmodule Shoestring.CLI.FollowTest do
                  ])
              )
 
-    lines = infos()
+    lines = stderr_lines()
     assert "The work needs you:" in lines
-    assert Enum.any?(lines, &String.contains?(&1, "mix shoestring.execution status #{c.goal.id}"))
+    assert Enum.any?(lines, &String.contains?(&1, "shoestring execution status #{c.goal.id}"))
 
     assert {:ok, :cancelled} =
              follow(c,
@@ -233,7 +235,7 @@ defmodule Shoestring.CLI.FollowTest do
     refute_received {:review_confirmed, _, _}
 
     assert ("The review of task alpha (attempt 1) by codex:gpt-review is held: " <>
-              "support_tier_conservative_partial") in infos()
+              "support_tier_conservative_partial") in stderr_lines()
   end
 
   test "a review that needs a decision ends following with the commands to decide it", c do
@@ -246,7 +248,7 @@ defmodule Shoestring.CLI.FollowTest do
                status: status_script([running(c, %{needs_user?: true, reviews: [escalated]})])
              )
 
-    line = Enum.find(infos(), &String.contains?(&1, "The review of task alpha"))
+    line = Enum.find(stderr_lines(), &String.contains?(&1, "The review of task alpha"))
     assert line =~ "will not be repaired automatically"
     assert line =~ "shoestring review accept|reject #{c.goal.id} alpha --reason"
   end

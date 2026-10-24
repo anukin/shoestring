@@ -293,6 +293,20 @@ defmodule Shoestring.Cobbler.PlanReviewTest do
     assert_receive {:mix_shell, :info, ["  reason: escalated"]}
     assert_receive {:mix_shell, :info, ["  F1 blocking calc.py:2: subtracts"]}
 
+    assert_receive {:mix_shell, :info, ["     fix: " <> _]}
+
+    assert Shoestring.CLI.Main.run(["review", "show", c.goal.id, "alpha", "--json"],
+             shell: Mix.Shell.Process
+           ) == 0
+
+    assert_receive {:mix_shell, :info, [json]}
+    refute_received {:mix_shell, :error, _}
+
+    assert %{"review" => %{"state" => "escalated", "needs_user" => true, "findings" => [finding]}} =
+             Jason.decode!(json)
+
+    assert finding["id"] == "F1"
+
     assert_raise Mix.Error, ~r/--reason is required/, fn ->
       Mix.Tasks.Shoestring.Review.run(["accept", c.goal.id, "alpha"])
     end
@@ -311,7 +325,7 @@ defmodule Shoestring.Cobbler.PlanReviewTest do
       @human
     ])
 
-    assert_receive {:mix_shell, :info, ["Recorded accept for the review of alpha" <> _]}
+    assert_receive {:mix_shell, :error, ["Recorded accept for the review of alpha" <> _]}
     assert {:ok, %{disposition: :accepted}} = complete(c, first, opts)
   end
 

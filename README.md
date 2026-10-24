@@ -79,8 +79,9 @@ replaceable execution providers. The longer-term product vocabulary is:
 
 ### One command (iteration 7A)
 
-From any clean Git repository, with the service running from this checkout
-(`mix phx.server`) and `bin/` on your `PATH`:
+From any clean Git repository, with the service running (`shoestring start`
+for an installed release, or `mix phx.server` in this checkout with `bin/` on
+your `PATH`):
 
 ```sh
 shoestring do "make add() return the sum of its arguments"
@@ -94,6 +95,11 @@ you, and finishes with the verified commit and the `git fetch`/`git merge`
 commands to take it. It never changes your checkout. One-time setup and
 details: [the CLI work loop](docs/cli-work-loop.md).
 
+The installed `shoestring` and the checkout's `bin/shoestring` are the same
+command (iteration 12): data on stdout, messages on stderr, `--json` on every
+command that prints data, one-line refusals. See
+[the CLI output contract](docs/cli-output.md).
+
 ### Step by step
 
 The agreed product direction puts work, execution, and approvals in the CLI.
@@ -102,17 +108,18 @@ allowances, named orchestrators with configurable team roles, and shared default
 Agent edits create immutable revisions. The CLI reads the same saved configuration:
 
 ```sh
-mix shoestring.agents list
-mix shoestring.agents show builder
-mix shoestring.agents show builder --revision 1
+shoestring agents list
+shoestring agents show builder
+shoestring agents show builder --revision 1
 ```
 
-Work starts from a goal. `mix shoestring.goals create --title "..."` records
+Work starts from a goal. `shoestring goals create --title "..."` records
 one and prints its `id`, the GOAL argument of the plan and execution commands;
-`mix shoestring.goals list` shows existing goals.
+`shoestring goals list` shows existing goals. In the checkout each command is
+also a Mix task (`mix shoestring.goals list`).
 
 REPO-INSPECTION: plan review, immutable JSON edits and exact-revision decisions
-are available through `mix shoestring.plans`. It starts only the repository and
+are available through `shoestring plans`. It starts only the repository and
 does not dispatch work. See [the CLI plan review workflow](docs/cli-plan-review.md)
 for import/export, approval/rejection and stored planner quota display.
 

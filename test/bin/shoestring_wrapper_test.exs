@@ -1,8 +1,9 @@
 defmodule Shoestring.ShoestringWrapperTest do
   @moduledoc """
   `bin/shoestring` with a stub `mix` first on PATH that records its working
-  directory and arguments; no Mix task, provider or network runs. Scratch
-  directories are kept.
+  directory, `SHOESTRING_CALLER_DIR` and arguments; no Mix task, provider or
+  network runs. Argument handling itself is `Shoestring.CLI.Main`'s (see
+  `Shoestring.CLI.MainTest`). Scratch directories are kept.
   """
   use ExUnit.Case, async: true
 
@@ -19,6 +20,7 @@ defmodule Shoestring.ShoestringWrapperTest do
     File.write!(Path.join(stub, "mix"), """
     #!/bin/sh
     pwd > "$WRAPPER_OUT"
+    printf '%s\\n' "$SHOESTRING_CALLER_DIR" >> "$WRAPPER_OUT"
     for a in "$@"; do printf '%s\\n' "$a" >> "$WRAPPER_OUT"; done
     """)
 
@@ -50,43 +52,43 @@ defmodule Shoestring.ShoestringWrapperTest do
   defp physical(path),
     do: path |> then(&System.cmd("pwd", ["-P"], cd: &1)) |> elem(0) |> String.trim()
 
-  test "do runs in the checkout with the caller's directory as the repository", ctx do
-    assert {0, _, [cwd | args]} =
+  test "every command runs `mix shoestring` in the checkout with the caller's directory",
+       ctx do
+    assert {0, _, [cwd, caller | args]} =
              wrapper(ctx, ["do", "make add work", "--test", "test/test_calc.py"])
 
     assert physical(cwd) == physical(@checkout)
+    assert physical(caller) == physical(ctx.caller)
+    assert args == ["shoestring", "do", "make add work", "--test", "test/test_calc.py"]
 
-    assert ["shoestring.do", "--repo", repo, "make add work", "--test", "test/test_calc.py"] =
-             args
-
-    assert physical(repo) == physical(ctx.caller)
-  end
-
-  test "other commands pass through; relative --file paths become the caller's", ctx do
-    assert {0, _, [_cwd | args]} =
+    assert {0, _, [_cwd, _caller | args]} =
              wrapper(ctx, ["plans", "propose", "G", "--file", "plan.json", "--by", "human:me"])
 
-    assert ["shoestring.plans", "propose", "G", "--file", file, "--by", "human:me"] = args
-    assert Path.basename(file) == "plan.json"
-    assert physical(Path.dirname(file)) == physical(ctx.caller)
-
-    assert {0, _, [_cwd | ["shoestring.plans", "propose", "G", "--file", "/abs/plan.json"]]} =
-             wrapper(ctx, ["plans", "propose", "G", "--file", "/abs/plan.json"])
+    assert args == [
+             "shoestring",
+             "plans",
+             "propose",
+             "G",
+             "--file",
+             "plan.json",
+             "--by",
+             "human:me"
+           ]
   end
 
   test "a symlinked wrapper still finds its checkout", ctx do
     link = Path.join(ctx.dir, "shoestring")
     File.ln_s!(@script, link)
-    assert {0, _, [cwd, "shoestring.follow", "G"]} = wrapper(ctx, ["follow", "G"], link)
+
+    assert {0, _, [cwd, _caller, "shoestring", "follow", "G"]} =
+             wrapper(ctx, ["follow", "G"], link)
+
     assert physical(cwd) == physical(@checkout)
   end
 
-  test "help, unknown commands and no command never run a task", ctx do
-    assert {0, help, nil} = wrapper(ctx, ["help"])
-    assert help =~ "usage: shoestring COMMAND"
-    assert {2, unknown, nil} = wrapper(ctx, ["rm", "-rf"])
-    assert unknown =~ "unknown command 'rm'"
-    assert {2, _, nil} = wrapper(ctx, [])
-    assert {0, _, [_cwd, "help", "shoestring.do"]} = wrapper(ctx, ["do", "--help"])
+  test "help, unknown commands and no command go to the shared CLI too", ctx do
+    assert {0, _, [_cwd, _caller, "shoestring", "help"]} = wrapper(ctx, ["help"])
+    assert {0, _, [_cwd, _caller, "shoestring", "rm", "-rf"]} = wrapper(ctx, ["rm", "-rf"])
+    assert {0, _, [_cwd, _caller, "shoestring"]} = wrapper(ctx, [])
   end
 end

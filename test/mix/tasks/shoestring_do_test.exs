@@ -44,7 +44,7 @@ defmodule Mix.Tasks.Shoestring.DoTest do
           :service_unreachable,
           :service_uses_another_database
         ] do
-      message = Mix.Tasks.Shoestring.Do.message(reason)
+      message = Shoestring.CLI.Messages.message(reason)
       refute message =~ "Refused:"
       refute message =~ "{"
     end

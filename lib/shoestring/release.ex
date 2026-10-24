@@ -64,9 +64,15 @@ defmodule Shoestring.Release do
     report = Shoestring.Release.Doctor.report()
 
     report =
-      if System.get_env("SHOESTRING_DOCTOR_PROBE_PROVIDERS") == "1",
-        do: Map.put(report, "provider_probes", Shoestring.Release.ProviderProbe.report()),
-        else: report
+      if System.get_env("SHOESTRING_DOCTOR_PROBE_PROVIDERS") == "1" do
+        probes = Shoestring.Release.ProviderProbe.report()
+
+        report
+        |> Map.put("provider_probes", probes)
+        |> Map.put("agents", Shoestring.Release.Doctor.agents(probes))
+      else
+        Map.put(report, "agents", Shoestring.Release.Doctor.agents())
+      end
 
     report |> Jason.encode!(pretty: true) |> IO.puts()
   end

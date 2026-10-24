@@ -1,5 +1,6 @@
 defmodule Shoestring.Release.Doctor do
   @moduledoc "Bounded local release checks. Provider discovery is passive; credentials are never inspected."
+  alias Shoestring.Harness.Capacity.Registry
   alias Shoestring.Terminal.Protocol
   @helper_version Protocol.helper_version()
 
@@ -34,6 +35,43 @@ defmodule Shoestring.Release.Doctor do
           else: "disabled_or_refused"
         )
     }
+  end
+
+  @agents [{"claude", :headless_stream_json}, {"codex", :app_server_stdio}]
+
+  @doc """
+  Whether each supported agent CLI can take task work, without inference:
+  `binary_missing`, `not_checked` (installed; run `doctor --probe-providers`
+  to check it), `needs_sign_in`, `version_untested` (outside the versions its
+  worker mode was tested with), `ready`, or `unknown`. `probes` is
+  `Shoestring.Release.ProviderProbe.report/1`, or `nil` for the passive
+  doctor, which runs no provider command. `find` locates an executable.
+  """
+  def agents(probes \\ nil, find \\ &System.find_executable/1) do
+    Map.new(@agents, fn {name, mode} ->
+      {:ok, entry} = Registry.lookup(name, mode)
+      probe = probes && probes[name]
+      version = probe && probe["cli_version"]
+
+      readiness =
+        cond do
+          is_nil(find.(name)) -> "binary_missing"
+          is_nil(probe) -> "not_checked"
+          probe["authentication"] == "reported_unauthenticated" -> "needs_sign_in"
+          is_nil(version) -> "unknown"
+          not Registry.tested_version?(entry, version) -> "version_untested"
+          probe["authentication"] == "reported_authenticated" -> "ready"
+          true -> "unknown"
+        end
+
+      {name,
+       %{
+         "readiness" => readiness,
+         "cli_version" => version,
+         "worker_mode" => Atom.to_string(mode),
+         "tested_versions" => entry.tested_versions
+       }}
+    end)
   end
 
   def supported? do

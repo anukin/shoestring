@@ -48,31 +48,90 @@ defmodule Shoestring.CLI.Checks do
     end)
   end
 
-  @doc "Prints the list, or one invocation's output. Options: `:shell`, `:output`."
+  @doc """
+  Prints the list, or one invocation's output. Options: `:shell`, `:output`
+  (an invocation number) and `:json`.
+
+  As text, the list goes to stdout; with `:output`, stdout carries only the
+  stored output bytes and the description goes to stderr, so the output can
+  be redirected as it was recorded.
+  """
   @spec show(Ecto.UUID.t(), keyword()) :: :ok | {:error, term()}
   def show(goal_id, opts \\ []) do
-    shell = Keyword.get(opts, :shell, Mix.shell())
+    shell = Keyword.get(opts, :shell, Shoestring.CLI.Shell)
+    json? = Keyword.get(opts, :json, false)
     invocations = invocations(goal_id)
 
     case Keyword.get(opts, :output) do
+      nil when json? ->
+        json(shell, %{goal_id: goal_id, checks: Enum.map(invocations, &data/1)})
+
       nil ->
-        if invocations == [], do: shell.info("No checks recorded.")
+        if invocations == [], do: shell.error("No checks recorded.")
         Enum.each(invocations, &shell.info(line(&1)))
 
       number ->
         with %{} = invocation <-
                Enum.find(invocations, &(&1.number == number)) || {:error, :no_such_check},
              {:ok, bytes, partial?} <- output(invocation, goal_id) do
-          shell.info(line(invocation))
           digest = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
-          label = if partial?, do: "Output so far", else: "Output"
-          shell.info("#{label} (#{byte_size(bytes)} bytes, redacted, sha256 #{digest}):")
-          shell.info(bytes)
-          if partial?, do: shell.info("[partial output; no complete output artifact recorded]")
-          if invocation.completed["output_truncated"], do: shell.info("[cut at the output limit]")
+          truncated? = invocation.completed["output_truncated"] == true
+
+          if json? do
+            {encoding, text} =
+              if String.valid?(bytes),
+                do: {"utf-8", bytes},
+                else: {"base64", Base.encode64(bytes)}
+
+            json(shell, %{
+              goal_id: goal_id,
+              check: data(invocation),
+              output: text,
+              encoding: encoding,
+              bytes: byte_size(bytes),
+              sha256: digest,
+              partial: partial?,
+              truncated: truncated?
+            })
+          else
+            shell.error(line(invocation))
+            label = if partial?, do: "Output so far", else: "Output"
+            shell.error("#{label} (#{byte_size(bytes)} bytes, redacted, sha256 #{digest}):")
+            shell.info(bytes)
+
+            if partial?,
+              do: shell.error("[partial output; no complete output artifact recorded]")
+
+            if truncated?, do: shell.error("[cut at the output limit]")
+          end
+
           :ok
         end
     end
+  end
+
+  defp json(shell, value) do
+    shell.info(Jason.encode!(value, pretty: true))
+    :ok
+  end
+
+  @doc false
+  # One invocation as the `--json` shape documents it.
+  def data(%{number: number, started: s, completed: c}) do
+    %{
+      number: number,
+      scope: if(s["scope"] == "task", do: "task", else: "final"),
+      plan_task_id: s["plan_task_id"],
+      attempt: s["attempt"],
+      gate: s["gate"],
+      kind: s["kind"],
+      required: s["required"] == true,
+      spec: s["spec"],
+      result: c && c["result"],
+      exit_status: c && c["exit_status"],
+      duration_ms: c && c["duration_ms"],
+      commit: c && c["commit"]
+    }
   end
 
   defp output(invocation, goal_id) do

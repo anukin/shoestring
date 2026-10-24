@@ -35,4 +35,37 @@ defmodule Shoestring.Release.DoctorTest do
       assert Doctor.helper_check(Map.put(manifest, key, value)) == "missing_or_incompatible"
     end
   end
+
+  test "agent readiness comes from installation and the explicit probe, never inference" do
+    present = fn _ -> "/usr/local/bin/agent" end
+    missing = fn _ -> nil end
+
+    probe = fn version, auth -> %{"cli_version" => version, "authentication" => auth} end
+
+    passive = Doctor.agents(nil, present)
+    assert passive["claude"]["readiness"] == "not_checked"
+    assert passive["codex"]["readiness"] == "not_checked"
+    assert passive["claude"]["worker_mode"] == "headless_stream_json"
+    assert "2.1.310" in passive["claude"]["tested_versions"]
+    assert Doctor.agents(nil, missing)["codex"]["readiness"] == "binary_missing"
+
+    probes = %{
+      "claude" => probe.("2.1.310", "reported_authenticated"),
+      "codex" => probe.("0.163.0", "reported_unauthenticated")
+    }
+
+    report = Doctor.agents(probes, present)
+    assert report["claude"]["readiness"] == "ready"
+    assert report["claude"]["cli_version"] == "2.1.310"
+    assert report["codex"]["readiness"] == "needs_sign_in"
+
+    untested =
+      Doctor.agents(%{probes | "claude" => probe.("9.9.9", "reported_authenticated")}, present)
+
+    assert untested["claude"]["readiness"] == "version_untested"
+
+    unknown = Doctor.agents(%{probes | "claude" => probe.(nil, "unknown")}, present)
+    assert unknown["claude"]["readiness"] == "unknown"
+    assert Doctor.agents(probes, missing)["claude"]["readiness"] == "binary_missing"
+  end
 end

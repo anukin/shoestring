@@ -84,6 +84,7 @@ defmodule Shoestring.CLI.WorkLoopTest do
       [
         repo: ctx.repo,
         by: "human:operator",
+        shell: Mix.Shell.Process,
         service: fn -> :ok end,
         edit_dir: ctx.edit_dir,
         planner_config: [
@@ -146,10 +147,11 @@ defmodule Shoestring.CLI.WorkLoopTest do
 
   defp answer(text), do: send(self(), {:mix_shell_input, :prompt, text})
 
-  defp infos do
+  # The loop's conversation goes to stderr (`error`).
+  defp stderr_lines do
     Stream.repeatedly(fn ->
       receive do
-        {:mix_shell, :info, [line]} -> line
+        {:mix_shell, :error, [line]} -> line
       after
         0 -> nil
       end
@@ -163,7 +165,7 @@ defmodule Shoestring.CLI.WorkLoopTest do
     answer("y")
     assert {:ok, %{goal_id: goal_id, revision: 1, execution_id: execution_id}} = run(ctx)
 
-    lines = infos()
+    lines = stderr_lines()
     assert "Goal #{goal_id}" in lines
     assert Enum.any?(lines, &String.starts_with?(&1, "Plan revision 1"))
     assert "  1. add: Implement add" in lines
@@ -208,7 +210,7 @@ defmodule Shoestring.CLI.WorkLoopTest do
     assert second.status == "approved"
     assert second.parent_revision_number == 1
     assert hd(second.content["tasks"])["title"] == "Implement add simply"
-    assert "  1. add: Implement add simply" in infos()
+    assert "  1. add: Implement add simply" in stderr_lines()
   end
 
   test "a held planning call runs only after the human confirms it", ctx do
@@ -219,7 +221,7 @@ defmodule Shoestring.CLI.WorkLoopTest do
     answer("y")
     answer("y")
     assert {:ok, %{revision: 1}} = run(ctx, snapshot: nil)
-    assert Enum.any?(infos(), &String.starts_with?(&1, "Planning is held:"))
+    assert Enum.any?(stderr_lines(), &String.starts_with?(&1, "Planning is held:"))
   end
 
   test "preflight refusals create no goal and queue nothing", ctx do

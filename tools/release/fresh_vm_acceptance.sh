@@ -47,6 +47,20 @@ to 120 shoestring doctor > ~/d2.json 2>&1
 check "doctor after init" 'grep -q "\"database\": \"ok\"" ~/d2.json && grep -q "\"endpoint_secret\": \"private\"" ~/d2.json'
 check "state directory private" '[ "$(stat -f %Lp "$D")" = 700 ] && [ "$(stat -f %Lp "$D/.endpoint-secret")" = 600 ]'
 
+echo "== work commands"
+out=$(to 60 shoestring goals create --title "Acceptance goal" --json 2>~/goal.err); st=$?
+GOAL=$(print -r -- "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' 2>/dev/null)
+check "goals create prints JSON on stdout only" '[ $st -eq 0 ] && [ -n "$GOAL" ] && [ ! -s ~/goal.err ]'
+check "goals list --json" 'to 60 shoestring goals list --json 2>/dev/null | grep -q "$GOAL"'
+check "work command help" 'to 60 shoestring do --help 2>/dev/null | grep -q "^shoestring do"'
+out=$(to 60 shoestring bogus 2>/dev/null); st=$?
+check "unknown command exits 2 with nothing on stdout" '[ $st -eq 2 ] && [ -z "$out" ]'
+mkdir -p ~/work && (cd ~/work && git init -q -b main && mkdir -p test && touch test/__init__.py && print 'import unittest\n' > test/test_x.py && git add . && git -c user.name=A -c user.email=a@example.invalid commit -qm base)
+out=$(cd ~/work && to 60 shoestring do "anything" 2>&1 >/dev/null); st=$?
+check "do without an agent refuses in one line" '[ $st -eq 1 ] && [ "$out" = "No default agent. Create one: shoestring agents create NAME --worker claude:MODEL --default" ]'
+out=$(to 60 shoestring follow "$GOAL" 2>&1); st=$?
+check "follow without the service says how to start it" '[ $st -eq 1 ] && [ "$out" = "The Shoestring service is not running. Start it in another terminal: shoestring start" ]'
+
 echo "== diagnostics"
 to 120 shoestring diagnostics-preview > ~/preview.json 2>&1
 check "preview" '[ $? -eq 0 ] && grep -q "\"confirmation_sha256\"" ~/preview.json'

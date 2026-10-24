@@ -90,6 +90,27 @@ Version drift asks for fixture review rather than claiming compatibility.
 Provider status commands may refresh credentials or exchange identity tokens;
 use passive doctor when those effects are unwanted.
 
+`doctor` also reports `agents`: each supported agent CLI's readiness for task
+work (`binary_missing`, `not_checked`, `needs_sign_in`, `version_untested`,
+`ready` or `unknown`) against the versions its worker mode was tested with.
+Without `--probe-providers` an installed CLI is `not_checked`. `doctor`
+accepts `--json`; its output is always JSON.
+
+## Work commands
+
+The installed `shoestring` also runs the work commands: `do`, `follow`,
+`result`, `review`, `checks` and the step-by-step `goals`, `plans`,
+`execution`, `agents`, `models` and `reservations`, with the same arguments
+and output as the checkout's `bin/shoestring`. Each runs in a short-lived
+runtime (`bin/shoestring eval`) against the service's state directory; no
+network listener, RPC or Erlang distribution is added. The command never
+creates or migrates the database: missing state asks for `shoestring init`,
+pending migrations ask you to stop the service and run `init`, and a newer
+database is refused. Commands that need the running service (`do`, and
+`follow` for an unfinished goal) say how to start it and never start one.
+Data goes to stdout and messages to stderr; see [the CLI output
+contract](cli-output.md).
+
 Erlang distribution/RPC is disabled. The packaged cookie is a public sentinel,
 not a shared authentication secret. Remote/daemon commands from the underlying
 generated runtime are unsupported. The supported entrypoint is `shoestringctl`.

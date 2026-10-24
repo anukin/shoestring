@@ -16,8 +16,9 @@ defmodule Shoestring.CLI.WorkLoop do
   - Work is queued only when the running service reports the same database
     (`Shoestring.Health.instance/0`).
 
-  Terminal I/O goes through `:shell` (default `Mix.shell()`), so tests drive
-  it with `Mix.Shell.Process`.
+  Terminal I/O goes through `:shell` (default `Shoestring.CLI.Shell`). All of
+  it is conversation, so it goes to stderr (`error/1`); the command prints the
+  data. Tests drive it with `Mix.Shell.Process`.
   """
 
   alias Shoestring.{AgentProfiles, Repo}
@@ -50,7 +51,7 @@ defmodule Shoestring.CLI.WorkLoop do
   """
   @spec run(String.t(), keyword()) :: result()
   def run(request, opts \\ []) do
-    shell = Keyword.get(opts, :shell, Mix.shell())
+    shell = Keyword.get(opts, :shell, Shoestring.CLI.Shell)
     by = Keyword.get_lazy(opts, :by, &default_human/0)
 
     with {:ok, facts} <- Intake.repository(Keyword.get(opts, :repo, File.cwd!())),
@@ -67,8 +68,8 @@ defmodule Shoestring.CLI.WorkLoop do
          {:ok, planner_config} <- planner_config(opts, coordinator),
          :ok <- service(opts),
          {:ok, goal} <- create_goal(request) do
-      shell.info("Goal #{goal.id}")
-      shell.info("Base #{short(facts.head)} in #{facts.root}; gates: #{describe_gates(gates)}")
+      shell.error("Goal #{goal.id}")
+      shell.error("Base #{short(facts.head)} in #{facts.root}; gates: #{describe_gates(gates)}")
 
       planner_opts =
         Keyword.merge(
@@ -213,7 +214,7 @@ defmodule Shoestring.CLI.WorkLoop do
     }
 
     with {:ok, _} <- Planner.request(context.goal.id, attrs, context.planner_opts) do
-      context.shell.info("Drafting a plan...")
+      context.shell.error("Drafting a plan...")
       generate(context, :generate, false)
     end
   end
@@ -244,7 +245,7 @@ defmodule Shoestring.CLI.WorkLoop do
   defp planned(_context, %{state: "ready"} = row, _mode, _confirmed?), do: {:ok, row}
 
   defp planned(context, %{state: "blocked"} = row, mode, false) do
-    context.shell.info("Planning is held: #{messages(row)}")
+    context.shell.error("Planning is held: #{messages(row)}")
 
     if yes?(
          context,
@@ -256,7 +257,7 @@ defmodule Shoestring.CLI.WorkLoop do
 
   defp planned(context, %{state: state} = row, :generate, confirmed?)
        when state in ["schema_failed", "unsafe_proposal"] do
-    context.shell.info("The draft was refused: #{messages(row)}")
+    context.shell.error("The draft was refused: #{messages(row)}")
 
     if yes?(context, "Ask the planner to repair it once? This is its last call. [y/N] "),
       do: generate(context, :repair, confirmed?),
@@ -317,7 +318,7 @@ defmodule Shoestring.CLI.WorkLoop do
         review(context, edited)
       else
         error ->
-          context.shell.info("The edit was not accepted: #{inspect(error, limit: 8)}")
+          context.shell.error("The edit was not accepted: #{inspect(error, limit: 8)}")
           review(context, revision)
       end
     end
@@ -329,37 +330,37 @@ defmodule Shoestring.CLI.WorkLoop do
     goal = contract.content["goal"]
     budget = contract.content["budget"]
 
-    shell.info("")
-    shell.info("Plan revision #{revision.revision_number} (#{short(revision.digest)})")
-    shell.info("  Goal: #{goal["statement"]}")
-    shell.info("  Checks at the end: #{describe_gates(goal["acceptance"]["gates"])}")
+    shell.error("")
+    shell.error("Plan revision #{revision.revision_number} (#{short(revision.digest)})")
+    shell.error("  Goal: #{goal["statement"]}")
+    shell.error("  Checks at the end: #{describe_gates(goal["acceptance"]["gates"])}")
 
     contract.ordered_task_ids
     |> Enum.with_index(1)
     |> Enum.each(fn {id, number} ->
       task = tasks[id]
-      shell.info("  #{number}. #{id}: #{task["title"]}")
-      shell.info("     Outcome: #{task["outcome"]}")
+      shell.error("  #{number}. #{id}: #{task["title"]}")
+      shell.error("     Outcome: #{task["outcome"]}")
 
       if task["depends_on"] != [],
-        do: shell.info("     After: #{Enum.join(task["depends_on"], ", ")}")
+        do: shell.error("     After: #{Enum.join(task["depends_on"], ", ")}")
 
       files = get_in(task, ["hints", "files"]) || []
-      if files != [], do: shell.info("     Files: #{Enum.join(files, ", ")}")
-      shell.info("     Checks: #{describe_gates(task["gates"])}")
+      if files != [], do: shell.error("     Files: #{Enum.join(files, ", ")}")
+      shell.error("     Checks: #{describe_gates(task["gates"])}")
     end)
 
-    shell.info(
+    shell.error(
       "  Budget: #{budget["max_total_attempts"]} attempts, " <>
         "#{div(budget["max_total_duration_seconds"], 60)} minutes"
     )
 
-    shell.info("")
+    shell.error("")
   end
 
   # The human edits the exported file in their own editor, then submits it.
   defp prompt_edit(shell, path) do
-    shell.info("Edit #{path} and save it.")
+    shell.error("Edit #{path} and save it.")
 
     case "Press Enter to submit the edit, or q to keep the plan as shown: "
          |> shell.prompt()
@@ -394,7 +395,7 @@ defmodule Shoestring.CLI.WorkLoop do
 
     case result do
       {:ok, %{execution: execution}} ->
-        context.shell.info(
+        context.shell.error(
           "Approved. Execution #{execution.execution_id} is queued for the service."
         )
 
