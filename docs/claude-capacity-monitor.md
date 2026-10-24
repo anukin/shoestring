@@ -20,8 +20,37 @@ flowchart TD
 
 ### Locked Policy Rules
 1. **Passive observation only:** The monitor never executes `claude` CLI commands to refresh capacity, run synthetic prompts, or consume model turns.
-2. **No headless or scraped modes:** Claude `-p --output-format json`, `stream-json`, and terminal scraping are classified as `:unsupported` and fail closed.
+2. **No json or scraped modes:** Claude `-p --output-format json` and terminal scraping are classified as `:unsupported` and fail closed. Headless `stream-json` runs are a second source; see below.
 3. **Local statusLine delivery:** Telemetry is accepted strictly via local interactive `statusLine` command callbacks delivered through the injectable receiver/input boundary.
+
+---
+
+## Readings from headless Claude runs
+
+Every Claude worker run (`claude -p --verbose --output-format stream-json`)
+reports Claude's own usage in `rate_limit_event` frames: `utilization` (a
+fraction) and `resetsAt` (Unix seconds) for the five-hour and seven-day
+windows, plus a provider `status` (`allowed`, `allowed_warning`, …).
+`ClaudeHeadless.Session` normalizes each frame with
+`Capacity.normalize(:claude, :headless_stream_json, frame, ...)` and ingests
+it into the Observatory, so admission sees it after the run ends and after a
+restart. This reuses the status-line window rules: utilization becomes whole
+percent, resets are stored as UTC, a missing window is unknown (never 0%),
+and a frame with no observed window records nothing. The provider status is
+kept as `claude:rate_limit_status` evidence and is shown on the Usage page; it
+never becomes a refusal by itself.
+
+Readings exist only while Claude runs: nothing asks Claude for one. Usage
+outside Shoestring (other Claude Code sessions, claude.ai) is invisible until
+the next run reports. The planner and reviewer use `--output-format json`,
+which reports no usage (VERIFIED with 2.1.310), so they add no readings.
+
+At admission, a Claude window at or over the reserve maximum with a future
+reset defers until that reset. Once the reset (plus 60 seconds of clock
+margin) has passed, the old reading no longer blocks: Claude cannot be
+re-read without inference, so the stale-reading and partial-tier rules ask
+for confirmation instead of deferring again. Tested versions: 2.1.261,
+2.1.263, 2.1.310.
 
 ---
 

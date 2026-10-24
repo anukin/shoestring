@@ -50,8 +50,9 @@ defmodule Shoestring.Harness.Capacity.RegistryTest do
         )
 
       assert %Entry{} = claude_headless_stream
-      assert claude_headless_stream.supported_tier == :unsupported
-      assert claude_headless_stream.compatibility_outcome == :incompatible
+      assert claude_headless_stream.supported_tier == :conservative_partial
+      assert claude_headless_stream.compatibility_outcome == :compatible
+      assert claude_headless_stream.tested_versions == ["2.1.261", "2.1.263", "2.1.310"]
 
       claude_scrape =
         Enum.find(entries, &(&1.provider == :claude and &1.invocation_mode == :terminal_scrape))

@@ -37,6 +37,10 @@ config :shoestring, :capacity_monitors,
   claude: [enabled: false, auto_ingest_initial: false],
   codex: [enabled: false]
 
+# Headless Claude runs record their `rate_limit_event` readings in the
+# Observatory. Tests pass an explicit `:capacity_sink` when they assert it.
+config :shoestring, claude_capacity_sink: nil
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :shoestring, ShoestringWeb.Endpoint,

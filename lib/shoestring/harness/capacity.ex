@@ -652,10 +652,22 @@ defmodule Shoestring.Harness.Capacity do
   end
 
   defp normalize_claude(payload, compat, captured_at, now, freshness_seconds, opts) do
-    source_event = Keyword.get(opts, :source_event, :status_line_input)
+    opts = Keyword.put_new(opts, :source_event, default_claude_source_event(payload))
+    source_event = Keyword.fetch!(opts, :source_event)
     rate_limits = Map.get(payload, "rate_limits")
 
     cond do
+      Map.get(payload, "type") == "rate_limit_event" ->
+        normalize_claude_rate_limit_event(
+          payload,
+          compat,
+          source_event,
+          captured_at,
+          now,
+          freshness_seconds,
+          opts
+        )
+
       claude_refusal?(payload) ->
         build_refusal_snapshot(
           compat,
@@ -717,6 +729,109 @@ defmodule Shoestring.Harness.Capacity do
     end
   end
 
+  # A headless run's `rate_limit_event` is a provider push during a run; the
+  # interactive status line is the only other Claude source.
+  defp default_claude_source_event(%{"type" => "rate_limit_event"}), do: :update_notification
+  defp default_claude_source_event(_payload), do: :status_line_input
+
+  # `claude --print --output-format stream-json` reports each window as a
+  # utilization fraction with a Unix-seconds reset. Translate it into the
+  # status-line shape (whole-percent units) so both sources share one window
+  # parser and its never-0%/never-unlimited rules. The provider's status is
+  # recorded as evidence only; no refusal shape has been observed, so it never
+  # becomes a refusal here.
+  defp normalize_claude_rate_limit_event(
+         payload,
+         compat,
+         source_event,
+         captured_at,
+         now,
+         freshness_seconds,
+         opts
+       ) do
+    case Map.get(payload, "rate_limit_info") do
+      %{"unifiedWindows" => windows} = info when is_map(windows) ->
+        rate_limits = %{
+          "five_hour" => percent_window(Map.get(windows, "five_hour")),
+          "seven_day" => percent_window(Map.get(windows, "seven_day"))
+        }
+
+        parse_claude_rate_limits(
+          rate_limits,
+          compat,
+          source_event,
+          captured_at,
+          now,
+          freshness_seconds,
+          opts,
+          rate_limit_event_extensions(info, compat),
+          "absent_in_rate_limit_event"
+        )
+
+      %{} ->
+        handle_claude_parse_failure(
+          "no_valid_windows",
+          compat,
+          captured_at,
+          now,
+          freshness_seconds,
+          opts
+        )
+
+      _ ->
+        handle_claude_parse_failure(
+          "malformed_rate_limit_info",
+          compat,
+          captured_at,
+          now,
+          freshness_seconds,
+          opts
+        )
+    end
+  end
+
+  defp percent_window(nil), do: nil
+
+  defp percent_window(%{} = window) do
+    used =
+      case Map.get(window, "utilization") do
+        fraction when is_number(fraction) -> Float.round(fraction * 100.0, 2)
+        _ -> nil
+      end
+
+    %{"used_percentage" => used, "resets_at" => Map.get(window, "resetsAt")}
+  end
+
+  defp percent_window(other), do: other
+
+  defp rate_limit_event_extensions(info, compat) do
+    windows = Map.get(info, "unifiedWindows")
+
+    [
+      {"claude:rate_limit_status", Map.get(info, "status")},
+      {"claude:rate_limit_type", Map.get(info, "rateLimitType")},
+      {"claude:five_hour_status", window_status(windows, "five_hour")},
+      {"claude:seven_day_status", window_status(windows, "seven_day")}
+    ]
+    |> Enum.filter(fn {_key, value} -> provider_label?(value) end)
+    |> Map.new()
+    |> then(fn extensions ->
+      if compat.version,
+        do: Map.put(extensions, CapacitySnapshot.cli_version_extension_key(), compat.version),
+        else: extensions
+    end)
+  end
+
+  defp window_status(windows, kind) do
+    case Map.get(windows, kind) do
+      %{"status" => status} -> status
+      _ -> nil
+    end
+  end
+
+  defp provider_label?(value),
+    do: is_binary(value) and Regex.match?(~r/\A[a-z][a-z0-9_]{0,39}\z/, value)
+
   defp claude_refusal?(payload) do
     (Map.get(payload, "is_error") == true and
        Map.get(payload, "subtype") in [
@@ -740,7 +855,9 @@ defmodule Shoestring.Harness.Capacity do
          captured_at,
          now,
          freshness_seconds,
-         opts
+         opts,
+         extensions \\ %{},
+         missing_reason \\ "absent_in_status_line"
        ) do
     five_hour_res =
       parse_window("five_hour", Map.get(rate_limits, "five_hour"), "used_percentage", "resets_at")
@@ -778,7 +895,9 @@ defmodule Shoestring.Harness.Capacity do
           captured_at,
           now,
           freshness_seconds,
-          opts
+          opts,
+          extensions,
+          missing_reason
         )
     end
   end
@@ -791,7 +910,9 @@ defmodule Shoestring.Harness.Capacity do
          captured_at,
          now,
          freshness_seconds,
-         opts
+         opts,
+         extensions,
+         missing_reason
        ) do
     case validate_timestamp(captured_at, now, freshness_seconds) do
       {:invalid, ts_reason} ->
@@ -817,11 +938,11 @@ defmodule Shoestring.Harness.Capacity do
             [
               if(five_hour_res != :absent,
                 do: elem(five_hour_res, 1),
-                else: window_unknown("five_hour", "absent_in_status_line")
+                else: window_unknown("five_hour", missing_reason)
               ),
               if(seven_day_res != :absent,
                 do: elem(seven_day_res, 1),
-                else: window_unknown("seven_day", "absent_in_status_line")
+                else: window_unknown("seven_day", missing_reason)
               )
             ],
             &is_nil/1
@@ -857,7 +978,7 @@ defmodule Shoestring.Harness.Capacity do
           source_event,
           confidence,
           combined_reason,
-          %{},
+          extensions,
           now,
           opts
         )
@@ -1169,7 +1290,7 @@ defmodule Shoestring.Harness.Capacity do
           reason,
           now,
           freshness_seconds,
-          :status_line_input,
+          Keyword.get(opts, :source_event, :status_line_input),
           opts,
           %{}
         )

@@ -38,15 +38,18 @@ defmodule Shoestring.Harness.Capacity.Registry do
       compatibility_outcome: :incompatible,
       description: "Claude headless -p --output-format json (does not expose capacity signals)"
     },
+    # Gate 0A's 2.1.251 stream-json probe failed before any frame; later
+    # runs (2.1.261, 2.1.263, 2.1.310) emit `rate_limit_event` frames with
+    # five-hour and seven-day utilization. Observed during a run only.
     %Entry{
       provider: :claude,
       invocation_mode: :headless_stream_json,
-      supported_tier: :unsupported,
-      tested_versions: ["2.1.251"],
-      required_semantic_fields: [],
-      compatibility_outcome: :incompatible,
+      supported_tier: :conservative_partial,
+      tested_versions: ["2.1.261", "2.1.263", "2.1.310"],
+      required_semantic_fields: ["rate_limit_info", "unifiedWindows", "utilization"],
+      compatibility_outcome: :compatible,
       description:
-        "Claude headless -p --output-format stream-json (process errors, no capacity signals)"
+        "Claude headless -p --output-format stream-json rate_limit_event frames during a run"
     },
     %Entry{
       provider: :claude,

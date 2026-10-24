@@ -16,12 +16,16 @@ defmodule Shoestring.Cobbler.AdmissionEvaluation do
   - Validates attributable single-decision confirmations against candidate, scope, and intent.
   - Never describes manual execution as automatically safe.
   - Prevents immediate retry loops on past reset timestamps via explicit delayed recheck.
+    A Claude breach whose window has reset no longer blocks: Claude cannot be
+    re-read without inference, so the confirmation rules decide instead.
   - Documents runtime transactional enforcement required (SQLite immediate/exclusive,
     not assumed Postgres SELECT FOR UPDATE).
   """
 
   alias Shoestring.Cobbler.{AdmissionDecision, AdmissionPolicy}
   alias Shoestring.Harness.{CapacitySnapshot, Contract}
+
+  @claude_reset_margin_seconds 60
 
   @doc """
   Evaluates admission for a single candidate provider deterministically.
@@ -513,16 +517,34 @@ defmodule Shoestring.Cobbler.AdmissionEvaluation do
     case find_window(snapshot, kind) do
       %{state: :observed, used_percent: used_percent} = window
       when is_number(used_percent) and used_percent >= max_used ->
-        build_breach_deferral(kind, used_percent, max_used, window.reset_at, now, policy)
+        unless_window_reset(snapshot, window.reset_at, now, fn ->
+          build_breach_deferral(kind, used_percent, max_used, window.reset_at, now, policy)
+        end)
 
       %{"state" => "observed", "used_percent" => used_percent} = window
       when is_number(used_percent) and used_percent >= max_used ->
         reset_at = parse_datetime(window["reset_at"])
-        build_breach_deferral(kind, used_percent, max_used, reset_at, now, policy)
+
+        unless_window_reset(snapshot, reset_at, now, fn ->
+          build_breach_deferral(kind, used_percent, max_used, reset_at, now, policy)
+        end)
 
       _ ->
         nil
     end
+  end
+
+  # Claude has no read that spends no quota, so a breach reading stays the
+  # newest Claude evidence until the next Claude run reports. Once its window
+  # has reset (plus a clock margin) the reading no longer describes current
+  # usage: it stops blocking, and the bypassable rules (stale, partial tier)
+  # decide instead. Codex keeps its delayed recheck because it re-reads at the
+  # wake.
+  defp unless_window_reset(snapshot, reset_at, now, breach) do
+    if snapshot_identity_provider(snapshot) == "claude" and reset_at != nil and
+         DateTime.compare(now, DateTime.add(reset_at, @claude_reset_margin_seconds)) == :gt,
+       do: nil,
+       else: breach.()
   end
 
   defp build_breach_deferral(kind, used_percent, max_used, reset_at, now, policy) do

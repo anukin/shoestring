@@ -45,7 +45,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   use GenServer
   require Logger
 
-  alias Shoestring.Harness.{Error, HarnessEvent}
+  alias Shoestring.Harness.{Capacity, CapacitySnapshot, Clock, Error, HarnessEvent, Observatory}
   alias Shoestring.Harness.ClaudeHeadless.{EventNormalizer, Transport}
 
   @default_max_frame_size 262_144
@@ -71,7 +71,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     :identity_waiters,
     :malformed_lines,
     :exit_status,
-    :max_frame_size
+    :max_frame_size,
+    :cli_version,
+    :capacity_sink
   ]
 
   # --- Public API ---
@@ -220,7 +222,12 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
         identity_waiters: [],
         malformed_lines: 0,
         exit_status: nil,
-        max_frame_size: max_frame_size
+        max_frame_size: max_frame_size,
+        cli_version: nil,
+        capacity_sink:
+          Keyword.get_lazy(opts, :capacity_sink, fn ->
+            Application.get_env(:shoestring, :claude_capacity_sink, Observatory)
+          end)
       }
 
       {:ok, state, {:continue, :init_transport}}
@@ -469,6 +476,8 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   end
 
   defp handle_frame(frame, state) do
+    state = state |> track_cli_version(frame) |> observe_capacity(frame)
+
     try do
       case EventNormalizer.normalize(frame, state.run_id, state.event_ordinal + 1, %{
              process_id: state.transport_os_pid && to_string(state.transport_os_pid),
@@ -490,6 +499,52 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
         %{state | malformed_lines: state.malformed_lines + 1}
     end
   end
+
+  defp track_cli_version(state, %{"type" => "system", "claude_code_version" => version})
+       when is_binary(version) and byte_size(version) <= 64,
+       do: %{state | cli_version: version}
+
+  defp track_cli_version(state, _frame), do: state
+
+  # Claude's own usage report becomes a durable capacity observation, so
+  # admission sees how close the subscription is to its limits and when each
+  # window resets. Evidence only: nothing here is requested from Claude, and a
+  # frame that yields no observed window, or a failing sink, never touches the
+  # run.
+  defp observe_capacity(%{capacity_sink: sink} = state, %{"type" => "rate_limit_event"} = frame)
+       when not is_nil(sink) do
+    now = Clock.now(Keyword.get(state.opts, :clock, Shoestring.Harness.SystemClock))
+
+    with {:ok, %CapacitySnapshot{} = snapshot} <-
+           Capacity.normalize(:claude, :headless_stream_json, frame,
+             version: state.cli_version,
+             now: now,
+             captured_at: now,
+             adapter_id: "claude_headless_stream_json",
+             scope: Application.get_env(:shoestring, :run_submission_scope, "subscription")
+           ),
+         true <- Enum.any?(snapshot.windows, &(&1.state == :observed)) do
+      case deliver_capacity(sink, snapshot) do
+        {:ok, _outcome, _snapshot} -> :ok
+        other -> Logger.warning("ClaudeHeadless capacity reading not recorded: #{inspect(other)}")
+      end
+    end
+
+    state
+  rescue
+    error ->
+      Logger.warning("ClaudeHeadless capacity reading failed: #{inspect(error)}")
+      state
+  catch
+    kind, reason ->
+      Logger.warning("ClaudeHeadless capacity reading failed: #{inspect({kind, reason})}")
+      state
+  end
+
+  defp observe_capacity(state, _frame), do: state
+
+  defp deliver_capacity(sink, snapshot) when is_atom(sink), do: sink.ingest(snapshot)
+  defp deliver_capacity(sink, snapshot) when is_function(sink, 1), do: sink.(snapshot)
 
   defp ingest_event(%HarnessEvent{} = event, state) do
     state = buffer_event(state, event)

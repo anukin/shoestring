@@ -139,6 +139,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizerTest do
       assert quota.kind == :lifecycle
       assert quota.extensions["claude-headless:rate_limit_status"] == "allowed"
       assert quota.extensions["claude-headless:rate_limit_type"] == "five_hour"
+      assert quota.extensions["claude-headless:five_hour_utilization"] == 0.28
+      assert quota.extensions["claude-headless:five_hour_resets_at"] == "2026-09-06T07:10:00Z"
+      assert quota.extensions["claude-headless:seven_day_resets_at"] == "2026-09-12T20:00:00Z"
     end
 
     test "events are ordinal-ordered and secret-free", %{events: events} do

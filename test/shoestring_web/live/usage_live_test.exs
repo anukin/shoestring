@@ -37,4 +37,42 @@ defmodule ShoestringWeb.UsageLiveTest do
     assert has_element?(view, "#usage-accounts [role=progressbar][aria-valuenow='25.0']")
     assert has_element?(view, "#usage-accounts h2", "Codex")
   end
+
+  test "a Claude run's reading shows its windows, reset and warning", %{conn: conn} do
+    now = DateTime.utc_now()
+    reset = now |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+    claude_reading = fn status ->
+      {:ok, snapshot} =
+        Shoestring.Harness.Capacity.normalize(
+          :claude,
+          :headless_stream_json,
+          %{
+            "type" => "rate_limit_event",
+            "rate_limit_info" => %{
+              "status" => status,
+              "unifiedWindows" => %{
+                "five_hour" => %{"utilization" => 0.83, "resetsAt" => DateTime.to_unix(reset)},
+                "seven_day" => %{"utilization" => 0.4, "resetsAt" => DateTime.to_unix(reset)}
+              }
+            }
+          },
+          version: "2.1.310",
+          now: now,
+          captured_at: now
+        )
+
+      {:ok, _, _} = Shoestring.Harness.Observatory.ingest(snapshot)
+    end
+
+    claude_reading.("allowed")
+    {:ok, view, _} = live(conn, "/usage")
+    assert has_element?(view, "#usage-accounts h2", "Claude")
+    assert has_element?(view, "#usage-accounts [role=progressbar][aria-valuenow='83.0']")
+    refute has_element?(view, "#usage-accounts .ss-notice", "close to a limit")
+
+    claude_reading.("allowed_warning")
+    {:ok, view, _} = live(conn, "/usage")
+    assert has_element?(view, "#usage-accounts .ss-notice", "close to a limit")
+  end
 end

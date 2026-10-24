@@ -728,6 +728,105 @@ defmodule Shoestring.Cobbler.AdmissionEvaluationTest do
     end
   end
 
+  describe "Claude readings across a window reset" do
+    @claude_candidate %{
+      provider_id: "claude",
+      adapter_id: "claude_headless_stream_json",
+      support_tier: :conservative_partial,
+      compatibility_state: :compatible,
+      scope: "subscription",
+      capabilities: ["supervised_execution", "read_only"]
+    }
+
+    defp claude_snapshot(five_hour, seven_day, observed_at) do
+      build_snapshot(%{
+        capacity_state: "degraded",
+        windows: %{
+          "items" => [
+            Map.merge(%{"kind" => "five_hour", "state" => "observed"}, five_hour),
+            Map.merge(%{"kind" => "seven_day", "state" => "observed"}, seven_day)
+          ]
+        },
+        source: %{
+          "adapter_id" => "claude_headless_stream_json",
+          "provider_id" => "claude",
+          "invocation_mode" => "headless_stream_json",
+          "event" => "update_notification"
+        },
+        scope: "subscription",
+        confidence: "medium",
+        support_tier: "conservative_partial",
+        reason: "conservative_partial_observation",
+        observed_at: observed_at,
+        expires_at: observed_at |> DateTime.from_iso8601() |> elem(1) |> DateTime.add(300)
+      })
+    end
+
+    test "a breach with a future reset defers until that reset" do
+      snap =
+        claude_snapshot(
+          %{"used_percent" => 83.0, "reset_at" => "2026-09-07T14:30:00Z"},
+          %{"used_percent" => 40.0, "reset_at" => "2026-09-12T00:00:00Z"},
+          "2026-09-07T13:59:00Z"
+        )
+
+      assert {:ok, decision} =
+               AdmissionEvaluation.evaluate(%{}, @claude_candidate, snap, nil, now: @now)
+
+      assert decision.result == :defer_until
+      assert decision.reason_code == "reserve_breach_five_hour"
+      assert decision.defer_until == ~U[2026-09-07 14:30:00Z]
+    end
+
+    test "after the reset the old breach no longer blocks and confirmation decides" do
+      # 83% at 09:00, window reset at 10:30; the next decision is at 14:00 with
+      # no newer Claude reading, because only a Claude run produces one.
+      snap =
+        claude_snapshot(
+          %{"used_percent" => 83.0, "reset_at" => "2026-09-07T10:30:00Z"},
+          %{"used_percent" => 40.0, "reset_at" => "2026-09-12T00:00:00Z"},
+          "2026-09-07T09:00:00Z"
+        )
+
+      assert {:ok, decision} =
+               AdmissionEvaluation.evaluate(%{}, @claude_candidate, snap, nil, now: @now)
+
+      assert decision.result == :require_confirmation
+      assert decision.reason_code == "stale_observation"
+    end
+
+    test "a reset inside the clock margin still blocks" do
+      snap =
+        claude_snapshot(
+          %{"used_percent" => 83.0, "reset_at" => "2026-09-07T13:59:30Z"},
+          %{"used_percent" => 40.0, "reset_at" => "2026-09-12T00:00:00Z"},
+          "2026-09-07T13:58:00Z"
+        )
+
+      assert {:ok, decision} =
+               AdmissionEvaluation.evaluate(%{}, @claude_candidate, snap, nil, now: @now)
+
+      assert decision.result == :defer_until
+      assert decision.reason_code == "past_reset_delayed_recheck"
+    end
+
+    test "a reset five-hour window does not lift a weekly breach" do
+      snap =
+        claude_snapshot(
+          %{"used_percent" => 83.0, "reset_at" => "2026-09-07T10:30:00Z"},
+          %{"used_percent" => 95.0, "reset_at" => "2026-09-09T00:00:00Z"},
+          "2026-09-07T09:00:00Z"
+        )
+
+      assert {:ok, decision} =
+               AdmissionEvaluation.evaluate(%{}, @claude_candidate, snap, nil, now: @now)
+
+      assert decision.result == :defer_until
+      assert decision.reason_code == "reserve_breach_weekly"
+      assert decision.defer_until == ~U[2026-09-09 00:00:00Z]
+    end
+  end
+
   describe "evaluate_candidates/5 Multi-Candidate Selection" do
     test "evaluates candidates in policy priority order and selects best" do
       claude_candidate = %{

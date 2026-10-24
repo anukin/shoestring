@@ -69,15 +69,18 @@ defmodule Shoestring.Harness.CapacityTest do
       assert result.reason == "untested_cli_version: unknown"
     end
 
-    test "evaluates Claude headless modes as incompatible and unsupported" do
+    test "evaluates Claude json as unsupported and stream-json as conservative" do
       json_res = Capacity.compatibility(:claude, :headless_json, "2.1.251")
       assert json_res.support_tier == :unsupported
       assert json_res.compatibility_state == :incompatible
       assert json_res.reason =~ "Claude headless -p --output-format json"
 
-      stream_res = Capacity.compatibility(:claude, :headless_stream_json, "2.1.251")
-      assert stream_res.support_tier == :unsupported
-      assert stream_res.compatibility_state == :incompatible
+      stream_res = Capacity.compatibility(:claude, :headless_stream_json, "2.1.310")
+      assert stream_res.support_tier == :conservative_partial
+      assert stream_res.compatibility_state == :compatible
+
+      assert Capacity.compatibility(:claude, :headless_stream_json, "2.1.251").compatibility_state ==
+               :degraded
 
       scrape_res = Capacity.compatibility(:claude, :terminal_scrape)
       assert scrape_res.support_tier == :unsupported

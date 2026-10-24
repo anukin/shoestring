@@ -59,7 +59,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.SessionTest do
            transport_pid: transport,
            transport: ScriptedTransport,
            owner: self()
-         ]}
+         ] ++ Keyword.take(opts, [:capacity_sink, :clock])}
       )
 
     :sys.replace_state(transport, fn state -> %{state | owner: session} end)
@@ -150,6 +150,133 @@ defmodule Shoestring.Harness.ClaudeHeadless.SessionTest do
       assert summary.status == :failed
       assert {:error, %{code: "nonzero_exit"}} = summary.terminal_result
     end
+  end
+
+  describe "capacity readings from rate_limit_event frames" do
+    defp await_completed(transport, session) do
+      :ok = ScriptedTransport.replay_all(transport)
+      _ = :sys.get_state(session)
+      {:ok, summary} = Session.await_terminal(session, 5_000)
+      summary
+    end
+
+    test "each reading reaches the sink with the run's CLI version and UTC resets" do
+      test_pid = self()
+
+      {transport, session} =
+        start_scripted_session(fixture_lines("stream-json-smoke-live.jsonl"),
+          capacity_sink: fn snapshot ->
+            send(test_pid, {:reading, snapshot})
+            {:ok, :persisted, snapshot}
+          end,
+          clock: Shoestring.Test.FixedClock
+        )
+
+      assert await_completed(transport, session).status == :completed
+
+      assert_received {:reading, first}
+      assert_received {:reading, second}
+      refute_received {:reading, _}
+
+      for snapshot <- [first, second] do
+        assert snapshot.source.provider_id == "claude"
+        assert snapshot.source.invocation_mode == "headless_stream_json"
+        assert snapshot.source.event == :update_notification
+        assert snapshot.observed_at == ~U[2026-08-30 12:00:00.000000Z]
+        assert snapshot.extensions["capacity:cli_version"] == "2.1.263"
+        assert snapshot.compatibility_state == :compatible
+      end
+
+      five_hour = fn snapshot -> Enum.find(snapshot.windows, &(&1.kind == "five_hour")) end
+      assert five_hour.(first).used_percent == 62.0
+      assert five_hour.(second).used_percent == 63.0
+      assert five_hour.(second).reset_at == DateTime.from_unix!(1_788_696_600)
+    end
+
+    test "a failing sink never affects the run" do
+      lines = fixture_lines("stream-json-smoke-live.jsonl")
+
+      {plain_transport, plain_session} = start_scripted_session(lines)
+      plain = await_completed(plain_transport, plain_session)
+
+      for sink <- [
+            fn _snapshot -> raise "database unavailable" end,
+            fn _snapshot -> exit(:sink_down) end,
+            fn _snapshot -> {:error, :busy} end
+          ] do
+        {transport, session} = start_supervised_session_with_sink(lines, sink)
+
+        summary = await_completed(transport, session)
+        assert summary.status == plain.status
+        assert summary.provider_session_id == plain.provider_session_id
+
+        assert events_without_time(session) == events_without_time(plain_session)
+      end
+    end
+
+    test "a frame without an observed window records nothing" do
+      test_pid = self()
+
+      malformed =
+        Jason.encode!(%{
+          "type" => "rate_limit_event",
+          "rate_limit_info" => %{"status" => "allowed"},
+          "session_id" => "aaaaaaaa-0000-4000-a000-000000000002"
+        })
+
+      lines =
+        fixture_lines("stream-json-smoke-live.jsonl")
+        |> Enum.reject(&String.contains?(&1, "rate_limit_event"))
+        |> List.insert_at(1, malformed)
+
+      {transport, session} =
+        start_scripted_session(lines,
+          capacity_sink: fn snapshot ->
+            send(test_pid, {:reading, snapshot})
+            {:ok, :persisted, snapshot}
+          end
+        )
+
+      assert await_completed(transport, session).status == :completed
+      refute_received {:reading, _}
+    end
+  end
+
+  # Frames without a provider timestamp take the session's wall clock.
+  defp events_without_time(session) do
+    {:ok, events} = Session.stream_events(session)
+    Enum.map(events, &%{&1 | occurred_at: nil})
+  end
+
+  defp start_supervised_session_with_sink(lines, sink) do
+    req = make_test_run_request()
+    id = make_ref()
+
+    {:ok, transport} =
+      start_supervised(
+        Supervisor.child_spec({ScriptedTransport, [owner: nil, lines: lines]},
+          id: {:transport, id}
+        )
+      )
+
+    session =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Session,
+           [
+             run_request: req,
+             run_id: req.dispatch_id,
+             transport_pid: transport,
+             transport: ScriptedTransport,
+             owner: self(),
+             capacity_sink: sink
+           ]},
+          id: {:session, id}
+        )
+      )
+
+    :sys.replace_state(transport, fn state -> %{state | owner: session} end)
+    {transport, session}
   end
 
   describe "kill-only cancellation" do

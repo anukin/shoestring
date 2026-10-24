@@ -199,8 +199,8 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
         "claude-headless:rate_limit_status" => sanitize_string(info["status"]),
         "claude-headless:rate_limit_type" => sanitize_string(info["rateLimitType"])
       }
-      |> maybe_put_window("claude-headless:five_hour_utilization", windows["five_hour"])
-      |> maybe_put_window("claude-headless:seven_day_utilization", windows["seven_day"])
+      |> maybe_put_window("claude-headless:five_hour", windows["five_hour"])
+      |> maybe_put_window("claude-headless:seven_day", windows["seven_day"])
 
     build_events(
       run_id,
@@ -481,11 +481,24 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
 
   defp maybe_put_window(map, _key, nil), do: map
 
-  defp maybe_put_window(map, key, %{"utilization" => util}) when is_number(util) do
-    Map.put(map, key, util)
+  # Utilization stays the provider's fraction; the reset is kept as UTC
+  # ISO-8601 so the run's own evidence says when each window resets.
+  defp maybe_put_window(map, prefix, %{"utilization" => util} = window) when is_number(util) do
+    map
+    |> Map.put("#{prefix}_utilization", util)
+    |> maybe_put_reset("#{prefix}_resets_at", window["resetsAt"])
   end
 
-  defp maybe_put_window(map, _key, _window), do: map
+  defp maybe_put_window(map, _prefix, _window), do: map
+
+  defp maybe_put_reset(map, key, epoch) when is_integer(epoch) and epoch > 0 do
+    case DateTime.from_unix(epoch) do
+      {:ok, reset_at} -> Map.put(map, key, DateTime.to_iso8601(reset_at))
+      _ -> map
+    end
+  end
+
+  defp maybe_put_reset(map, _key, _epoch), do: map
 
   defp source_id(%{"uuid" => uuid}, _fallback)
        when is_binary(uuid) and byte_size(uuid) > 0 and byte_size(uuid) <= 200 do

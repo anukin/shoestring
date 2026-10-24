@@ -58,6 +58,9 @@ defmodule ShoestringWeb.UsageLive do
           <p :if={account.stale?} class="ss-notice">
             This reading is stale. Current allowance is unknown.
           </p>
+          <p :if={account.warning?} id={"#{id}-warning"} class="ss-notice">
+            The provider reported this account is close to a limit at the last reading.
+          </p>
           <section :for={w <- account.windows} class="ss-window" aria-label={window(w.kind)}>
             <div class="ss-row">
               <h3>{window(w.kind)}</h3>

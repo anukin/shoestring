@@ -67,12 +67,18 @@ defmodule Shoestring.Usage do
       scope: Security.redact(record.scope),
       status: status,
       stale?: summary.freshness_state == :stale,
+      warning?: warning?(record.extensions),
       reason: redact_nullable(summary.reason),
       observed_at: summary.observed_at,
       windows: windows(summary.windows),
       history: history(record, now)
     }
   end
+
+  # Claude reports `allowed_warning` when the account nears a limit. Shown as
+  # reported; it does not change admission by itself.
+  defp warning?(%{"claude:rate_limit_status" => "allowed_warning"}), do: true
+  defp warning?(_extensions), do: false
 
   defp unknown(provider),
     do: %{
@@ -81,6 +87,7 @@ defmodule Shoestring.Usage do
       scope: "No account observed",
       status: "Unknown",
       stale?: false,
+      warning?: false,
       reason: "No saved allowance observation yet.",
       observed_at: nil,
       windows: windows([]),

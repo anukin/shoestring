@@ -88,8 +88,11 @@ with degraded state and bounded reason without crashing.
 2. **Untested version drift** (e.g. `0.151.0` or `3.0.0`):
    * Outcome degrades to `:degraded` with reason `"untested_cli_version: <version>"`.
    * Future automatic admission policies will safely fail closed on degraded compatibility.
-3. **Unsupported modes** (Claude headless `-p --output-format json`, `stream-json`, terminal scraping):
+3. **Unsupported modes** (Claude headless `-p --output-format json`, terminal scraping):
    * Outcome is `:incompatible`, tier is `:unsupported`.
+4. **Claude headless `stream-json`** `rate_limit_event` frames during a run:
+   * `:conservative_partial` tier, `:compatible` for tested versions
+     (see [Claude capacity monitor](claude-capacity-monitor.md)).
 
 ### Phase 3: Observation Normalization
 
