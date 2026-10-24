@@ -51,6 +51,17 @@ defmodule Shoestring.Harness.Capacity.Registry do
       description:
         "Claude headless -p --output-format stream-json rate_limit_event frames during a run"
     },
+    # opencode reports no remaining quota without inference; its worker mode
+    # is tested for the protocol, and capacity is always an honest unknown.
+    %Entry{
+      provider: :opencode,
+      invocation_mode: :acp_stdio,
+      supported_tier: :reactive_only,
+      tested_versions: ["2.0.31"],
+      required_semantic_fields: [],
+      compatibility_outcome: :compatible,
+      description: "opencode acp (Agent Client Protocol over stdio); no capacity signal"
+    },
     %Entry{
       provider: :claude,
       invocation_mode: :terminal_scrape,
@@ -114,6 +125,8 @@ defmodule Shoestring.Harness.Capacity.Registry do
   def normalize_provider("codex"), do: {:ok, :codex}
   def normalize_provider(:claude), do: {:ok, :claude}
   def normalize_provider("claude"), do: {:ok, :claude}
+  def normalize_provider(:opencode), do: {:ok, :opencode}
+  def normalize_provider("opencode"), do: {:ok, :opencode}
   def normalize_provider(_), do: {:error, :unsupported_provider}
 
   @doc "Normalizes invocation mode atom or string for a given provider."
@@ -164,6 +177,10 @@ defmodule Shoestring.Harness.Capacity.Registry do
              "scrape"
            ],
       do: {:ok, :terminal_scrape}
+
+  def normalize_mode(:opencode, mode)
+      when mode in [:acp_stdio, "acp_stdio", "acp", "opencode acp"],
+      do: {:ok, :acp_stdio}
 
   def normalize_mode(_provider, _mode), do: {:error, :unsupported_mode}
 end

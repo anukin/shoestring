@@ -64,6 +64,15 @@ defmodule Shoestring.Release.DoctorTest do
 
     assert untested["claude"]["readiness"] == "version_untested"
 
+    # opencode's sign-in cannot be read without starting its background
+    # server: a tested version is never reported ready.
+    opencode =
+      Doctor.agents(Map.put(probes, "opencode", probe.("2.0.31", "not_detectable")), present)
+
+    assert opencode["opencode"]["readiness"] == "unknown"
+    assert opencode["opencode"]["worker_mode"] == "acp_stdio"
+    assert passive["opencode"]["readiness"] == "not_checked"
+
     unknown = Doctor.agents(%{probes | "claude" => probe.(nil, "unknown")}, present)
     assert unknown["claude"]["readiness"] == "unknown"
     assert Doctor.agents(probes, missing)["claude"]["readiness"] == "binary_missing"

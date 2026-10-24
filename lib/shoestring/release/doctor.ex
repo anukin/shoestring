@@ -37,13 +37,19 @@ defmodule Shoestring.Release.Doctor do
     }
   end
 
-  @agents [{"claude", :headless_stream_json}, {"codex", :app_server_stdio}]
+  @agents [
+    {"claude", :headless_stream_json},
+    {"codex", :app_server_stdio},
+    {"opencode", :acp_stdio}
+  ]
 
   @doc """
   Whether each supported agent CLI can take task work, without inference:
   `binary_missing`, `not_checked` (installed; run `doctor --probe-providers`
   to check it), `needs_sign_in`, `version_untested` (outside the versions its
-  worker mode was tested with), `ready`, or `unknown`. `probes` is
+  worker mode was tested with), `ready`, or `unknown`. opencode's sign-in
+  cannot be read without starting its background server, so a tested opencode
+  is `unknown`, never `ready`. `probes` is
   `Shoestring.Release.ProviderProbe.report/1`, or `nil` for the passive
   doctor, which runs no provider command. `find` locates an executable.
   """

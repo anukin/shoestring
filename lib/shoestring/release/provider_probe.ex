@@ -8,7 +8,10 @@ defmodule Shoestring.Release.ProviderProbe do
         {"claude", ["auth", "status"],
          Shoestring.Harness.ClaudeHeadless.identity().adapter_version},
         {"codex", ["login", "status"],
-         Shoestring.Harness.CodexAppServer.identity().adapter_version}
+         Shoestring.Harness.CodexAppServer.identity().adapter_version},
+        # `opencode auth list` starts opencode's detached background server,
+        # so only the version is read; sign-in is not detectable.
+        {"opencode", nil, Shoestring.Harness.OpencodeAcp.identity().adapter_version}
       ],
       fn {name, auth_args, fixture_version} ->
         version =
@@ -16,7 +19,7 @@ defmodule Shoestring.Release.ProviderProbe do
             {:ok, 0, body} when is_binary(body) ->
               body = if String.valid?(body), do: body, else: ""
 
-              case Regex.run(~r/\b(\d{1,5}\.\d{1,5}\.\d{1,5})\b/, body) do
+              case Regex.run(~r/\bv?(\d{1,5}\.\d{1,5}\.\d{1,5})\b/, body) do
                 [_, value] -> value
                 _ -> nil
               end
@@ -26,7 +29,8 @@ defmodule Shoestring.Release.ProviderProbe do
           end
 
         auth =
-          case runner.(name, auth_args) do
+          case auth_args && runner.(name, auth_args) do
+            nil -> "not_detectable"
             {:ok, 0, _} -> "reported_authenticated"
             {:ok, 1, _} -> "reported_unauthenticated"
             _ -> "unknown"

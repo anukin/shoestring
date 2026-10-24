@@ -8,10 +8,17 @@ defmodule Shoestring.Harness.Capacity.RegistryTest do
     test "seeds authoritative Gate 0A support matrix entries" do
       entries = Registry.entries()
 
-      assert length(entries) == 5
+      assert length(entries) == 6
 
       providers = Enum.map(entries, & &1.provider) |> Enum.uniq() |> Enum.sort()
-      assert providers == [:claude, :codex]
+      assert providers == [:claude, :codex, :opencode]
+
+      # opencode has no capacity signal: never proactive, never unsupported
+      # (an unsupported tier would refuse every run without confirmation).
+      assert {:ok, %Entry{supported_tier: :reactive_only, tested_versions: ["2.0.31"]} = opencode} =
+               Registry.lookup("opencode", "acp")
+
+      assert Registry.tested_version?(opencode, "opencode v2.0.31")
 
       codex_stdio =
         Enum.find(entries, &(&1.provider == :codex and &1.invocation_mode == :app_server_stdio))
