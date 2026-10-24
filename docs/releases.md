@@ -93,7 +93,8 @@ use passive doctor when those effects are unwanted.
 `doctor` also reports `agents`: each supported agent CLI's readiness for task
 work (`binary_missing`, `not_checked`, `needs_sign_in`, `version_untested`,
 `ready` or `unknown`) against the versions its worker mode was tested with.
-Without `--probe-providers` an installed CLI is `not_checked`. `doctor`
+Without `--probe-providers` an installed CLI is `not_checked`. opencode's
+sign-in is not detectable, so a tested opencode is `unknown`. `doctor`
 accepts `--json`; its output is always JSON.
 
 ## Work commands

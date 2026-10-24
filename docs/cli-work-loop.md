@@ -34,6 +34,10 @@ shoestring agents create builder --worker claude:opus --default
 mix phx.server
 ```
 
+To run tasks through opencode instead, see [opencode worker](opencode-worker.md):
+the worker becomes `opencode:PROVIDER/MODEL` and the coordinator stays Claude or
+Codex.
+
 `do` refuses to queue work unless the service it reaches reports the same
 database it uses (`/health` carries a fingerprint of the database path), so
 give both the same state directory: the installation's default, or the same

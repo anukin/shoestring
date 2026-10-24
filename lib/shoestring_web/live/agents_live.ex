@@ -134,9 +134,17 @@ defmodule ShoestringWeb.AgentsLive do
   end
 
   defp reset_model(attrs, _), do: attrs
-  defp providers, do: [{"Claude Code", "claude"}, {"Codex", "codex"}]
+
+  defp providers,
+    do: [
+      {"Claude Code", "claude"},
+      {"Codex", "codex"},
+      {"opencode (plan tasks only)", "opencode"}
+    ]
+
   defp provider("claude"), do: "Claude Code"
   defp provider("codex"), do: "Codex"
+  defp provider("opencode"), do: "opencode"
 
   def render(assigns) do
     ~H"""

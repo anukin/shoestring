@@ -86,6 +86,7 @@ defmodule ShoestringWeb.ConfigurationLiveTest do
       settings: %{
         default_agent_id: agent.id,
         codex_models: "default\nconfigured-model",
+        opencode_models: "opencode/configured-free",
         refresh_seconds: "0"
       }
     )
@@ -93,6 +94,7 @@ defmodule ShoestringWeb.ConfigurationLiveTest do
 
     assert AgentProfiles.settings().default_agent_id == agent.id
     assert AgentProfiles.catalog()["codex"] == ["default", "configured-model"]
+    assert AgentProfiles.catalog()["opencode"] == ["opencode/configured-free"]
     {:ok, _} = AgentProfiles.save_settings(AgentProfiles.settings(), %{"refresh_seconds" => 300})
     view |> form("#settings-form", settings: %{refresh_seconds: "60"}) |> render_submit()
     assert has_element?(view, "#settings-errors", "settings changed")

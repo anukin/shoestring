@@ -8,7 +8,7 @@ defmodule Shoestring.Diagnostics.Bundle do
   @max_bytes 512 * 1024
   @registered EventRegistry.registered_types()
   @types Enum.uniq(Enum.map(@registered, &elem(&1, 0)))
-  @providers ~w(claude codex fake claude_headless_stream_json codex_app_server_stdio)
+  @providers ~w(claude codex opencode fake claude_headless_stream_json codex_app_server_stdio opencode_acp)
   @tiers ~w(proactive reactive_only conservative_partial unsupported supported partial)
   @compatibility ~w(compatible degraded incompatible unknown)
   @reasons ~w(automatic_admission_eligible unsupported_capability incompatible_cli unsupported_tier

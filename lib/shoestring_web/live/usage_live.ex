@@ -22,6 +22,7 @@ defmodule ShoestringWeb.UsageLive do
   defp load(socket), do: stream(socket, :accounts, Usage.cards(), reset: true)
   defp provider("claude"), do: "Claude Code"
   defp provider("codex"), do: "Codex"
+  defp provider("opencode"), do: "opencode"
   defp provider(value), do: Shoestring.Harness.Security.redact(value)
   defp window("five_hour"), do: "Five-hour allowance"
   defp window("seven_day"), do: "Weekly allowance"
@@ -57,6 +58,10 @@ defmodule ShoestringWeb.UsageLive do
           <p :if={account.reason} class="ss-small">{account.reason}</p>
           <p :if={account.stale?} class="ss-notice">
             This reading is stale. Current allowance is unknown.
+          </p>
+          <p :if={account.provider == "opencode"} id={"#{id}-shared-quota"} class="ss-notice">
+            opencode reports no remaining allowance. An openai/ model uses the same ChatGPT
+            subscription as Codex, and Shoestring cannot see that use.
           </p>
           <p :if={account.warning?} id={"#{id}-warning"} class="ss-notice">
             The provider reported this account is close to a limit at the last reading.

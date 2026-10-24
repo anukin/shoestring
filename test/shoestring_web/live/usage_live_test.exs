@@ -75,4 +75,16 @@ defmodule ShoestringWeb.UsageLiveTest do
     {:ok, view, _} = live(conn, "/usage")
     assert has_element?(view, "#usage-accounts .ss-notice", "close to a limit")
   end
+
+  test "an opencode account shows unknown capacity and the shared-subscription note", %{
+    conn: conn
+  } do
+    {:ok, snapshot} = Shoestring.Harness.OpencodeAcp.probe(%{scope: "subscription"})
+    {:ok, _, _} = Shoestring.Harness.Observatory.ingest(snapshot)
+
+    {:ok, view, _} = live(conn, "/usage")
+    assert has_element?(view, "#usage-accounts h2", "opencode")
+    assert has_element?(view, "#usage-accounts .ss-notice", "same ChatGPT")
+    refute has_element?(view, "#usage-accounts [role=progressbar]")
+  end
 end

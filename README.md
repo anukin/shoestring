@@ -10,7 +10,8 @@ The short version:
 
 It owns goals, tasks, trajectory events, projections, artifacts, recovery, and
 event-driven UI. Harness adapters are the boundary where it will later launch
-and observe external coding agents such as Claude Code or Codex. Shoestring
+and observe external coding agents such as Claude Code or Codex; opencode can
+also run plan tasks ([opencode worker](docs/opencode-worker.md)). Shoestring
 does not itself provide a model, a coding-agent CLI, or a vendor API.
 
 ## What is implemented

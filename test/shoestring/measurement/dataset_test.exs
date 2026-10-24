@@ -117,6 +117,29 @@ defmodule Shoestring.Measurement.DatasetTest do
     refute Dataset.encode(dataset) =~ "PRIVATE_VERSION_MARKER"
   end
 
+  # Base: an opencode run's adapter was unknown, so its row had no provider.
+  test "an opencode run is labelled, and never a calibration example" do
+    f = F.history()
+
+    events =
+      Enum.map(f.events, fn
+        %{type: "run.requested"} = e ->
+          %{e | payload: Map.put(e.payload, "provider_id", "opencode_acp")}
+
+        e ->
+          e
+      end)
+
+    assert {:ok, dataset} = Dataset.build(events)
+    [row] = dataset["rows"]
+    assert row["provider"] == "opencode"
+    assert row["harness"] == "opencode_acp"
+
+    assert {:ok, v2} = Shoestring.Measurement.DatasetV2.build(events)
+    assert [%{"capacity" => %{"assignable" => false}, "training_eligible" => false}] = v2["rows"]
+    refute "opencode" in Shoestring.Measurement.Brackets.readable_providers()
+  end
+
   test "overlapping external-to-goal runs are contamination, never consumption labels" do
     a = F.history()
     b = F.history()

@@ -16,6 +16,7 @@ defmodule Shoestring.Measurement.Dataset do
   @adapters %{
     "claude_headless_stream_json" => "claude",
     "codex_app_server_stdio" => "codex",
+    "opencode_acp" => "opencode",
     "claude_interactive_pty" => "claude",
     "codex_interactive_pty" => "codex",
     "fixture_interactive_pty" => "fixture",

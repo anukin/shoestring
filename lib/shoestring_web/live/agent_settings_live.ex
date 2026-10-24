@@ -91,6 +91,20 @@ defmodule ShoestringWeb.AgentSettingsLive do
             />
             <p class="ss-small">Use identifiers available in your installed CLI and account.</p>
           </div>
+          <div>
+            <.input
+              field={@form[:opencode_models]}
+              type="textarea"
+              label="opencode model identifiers"
+              rows="4"
+              class="ss-input"
+            />
+            <p class="ss-small">
+              provider/model, as <code>opencode models</code>
+              lists them. opencode runs plan tasks only; there is no default model.
+              An openai/ model uses the same ChatGPT subscription as Codex, and Shoestring cannot see that use.
+            </p>
+          </div>
         </div>
         <h2 class="ss-section">Defaults</h2>
         <div class="ss-fields">

@@ -161,9 +161,9 @@ one tab-separated line per agent.
 
 ## `doctor` agent readiness
 
-`shoestring doctor` reports `agents`: for each supported agent CLI (Claude
-and Codex) its readiness for task work, the CLI version, its worker mode and
-the versions that mode was tested with:
+`shoestring doctor` reports `agents`: for each supported agent CLI (Claude,
+Codex and opencode) its readiness for task work, the CLI version, its worker
+mode and the versions that mode was tested with:
 
 | Readiness | Meaning |
 | --- | --- |
@@ -177,4 +177,7 @@ the versions that mode was tested with:
 Only `shoestring doctor --probe-providers` runs the provider CLIs, and only
 for `--version`, `claude auth status` and `codex login status`, never a model
 prompt (see [releases](releases.md#first-run-and-doctor)). Reported sign-in is
-not proof that a later run will succeed.
+not proof that a later run will succeed. opencode is asked only for its
+version: its status commands start a background server, so its sign-in is not
+detectable and a tested opencode is `unknown`, never `ready`
+([opencode worker](opencode-worker.md)).
