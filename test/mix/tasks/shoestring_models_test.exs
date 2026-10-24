@@ -22,9 +22,14 @@ defmodule Mix.Tasks.Shoestring.ModelsTest do
     assert %{"claude" => ["default", "opus"]} = run_json!(["add", "claude", "opus"])
     assert %{"codex" => ["default", "gpt-5.5"]} = run_json!(["add", "codex", "gpt-5.5"])
 
+    # opencode starts with no model: there is no default to fall back to.
+    assert %{"opencode" => ["opencode/glm-5"]} =
+             run_json!(["add", "opencode", "opencode/glm-5"])
+
     assert AgentProfiles.catalog() == %{
              "claude" => ["default", "opus"],
-             "codex" => ["default", "gpt-5.5"]
+             "codex" => ["default", "gpt-5.5"],
+             "opencode" => ["opencode/glm-5"]
            }
   end
 
@@ -33,6 +38,7 @@ defmodule Mix.Tasks.Shoestring.ModelsTest do
           ["add", "gemini", "pro"],
           ["add", "claude", "two words"],
           ["add", "claude", "-rf"],
+          ["add", "opencode", "glm-5"],
           ["add", "claude"],
           ["remove", "claude", "opus"],
           ["list", "--all"]
@@ -40,6 +46,10 @@ defmodule Mix.Tasks.Shoestring.ModelsTest do
       assert_raise Mix.Error, fn -> Mix.Tasks.Shoestring.Models.run(args) end
     end
 
-    assert AgentProfiles.catalog() == %{"claude" => ["default"], "codex" => ["default"]}
+    assert AgentProfiles.catalog() == %{
+             "claude" => ["default"],
+             "codex" => ["default"],
+             "opencode" => []
+           }
   end
 end

@@ -106,4 +106,38 @@ defmodule Mix.Tasks.Shoestring.AgentsTest do
 
     assert AgentProfiles.list() == []
   end
+
+  test "an opencode worker needs a Claude or Codex coordinator" do
+    {:ok, _} =
+      AgentProfiles.save_settings(AgentProfiles.settings(), %{
+        "claude_models" => "default fixture-claude",
+        "opencode_models" => "opencode/fixture-free"
+      })
+
+    assert_raise Mix.Error, ~r/opencode runs plan tasks only. Add --coordinator/, fn ->
+      Mix.Tasks.Shoestring.Agents.run([
+        "create",
+        "oc",
+        "--worker",
+        "opencode:opencode/fixture-free"
+      ])
+    end
+
+    assert AgentProfiles.list() == []
+
+    snapshot =
+      run_json!([
+        "create",
+        "oc",
+        "--worker",
+        "opencode:opencode/fixture-free",
+        "--coordinator",
+        "claude:fixture-claude"
+      ])
+
+    assert [
+             %{"name" => "Coordinator", "provider" => "claude"},
+             %{"name" => "Worker", "provider" => "opencode", "model" => "opencode/fixture-free"}
+           ] = snapshot["configuration"]["roles"]
+  end
 end
