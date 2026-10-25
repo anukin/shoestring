@@ -78,9 +78,11 @@ replaceable execution providers. The longer-term product vocabulary is:
 
 ## Product interface
 
-REPO-INSPECTION: a persistent conversational Cobbler terminal is planned in
-[iteration 14](plans/milestones/14-conversational-cli.md). It is proposed and
-unimplemented; the current CLI workflow below handles one request at a time.
+REPO-INSPECTION: an Omnigent-style orchestrator is planned in
+[iteration 14](plans/milestones/14-coordinator-orchestration.md): you chat with
+Claude Code, Codex or opencode as the coordinator, and it dispatches sandboxed
+Elves through Shoestring. It is proposed and unimplemented; the current CLI
+workflow below handles one request at a time.
 
 ### One command (iteration 7A)
 

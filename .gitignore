@@ -54,7 +54,7 @@ plans/milestones/*
 !/plans/milestones/06-cobbler-planning.md
 !/plans/milestones/07-multi-elf.md
 !/plans/milestones/07a-cli-work-loop.md
-!/plans/milestones/14-conversational-cli.md
+!/plans/milestones/14-coordinator-orchestration.md
 !/plans/milestones/configuration-and-usage-ui.md
 !/plans/mockups/
 /plans/mockups/*
