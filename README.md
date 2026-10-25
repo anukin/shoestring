@@ -78,6 +78,10 @@ replaceable execution providers. The longer-term product vocabulary is:
 
 ## Product interface
 
+REPO-INSPECTION: a persistent conversational Cobbler terminal is planned in
+[iteration 14](plans/milestones/14-conversational-cli.md). It is proposed and
+unimplemented; the current CLI workflow below handles one request at a time.
+
 ### One command (iteration 7A)
 
 From any clean Git repository, with the service running (`shoestring start`

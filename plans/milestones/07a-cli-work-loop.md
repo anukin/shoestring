@@ -203,6 +203,11 @@ unchanged.
 Auto-approval, automatic merging, chat-style follow-up conversation, a
 terminal UI beyond line output, Codex planning, and packaging (iteration 10).
 
+REPO-INSPECTION — 2026-10-25 follow-up: the conversational terminal product gap
+is specified separately in [iteration 14](14-conversational-cli.md). This
+preserves 7A's original acceptance scope; its completion is not evidence that
+ongoing Cobbler conversation or chat-style follow-ups have shipped.
+
 ## Completion record
 
 - Final status and date: implemented and live-verified, 2026-10-15; accepted
