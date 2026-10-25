@@ -5,6 +5,13 @@ receipts and full roadmap acceptance are separate claims. The milestone index
 and dated completion addenda remain the authoritative history; old proposed
 headers do not override later decisions.
 
+VERIFIED 2026-10-25: the local follow-up passed `mix precommit` with 4 doctests,
+2555 tests, 0 failures, 1 skipped and 6 live tests excluded. Rust passed 4 unit
+and 5 integration tests; Node passed 52/52 and 16/16. The clean implementation
+release also passed extracted-package CLI, health, page/asset and diagnostics
+checks. [Exact commands, regression evidence and retained limits](../plans/evidence/10-forecasting-packaging/acceptance-gap-closure.md)
+are recorded together; none of these checks consumed provider quota.
+
 | Area | Evidence and boundary |
 | --- | --- |
 | Core supervisor, plans, concurrency, review, terminal and installed CLI | REPO-INSPECTION: implemented, with dated acceptance records through iterations 9 and 11–13 in the [milestone index](../plans/milestones/README.md). |
