@@ -4,7 +4,8 @@ defmodule ShoestringWeb.AgentsLive do
   alias Shoestring.AgentProfiles.{Definition, Role}
 
   def mount(_, _, socket),
-    do: {:ok, assign(socket, current_scope: nil, page_title: "Agents", agent: nil)}
+    do:
+      {:ok, assign(socket, current_scope: nil, page_title: "Agents", agent: nil, team_status: "")}
 
   def handle_params(params, _, socket) do
     case socket.assigns.live_action do
@@ -58,7 +59,7 @@ defmodule ShoestringWeb.AgentsLive do
          |> push_navigate(to: ~p"/agents")}
 
       {:error, changeset} ->
-        {:noreply, form(socket, changeset)}
+        {:noreply, socket |> form(changeset) |> push_event("ss:focus", %{id: "agent-errors"})}
     end
   end
 
@@ -74,7 +75,11 @@ defmodule ShoestringWeb.AgentsLive do
         model: hd(catalog["codex"])
       }
 
-      {:noreply, configure(socket, %{draft | roles: draft.roles ++ [role]}, socket.assigns.agent)}
+      {:noreply,
+       socket
+       |> configure(%{draft | roles: draft.roles ++ [role]}, socket.assigns.agent)
+       |> assign(:team_status, "Role #{length(draft.roles) + 1} added.")
+       |> push_event("ss:focus", %{id: "agent_roles_#{length(draft.roles)}_name"})}
     else
       {:noreply, socket}
     end
@@ -86,11 +91,10 @@ defmodule ShoestringWeb.AgentsLive do
     case Integer.parse(index) do
       {index, ""} when index > 0 and index < length(draft.roles) ->
         {:noreply,
-         configure(
-           socket,
-           %{draft | roles: List.delete_at(draft.roles, index)},
-           socket.assigns.agent
-         )}
+         socket
+         |> configure(%{draft | roles: List.delete_at(draft.roles, index)}, socket.assigns.agent)
+         |> assign(:team_status, "Role #{index + 1} removed.")
+         |> push_event("ss:focus", %{id: "add-role"})}
 
       _ ->
         {:noreply, socket}
@@ -114,6 +118,7 @@ defmodule ShoestringWeb.AgentsLive do
         catalog: AgentProfiles.catalog(),
         efforts: AgentProfiles.efforts(),
         form_errors: if(changeset.action, do: changeset.errors, else: []),
+        form_invalid?: not is_nil(changeset.action) and not changeset.valid?,
         role_count: length(Ecto.Changeset.get_field(changeset, :roles) || [])
       )
 
@@ -152,7 +157,7 @@ defmodule ShoestringWeb.AgentsLive do
       <%= if @live_action == :index do %>
         <div class="ss-heading">
           <div>
-            <h1>Agents</h1>
+            <h1 id="page-heading" tabindex="-1">Agents</h1>
             <p>Named orchestrators for your CLI workflow.</p>
           </div>
           <.link id="new-agent" navigate={~p"/agents/new"} class="ss-button ss-primary">
@@ -183,9 +188,11 @@ defmodule ShoestringWeb.AgentsLive do
             <div class="ss-actions">
               <code>{agent.slug}</code><.link
                 id={"duplicate-#{agent.id}"}
+                aria-label={"Duplicate #{agent.name}"}
                 navigate={~p"/agents/#{agent.slug}/duplicate"}
               >Duplicate</.link><.link
                 id={"edit-#{agent.id}"}
+                aria-label={"Edit #{agent.name}"}
                 navigate={~p"/agents/#{agent.slug}/edit"}
               >Edit</.link>
             </div>
@@ -194,7 +201,9 @@ defmodule ShoestringWeb.AgentsLive do
       <% else %>
         <div class="ss-heading">
           <div>
-            <h1>{if @agent, do: "Edit agent", else: "Create agent"}</h1>
+            <h1 id="page-heading" tabindex="-1">
+              {if @agent, do: "Edit agent", else: "Create agent"}
+            </h1>
             <p>Save a configuration for CLI use. Each edit creates a new revision.</p>
           </div>
         </div>
@@ -206,7 +215,9 @@ defmodule ShoestringWeb.AgentsLive do
           phx-change="validate"
           phx-submit="save"
         >
-          <div :if={@form_errors != []} id="agent-errors" class="ss-error" role="alert">
+          <div :if={@form_invalid?} id="agent-errors" class="ss-error" role="alert" tabindex="-1">
+            <h2>Check agent configuration</h2>
+            <p>Review the highlighted fields. Your changes have been kept.</p>
             <p :for={{field, {message, _}} <- @form_errors}>{field}: {message}</p>
             <button
               :if={@agent}
@@ -234,9 +245,15 @@ defmodule ShoestringWeb.AgentsLive do
             class="ss-input"
           />
           <h2 class="ss-section">Team</h2>
-          <p>The coordinator is required. Add up to five roles for your workflow.</p>
+          <p id="agent-team-help">
+            The coordinator is required. Add up to five roles for your workflow.
+          </p>
+          <p id="agent-team-status" class="ss-sr-only" role="status" aria-atomic="true">
+            {@team_status}
+          </p>
           <.inputs_for :let={role} field={@form[:roles]}>
-            <div class="ss-role-editor">
+            <fieldset id={"role-editor-#{role.index}"} class="ss-role-editor">
+              <legend>{role[:name].value || "Role #{role.index + 1}"}</legend>
               <.input field={role[:name]} label="Role" readonly={role.index == 0} class="ss-input" />
               <.input
                 field={role[:provider]}
@@ -267,11 +284,11 @@ defmodule ShoestringWeb.AgentsLive do
                 class="ss-button"
                 phx-click="remove-role"
                 phx-value-index={role.index}
-                aria-label={"Remove role #{role.index + 1}"}
+                aria-label={"Remove role #{role.index + 1}: #{role[:name].value}"}
               >
                 Remove
               </button>
-            </div>
+            </fieldset>
           </.inputs_for>
           <button
             id="add-role"
@@ -279,6 +296,7 @@ defmodule ShoestringWeb.AgentsLive do
             class="ss-button"
             phx-click="add-role"
             disabled={@role_count >= 6}
+            aria-describedby="agent-team-help"
           >
             Add role
           </button>

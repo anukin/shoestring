@@ -4,10 +4,11 @@ defmodule ShoestringWeb.UsageLive do
 
   def mount(_params, _session, socket) do
     if connected?(socket), do: schedule()
-    {:ok, socket |> assign(current_scope: nil, page_title: "Usage") |> load()}
+    {:ok, socket |> assign(current_scope: nil, page_title: "Usage", refresh_count: 0) |> load()}
   end
 
-  def handle_event("refresh", _, socket), do: {:noreply, load(socket)}
+  def handle_event("refresh", _, socket),
+    do: {:noreply, socket |> load() |> update(:refresh_count, &(&1 + 1))}
 
   def handle_info(:refresh, socket) do
     schedule()
@@ -36,7 +37,7 @@ defmodule ShoestringWeb.UsageLive do
     <Layouts.app flash={@flash} current_scope={@current_scope} product_page="usage">
       <div class="ss-heading">
         <div>
-          <h1>Usage</h1>
+          <h1 id="page-heading" tabindex="-1">Usage</h1>
           <p>Subscription allowances shared by each provider account.</p>
         </div>
         <button
@@ -48,6 +49,11 @@ defmodule ShoestringWeb.UsageLive do
           Refresh
         </button>
       </div>
+      <p id="usage-refresh-status" class="ss-sr-only" role="status" aria-atomic="true">
+        <span :if={@refresh_count > 0} id={"usage-refreshed-#{@refresh_count}"}>
+          Saved observations refreshed. No provider was contacted.
+        </span>
+      </p>
       <div id="usage-accounts" class="ss-grid" phx-update="stream">
         <article :for={{id, account} <- @streams.accounts} id={id} class="ss-panel">
           <div class="ss-row">
@@ -96,11 +102,29 @@ defmodule ShoestringWeb.UsageLive do
             <p class="ss-small">
               Daily peak of five-hour usage · UTC · 0–100%. Gaps mean no observation.
             </p>
-            <div class="ss-bars">
+            <table class="ss-sr-only">
+              <caption>
+                Seven-day usage history for {provider(account.provider)} · {account.scope}
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Date (UTC)</th>
+                  <th scope="col">Peak five-hour usage</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr :for={day <- account.history}>
+                  <th scope="row">{Date.to_iso8601(day.date)}</th>
+                  <td>
+                    {if is_nil(day.value), do: "No observation", else: percent(day.value) <> "% used"}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="ss-bars" aria-hidden="true">
               <div
                 :for={day <- account.history}
                 class="ss-day"
-                aria-label={"#{day.date}: #{if is_nil(day.value), do: "no observation", else: percent(day.value) <> "% used"}"}
               >
                 <div class="ss-column">
                   <span :if={is_number(day.value)} style={"height: #{day.value}%"}></span><span

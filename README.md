@@ -9,14 +9,14 @@ The short version:
 > Shoestring is an agent supervisor, not an agent harness.
 
 It owns goals, tasks, trajectory events, projections, artifacts, recovery, and
-event-driven UI. Harness adapters are the boundary where it will later launch
+event-driven UI. Harness adapters are the boundary where it launches
 and observe external coding agents such as Claude Code or Codex; opencode can
 also run plan tasks ([opencode worker](docs/opencode-worker.md)). Shoestring
 does not itself provide a model, a coding-agent CLI, or a vendor API.
 
 ## What is implemented
 
-The current application contains the first durable trajectory slice:
+REPO-INSPECTION: the current application implements:
 
 - Phoenix and LiveView provide a local control-plane UI and health endpoint.
 - SQLite through Ecto stores goals, tasks, canonical trajectory events,
@@ -25,9 +25,8 @@ The current application contains the first durable trajectory slice:
   uniqueness remains the final ordering and idempotency boundary.
 - Events use UUIDv4 binary IDs, UTC microsecond timestamps, and positive
   per-goal sequence numbers.
-- The versioned event registry currently supports `goal.created`,
-  `task.created`, `decision.recorded`, and `task.completed` at schema version
-  1.
+- A versioned event registry validates goal/task, run/lease, planning,
+  reservation, review, capacity and terminal lifecycle events.
 - Deterministic goal/task projectors can resume from a persisted sequence or
   rebuild derived state from canonical events.
 - Artifacts are bounded, content-addressed, atomically written, and verified
@@ -36,6 +35,17 @@ The current application contains the first durable trajectory slice:
   non-canonical. It can replay fixtures through pure projection transitions.
 - A local timeline route renders replayed events and projection status:
   `/goals/:goal_id/timeline`.
+- Approved plans execute sequentially or through concurrent isolated workers,
+  with shared reservations, deterministic sandboxed checks and optional bounded
+  cross-provider review.
+- The installed CLI submits work, follows progress, records human decisions and
+  returns verified results. The web UI configures agents and shows saved usage.
+- Interactive PTY sessions support explicit human takeover and bounded output.
+- Claude usage readings and Codex capacity observations retain their provenance;
+  opencode task workers report unknown capacity and shared-quota limits.
+- Native macOS arm64 releases include initialization, upgrade backups, doctor
+  checks and private diagnostic exports. Optional API/local text adapters are
+  disabled by default, and forecasts remain shadow-only.
 
 The timeline is currently a development/demo surface. The repository does not
 yet contain an authentication plug, authenticated `live_session`, or
@@ -59,14 +69,13 @@ Shoestring trajectory boundary
           ├── bounded artifact store
           └── ordered, redacted JSONL fixtures
 
-Future harness adapters
+Harness adapters
           │
           └── Claude Code, Codex, and other external executors
 ```
 
 This makes Shoestring closer to a supervisor/control plane than a “meta
-harness.” It may supervise multiple harnesses, but the harnesses remain
-replaceable execution providers. The longer-term product vocabulary is:
+harness.” Harnesses remain replaceable execution providers. The product vocabulary is:
 
 - **Cobbler**: a per-goal supervisor that plans, dispatches, waits, verifies,
   and replans.
@@ -147,8 +156,8 @@ small `python3` wrapper that creates a new process group (`os.setsid()`),
 redirects stdin from `/dev/null`, and `exec`s the target argv, so
 cancellation can reliably terminate the whole owned group. Without it, Elf
 runs fail closed with `error_code: "setsid_unavailable"` in the durable
-`run.failed` event. Iteration 9 (or earlier hardening) is expected to replace
-the wrapper with a small compiled C shim in `c_src/` (or `:erlexec`): the
+`run.failed` event. A compiled replacement has not shipped. The previously
+proposed small C shim in `c_src/` (or `:erlexec`) remains a follow-up: the
 interpreter costs roughly 30-50ms per spawn and the host `PYTHONPATH` leaks
 into the launch environment.
 
@@ -243,21 +252,14 @@ appear successful.
 
 ## Roadmap
 
-REPO-INSPECTION: durable harness execution, quota-aware admission/continuation,
-approved sequential plans, worktree gates and bounded amendment are implemented.
-The [iteration-6 acceptance packet](plans/evidence/06-cobbler-planning/final-acceptance.md)
-separates deterministic checks, the successful live receipt run and retained limits.
+REPO-INSPECTION: concurrent isolated workers, shared reservations, bounded
+cross-provider review, interactive terminals, native releases, the installed
+work CLI, Claude usage tracking and opencode task workers are implemented.
+The [milestone index](plans/milestones/README.md) links their acceptance records.
+The [current acceptance status](docs/acceptance-status.md) distinguishes shipped
+capabilities, fresh verification and retained limits.
 
-Planned follow-ups are concurrent isolated workers and shared reservations,
-bounded cross-provider review, and installable releases with diagnostics and
-optional forecasting/adapters. Production subscription planning is a separate
-integration gap: importing a saved subscription-model proposal does not establish
-admission/accounting for subscription planner inference. The older browser-terminal
-milestone needs reconciling with the agreed CLI work interface. Authentication
-also remains necessary before shared/non-loopback exposure. See the
-[current milestone record](plans/milestones/06-cobbler-planning.md).
-
-Iteration 10 is in progress. Repository-only [run measurements](docs/measurements.md)
+Iteration 10 retains explicitly deferred acceptance work. Repository-only [run measurements](docs/measurements.md)
 and [shadow forecast reports](docs/shadow-forecasts.md) expose provenance, missing
 data and fallback without changing admission. Forecast-assisted routing remains
 disabled; adapter, release and diagnostic work is tracked separately in the
@@ -267,8 +269,12 @@ sanitized bundle and requires its exact digest before creating a private export.
 Optional [local and capped API text adapters](docs/text-adapters.md) use durable
 once-only requests and operator policy. [Release tooling](docs/releases.md)
 provides native packaging, private initialization, backup-before-upgrade,
-doctor checks and a foreground launcher. Real calibration and external
-clean-machine installation remain separate acceptance checks.
+doctor checks and a foreground launcher. Fresh-machine installation was verified
+in the [installed-CLI acceptance run](plans/evidence/12-installed-cli/README.md#fresh-vm-acceptance-verified-2026-10-24).
+Real calibration, live optional-adapter inference and forecast-assisted policy
+acceptance remain open; the [calibration collection plan](docs/calibration-run-plan.md)
+describes their prerequisites. Linux sandboxing and shared/non-loopback
+authentication remain outside the supported local macOS scope.
 
 ## Production release
 
