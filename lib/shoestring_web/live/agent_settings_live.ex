@@ -16,8 +16,11 @@ defmodule ShoestringWeb.AgentSettingsLive do
 
   def handle_event("save", %{"settings" => attrs}, socket) do
     case AgentProfiles.save_settings(socket.assigns.settings, attrs) do
-      {:ok, _} -> {:noreply, socket |> load() |> put_flash(:info, "Settings saved")}
-      {:error, changeset} -> {:noreply, form(socket, changeset)}
+      {:ok, _} ->
+        {:noreply, socket |> load() |> put_flash(:info, "Settings saved")}
+
+      {:error, changeset} ->
+        {:noreply, socket |> form(changeset) |> push_event("ss:focus", %{id: "settings-errors"})}
     end
   end
 
@@ -46,7 +49,7 @@ defmodule ShoestringWeb.AgentSettingsLive do
     <Layouts.app flash={@flash} current_scope={@current_scope} product_page="settings">
       <div class="ss-heading">
         <div>
-          <h1>Settings</h1>
+          <h1 id="page-heading" tabindex="-1">Settings</h1>
           <p>Providers and defaults for saved agents.</p>
         </div>
       </div>
@@ -58,7 +61,9 @@ defmodule ShoestringWeb.AgentSettingsLive do
         phx-change="validate"
         phx-submit="save"
       >
-        <div :if={@form_errors != []} id="settings-errors" class="ss-error" role="alert">
+        <div :if={@form_errors != []} id="settings-errors" class="ss-error" role="alert" tabindex="-1">
+          <h2>Check settings</h2>
+          <p>Review the highlighted fields. Your changes have been kept.</p>
           <p :for={{field, {message, _}} <- @form_errors}>{field}: {message}</p>
           <button id="reload-settings" type="button" class="ss-button" phx-click="reload-settings">
             Reload saved settings
@@ -76,8 +81,9 @@ defmodule ShoestringWeb.AgentSettingsLive do
               label="Claude Code model identifiers"
               rows="4"
               class="ss-input"
+              aria-describedby="settings-claude-help"
             />
-            <p class="ss-small">
+            <p id="settings-claude-help" class="ss-small">
               One identifier per line. “default” delegates model selection to the provider.
             </p>
           </div>
@@ -88,8 +94,11 @@ defmodule ShoestringWeb.AgentSettingsLive do
               label="Codex model identifiers"
               rows="4"
               class="ss-input"
+              aria-describedby="settings-codex-help"
             />
-            <p class="ss-small">Use identifiers available in your installed CLI and account.</p>
+            <p id="settings-codex-help" class="ss-small">
+              Use identifiers available in your installed CLI and account.
+            </p>
           </div>
           <div>
             <.input
@@ -98,8 +107,9 @@ defmodule ShoestringWeb.AgentSettingsLive do
               label="opencode model identifiers"
               rows="4"
               class="ss-input"
+              aria-describedby="settings-opencode-help"
             />
-            <p class="ss-small">
+            <p id="settings-opencode-help" class="ss-small">
               provider/model, as <code>opencode models</code>
               lists them. opencode runs plan tasks only; there is no default model.
               An openai/ model uses the same ChatGPT subscription as Codex, and Shoestring cannot see that use.

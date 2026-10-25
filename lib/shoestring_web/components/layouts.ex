@@ -38,6 +38,7 @@ defmodule ShoestringWeb.Layouts do
     ~H"""
     <%= if @product_page do %>
       <div class="ss-product">
+        <a id="skip-to-content" href="#product-main" class="ss-skip">Skip to content</a>
         <header class="ss-header">
           <.link navigate={~p"/usage"} class="ss-brand">Shoestring</.link>
           <nav id="product-nav" aria-label="Main navigation">
@@ -57,7 +58,9 @@ defmodule ShoestringWeb.Layouts do
             </.link>
           </nav>
         </header>
-        <main id="product-main" class="ss-main">{render_slot(@inner_block)}</main>
+        <main id="product-main" class="ss-main" tabindex="-1" aria-labelledby="page-heading">
+          {render_slot(@inner_block)}
+        </main>
       </div>
     <% else %>
       <header class="border-b border-zinc-200 px-4 py-4 sm:px-6 lg:px-8">

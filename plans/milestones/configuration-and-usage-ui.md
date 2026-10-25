@@ -1,8 +1,8 @@
 # Product follow-up: agent configuration and usage UI
 
 **Status:** configuration and usage implemented; CLI approval and execution
-binding are implemented in iteration 6. Keyboard/screen-reader acceptance remains
-open. See the dated acceptance records below.
+binding are implemented in iteration 6. Keyboard and programmatic accessibility
+checks are recorded below; actual spoken screen-reader acceptance remains open.
 
 **Decision recorded:** 2026-10-05.
 
@@ -82,7 +82,8 @@ illustrative rather than a provider support claim.
 - [x] Add seven-day history from recorded observations, including missing-day gaps.
 - [x] Verify restart persistence and UI/CLI configuration consistency.
 - [x] Verify shared quota, missing/stale observations and narrow-screen rendering.
-- [ ] Complete keyboard and screen-reader acceptance coverage.
+- [x] Verify keyboard operation and programmatic accessibility semantics (2026-10-25).
+- [ ] Verify actual spoken screen-reader announcements; Firefox Inspector is narrower.
 - [x] Final full-gate verification after the transaction-abort fix (record below).
 
 ## Acceptance gate
@@ -121,3 +122,19 @@ UNVERIFIED: live entitlement for all configured models and complete keyboard/
 screen-reader acceptance remain open. Settings does not test provider
 authentication; it states that boundary explicitly. Iteration 6's receipt run
 verifies inference only for its explicitly selected model and account.
+
+### Accessibility follow-up — 2026-10-25
+
+VERIFIED: the keyboard/programmatic part of the historical limitation above is
+addressed by the [acceptance-gap closure evidence](../evidence/10-forecasting-packaging/acceptance-gap-closure.md).
+Firefox exposed labeled role groups and controls, the skip link received the
+first page Tab stop, form input reached Save by keyboard, and a submitted
+validation error received focus. At the loopback literal, keyboard role
+removal returned focus to Add role; Space added a role and focused its name.
+A dynamically inserted settings-save message was dismissed with Tab/Enter.
+The 390 × 844 form was visually inspected for stacking and wrapping.
+
+VERIFIED: the user chose Firefox Accessibility Inspector and keyboard/automated
+checks instead of VoiceOver. No spoken-announcement result is claimed. Firefox's
+body-level keyboard diagnostic and the detector's existing type-size advisories
+are retained in the evidence rather than presented as a clean automated audit.

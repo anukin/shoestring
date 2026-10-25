@@ -151,8 +151,24 @@
 
   var csrf = document.querySelector("meta[name='csrf-token']");
   if (root.Phoenix && root.LiveView && csrf) {
+    var hooks = {
+      FlashDismiss: {
+        mounted: function () {
+          var hook = this;
+          this.dismissed = false;
+          this.onDismiss = function () { hook.dismissed = true; };
+          this.el.addEventListener("click", this.onDismiss);
+        },
+        destroyed: function () {
+          this.el.removeEventListener("click", this.onDismiss);
+          var main = document.getElementById("product-main");
+          if (this.dismissed && main) { main.focus(); }
+        }
+      }
+    };
+    if (root.ShoestringTerminal) { hooks.Terminal = root.ShoestringTerminal.Hook; }
     var liveSocket = new root.LiveView.LiveSocket("/live", root.Phoenix.Socket, {
-      hooks: root.ShoestringTerminal ? { Terminal: root.ShoestringTerminal.Hook } : {},
+      hooks: hooks,
       params: { _csrf_token: csrf.getAttribute("content") }
     });
     liveSocket.connect();
@@ -160,11 +176,13 @@
 
   start(document, root);
 
-  // Handle flash close
-  // (you can safely remove this if you don't use the default flash component)
-  document.querySelectorAll("[role=alert][data-flash]").forEach(function (el) {
-    el.addEventListener("click", function () {
-      el.setAttribute("hidden", "");
+  // LiveView delivers pushed events after applying the DOM patch. Restore
+  // focus when a role is inserted/removed or a submitted form is invalid.
+  if (root.addEventListener) {
+    root.addEventListener("phx:ss:focus", function (event) {
+      var el = document.getElementById(event.detail.id);
+      if (el) { el.focus(); }
     });
-  });
+  }
+
 })(typeof globalThis !== "undefined" ? globalThis : this);

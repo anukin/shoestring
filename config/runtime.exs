@@ -141,6 +141,13 @@ if config_env() == :prod do
   port = String.to_integer(present_env.("PORT") || "4000")
   host = present_env.("PHX_HOST") || "localhost"
 
+  # The local UI is reachable by hostname or either loopback literal. Keep
+  # origin validation enabled and pin each accepted origin to this port.
+  browser_origins =
+    [host, "localhost", "127.0.0.1", "::1"]
+    |> Enum.uniq()
+    |> Enum.map(&URI.to_string(%URI{scheme: "http", host: &1, port: port}))
+
   config :shoestring, :dns_cluster_query, present_env.("DNS_CLUSTER_QUERY")
 
   config :shoestring, Shoestring.Repo,
@@ -148,6 +155,7 @@ if config_env() == :prod do
 
   config :shoestring, ShoestringWeb.Endpoint,
     url: [host: host, port: port, scheme: "http"],
+    check_origin: browser_origins,
     http: [ip: bind_ip, port: port],
     secret_key_base: secret_key_base
 end

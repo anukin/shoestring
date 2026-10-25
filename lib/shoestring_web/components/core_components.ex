@@ -71,7 +71,16 @@ defmodule ShoestringWeb.CoreComponents do
           <p>{msg}</p>
         </div>
         <div class="flex-1" />
-        <button type="button" class="group self-start cursor-pointer" aria-label={gettext("close")}>
+        <button
+          type="button"
+          id={"#{@id}-close"}
+          data-flash-close
+          class="group self-start cursor-pointer"
+          aria-label={gettext("close")}
+          phx-hook="FlashDismiss"
+          phx-click="lv:clear-flash"
+          phx-value-key={@kind}
+        >
           <.icon name="hero-x-mark" class="size-5 opacity-40 group-hover:opacity-70" />
         </button>
       </div>
@@ -203,6 +212,7 @@ defmodule ShoestringWeb.CoreComponents do
       assign_new(assigns, :checked, fn ->
         Phoenix.HTML.Form.normalize_value("checkbox", assigns[:value])
       end)
+      |> accessible_input()
 
     ~H"""
     <div class="fieldset mb-2">
@@ -226,12 +236,16 @@ defmodule ShoestringWeb.CoreComponents do
           />{@label}
         </span>
       </label>
-      <.error :for={msg <- @errors}>{msg}</.error>
+      <div :if={@errors != []} id={@error_id}>
+        <.error :for={msg <- @errors}>{msg}</.error>
+      </div>
     </div>
     """
   end
 
   def input(%{type: "select"} = assigns) do
+    assigns = accessible_input(assigns)
+
     ~H"""
     <div class="fieldset mb-2">
       <label>
@@ -247,12 +261,16 @@ defmodule ShoestringWeb.CoreComponents do
           {Phoenix.HTML.Form.options_for_select(@options, @value)}
         </select>
       </label>
-      <.error :for={msg <- @errors}>{msg}</.error>
+      <div :if={@errors != []} id={@error_id}>
+        <.error :for={msg <- @errors}>{msg}</.error>
+      </div>
     </div>
     """
   end
 
   def input(%{type: "textarea"} = assigns) do
+    assigns = accessible_input(assigns)
+
     ~H"""
     <div class="fieldset mb-2">
       <label>
@@ -267,13 +285,17 @@ defmodule ShoestringWeb.CoreComponents do
           {@rest}
         >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
       </label>
-      <.error :for={msg <- @errors}>{msg}</.error>
+      <div :if={@errors != []} id={@error_id}>
+        <.error :for={msg <- @errors}>{msg}</.error>
+      </div>
     </div>
     """
   end
 
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
+    assigns = accessible_input(assigns)
+
     ~H"""
     <div class="fieldset mb-2">
       <label>
@@ -290,9 +312,31 @@ defmodule ShoestringWeb.CoreComponents do
           {@rest}
         />
       </label>
-      <.error :for={msg <- @errors}>{msg}</.error>
+      <div :if={@errors != []} id={@error_id}>
+        <.error :for={msg <- @errors}>{msg}</.error>
+      </div>
     </div>
     """
+  end
+
+  defp accessible_input(assigns) do
+    error_id = if assigns.id, do: "#{assigns.id}-errors"
+
+    rest =
+      if assigns.errors != [] do
+        described_by =
+          [assigns.rest[:"aria-describedby"], error_id]
+          |> Enum.reject(&is_nil/1)
+          |> Enum.join(" ")
+
+        assigns.rest
+        |> Map.put(:"aria-invalid", "true")
+        |> Map.put(:"aria-describedby", if(described_by != "", do: described_by))
+      else
+        assigns.rest
+      end
+
+    assign(assigns, error_id: error_id, rest: rest)
   end
 
   # Helper used by inputs to generate form errors
