@@ -60,6 +60,36 @@ defmodule Shoestring.Cobbler.ReviewContractTest do
                  review_config: [enabled: true, adapter: :codex, model: "gpt-review"]
                )
     end
+
+    # Base (9a0f1af): families were keyed by harness, opencode had none, and
+    # every opencode task's review was `:implementer_unknown`.
+    test "an opencode worker is told apart by its model's vendor, not its harness" do
+      worker = fn model -> %{agent_profile: %{"provider" => "opencode", "model" => model}} end
+      reviewer = fn adapter -> [enabled: true, adapter: adapter, model: "fixture-reviewer"] end
+
+      assert {:ok, {:required, %{public: %{"provider_id" => "claude"}}}} =
+               Configuration.load(worker.("opencode/glm-5.3-flash-free"),
+                 review_config: reviewer.(:claude)
+               )
+
+      assert {:ok, {:required, %{public: %{"provider_id" => "codex"}}}} =
+               Configuration.load(worker.("anthropic/claude-sonnet"),
+                 review_config: reviewer.(:codex)
+               )
+
+      assert {:ok, {:unavailable, :same_provider}} =
+               Configuration.load(worker.("openai/gpt-mini"), review_config: reviewer.(:codex))
+
+      assert {:ok, {:unavailable, :same_provider}} =
+               Configuration.load(worker.("anthropic/claude-sonnet"),
+                 review_config: reviewer.(:claude)
+               )
+
+      assert {:ok, {:unavailable, :implementer_unknown}} =
+               Configuration.load(worker.("opencode/big-pickle"),
+                 review_config: reviewer.(:claude)
+               )
+    end
   end
 
   describe "findings" do

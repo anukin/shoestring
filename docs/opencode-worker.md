@@ -4,7 +4,8 @@ An agent's Worker role can run plan tasks through the locally installed
 [`opencode`](https://opencode.ai) CLI, the same way Claude and Codex workers
 run them: in the task's own worktree, with normalized events, cancellation
 that reaps every process it started, and the plan's checks deciding
-acceptance. Planning and review stay on Claude or Codex.
+acceptance. `shoestring do` plans with a Claude Coordinator, and review runs
+on Claude or Codex.
 
 ## Setup
 
@@ -17,8 +18,13 @@ shoestring agents create builder --coordinator claude:opus \
 
 - A model is `provider/model`, exactly as `opencode models` lists it. The list
   starts empty: an opencode role always names a model, never a default.
-- An opencode worker needs a Claude or Codex coordinator (`--coordinator`),
-  and a Reviewer role cannot be opencode.
+- An agent may have an opencode Coordinator, but `shoestring do` drafts
+  plans only with a Claude one (`--coordinator claude:MODEL`). A Reviewer role
+  cannot be opencode yet: opencode has no review path.
+- Cross-review compares model vendors, not harnesses: an `openai/…` worker is
+  OpenAI, so a Codex reviewer of it is refused and a Claude one is used. A
+  model whose vendor cannot be told (for example `opencode/big-pickle`) waits
+  for you instead of being reviewed.
 - A role cannot pin an effort for opencode: the levels it offers differ per
   model.
 - opencode keeps its own login (`opencode auth login`). Shoestring never signs

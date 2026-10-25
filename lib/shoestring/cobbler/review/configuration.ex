@@ -5,24 +5,21 @@ defmodule Shoestring.Cobbler.Review.Configuration do
 
   The reviewer is the explicitly configured adapter, otherwise the `Reviewer`
   role of the execution's own immutable agent revision. "Different provider"
-  means a different provider family (Anthropic for `claude`, OpenAI for
-  `codex`); two models of one vendor are the same provider. A reviewer of the
-  implementer's family, or no reviewer at all, makes review unavailable: the
-  task waits for a human waiver and is never approved by its implementer.
+  means a different model vendor (`Shoestring.Harnesses.vendor/2`), not a
+  different harness: opencode running an `openai/` model is OpenAI, like
+  Codex. A reviewer of the implementer's vendor, a model whose vendor cannot
+  be told, or no reviewer at all makes review unavailable: the task waits for
+  a human waiver and is never approved by its implementer.
 
   Plans and models never choose any of this: it comes from configuration and
   the saved agent the human approved the execution with.
   """
   alias Shoestring.Cobbler.{ExecutionProfile, PlanContract}
   alias Shoestring.Harness.Contract
+  alias Shoestring.Harnesses
 
   @role "Reviewer"
-  @families %{
-    "claude" => "anthropic",
-    "codex" => "openai",
-    "fixture" => "fixture",
-    "fake" => "fake"
-  }
+  @test_vendors %{"fixture" => "fixture", "fake" => "fake"}
 
   @type loaded :: %{
           public: map(),
@@ -49,8 +46,9 @@ defmodule Shoestring.Cobbler.Review.Configuration do
     end
   end
 
-  @doc "The provider family a provider id belongs to, or nil."
-  def family(provider), do: Map.get(@families, provider)
+  @doc "The vendor of `model` run by `provider`, or nil when it cannot be told."
+  def vendor(provider, model),
+    do: Map.get(@test_vendors, provider) || Harnesses.vendor(provider, model)
 
   @doc "The admission candidate for a reviewer configuration."
   def candidate(public) do
@@ -66,10 +64,11 @@ defmodule Shoestring.Cobbler.Review.Configuration do
 
   defp required(config, execution, opts) do
     implementer = get_in(execution, [:agent_profile, "provider"]) || "fake"
+    implementer_model = get_in(execution, [:agent_profile, "model"])
 
     with {:ok, provider, model} <- reviewer(config, execution, opts),
          {:ok, adapter, tier} <- adapter(provider),
-         :ok <- distinct(provider, implementer),
+         :ok <- distinct(vendor(provider, model), vendor(implementer, implementer_model)),
          {:ok, model} <- Contract.text(model, :model, max: 100),
          {:ok, limit} <- integer(config, :max_output_tokens, 4096, 1, 8192),
          {:ok, timeout} <- integer(config, :timeout_ms, 180_000, 1, 300_000),
@@ -97,10 +96,13 @@ defmodule Shoestring.Cobbler.Review.Configuration do
     end
   end
 
-  defp distinct(provider, implementer) do
+  # `:same_provider` keeps the reason recorded before vendors replaced
+  # provider families.
+  defp distinct(reviewer, implementer) do
     cond do
-      family(implementer) == nil -> {:unavailable, :implementer_unknown}
-      family(provider) == family(implementer) -> {:unavailable, :same_provider}
+      implementer == nil -> {:unavailable, :implementer_unknown}
+      reviewer == nil -> {:unavailable, :reviewer_unknown}
+      reviewer == implementer -> {:unavailable, :same_provider}
       true -> :ok
     end
   end

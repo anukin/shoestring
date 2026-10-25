@@ -50,6 +50,12 @@ defmodule Shoestring.CLI.Messages do
       "No planner. Give the agent a Claude Coordinator with an explicit model " <>
         "(shoestring agents set-role NAME Coordinator claude:MODEL) or configure :planner."
 
+  def message({:coordinator_cannot_plan, provider}, _),
+    do:
+      "The agent's Coordinator (#{Shoestring.Harnesses.name(provider)}) cannot draft plans for " <>
+        "shoestring do. Give it a Claude Coordinator " <>
+        "(shoestring agents set-role NAME Coordinator claude:MODEL) or configure :planner."
+
   def message(:service_unreachable, start_hint),
     do: "The Shoestring service is not running. Start it in another terminal: #{start_hint}"
 

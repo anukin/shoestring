@@ -255,6 +255,18 @@ defmodule Shoestring.CLI.WorkLoopTest do
     {:ok, agent} = AgentProfiles.update(ctx.agent, roles.("default", "opus"))
     assert {:error, :planner_not_configured} = run(ctx, planner_config: nil)
 
+    # A Coordinator whose harness has no planner is named. Base (9a0f1af):
+    # the generic `:planner_not_configured`.
+    {:ok, agent} =
+      AgentProfiles.update(agent, %{
+        "roles" => [
+          %{"name" => "Coordinator", "provider" => "codex", "model" => "default"},
+          %{"name" => "Worker", "provider" => "claude", "model" => "opus"}
+        ]
+      })
+
+    assert {:error, {:coordinator_cannot_plan, "codex"}} = run(ctx, planner_config: nil)
+
     {:ok, _} = AgentProfiles.update(agent, roles.("default", "default"))
     assert {:error, :worker_model_required} = run(ctx)
     assert Repo.aggregate(Goal.user_goals(), :count) == 0

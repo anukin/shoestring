@@ -124,8 +124,9 @@ shoestring checks GOAL --output 3 # check 3's output so far, or its complete out
 ## Cross-review
 
 Turn it on with `config :shoestring, :plan_review, enabled: true` (in
-`config/config.exs` or your runtime config) and give the agent a reviewer of
-another provider than its worker:
+`config/config.exs` or your runtime config) and give the agent a reviewer
+whose model comes from another vendor than its worker's (an opencode
+`openai/…` model is OpenAI, like Codex):
 
 ```sh
 shoestring models add codex gpt-6-luna

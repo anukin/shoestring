@@ -12,9 +12,8 @@ defmodule Shoestring.CLI.Commands.Models do
   name a listed model, and execution needs one other than `default`. PROVIDER
   is `claude`, `codex` or `opencode`; MODEL is the name the provider CLI
   accepts (for example `opus`, or `provider/model` for opencode, as
-  `opencode models` lists them). opencode runs plan tasks only. Starts only
-  the repository; nothing runs. Output is JSON on stdout (`--json` is accepted
-  and changes nothing).
+  `opencode models` lists them). Starts only the repository; nothing runs.
+  Output is JSON on stdout (`--json` is accepted and changes nothing).
   """
 
   @fields %{"claude" => :claude_models, "codex" => :codex_models, "opencode" => :opencode_models}

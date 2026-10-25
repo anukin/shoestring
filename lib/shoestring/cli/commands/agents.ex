@@ -22,8 +22,10 @@ defmodule Shoestring.CLI.Commands.Agents do
   `create` and `set-role` save a new immutable revision exactly as the web form
   does. NAME is the agent's CLI name (lowercase letters, numbers, hyphens).
   The first role is always Coordinator; `--coordinator` defaults to the worker's
-  provider and model. An opencode worker needs a Claude or Codex coordinator:
-  opencode runs plan tasks only. Models must be listed by `shoestring models`.
+  provider and model. A role needs a harness that can do its job: any harness
+  can coordinate or be the Worker, Claude Code or Codex can review, and only
+  a Claude Coordinator drafts plans for `shoestring do`. Models must be listed
+  by `shoestring models`.
   `set-role` replaces the role with that name or adds it. `default` makes the
   agent the saved default.
   """
@@ -103,13 +105,6 @@ defmodule Shoestring.CLI.Commands.Agents do
 
   defp create(name, opts, context) do
     worker = role!("Worker", opts[:worker])
-
-    if worker["provider"] in AgentProfiles.worker_only() and is_nil(opts[:coordinator]),
-      do:
-        Refusal.refuse!(
-          "#{worker["provider"]} runs plan tasks only. Add --coordinator claude:MODEL or codex:MODEL"
-        )
-
     coordinator = role!("Coordinator", opts[:coordinator] || opts[:worker])
 
     attrs = %{

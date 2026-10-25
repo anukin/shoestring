@@ -366,6 +366,19 @@ merge); new harness adapters; paid API paths; enabled forecasts. An MCP server
 is the next step after this iteration: a thin layer over the same commands, so
 a coordinator can be allowed Shoestring's tools without a general shell.
 
+## Progress
+
+- 2026-10-25, package A first slice. `Shoestring.Harnesses` records each
+  harness's capabilities by the module that provides them (`:plan`,
+  `:implement`, `:review`; `:coordinate` is descriptive until package F).
+  Role validation uses it, so the opencode worker-only rule is gone: opencode
+  may coordinate, and is refused as Reviewer until it has a review path.
+  Cross-review compares model vendors (`Harnesses.vendor/2`), so opencode
+  tasks are now reviewable instead of always `implementer_unknown`.
+  `shoestring do` names a Coordinator that cannot plan. Still open in A:
+  capability declarations for the contract suite (`:read_only`,
+  `:structured_report`, `:effort`) arrive with packages B and D.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

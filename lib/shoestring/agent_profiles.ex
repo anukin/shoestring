@@ -33,11 +33,6 @@ defmodule Shoestring.AgentProfiles do
 
   def efforts, do: @efforts
 
-  # Providers that may run plan tasks only: planning and review stay on the
-  # Claude and Codex paths.
-  @worker_only ~w(opencode)
-  def worker_only, do: @worker_only
-
   def template do
     catalog = catalog()
 

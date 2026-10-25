@@ -21,7 +21,7 @@ defmodule Shoestring.CLI.WorkLoop do
   data. Tests drive it with `Mix.Shell.Process`.
   """
 
-  alias Shoestring.{AgentProfiles, Repo}
+  alias Shoestring.{AgentProfiles, Harnesses, Repo}
 
   alias Shoestring.Cobbler.{
     ExecutionControl,
@@ -133,7 +133,8 @@ defmodule Shoestring.CLI.WorkLoop do
   end
 
   # An explicitly configured planner wins; otherwise the agent's Coordinator
-  # plans when it is Claude with an explicit model.
+  # plans when its harness can (only Claude has a planner) and it names an
+  # explicit model.
   defp planner_config(opts, coordinator) do
     configured = Application.get_env(:shoestring, :planner, [])
 
@@ -144,7 +145,10 @@ defmodule Shoestring.CLI.WorkLoop do
       Keyword.get(configured, :adapter, :disabled) != :disabled ->
         {:ok, configured}
 
-      coordinator["provider"] == "claude" and coordinator["model"] != "default" ->
+      not Harnesses.supports?(coordinator["provider"], :plan) ->
+        {:error, {:coordinator_cannot_plan, coordinator["provider"]}}
+
+      coordinator["model"] != "default" ->
         {:ok, [adapter: :claude, model: coordinator["model"]] ++ @claude_planner}
 
       true ->

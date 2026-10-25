@@ -62,20 +62,25 @@ defmodule Shoestring.AgentProfiles.OpencodeWorkerTest do
       assert inspect(errors_on(changeset)) =~ "effort"
     end
 
-    test "opencode can neither coordinate nor review" do
-      for name <- ["Coordinator", "Reviewer"] do
-        roles =
-          Enum.map(roles("opencode/fixture-free"), fn
-            %{"name" => ^name} = role ->
-              %{role | "provider" => "opencode", "model" => "opencode/fixture-free"}
+    # Base (9a0f1af): opencode was refused as Coordinator ("opencode runs plan
+    # tasks only"). Roles now check capabilities, and opencode has no review
+    # path yet.
+    test "opencode can coordinate, but cannot review until it has a review path" do
+      as = fn name ->
+        Enum.map(roles("opencode/fixture-free"), fn
+          %{"name" => ^name} = role ->
+            %{role | "provider" => "opencode", "model" => "opencode/fixture-free"}
 
-            role ->
-              role
-          end)
-
-        assert {:error, changeset} = create(roles)
-        assert inspect(errors_on(changeset)) =~ "opencode runs plan tasks only", name
+          role ->
+            role
+        end)
       end
+
+      assert {:ok, _} = create(as.("Coordinator"))
+      assert {:error, changeset} = create(as.("Reviewer"))
+
+      assert inspect(errors_on(changeset)) =~
+               "opencode cannot review yet; use Claude Code or Codex as the Reviewer"
     end
   end
 

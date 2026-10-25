@@ -2,6 +2,8 @@ defmodule Shoestring.AgentProfiles.Definition do
   use Ecto.Schema
   import Ecto.Changeset
   alias Shoestring.AgentProfiles.Role
+  alias Shoestring.Harnesses
+  @verbs %{coordinate: "coordinate", implement: "run tasks", review: "review"}
   @primary_key {:id, :binary_id, autogenerate: true}
   schema "agent_definitions" do
     field :name, :string
@@ -43,19 +45,23 @@ defmodule Shoestring.AgentProfiles.Definition do
       Enum.any?(roles, &(&1.model not in Map.get(catalog, &1.provider, []))) ->
         add_error(changeset, :roles, "choose models from the current provider configuration")
 
-      Enum.any?(
-        roles,
-        &(&1.name in ["Coordinator", "Reviewer"] and
-              &1.provider in Shoestring.AgentProfiles.worker_only())
-      ) ->
-        add_error(
-          changeset,
-          :roles,
-          "opencode runs plan tasks only; plan and review with Claude or Codex"
-        )
+      message = Enum.find_value(roles, &missing_capability/1) ->
+        add_error(changeset, :roles, message)
 
       true ->
         changeset
+    end
+  end
+
+  # A role Shoestring runs needs a harness that can do that job. An unknown
+  # provider is already the role's own error.
+  defp missing_capability(role) do
+    capability = Harnesses.role_capability(role.name)
+
+    if capability && role.provider in Harnesses.ids() &&
+         not Harnesses.supports?(role.provider, capability) do
+      "#{Harnesses.name(role.provider)} cannot #{@verbs[capability]} yet; " <>
+        "use #{Harnesses.offering(capability)} as the #{role.name}"
     end
   end
 end

@@ -1,6 +1,6 @@
 defmodule ShoestringWeb.AgentsLive do
   use ShoestringWeb, :live_view
-  alias Shoestring.AgentProfiles
+  alias Shoestring.{AgentProfiles, Harnesses}
   alias Shoestring.AgentProfiles.{Definition, Role}
 
   def mount(_, _, socket),
@@ -135,16 +135,8 @@ defmodule ShoestringWeb.AgentsLive do
 
   defp reset_model(attrs, _), do: attrs
 
-  defp providers,
-    do: [
-      {"Claude Code", "claude"},
-      {"Codex", "codex"},
-      {"opencode (plan tasks only)", "opencode"}
-    ]
-
-  defp provider("claude"), do: "Claude Code"
-  defp provider("codex"), do: "Codex"
-  defp provider("opencode"), do: "opencode"
+  defp providers, do: Enum.map(Harnesses.ids(), &{Harnesses.name(&1), &1})
+  defp provider(id), do: Harnesses.name(id)
 
   def render(assigns) do
     ~H"""

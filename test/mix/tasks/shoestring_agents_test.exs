@@ -107,28 +107,36 @@ defmodule Mix.Tasks.Shoestring.AgentsTest do
     assert AgentProfiles.list() == []
   end
 
-  test "an opencode worker needs a Claude or Codex coordinator" do
+  # Base (9a0f1af): `create --worker opencode:...` without --coordinator was
+  # refused ("opencode runs plan tasks only"). Any harness may coordinate now;
+  # a role still refuses a harness that cannot do its job.
+  test "an opencode worker may coordinate itself, but cannot review" do
     {:ok, _} =
       AgentProfiles.save_settings(AgentProfiles.settings(), %{
         "claude_models" => "default fixture-claude",
         "opencode_models" => "opencode/fixture-free"
       })
 
-    assert_raise Mix.Error, ~r/opencode runs plan tasks only. Add --coordinator/, fn ->
+    snapshot = run_json!(["create", "oc", "--worker", "opencode:opencode/fixture-free"])
+
+    assert [
+             %{"name" => "Coordinator", "provider" => "opencode"},
+             %{"name" => "Worker", "provider" => "opencode", "model" => "opencode/fixture-free"}
+           ] = snapshot["configuration"]["roles"]
+
+    assert_raise Mix.Error, ~r/opencode cannot review yet; use Claude Code or Codex/, fn ->
       Mix.Tasks.Shoestring.Agents.run([
-        "create",
+        "set-role",
         "oc",
-        "--worker",
+        "Reviewer",
         "opencode:opencode/fixture-free"
       ])
     end
 
-    assert AgentProfiles.list() == []
-
     snapshot =
       run_json!([
         "create",
-        "oc",
+        "oc-claude",
         "--worker",
         "opencode:opencode/fixture-free",
         "--coordinator",

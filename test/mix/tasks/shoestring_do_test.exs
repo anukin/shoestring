@@ -41,6 +41,7 @@ defmodule Mix.Tasks.Shoestring.DoTest do
           :no_default_agent,
           :worker_model_required,
           :planner_not_configured,
+          {:coordinator_cannot_plan, "codex"},
           :service_unreachable,
           :service_uses_another_database
         ] do

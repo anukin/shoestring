@@ -100,8 +100,7 @@ defmodule ShoestringWeb.AgentSettingsLive do
               class="ss-input"
             />
             <p class="ss-small">
-              provider/model, as <code>opencode models</code>
-              lists them. opencode runs plan tasks only; there is no default model.
+              provider/model, as <code>opencode models</code> lists them. There is no default model.
               An openai/ model uses the same ChatGPT subscription as Codex, and Shoestring cannot see that use.
             </p>
           </div>
