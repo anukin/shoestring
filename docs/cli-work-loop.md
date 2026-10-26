@@ -60,8 +60,10 @@ shoestring do "add retry with backoff to the HTTP client" --test test/test_http.
    (`mix_test`, `mix_precommit`, `mix_format_check`, `mix_compile_strict`, or
    `project:NAME` for a command you approved, see [Checks](#checks)), or
    are detected: a Mix project runs `mix_test`; Python with 1-16
-   `test/**/test_*.py` files runs `python_unittest` over them. The planner
-   never picks checks.
+   `test/**/test_*.py` files runs `python_unittest` over them
+   (`python3 -B -m unittest test/...`, which needs a tracked
+   `test/__init__.py`: without one, Python's own `test` package hides the
+   directory and the check fails on import). The planner never picks checks.
 2. **Plan.** Claude drafts tasks from your request and a list of tracked file
    paths (never file contents), with no tools and no repository access. When
    Claude's remaining usage cannot be confirmed automatically you are asked

@@ -38,3 +38,26 @@ VERIFIED from the captured frames:
 
 Side effect: the opencode probe created one unprompted session in opencode's
 own storage, as every `shoestring models refresh opencode` will.
+
+## Offline launch checks, 2026-10-26
+
+What each coordinator CLI does with the arguments Shoestring gives it, read
+from the request it would send. Each CLI ran with a scratch `HOME` (and
+`CODEX_HOME`, `XDG_*` for Codex and opencode), a dummy key and its API
+address on `capture_server.py` (`python3 -I capture_server.py PORT OUT`),
+which records each request body and answers 400. No request left the
+machine, no model was called and no allowance was used. Only the fields
+below were read; the captured bodies (which hold each CLI's own system
+prompt) are not kept.
+
+| CLI | Invocation (besides scratch home, dummy key, local address) | Read from the request | Result |
+| --- | --- | --- | --- |
+| Claude Code 2.1.310 | `claude -p hi --model opus --effort high --effort low` (and reversed) | `output_config.effort` | `low` (reversed: `high`): the last `--effort` wins |
+| Claude Code 2.1.310 | same, no `--effort`, `--model opus` and `--model sonnet` | `output_config.effort` | `medium` for both |
+| Claude Code 2.1.310 | `--append-system-prompt-file FILE` | `system` | holds FILE's marker line |
+| Codex 0.164.0 | `codex exec -m gpt-6-luna -c developer_instructions='''…''' -c model_reasoning_effort="high"`, with a `model_providers.capture` entry at the local address | `input[role=developer]`, `reasoning` | the developer message is FILE's text exactly; `reasoning.effort` is `high` |
+| opencode 2.0.31 | `opencode run --standalone -m openai/gpt-6-luna` with `OPENCODE_CONFIG_CONTENT` `{"model", "instructions": [FILE], "provider": {"openai": {"options": {"baseURL", "apiKey"}}}}` | request bodies | FILE's marker is in the main request (not in its two short side requests) |
+
+UNVERIFIED: the interactive start `shoestring chat` uses (`claude`, `codex`
+and `opencode` with no prompt) takes the same flags and configuration, but
+was not run against the capture server.

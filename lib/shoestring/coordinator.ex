@@ -6,14 +6,15 @@ defmodule Shoestring.Coordinator do
   `shoestring chat` renders the coordinator's instructions
   (`priv/coordinator/instructions.md` with the session, its grant, the
   agent's roles and instructions) and the command that starts the CLI with
-  them. How each CLI receives them (REPO-INSPECTION of their `--help` and
-  binaries, 2026-10-25):
+  them. How each CLI receives them (VERIFIED from the request each sends,
+  captured locally in its non-interactive mode, 2026-10-26; the interactive
+  start is UNVERIFIED; `plans/evidence/14-coordinator-orchestration`):
 
     * Claude Code 2.1.310: `--model` and `--append-system-prompt-file`.
     * Codex 0.164.0: `-m` and `-c developer_instructions=...` (a TOML literal
-      string). UNVERIFIED in a live session.
+      string), which arrives as a developer message.
     * opencode 2.0.31: `OPENCODE_CONFIG_CONTENT` with `model` and
-      `instructions`. UNVERIFIED in a live session.
+      `instructions`.
 
   The CLI runs as the person's own session, under its own permission
   prompts; Shoestring does not sandbox it. Its instructions tell it to

@@ -628,6 +628,84 @@ authorized by this milestone.
   terminal (`chat` and `grant` refuse without one) and a budget naming the
   coordinator, worker and reviewer.
 
+- 2026-10-26, verification. Correction to the status entry above: the
+  hermetic demo needed no new seam. The Elf's existing `:elf_dispatch_opts`
+  lets a test give the real Claude adapter another executable.
+  `test/shoestring/dispatch_integration_test.exs` (isolated node) runs a
+  grant, a `claude:opus` dispatch at effort `high`, admission on a Claude
+  reading, a sandboxed Claude Elf whose executable is
+  `test/support/fake_claude_cli.py` (it edits, commits and prints Claude's
+  stream-json), the `python_unittest` check at the worker's commit,
+  acceptance, `runs show`, and the `take` commands, which merge the commit
+  into the scratch checkout, whose tests then pass. Only the executable is a
+  stand-in: adapter, transport, normalizer, sandbox flags, executor and
+  checks are real. A stand-in that commits `a - b` instead ends in
+  `{:cancel, :plan_needs_user}`, so the test can fail.
+
+  Fixed, with regression tests that fail on `7e7512e`:
+
+  - Every sandboxed Claude Elf ran at effort medium whatever its saved agent
+    or dispatch chose: the sandbox flags (since `53f79a2`, iteration 7A)
+    ended with `--effort medium`, after the binding's `--effort`, and Claude
+    Code 2.1.310 keeps the last one (captured offline; see the evidence
+    README). The binding's effort now wins; medium, the CLI's own default for
+    Opus and Sonnet, stays the default for a sandboxed launch. The test failed
+    with `["high", "medium"]`.
+  - `dispatch` and `chat` crashed from a checkout (`KeyError` for
+    `:database`, found running `bin/shoestring chat` in a terminal): they
+    checked the service before opening the repository, and a checkout's
+    database path is set only then. They now check inside the repository, as
+    `do` and `follow` do. The tests leave the database path unset until the
+    repository opens and failed with that `KeyError`.
+
+  Checked in a real terminal (a pseudo-terminal driven by `expect`), against
+  a scratch service with no usage monitors, model listing or job queues, and
+  stand-in coordinator CLIs that record how they were started. `chat` showed
+  the proposed grant and took `y` at the terminal; the wrapper exec'd the
+  launch, and the coordinator held the terminal and read typed input. The
+  launch file deleted itself. Codex and opencode coordinators then reused the
+  session's grant without asking, and Codex got the instructions as one
+  argument. `dispatch`, run without a terminal as a coordinator runs it,
+  recorded and queued. `runs list|show`, `grants list`, `chat list`,
+  `capacity` and `advice` answered, and `wait --timeout 1` returned
+  `timed_out` with exit status 3 after 61 s. Offline, each CLI's request
+  carries Shoestring's instructions (evidence README): Claude Code's
+  `--append-system-prompt-file`, Codex's `developer_instructions` and
+  `model_reasoning_effort`, and opencode's `instructions`. Their interactive
+  start is UNVERIFIED. `/cobbler` from the scratch service renders the
+  session, its grant's room and the dispatch with worker, reviewer and
+  state. Not looked at in a browser: the Chrome extension was not connected.
+
+  Found, not fixed:
+
+  - `ClaudeHeadless.probe/1` raises a `MatchError` on every call: its
+    unknown snapshot has `confidence: :low`, which the snapshot contract
+    (`afdd32e`, before the adapter) rejects. The Elf's lease renewal observes
+    through it and fails closed. With admission's default
+    `checkpoint_cadence: 1`, every Claude run records `lease.renewal_due`,
+    `lease.expired` and `lease.checkpoint_required` at its first spend, as
+    the demo run did. A finished turn keeps its result and is accepted. The
+    effect on a Claude turn cut short by a usage limit is UNVERIFIED. Since
+    `07a7ff4` (2026-09-05). Fixing it needs a decision: return the unknown
+    reading (renewal still fails closed), or read Claude's own latest reading
+    from the Observatory (renewal could then admit).
+  - The `python_unittest` check runs `python3 -B -m unittest test/...`.
+    Without `test/__init__.py`, Python's own `test` package hides the
+    directory and the check fails on import (`No module named
+    'test.test_calc'`, Python 3.12). A dispatch in such a repository spends a
+    worker run, then fails a check the worker cannot fix when `test/` is out
+    of its scope. Every live fixture had the file. Documented in
+    `docs/cli-work-loop.md`; refusing at intake would also need eight test
+    fixtures changed.
+  - Risk for the live session: `wait --timeout` counts minutes (default 30),
+    and a coordinator CLI may stop a foreground command sooner. Claude Code's
+    command tool defaults to 2 minutes. The instructions say to run `wait` in
+    the background where the CLI reports when it exits.
+
+  Still open before acceptance: EXPLORE dispatches and a stand-alone REVIEW;
+  advice's usage share; the installed-release check; and the live session,
+  with a budget naming the coordinator, worker and reviewer.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.
