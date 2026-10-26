@@ -214,6 +214,55 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
     assert %{"outcome" => "recorded", "state" => "queued"} = json!()
   end
 
+  # Admission deferred it until its provider's usage resets.
+  defp defer!(goal_id, until) do
+    Shoestring.Test.CobblerHelpers.append_admission_event!(
+      goal_id,
+      Shoestring.Test.CobblerHelpers.admission_payload()
+      |> Map.merge(%{
+        "result" => "defer_until",
+        "reason_code" => "reserve_breach_five_hour",
+        "defer_until" => DateTime.to_iso8601(until)
+      })
+    )
+  end
+
+  test "wait returns when a dispatch starts waiting for a usage reset, not while it already was",
+       ctx do
+    grant!(ctx)
+    Dispatch.run(dispatch_args(ctx), context(ctx))
+    %{"dispatch_id" => id, "goal_id" => goal_id} = json!()
+    until = DateTime.utc_now() |> DateTime.add(3_600) |> DateTime.truncate(:second)
+
+    # Admission defers it while `wait` pauses between its reads.
+    defer_once = fn _ms ->
+      unless Process.put(:deferred, true), do: defer!(goal_id, until)
+    end
+
+    assert Wait.run([id], Map.put(context(ctx), :sleep, defer_once)) == :ok
+    assert %{"settled" => %{"dispatch_id" => ^id, "state" => "waiting"}} = json!()
+
+    # Already waiting when `wait` begins: it waits for that to change.
+    assert Wait.run([id], context(ctx, wait_ms: 50)) == 3
+    assert %{"timed_out" => true, "dispatches" => [%{"state" => "waiting"}]} = json!()
+
+    Runs.run(["show", id], context(ctx))
+    shown = json!()
+
+    assert shown["waiting"] == %{
+             "until" => DateTime.to_iso8601(until),
+             "reason" => "reserve_breach_five_hour"
+           }
+
+    assert shown["next"] =~
+             "Starts by itself after codex's usage resets at #{DateTime.to_iso8601(until)}"
+
+    assert shown["next"] =~ "shoestring runs cancel #{id} --reason TEXT"
+
+    # It still holds its place among the grant's dispatches at once.
+    assert %{running: 1} = Dispatches.usage(Shoestring.Grants.active("s1"))
+  end
+
   test "wait returns on the first settled dispatch, or times out with exit 3", ctx do
     grant!(ctx)
     Dispatch.run(dispatch_args(ctx), context(ctx))

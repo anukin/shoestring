@@ -10,9 +10,10 @@ defmodule Shoestring.CLI.Commands.Wait do
 
   Returns as soon as one of the dispatches settles — completed, cancelled,
   failed to start, held for a usage confirmation (`held`), or waiting for a
-  person (`needs_you`) — and prints it with
-  the others' states. It reads Shoestring's records every few seconds and
-  makes no model call. After --timeout minutes (default 30, at most 1440) it
+  person (`needs_you`) — or starts `waiting` for its provider's usage to
+  reset, and prints it (under `settled`) with the others' states. One that
+  was already `waiting` when `wait` began returns only when that changes. It
+  reads Shoestring's records every few seconds and makes no model call. After --timeout minutes (default 30, at most 1440) it
   returns with `timed_out` and exit status 3; nothing about the dispatches
   changes either way. A coordinator can run it in the background to be woken
   when it exits. Output is JSON on stdout.
@@ -33,7 +34,10 @@ defmodule Shoestring.CLI.Commands.Wait do
           deadline =
             System.monotonic_time(:millisecond) + Map.get(context, :wait_ms, minutes * 60_000)
 
-          poll(dispatches, deadline, Map.get(context, :poll_ms, 2_000), context)
+          waiting =
+            for d <- dispatches, Dispatches.state(d) == "waiting", into: MapSet.new(), do: d.id
+
+          poll(dispatches, waiting, deadline, Map.get(context, :poll_ms, 2_000), context)
         end)
 
       _ ->
@@ -41,19 +45,30 @@ defmodule Shoestring.CLI.Commands.Wait do
     end
   end
 
-  defp poll(dispatches, deadline, interval, context) do
+  # `waiting` holds the dispatches that were waiting for a usage reset when
+  # `wait` began: they return only once that changes.
+  defp poll(dispatches, waiting, deadline, interval, context) do
     # A hold the grant pre-approved is confirmed here, so it is not settled.
     Enum.each(dispatches, &Dispatches.advance/1)
     summaries = Enum.map(dispatches, &Dispatch.summary/1)
 
-    case Enum.find(summaries, &Dispatches.settled?(&1["state"])) do
+    returns? = fn summary ->
+      Dispatches.settled?(summary["state"]) or
+        (summary["state"] == "waiting" and summary["dispatch_id"] not in waiting)
+    end
+
+    case Enum.find(summaries, returns?) do
       nil ->
         if System.monotonic_time(:millisecond) >= deadline do
           Command.json(context, %{"timed_out" => true, "dispatches" => summaries})
           3
         else
-          Process.sleep(interval)
-          poll(dispatches, deadline, interval, context)
+          Map.get(context, :sleep, &Process.sleep/1).(interval)
+
+          waiting =
+            for s <- summaries, s["state"] == "waiting", into: MapSet.new(), do: s["dispatch_id"]
+
+          poll(dispatches, waiting, deadline, interval, context)
         end
 
       settled ->

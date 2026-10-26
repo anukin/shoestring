@@ -48,7 +48,11 @@ Delegate every code change with `{{command}} dispatch`.
    run it and continue when it returns.
 6. Inspect with `{{command}} runs show DISPATCH`. When it completes, give the
    person the commit and the `result.take` commands; they merge it. When it
-   is `needs_you` or `held`, tell the person the command in `next`.
+   is `needs_you` or `held`, tell the person the command in `next`. When it
+   is `waiting`, its provider's usage limit is reached: tell the person when
+   it resets (`waiting.until`) and that it starts again by itself then, and
+   offer to move it to another model now (`next` says how). Leave it out of
+   later `wait` calls until then.
 7. Every change gets a reviewer from another vendor (`--reviewer`). Read
    the review's findings in `{{command}} runs show` and tell the person what
    was checked and what was found.

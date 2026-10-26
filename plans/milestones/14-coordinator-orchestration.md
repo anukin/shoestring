@@ -745,6 +745,41 @@ authorized by this milestone.
   was refused at launch (`group_leader_unverifiable`: gone before its
   process group was verified). A real CLI starts slower.
 
+- 2026-10-26, both follow-ups (the user: "lets go ahead").
+
+  A confirmed run keeps its confirmation at renewal. `LeaseRenewal`
+  carries the original admission's valid confirmation into the renewal
+  evaluation only while the fresh reading is complete
+  (`AdmissionEvaluation.complete_reading?/2`): not stale or dated in the
+  future, capacity observed or degraded, five-hour and weekly windows both
+  observed. The confirmation then covers only the bypassable conditions,
+  such as Claude's conservative tier. A breached reserve or a refusal still
+  stops renewal, as at admission. Tests in
+  `lease_renewal_confirmation_test.exs`:
+  - A fresh, complete Claude report renews, with
+    `confirmed_support_tier_conservative_partial`. This case fails on
+    `942abc7`.
+  - Stale, incomplete and breached reports still end the lease.
+  - An automatic admission has no confirmation to carry.
+  The dispatch test's Claude worker now renews, and its lease ends the way
+  any completed run's does (`revoked`, `checkpoint_required`). It fails on
+  `942abc7`.
+
+  A deferred dispatch is `waiting`. `Dispatches.state/2` reports it while
+  the latest admission decision defers to a time still ahead, and the
+  grant's at-once count includes it. `runs show` adds `waiting.until`,
+  `waiting.reason` and a `next` that offers another model. `wait` returns
+  when a dispatch starts waiting, not while it already was. The coordinator
+  instructions and `docs/coordinator.md` say what to do. The tests fail on
+  `942abc7`, and the limit test now sees `waiting` with the five-hour reason.
+
+  Noted, unchanged: a dispatch's "latest admission" is the goal's newest
+  `admission.decided` event, which includes renewal decisions. A renewal
+  that defers makes the dispatch `waiting` after its run, which is accurate.
+  A renewal that asks for a confirmation after a failed run makes it `held`,
+  and the grant then pre-confirms the next attempt. That attempt's admission
+  would have asked anyway.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

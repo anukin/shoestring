@@ -137,10 +137,23 @@ Reviewer is a Claude model needs `--unread-usage` at least the number of
 Claude tasks and reviews you want to start without being asked.
 
 A dispatch deferred until a usage window resets (a reserve breached, or a
-worker that stopped at its limit) shows as `queued`, and `runs show` does not
-yet say what it waits for; it starts again by itself after the reset.
+worker that stopped at its limit) is `waiting`: `runs show` gives the reset
+time and the reason (`waiting.until`, `waiting.reason`), and it starts again
+by itself after the reset. `wait` returns when a dispatch starts waiting,
+not while it already was, so the coordinator can tell you and offer another
+model.
 
-States: `starting`, `queued`, `running`, `held` (its provider's remaining
+Once a task is running, its allowance is renewed against fresh usage
+readings. A task admitted on a confirmation (yours, or a grant's
+pre-approval) keeps it for those renewals while its provider's reading is
+fresh and has both its five-hour and weekly windows. That is how a Claude
+worker, whose reports alone never admit, keeps going. A stale or incomplete
+reading gets no confirmation, and a breached reserve stops renewal whatever
+was confirmed. A run is never cut off mid-turn for its allowance: an
+allowance that is not renewed is recorded, and the turn's result stands.
+
+States: `starting`, `queued`, `running`, `waiting` (until its provider's
+usage resets; it starts by itself then), `held` (its provider's remaining
 usage could not be confirmed; you confirm it with `shoestring follow GOAL`),
 `needs_you` (you decide, with `shoestring follow GOAL`), `completed`,
 `cancelled`, `failed_to_start`. The web dashboard (`/cobbler`) lists each

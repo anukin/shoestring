@@ -270,6 +270,23 @@ defmodule Shoestring.DispatchesTest do
 
     held = %{last_admission: %{"result" => "require_confirmation"}}
     assert Dispatches.state(dispatch, status.(held)) == "held"
+
+    deferred = fn until ->
+      %{
+        last_admission: %{
+          "result" => "defer_until",
+          "reason_code" => "reserve_breach_five_hour",
+          "defer_until" => until |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+        }
+      }
+    end
+
+    later = DateTime.add(DateTime.utc_now(), 3_600)
+    assert Dispatches.state(dispatch, status.(deferred.(later))) == "waiting"
+    refute Dispatches.settled?("waiting")
+    # Once the reset has passed, admission decides again.
+    earlier = DateTime.add(DateTime.utc_now(), -60)
+    assert Dispatches.state(dispatch, status.(deferred.(earlier))) == "queued"
     assert Dispatches.settled?("held")
     assert Dispatches.state(dispatch, status.(%{needs_user?: true})) == "needs_you"
     assert Dispatches.state(dispatch, status.(%{completed?: true})) == "completed"

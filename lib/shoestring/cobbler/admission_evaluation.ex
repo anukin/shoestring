@@ -61,6 +61,22 @@ defmodule Shoestring.Cobbler.AdmissionEvaluation do
   end
 
   @doc """
+  Whether `snapshot` is a fresh reading with both reserve windows observed.
+  A run's confirmation carried into its lease renewal
+  (`Shoestring.Cobbler.LeaseRenewal`) may stand in for how far such a
+  reading is trusted, never for what it lacks.
+  """
+  @spec complete_reading?(CapacitySnapshot.t() | nil, DateTime.t()) :: boolean()
+  def complete_reading?(nil, _now), do: false
+
+  def complete_reading?(snapshot, now) do
+    snapshot_state(snapshot) in [:observed, :degraded] and
+      not snapshot_future?(snapshot, now) and not snapshot_stale?(snapshot, now) and
+      not missing_or_unknown_window?(snapshot, "five_hour") and
+      not missing_or_unknown_window?(snapshot, "weekly")
+  end
+
+  @doc """
   Deterministically evaluates multiple candidates in policy-defined priority order.
   """
   @spec evaluate_candidates(map(), [map()], map(), AdmissionPolicy.t() | nil, keyword()) ::

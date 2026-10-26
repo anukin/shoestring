@@ -132,9 +132,9 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert prompt =~ "Coordinator brief:\n" <> @brief
       assert prompt =~ "calc.py"
 
-      # Renewal judged the usage Claude reported during the run. That
-      # evidence asks for a confirmation, so the lease ended there; the turn
-      # had finished, so its result stood.
+      # Renewal judged the usage Claude reported during the run: fresh, both
+      # windows observed and within the reserves, so the confirmation that
+      # admitted the run carried it on.
       assert [%{"claude:rate_limit_status" => "allowed"}] =
                for(
                  reading <- Shoestring.Harness.Observatory.latest_observations(),
@@ -142,7 +142,13 @@ defmodule Shoestring.DispatchIntegrationTest do
                  do: reading.extensions
                )
 
-      assert %{payload: %{"result" => "require_confirmation"}} =
+      assert %{
+               payload: %{
+                 "result" => "admit",
+                 "reason_code" => "confirmed_support_tier_conservative_partial",
+                 "override" => %{"confirmed_by" => "grant:" <> _}
+               }
+             } =
                Repo.one!(
                  from e in TrajectoryEvent,
                    where:
@@ -150,12 +156,14 @@ defmodule Shoestring.DispatchIntegrationTest do
                        like(e.idempotency_key, "lease-renewal-decision:%")
                )
 
+      # The completed run then retires its live lease, as any run does.
       assert lease_events(dispatch) == [
                "lease.proposed",
                "lease.granted",
                "lease.active",
                "lease.renewal_due",
-               "lease.expired",
+               "lease.renewed",
+               "lease.revoked",
                "lease.checkpoint_required"
              ]
 
@@ -256,10 +264,12 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert {:ok, until, _} = DateTime.from_iso8601(until)
       assert DateTime.compare(until, DateTime.truncate(reset_at, :second)) in [:eq, :gt]
 
-      # Not settled: `wait` keeps waiting, and the attempt it used is shown.
+      # The coordinator is told what it waits for, and until when.
       shown = runs_show!(dispatch.id, "s2")
       assert shown["attempts_used"] == 1
-      refute Dispatches.settled?(shown["state"])
+      assert shown["state"] == "waiting"
+      assert shown["waiting"]["reason"] == "reserve_breach_five_hour"
+      assert shown["next"] =~ "Starts by itself after claude's usage resets at"
     end
 
     defp source!(name) do

@@ -12,8 +12,9 @@ defmodule Shoestring.CLI.Commands.Runs do
 
   `list` prints the session's dispatches (ID or SHOESTRING_SESSION; every
   dispatch without either) with their states. `show` adds the attempts and
-  time used and, once it completes, the verified commit, its checks and the
-  commands to take it. `cancel` cancels a dispatch of this session through
+  time used, what a `waiting` dispatch waits for (`waiting.until`,
+  `waiting.reason`) and, once it completes, the verified commit, its checks
+  and the commands to take it. `cancel` cancels a dispatch of this session through
   the ordinary cancellation path, which reaps everything it started; other
   dispatches keep running. Output is JSON on stdout.
   """
@@ -56,7 +57,12 @@ defmodule Shoestring.CLI.Commands.Runs do
             "attempts_used" => status[:total_attempts],
             "duration_ms" => status[:total_duration_ms],
             "active_run_id" => status[:active_run_id],
-            "reviews" => Enum.map(status[:reviews] || [], &Result.review/1)
+            "reviews" => Enum.map(status[:reviews] || [], &Result.review/1),
+            "waiting" =>
+              case Dispatches.waiting_until(status) do
+                {until, reason} -> %{"until" => until, "reason" => reason}
+                nil -> nil
+              end
           }
 
         _ ->
@@ -88,11 +94,20 @@ defmodule Shoestring.CLI.Commands.Runs do
       case summary["state"] do
         "needs_you" -> "A person decides: shoestring follow #{dispatch.goal_id}"
         "held" -> "A person confirms the usage: shoestring follow #{dispatch.goal_id}"
+        "waiting" -> waiting_next(dispatch, status["waiting"])
         "completed" -> "Take the commit with the commands in result.take"
         _ -> nil
       end
     )
   end
+
+  defp waiting_next(dispatch, %{"until" => until}),
+    do:
+      "Starts by itself after #{dispatch.provider}'s usage resets at " <>
+        "#{DateTime.to_iso8601(until)}. To use another model now: shoestring runs cancel " <>
+        "#{dispatch.id} --reason TEXT, then dispatch it again with another --worker"
+
+  defp waiting_next(_dispatch, _waiting), do: nil
 
   defp cancel(dispatch, reason, session, context) do
     if session != dispatch.session_id,

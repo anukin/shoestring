@@ -469,8 +469,8 @@ defmodule Shoestring.Dispatches do
 
   @doc """
   What `grant`'s dispatches already reserve: attempts and seconds (every
-  dispatch not failed to start) and how many are starting, queued, running or
-  held.
+  dispatch not failed to start) and how many are starting, queued, running,
+  waiting or held.
   """
   def usage(%Grant{} = grant) do
     dispatches =
@@ -479,7 +479,7 @@ defmodule Shoestring.Dispatches do
     %{
       attempts: Enum.sum_by(dispatches, & &1.max_attempts),
       seconds: Enum.sum_by(dispatches, & &1.max_duration_seconds),
-      running: Enum.count(dispatches, &(state(&1) in ~w(starting queued running held)))
+      running: Enum.count(dispatches, &(state(&1) in ~w(starting queued running waiting held)))
     }
   end
 
@@ -523,9 +523,10 @@ defmodule Shoestring.Dispatches do
 
   @doc """
   The dispatch's state, derived from its execution: `starting`, `queued`,
-  `running`, `held` (its provider's remaining usage could not be confirmed;
-  a person confirms it), `needs_you` (waits for a person), `completed`,
-  `cancelled` or `failed_to_start`.
+  `running`, `waiting` (deferred until its provider's usage resets; it
+  starts by itself then), `held` (its provider's remaining usage could not
+  be confirmed; a person confirms it), `needs_you` (waits for a person),
+  `completed`, `cancelled` or `failed_to_start`.
   """
   def state(dispatch, status \\ &ExecutionControl.status/1)
   def state(%Dispatch{state: "creating"}, _status), do: "starting"
@@ -548,11 +549,32 @@ defmodule Shoestring.Dispatches do
       {:ok, %{last_admission: %{"result" => "require_confirmation"}}} ->
         "held"
 
-      {:ok, %{reviews: [_ | _] = reviews}} ->
-        if(Enum.any?(reviews, &(&1.state == "held")), do: "held", else: "queued")
+      {:ok, status} when is_map(status) ->
+        if waiting_until(status), do: "waiting", else: queued_or_held(status)
 
       _ ->
         "queued"
+    end
+  end
+
+  defp queued_or_held(%{reviews: [_ | _] = reviews}),
+    do: if(Enum.any?(reviews, &(&1.state == "held")), do: "held", else: "queued")
+
+  defp queued_or_held(_status), do: "queued"
+
+  @doc """
+  When an execution `status` (`ExecutionControl.status/1`) waits for its
+  provider's usage to reset: `{until, reason_code}` from its latest admission
+  decision while that time is ahead, otherwise nil.
+  """
+  def waiting_until(status, now \\ DateTime.utc_now()) do
+    with %{"result" => "defer_until", "defer_until" => text} = admission <-
+           status[:last_admission],
+         {:ok, until, _} <- DateTime.from_iso8601(text),
+         :gt <- DateTime.compare(until, now) do
+      {until, admission["reason_code"]}
+    else
+      _ -> nil
     end
   end
 

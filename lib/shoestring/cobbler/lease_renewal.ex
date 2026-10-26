@@ -24,6 +24,10 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
     with an explicit `:now` and claim occupancy (`:occupancy`, default
     `false`). Request and candidate are reconstructed from the original
     admission decision so renewal judges the same intent/scope/candidate.
+    A confirmation that admitted the run is carried while the fresh reading
+    is complete (`AdmissionEvaluation.complete_reading?/2`): it stands in for
+    how far that reading is trusted, never for stale, missing or breached
+    evidence (iteration 14).
 
   Outcomes (appended through `Shoestring.Cobbler.Leases.transition/4`,
   `LeaseStateMachine`-validated):
@@ -407,12 +411,15 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
 
     case Keyword.fetch(opts, :now) do
       {:ok, %DateTime{} = _now} ->
+        now = Keyword.fetch!(opts, :now)
+
         case AdmissionEvaluation.evaluate(
-               renewal_request(goal_id, lease, run, decision),
+               renewal_request(goal_id, lease, run, decision)
+               |> Map.put(:override, carried_override(decision, snapshot, now)),
                renewal_candidate(decision),
                snapshot,
                policy,
-               now: Keyword.fetch!(opts, :now),
+               now: now,
                occupancy: occupancy
              ) do
           {:ok, evaluation} -> {:ok, evaluation}
@@ -433,6 +440,21 @@ defmodule Shoestring.Cobbler.LeaseRenewal do
       run_id: lease.run_id
     }
   end
+
+  # A run admitted on an attributable confirmation keeps it while the fresh
+  # reading is complete (iteration 14, decided with the user): it then
+  # stands in only for how far that evidence is trusted, such as Claude's
+  # conservative usage reports. A stale or incomplete reading gets no
+  # confirmation, and a breached one defers whatever is confirmed.
+  defp carried_override(
+         %AdmissionDecision{override: %{"valid" => true} = override},
+         snapshot,
+         now
+       ) do
+    if AdmissionEvaluation.complete_reading?(snapshot, now), do: override
+  end
+
+  defp carried_override(_decision, _snapshot, _now), do: nil
 
   defp task_id(%RunRecord{task_id: task_id}, _lease), do: task_id
   defp task_id(_run, _lease), do: nil
