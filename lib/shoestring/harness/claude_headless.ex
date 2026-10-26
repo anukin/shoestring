@@ -502,21 +502,56 @@ defmodule Shoestring.Harness.ClaudeHeadless do
 
   # --- Capacity Probe Helpers ---
 
-  # The headless protocol has no live quota/status poll (unlike the
-  # Codex monitor's account reads): the default probe is an honest
-  # :unknown snapshot, never an invented utilization figure.
-  defp do_probe(_opts) do
-    {:ok, build_unknown_snapshot()}
+  # The headless protocol has no usage poll (unlike the Codex monitor's
+  # account reads), but Claude reports its usage itself: in a headless run's
+  # `rate_limit_event` frames (recorded by `Session`) and in an interactive
+  # session's status line (`ClaudeMonitor`). The probe answers with the latest
+  # such reading in the Observatory, under a new id: each answer is its own
+  # observation, so a lease renewal judges it afresh instead of replaying the
+  # last renewal keyed by that id, while the reading's windows and age stay
+  # its own. Without a reading it is an honest unknown, never an invented
+  # utilization figure.
+  defp do_probe(opts) do
+    scope =
+      Map.get(opts, :scope) ||
+        Application.get_env(:shoestring, :run_submission_scope, "subscription")
+
+    case latest_reading(scope) do
+      %CapacitySnapshot{} = reading ->
+        {:ok,
+         %CapacitySnapshot{
+           reading
+           | snapshot_id: Ecto.UUID.generate(),
+             extensions:
+               Map.put(
+                 reading.extensions || %{},
+                 "claude-headless:observed_snapshot_id",
+                 reading.snapshot_id
+               )
+         }}
+
+      nil ->
+        {:ok, build_unknown_snapshot(scope)}
+    end
   end
 
-  defp build_unknown_snapshot do
+  defp latest_reading(scope) do
+    Shoestring.Harness.Observatory.latest_observations()
+    |> Enum.filter(
+      &(match?(%CapacitySnapshot{observed_at: %DateTime{}}, &1) and
+          to_string(&1.source.provider_id) == @provider and &1.scope == scope)
+    )
+    |> Enum.max_by(& &1.observed_at, DateTime, fn -> nil end)
+  end
+
+  defp build_unknown_snapshot(scope) do
     now = DateTime.utc_now()
 
     {:ok, snapshot} =
       CapacitySnapshot.new(
         %{
           version: 2,
-          snapshot_id: "00000000-0000-4000-8000-000000000089",
+          snapshot_id: Ecto.UUID.generate(),
           capacity_state: :unknown,
           windows: [],
           observed_at: now,
@@ -525,13 +560,13 @@ defmodule Shoestring.Harness.ClaudeHeadless do
             adapter_id: @adapter_id,
             provider_id: @provider,
             invocation_mode: "headless_stream_json",
-            event: :explicit_read
+            event: :none
           },
-          scope: "account",
-          confidence: :low,
+          scope: scope,
+          confidence: :none,
           support_tier: :reactive_only,
           compatibility_state: :compatible,
-          reason: "headless_no_live_signal",
+          reason: "no_claude_usage_reading",
           extensions: %{}
         },
         now: now

@@ -2,10 +2,11 @@ defmodule Shoestring.DispatchIntegrationTest do
   @moduledoc """
   A coordinator's dispatch end to end (iteration 14): grant, dispatch,
   admission, a sandboxed Claude Elf in a private worktree, the checks,
-  acceptance, `runs show` and taking the commit. Everything is real except the
-  `claude` executable, which is `test/support/fake_claude_cli.py`: it makes the
-  change, commits it and prints Claude's stream-json frames. No provider CLI,
-  no network.
+  acceptance, `runs show` and taking the commit; and a run that stops at the
+  usage limit. Everything is real except the `claude` executable, which is
+  `test/support/fake_claude_cli.py`: it makes the change, commits it and
+  prints Claude's stream-json frames, its usage report included. No provider
+  CLI, no network.
   """
   use ExUnit.Case, async: false
 
@@ -33,6 +34,8 @@ defmodule Shoestring.DispatchIntegrationTest do
       )
 
       Application.put_env(:shoestring, :dispatch_effect, Shoestring.Harness.Dispatch.ElfEffect)
+      # Claude's usage reports are recorded, as in the service.
+      Application.put_env(:shoestring, :claude_capacity_sink, Shoestring.Harness.Observatory)
 
       fake = Path.join(Shoestring.State.root(), "bin/claude")
       File.mkdir_p!(Path.dirname(fake))
@@ -40,6 +43,7 @@ defmodule Shoestring.DispatchIntegrationTest do
       File.chmod!(fake, 0o755)
       log = Path.join(Shoestring.State.root(), "fake-claude.jsonl")
       System.put_env("FAKE_CLAUDE_LOG", log)
+      System.delete_env("FAKE_CLAUDE_SCENARIO")
 
       # The run launches exactly as a dispatched Claude run does, sandbox
       # settings included; only the executable is the stand-in.
@@ -48,63 +52,19 @@ defmodule Shoestring.DispatchIntegrationTest do
       )
 
       restart!()
+      _ = ModelCatalog.add("claude", "opus")
       %{log: log}
     end
 
     test "a coordinator's dispatch runs a Claude Elf to a verified commit the user can take",
          ctx do
-      source = Path.join(Shoestring.State.root(), "calc")
-      File.mkdir_p!(Path.join(source, "test"))
-      File.write!(Path.join(source, "calc.py"), "def add(a, b):\n    raise NotImplementedError\n")
-      File.write!(Path.join(source, "test/__init__.py"), "")
-
-      File.write!(Path.join(source, "test/test_calc.py"), """
-      import unittest
-
-      from calc import add
-
-
-      class AddTest(unittest.TestCase):
-          def test_add(self):
-              self.assertEqual(add(2, 3), 5)
-      """)
-
-      git!(source, ["init", "-q", "-b", "main"])
-      git!(source, ["add", "."])
-
-      git!(source, [
-        "-c",
-        "user.name=T",
-        "-c",
-        "user.email=t@example.com",
-        "commit",
-        "-qm",
-        "base"
-      ])
-
+      source = source!("calc")
       base = git!(source, ["rev-parse", "HEAD"]) |> String.trim()
       {:ok, facts} = Shoestring.Cobbler.Intake.repository(source)
+      grant = grant!("s1", facts.root)
 
-      {:ok, _} = ModelCatalog.add("claude", "opus")
-
-      {:ok, grant} =
-        Grants.create(
-          %{
-            session_id: "s1",
-            repository_root: facts.root,
-            models: ["claude:opus"],
-            purposes: ["implement"],
-            max_dispatches: 1,
-            max_parallel: 1,
-            max_total_seconds: 3_600,
-            max_dispatch_seconds: 1_800,
-            unread_usage: 0
-          },
-          "human:operator"
-        )
-
-      # Shoestring has read Claude's usage: plenty left in both windows.
-      claude_reading!()
+      # Claude reported its usage in an earlier run: plenty left.
+      claude_reading!(0.2)
 
       {:ok, dispatch, :recorded} =
         Dispatches.create(%{
@@ -122,9 +82,11 @@ defmodule Shoestring.DispatchIntegrationTest do
         })
 
       assert Dispatches.state(dispatch) == "queued"
+      job = job!(dispatch)
 
-      job =
-        Repo.one!(from j in Oban.Job, where: j.worker == "Shoestring.Cobbler.PlanExecutionWorker")
+      # Claude's own usage report is conservative evidence: admission asks for
+      # a confirmation, which the grant's pre-approval gives.
+      confirm!(dispatch, job)
 
       # Admitted and dispatched: one Claude run in a private worktree.
       assert {:snooze, 5} = PlanExecutionWorker.perform(job)
@@ -170,6 +132,33 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert prompt =~ "Coordinator brief:\n" <> @brief
       assert prompt =~ "calc.py"
 
+      # Renewal judged the usage Claude reported during the run. That
+      # evidence asks for a confirmation, so the lease ended there; the turn
+      # had finished, so its result stood.
+      assert [%{"claude:rate_limit_status" => "allowed"}] =
+               for(
+                 reading <- Shoestring.Harness.Observatory.latest_observations(),
+                 reading.source.provider_id == "claude",
+                 do: reading.extensions
+               )
+
+      assert %{payload: %{"result" => "require_confirmation"}} =
+               Repo.one!(
+                 from e in TrajectoryEvent,
+                   where:
+                     e.goal_id == ^dispatch.goal_id and e.type == "admission.decided" and
+                       like(e.idempotency_key, "lease-renewal-decision:%")
+               )
+
+      assert lease_events(dispatch) == [
+               "lease.proposed",
+               "lease.granted",
+               "lease.active",
+               "lease.renewal_due",
+               "lease.expired",
+               "lease.checkpoint_required"
+             ]
+
       # Claude's token counts were recorded for advice.
       assert Enum.any?(Advice.token_payloads(Repo), fn payload ->
                payload["run_id"] == run.id and
@@ -192,7 +181,7 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert shown["result"]["commit"] == commit
       assert shown["result"]["base"] == base
       assert Enum.any?(shown["result"]["checks"], &(&1["exit_status"] == 0))
-      assert Grants.get(grant.id) != nil
+      assert Grants.get(grant.id).unread_usage_used == 1
 
       # The user's checkout is untouched until they take the commit.
       assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
@@ -216,55 +205,183 @@ defmodule Shoestring.DispatchIntegrationTest do
                )
     end
 
-    defp claude_reading! do
+    # SYNTHETIC limit output (see the stand-in): what the person sees when a
+    # Claude worker stops at the usage limit. Documents today's behaviour; it
+    # passes with or without the probe change.
+    test "a Claude worker that stops at the usage limit waits for the reset", _ctx do
+      System.put_env("FAKE_CLAUDE_SCENARIO", "limit")
+      source = source!("calc-limit")
+      {:ok, facts} = Shoestring.Cobbler.Intake.repository(source)
+      grant!("s2", facts.root)
+      claude_reading!(0.2)
+
+      {:ok, dispatch, :recorded} =
+        Dispatches.create(%{
+          session_id: "s2",
+          request_id: "r1",
+          purpose: "implement",
+          provider: "claude",
+          model: "opus",
+          attempts: 2,
+          title: "Make add return the sum of its arguments",
+          brief: @brief,
+          repository: source
+        })
+
+      job = job!(dispatch)
+      confirm!(dispatch, job)
+      assert {:snooze, 5} = PlanExecutionWorker.perform(job)
+      run = Repo.one!(from r in RunRecord, where: r.goal_id == ^dispatch.goal_id)
+      finish_worker!(run.id)
+      assert Repo.get!(RunRecord, run.id).status == "failed"
+
+      # The run's own report says the five-hour window is full, so the second
+      # attempt waits for its reset instead of starting.
+      assert [%{used_percent: 100.0, reset_at: reset_at}] =
+               for(
+                 reading <- Shoestring.Harness.Observatory.latest_observations(),
+                 reading.source.provider_id == "claude",
+                 window <- reading.windows,
+                 window.kind == "five_hour",
+                 do: window
+               )
+
+      assert {:snooze, _} = PlanExecutionWorker.perform(job)
+
+      assert Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^dispatch.goal_id), :count) ==
+               1
+
+      {:ok, status} = Shoestring.Cobbler.ExecutionControl.status(dispatch.goal_id)
+      assert %{"result" => "defer_until", "defer_until" => until} = status.last_admission
+      assert {:ok, until, _} = DateTime.from_iso8601(until)
+      assert DateTime.compare(until, DateTime.truncate(reset_at, :second)) in [:eq, :gt]
+
+      # Not settled: `wait` keeps waiting, and the attempt it used is shown.
+      shown = runs_show!(dispatch.id, "s2")
+      assert shown["attempts_used"] == 1
+      refute Dispatches.settled?(shown["state"])
+    end
+
+    defp source!(name) do
+      source = Path.join(Shoestring.State.root(), name)
+      File.mkdir_p!(Path.join(source, "test"))
+      File.write!(Path.join(source, "calc.py"), "def add(a, b):\n    raise NotImplementedError\n")
+      File.write!(Path.join(source, "test/__init__.py"), "")
+
+      File.write!(Path.join(source, "test/test_calc.py"), """
+      import unittest
+
+      from calc import add
+
+
+      class AddTest(unittest.TestCase):
+          def test_add(self):
+              self.assertEqual(add(2, 3), 5)
+      """)
+
+      git!(source, ["init", "-q", "-b", "main"])
+      git!(source, ["add", "."])
+
+      git!(source, [
+        "-c",
+        "user.name=T",
+        "-c",
+        "user.email=t@example.com",
+        "commit",
+        "-qm",
+        "base"
+      ])
+
+      source
+    end
+
+    defp grant!(session, root) do
+      {:ok, grant} =
+        Grants.create(
+          %{
+            session_id: session,
+            repository_root: root,
+            models: ["claude:opus"],
+            purposes: ["implement"],
+            max_dispatches: 2,
+            max_parallel: 1,
+            max_total_seconds: 3_600,
+            max_dispatch_seconds: 1_800,
+            unread_usage: 1
+          },
+          "human:operator"
+        )
+
+      grant
+    end
+
+    defp job!(dispatch) do
+      Repo.one!(
+        from j in Oban.Job,
+          where:
+            j.worker == "Shoestring.Cobbler.PlanExecutionWorker" and
+              fragment("json_extract(?, '$.goal_id')", j.args) == ^dispatch.goal_id
+      )
+    end
+
+    defp confirm!(dispatch, job) do
+      assert {:snooze, 60} = PlanExecutionWorker.perform(job)
+      assert Dispatches.state(dispatch) == "held"
+      assert Dispatches.advance(dispatch) == :confirmed
+    end
+
+    defp lease_events(dispatch) do
+      Repo.all(
+        from e in TrajectoryEvent,
+          where: e.goal_id == ^dispatch.goal_id and like(e.type, "lease.%"),
+          order_by: e.sequence,
+          select: e.type
+      )
+    end
+
+    # A usage report as a headless Claude run records it: the 2.1.310
+    # `rate_limit_event` through the normalization `Session` uses.
+    defp claude_reading!(utilization) do
       now = DateTime.utc_now()
+      resets = now |> DateTime.add(3_600) |> DateTime.to_unix()
+
+      frame = %{
+        "type" => "rate_limit_event",
+        "rate_limit_info" => %{
+          "status" => "allowed",
+          "rateLimitType" => "five_hour",
+          "unifiedWindows" => %{
+            "five_hour" => %{
+              "utilization" => utilization,
+              "resetsAt" => resets,
+              "status" => "allowed"
+            },
+            "seven_day" => %{
+              "utilization" => 0.1,
+              "resetsAt" => resets + 86_400,
+              "status" => "allowed"
+            }
+          }
+        }
+      }
 
       {:ok, snapshot} =
-        Shoestring.Harness.CapacitySnapshot.new(
-          %{
-            version: 2,
-            snapshot_id: Ecto.UUID.generate(),
-            capacity_state: :observed,
-            windows: [
-              %{
-                kind: "five_hour",
-                state: :observed,
-                used_percent: 20.0,
-                reset_at: DateTime.add(now, 3_600)
-              },
-              %{
-                kind: "weekly",
-                state: :observed,
-                used_percent: 10.0,
-                reset_at: DateTime.add(now, 86_400)
-              }
-            ],
-            freshness: %{max_age_seconds: 300},
-            source: %{
-              adapter_id: ClaudeHeadless.identity().adapter_id,
-              provider_id: "claude",
-              invocation_mode: "headless_stream_json",
-              event: :explicit_read
-            },
-            scope: "subscription",
-            confidence: :high,
-            support_tier: :proactive,
-            compatibility_state: :compatible,
-            observed_at: now,
-            reason: nil,
-            extensions: %{}
-          },
-          now: now
+        Shoestring.Harness.Capacity.normalize(:claude, :headless_stream_json, frame,
+          version: "2.1.310",
+          now: now,
+          captured_at: now,
+          adapter_id: ClaudeHeadless.identity().adapter_id,
+          scope: "subscription"
         )
 
       {:ok, _, _} = Shoestring.Harness.Observatory.ingest(snapshot, now: now)
     end
 
-    defp runs_show!(id) do
+    defp runs_show!(id, session \\ "s1") do
       context = %{
         shell: Mix.Shell.Process,
         with_repo: fn fun -> fun.(Repo) end,
-        env: fn "SHOESTRING_SESSION" -> "s1" end
+        env: fn "SHOESTRING_SESSION" -> session end
       }
 
       Shoestring.CLI.Commands.Runs.run(["show", id], context)
@@ -317,7 +434,7 @@ defmodule Shoestring.DispatchIntegrationTest do
         )
 
       assert status == 0, output
-      assert output =~ "1 test, 0 failures"
+      assert output =~ "2 tests, 0 failures"
     end
   end
 end

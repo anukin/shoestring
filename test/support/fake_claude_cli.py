@@ -5,17 +5,26 @@ Used only by hermetic tests: it starts no model, opens no network connection
 and reads no credentials. Like a worker that did its job, it makes `add()` in
 `calc.py` (in its working directory, the run's worktree) return the sum of
 its arguments, commits that change, and prints the stream-json frames a
-headless Claude run prints: `system`/`init`, one `assistant` text message and
-a `result` with token usage. Its argv is appended as one JSON line to
+headless Claude run prints, in the 2.1.310 order: `system`/`init`, one
+`assistant` text message, a `rate_limit_event` (Claude's own usage report)
+and a `result` with token usage. Its argv is appended as one JSON line to
 FAKE_CLAUDE_LOG when that is set.
+
+FAKE_CLAUDE_SCENARIO=limit instead changes nothing and stops at the usage
+limit: a `rate_limit_event` whose five-hour window is full and rejected,
+then an error `result`. SYNTHETIC: Claude's real limit output has never been
+captured; the result copies the captured auth failure's shape
+(`is_error: true`, `terminal_reason: "api_error"`).
 """
 import json
 import os
 import subprocess
 import sys
+import time
 
 SESSION = "aaaaaaaa-0000-4000-a000-0000000000c1"
 LOG = os.environ.get("FAKE_CLAUDE_LOG")
+SCENARIO = os.environ.get("FAKE_CLAUDE_SCENARIO", "complete")
 
 
 def emit(frame):
@@ -27,8 +36,47 @@ if LOG:
     with open(LOG, "a") as handle:
         handle.write(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd()}) + "\n")
 
+
+
+def usage(five_hour, status):
+    resets = int(time.time()) + 3600
+    emit(
+        {
+            "type": "rate_limit_event",
+            "session_id": SESSION,
+            "rate_limit_info": {
+                "status": status,
+                "rateLimitType": "five_hour",
+                "resetsAt": resets,
+                "unifiedWindows": {
+                    "five_hour": {"utilization": five_hour, "resetsAt": resets, "status": status},
+                    "seven_day": {"utilization": 0.1, "resetsAt": resets + 86400, "status": "allowed"},
+                },
+            },
+        }
+    )
+
+
 model = sys.argv[sys.argv.index("--model") + 1] if "--model" in sys.argv else None
 emit({"type": "system", "subtype": "init", "session_id": SESSION, "model": model})
+
+if SCENARIO == "limit":
+    # A real CLI takes at least this long to start; a process that is gone
+    # before Shoestring verifies its process group is refused at launch.
+    time.sleep(1)
+    usage(1.0, "rejected")
+    emit(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "terminal_reason": "api_error",
+            "result": "Claude usage limit reached.",
+            "num_turns": 1,
+            "session_id": SESSION,
+        }
+    )
+    sys.exit(1)
 
 with open("calc.py") as handle:
     source = handle.read()
@@ -64,6 +112,8 @@ emit(
         },
     }
 )
+
+usage(0.2, "allowed")
 
 emit(
     {

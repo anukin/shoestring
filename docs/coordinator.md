@@ -26,9 +26,13 @@ grant, the agent's roles and its instructions). How each CLI receives them:
 
 | Coordinator | Model | Instructions | Status |
 | --- | --- | --- | --- |
-| Claude Code | `--model` | `--append-system-prompt-file` | REPO-INSPECTION of `claude --help` 2.1.310 |
-| Codex | `-m` | `-c developer_instructions='''...'''` | UNVERIFIED in a live session |
-| opencode | `OPENCODE_CONFIG_CONTENT` `model` | its `instructions` | UNVERIFIED in a live session |
+| Claude Code | `--model` | `--append-system-prompt-file` | in the request 2.1.310 sends |
+| Codex | `-m` | `-c developer_instructions='''...'''` | a developer message in the request 0.164.0 sends |
+| opencode | `OPENCODE_CONFIG_CONTENT` `model` | its `instructions` | in the request 2.0.31 sends |
+
+Each was checked offline against a local stand-in for the model API, in the
+CLI's non-interactive mode (`plans/evidence/14-coordinator-orchestration`);
+the interactive start `chat` uses is not yet checked in a live session.
 
 The coordinator is your own session of that CLI, under its own permission
 prompts; Shoestring does not sandbox it, and its instructions tell it not to
@@ -122,12 +126,19 @@ shoestring runs cancel DISPATCH --reason TEXT     # this session's own dispatch
 ```
 
 When a dispatch's task or review is held because its provider's remaining
-usage cannot be read (always for opencode, and for Claude or Codex when the
-last reading is stale — never when a reserve is breached, which defers it),
-`wait` and `runs show` spend one of the grant's `--unread-usage`
-pre-approvals on it. Each hold is paid for once, a failed confirmation is
-refunded, and the grant's history records every spend. With none left the
-dispatch stays `held` for you.
+usage cannot be confirmed — always for opencode, which reports none; always
+for Claude, whose own usage reports can defer work but never admit it alone;
+for Codex when its last reading is stale; never when a reserve is breached,
+which defers it — `wait` and `runs show` spend one of the grant's
+`--unread-usage` pre-approvals on it. Each hold is paid for once, a failed
+confirmation is refunded, and the grant's history records every spend. With
+none left the dispatch stays `held` for you. So a grant whose Worker or
+Reviewer is a Claude model needs `--unread-usage` at least the number of
+Claude tasks and reviews you want to start without being asked.
+
+A dispatch deferred until a usage window resets (a reserve breached, or a
+worker that stopped at its limit) shows as `queued`, and `runs show` does not
+yet say what it waits for; it starts again by itself after the reset.
 
 States: `starting`, `queued`, `running`, `held` (its provider's remaining
 usage could not be confirmed; you confirm it with `shoestring follow GOAL`),

@@ -706,6 +706,45 @@ authorized by this milestone.
   advice's usage share; the installed-release check; and the live session,
   with a budget naming the coordinator, worker and reviewer.
 
+- 2026-10-26, Claude's usage check (the user chose "use Claude's own latest
+  reading"). `ClaudeHeadless.probe/1` now answers with the latest Claude
+  usage reading in the Observatory: the reports Claude's stream gives during
+  a run, or an interactive session's status line. Its windows and age are
+  the reading's own, but each answer gets a new id, so a renewal judges it
+  afresh: renewal keys its records on the reading's id and replays a
+  repeated key's earlier decision. Without a reading it is a valid unknown.
+  Regression evidence on `aab28d1`: the probe tests failed with the
+  `MatchError`, and the dispatch test found no renewal decision.
+
+  Correction to what this was expected to achieve: renewals of a Claude
+  worker still do not succeed. Iteration 11 made Claude's own reports
+  conservative evidence (`conservative_partial`, `degraded`, medium
+  confidence). Admission and renewal defer on them when a reserve is
+  breached, but never admit on them alone: they ask for a confirmation. A
+  Claude worker's lease now ends at its first renewal on a recorded
+  `require_confirmation` decision instead of a crash. As before, a finished
+  turn keeps its result. Renewing would need renewal to honour the run's
+  admission confirmation, a policy change not made.
+
+  Consequence for coordinators: every Claude task or review is held at
+  admission until it is confirmed, by a grant's `--unread-usage`
+  pre-approval or by the person. `docs/coordinator.md` said "when the last
+  reading is stale" and now says always. The dispatch test had admitted on
+  an invented proactive, high-confidence Claude reading. It now uses the
+  2.1.310 report shape, is held, and is confirmed under the grant.
+
+  Usage limit mid-task (second test). The stand-in's limit output is
+  SYNTHETIC; Claude's real limit output has never been captured. The run
+  fails as `task_failed` (`api_error`), and its own report records the full
+  five-hour window. The retry is deferred until the reset
+  (`reserve_breach_five_hour`), and no second run starts. The dispatch
+  shows `queued` with no `next`, so a coordinator is not told it is waiting
+  for a reset. Not fixed, and recorded in `docs/coordinator.md`. After the
+  reset the reading is stale, so the dispatch asks for a confirmation again.
+  That is UNVERIFIED in a test. A stand-in that exited within milliseconds
+  was refused at launch (`group_leader_unverifiable`: gone before its
+  process group was verified). A real CLI starts slower.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.
