@@ -506,6 +506,22 @@ authorized by this milestone.
   start (package C); refusing a dispatch that names an unavailable model
   (package D); a discovered-model view in the web Settings page.
 
+- 2026-10-25, package C. `shoestring setup` probes each CLI (the
+  `doctor --probe-providers` commands only), refreshes the installed ones'
+  models, suggests a Coordinator, a Worker and a Reviewer of another vendor
+  (or keeps the agent's current ones), shows what it would save and asks.
+  Without a terminal it refuses unless given `--worker` and `--yes`, before
+  changing anything; a rerun with the same choices saves nothing. Terminal
+  detection is OTP's `:io.getopts(:standard_io)[:stdin]` (`Shoestring.CLI.Terminal`):
+  VERIFIED false without a terminal; the true case is UNVERIFIED, because
+  this environment cannot open a pseudo-terminal. `shoestring doctor` now
+  also runs from the checkout (agents, git, python3, recorded models); the
+  release keeps its fuller doctor. In the checkout, `mix setup` remains the
+  equivalent of `init`. The service refreshes stale catalogs once at start
+  (`Shoestring.ModelCatalog.StartupRefresh`, off in tests). Deviation:
+  `doctor --probe-providers` does not refresh models — it stays read-only;
+  `setup`, `models refresh` and the start-up refresh do.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

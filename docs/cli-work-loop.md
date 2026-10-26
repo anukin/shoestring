@@ -11,11 +11,16 @@ With an installed release (Homebrew), `shoestring` is already on your `PATH`:
 
 ```sh
 shoestring init                 # create the state directory
-shoestring doctor --probe-providers   # is the claude CLI installed, signed in, tested?
-shoestring models refresh       # ask each installed CLI for its models (no prompt is sent)
-shoestring agents create builder --worker claude:opus --default
+shoestring setup                # check the CLIs, record their models, choose the default agent
 shoestring start                # in another terminal; leave it running
 ```
+
+`setup` checks each agent CLI the way `shoestring doctor --probe-providers`
+does, asks the installed ones for their models (no prompt is sent), suggests
+a Coordinator, Worker and Reviewer from another vendor, and asks before
+saving. Without a terminal, pass `--worker PROVIDER:MODEL --yes`. The
+step-by-step equivalents are `shoestring models refresh` and
+`shoestring agents create`.
 
 From a source checkout, the wrapper runs the same commands with this
 checkout's code and state:
@@ -24,15 +29,12 @@ checkout's code and state:
 # 1. Put the wrapper on your PATH.
 ln -s "$PWD/bin/shoestring" /usr/local/bin/shoestring   # or add bin/ to PATH
 
-# 2. Record the models each installed CLI offers. New Claude and Codex
-#    models are enabled; enable opencode ones yourself (shoestring models
-#    enable opencode PROVIDER/MODEL). `models add` names one a CLI did not report.
-shoestring models refresh
+# 2. Check the agent CLIs, record their models and choose the default agent.
+#    New Claude and Codex models are enabled; enable opencode ones yourself
+#    (shoestring models enable opencode PROVIDER/MODEL).
+shoestring setup
 
-# 3. Create the default agent. Its Coordinator plans; its Worker does the work.
-shoestring agents create builder --worker claude:opus --default
-
-# 4. Start the service from this checkout and leave it running.
+# 3. Start the service from this checkout and leave it running.
 mix phx.server
 ```
 

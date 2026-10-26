@@ -37,6 +37,9 @@ config :shoestring, :capacity_monitors,
   claude: [enabled: false, auto_ingest_initial: false],
   codex: [enabled: false]
 
+# Tests never start a harness CLI to list its models.
+config :shoestring, :model_catalog_refresh_on_start, false
+
 # Headless Claude runs record their `rate_limit_event` readings in the
 # Observatory. Tests pass an explicit `:capacity_sink` when they assert it.
 config :shoestring, claude_capacity_sink: nil

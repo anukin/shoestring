@@ -53,10 +53,16 @@ After checking the archive hash, extract to a new installation directory:
 
 ```sh
 bin/shoestringctl doctor
+bin/shoestringctl init
+bin/shoestringctl setup
 bin/shoestringctl start
 ```
 
-The Homebrew command is `shoestring doctor` / `shoestring start`. `start` stays
+The Homebrew command is `shoestring doctor` / `shoestring setup` /
+`shoestring start`. `setup` runs the provider probes described below, asks
+each installed agent CLI for its models (no prompt is sent) and saves a
+default agent after asking; see [the CLI work loop](cli-work-loop.md). It
+needs initialized state (`init`). `start` stays
 in the foreground. Stop it explicitly with Ctrl-C or SIGTERM. There is no
 automatic service installation, daemon/reaper, forced shutdown of another
 instance or file cleanup.
@@ -89,6 +95,12 @@ Reported authentication is not proof that a future inference will succeed.
 Version drift asks for fixture review rather than claiming compatibility.
 Provider status commands may refresh credentials or exchange identity tokens;
 use passive doctor when those effects are unwanted.
+
+Once a day, the service also asks each installed agent CLI for its models
+when it starts (`config :shoestring, :model_catalog_refresh_on_start`, off
+with `SHOESTRING_AUTOMATION=off`). Like `shoestring models refresh` this sends
+no prompt; opencode's listing leaves one unprompted session in opencode's
+history.
 
 `doctor` also reports `agents`: each supported agent CLI's readiness for task
 work (`binary_missing`, `not_checked`, `needs_sign_in`, `version_untested`,

@@ -31,12 +31,17 @@ defmodule Shoestring.CLI.Main do
     {"execution", Commands.Execution},
     {"agents", Commands.Agents},
     {"models", Commands.Models},
-    {"reservations", Commands.Reservations}
+    {"reservations", Commands.Reservations},
+    {"setup", Commands.Setup},
+    {"doctor", Commands.Doctor}
   ]
 
   @usage """
   usage: shoestring COMMAND [ARGS...]
 
+    setup       check the agent CLIs, record their models and save a default agent
+    doctor [--probe-providers]
+                check each agent CLI and, with the flag, its version and sign-in
     do "REQUEST" [--agent NAME] [--test PATH]... [--gate NAME]... [--no-follow]
                 plan, approve and run REQUEST in the current Git repository
     follow GOAL follow a goal and answer what it waits for
@@ -57,8 +62,6 @@ defmodule Shoestring.CLI.Main do
   Service commands:
     start       start the service in the foreground (stop it with Ctrl-C)
     init        create and upgrade the state directory without starting
-    doctor [--probe-providers]
-                check the installation and, with the flag, each agent CLI
     version     print the installed version
     text | diagnostics-preview | diagnostics-export
                 see docs/releases.md

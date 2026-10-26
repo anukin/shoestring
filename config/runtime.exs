@@ -124,7 +124,8 @@ if config_env() == :prod do
           :plan_execution_reconciler,
           :reservation_control_reconciler,
           :plan_child_inbox_reconciler,
-          :terminal_recovery
+          :terminal_recovery,
+          :model_catalog_refresh_on_start
         ] do
       config :shoestring, key, false
     end

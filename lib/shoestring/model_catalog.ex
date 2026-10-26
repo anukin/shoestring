@@ -37,6 +37,15 @@ defmodule Shoestring.ModelCatalog do
 
   def entry(provider, model), do: Repo.get_by(Entry, provider: provider, model: model)
 
+  @doc "When `provider`'s models were last listed by its harness, or nil."
+  def last_listed_at(provider) do
+    Repo.one(
+      from e in Entry,
+        where: e.provider == ^provider and e.source == "live",
+        select: max(e.fetched_at)
+    )
+  end
+
   @doc "The models enabled for `provider`."
   def enabled(provider),
     do: Settings.model_ids(Map.get(AgentProfiles.settings(), field!(provider)))

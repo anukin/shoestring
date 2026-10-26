@@ -41,6 +41,10 @@ config :shoestring, :capacity_monitors,
   claude: [enabled: true, auto_ingest_initial: true],
   codex: [enabled: true]
 
+# At start, re-list the models of installed harnesses whose catalog is over a
+# day old. Listing sends no prompt (Shoestring.Harnesses.ModelListing).
+config :shoestring, :model_catalog_refresh_on_start, true
+
 # Fan-out is an explicit operator decision. When enabled, concurrency follows
 # `:plan_reservation_policy`, whose global, provider-account and goal limits
 # and configured units all default to one.

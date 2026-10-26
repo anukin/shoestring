@@ -49,6 +49,7 @@ defmodule Shoestring.Application do
         plan_execution_reconciler_children() ++
         reservation_control_reconciler_children() ++
         plan_child_inbox_reconciler_children() ++
+        model_catalog_children() ++
         [
           {DNSCluster, query: Application.get_env(:shoestring, :dns_cluster_query) || :ignore},
           ShoestringWeb.Endpoint
@@ -147,6 +148,13 @@ defmodule Shoestring.Application do
   defp reservation_control_reconciler_children do
     if Application.get_env(:shoestring, :reservation_control_reconciler, true),
       do: [Shoestring.Cobbler.ReservationControlReconciler],
+      else: []
+  end
+
+  # Off unless configured, so a test or a tool run never starts a harness CLI.
+  defp model_catalog_children do
+    if Application.get_env(:shoestring, :model_catalog_refresh_on_start, false),
+      do: [Shoestring.ModelCatalog.StartupRefresh],
       else: []
   end
 
