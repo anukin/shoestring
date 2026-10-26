@@ -76,6 +76,7 @@ dispatches (running work continues) — both ask you, in a terminal.
 
 ```sh
 shoestring dispatch --purpose implement --worker codex:gpt-6-luna \
+  --reviewer claude:opus \
   --title "Make add() return the sum of its arguments" --brief brief.md \
   --file calc.py --stay-out test/ --test test/test_calc.py
 ```
@@ -85,10 +86,15 @@ and approved under the grant (recorded as `grant:ID`, with
 `author_kind: grant`), and an execution the service runs in a private copy
 of the repository at its `HEAD`. The checks decide acceptance; the result is
 a verified commit to fetch and merge, and your checkout is never changed.
-The worker reads the brief under "Coordinator brief". Dispatched work is not
-cross-reviewed automatically even with `:plan_review` enabled; the
-coordinator reviews it with a REVIEW dispatch from another vendor once that
-exists.
+The worker reads the brief under "Coordinator brief".
+
+`--reviewer` names a model from another vendor than the worker's (the grant
+must allow REVIEW and that model). Iteration 8's cross-review then runs
+before the task is accepted, whatever `:plan_review` says: the reviewer gets
+the task contract, the diff and the check results and no tools; blocking
+findings send the task back to the worker once, and if they remain the
+dispatch waits for you (`needs_you`). `runs show` lists every review round
+and its findings. Without `--reviewer`, dispatched work is not reviewed.
 
 A dispatch outside the grant is refused with the limit it would cross and
 nothing is queued. A retry with the same request id (by default derived from

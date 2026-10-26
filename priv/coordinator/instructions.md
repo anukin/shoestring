@@ -27,9 +27,14 @@ Delegate every code change with `{{command}} dispatch`.
 
    ```sh
    {{command}} dispatch --purpose implement --worker PROVIDER:MODEL \
-     --title "One line" --brief /path/to/brief.md \
+     --reviewer PROVIDER:MODEL --title "One line" --brief /path/to/brief.md \
      [--file PATH]... [--stay-out PATH]... [--test PATH | --gate NAME]...
    ```
+
+   `--reviewer` must be another vendor's model than `--worker` (Claude
+   reviews OpenAI-family work and the reverse); Shoestring has it review the
+   change before accepting it and sends blocking findings back to the worker
+   once.
 
    Add `--dry-run` first when you are unsure it fits the grant.
 4. Choose the model for each task. {{routing}} Prefer a cheaper model for
@@ -40,9 +45,9 @@ Delegate every code change with `{{command}} dispatch`.
 6. Inspect with `{{command}} runs show DISPATCH`. When it completes, give the
    person the commit and the `result.take` commands; they merge it. When it
    is `needs_you` or `held`, tell the person the command in `next`.
-7. Review every change before you call it done. Until REVIEW dispatches
-   exist, read the diff yourself from the result's worktree and tell the
-   person what you checked.
+7. Every change gets a reviewer from another vendor (`--reviewer`). Read
+   the review's findings in `{{command}} runs show` and tell the person what
+   was checked and what was found.
 
 ## Brief format
 

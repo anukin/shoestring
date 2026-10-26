@@ -14,9 +14,10 @@ defmodule Shoestring.Cobbler.Review.Configuration do
   Plans and models never choose any of this: it comes from configuration and
   the saved agent the human approved the execution with.
 
-  A coordinator's dispatch (iteration 14) is not cross-reviewed here: the
-  coordinator reviews it with a separate REVIEW dispatch, whose model must be
-  another vendor's.
+  A coordinator's dispatch (iteration 14) is cross-reviewed exactly when it
+  names a reviewer, whatever `:plan_review` says: the reviewer is the
+  dispatch's, never configuration's `:adapter`, and must still be another
+  vendor's.
   """
   alias Shoestring.Cobbler.{ExecutionProfile, PlanContract}
   alias Shoestring.Harness.Contract
@@ -45,13 +46,23 @@ defmodule Shoestring.Cobbler.Review.Configuration do
 
     cond do
       not is_list(config) -> {:error, :invalid_review_configuration}
+      dispatched?(execution) -> dispatched(config, execution, opts)
       Keyword.get(config, :enabled, false) != true -> {:ok, :not_required}
-      dispatched?(execution) -> {:ok, :not_required}
       true -> required(config, execution, opts)
     end
   end
 
   defp dispatched?(execution), do: is_binary(get_in(execution, [:agent_profile, "dispatch_id"]))
+
+  defp dispatched(config, execution, opts) do
+    repo = Keyword.get(opts, :repo, Shoestring.Repo)
+    binding = execution.agent_profile
+
+    case ExecutionProfile.resolve(Map.put(binding, "role", @role), repo) do
+      {:ok, _reviewer} -> required(Keyword.drop(config, [:adapter, :model]), execution, opts)
+      {:error, _} -> {:ok, :not_required}
+    end
+  end
 
   @doc "The vendor of `model` run by `provider`, or nil when it cannot be told."
   def vendor(provider, model),

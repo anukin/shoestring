@@ -51,7 +51,8 @@ defmodule Shoestring.CLI.Commands.Runs do
           %{
             "attempts_used" => status[:total_attempts],
             "duration_ms" => status[:total_duration_ms],
-            "active_run_id" => status[:active_run_id]
+            "active_run_id" => status[:active_run_id],
+            "reviews" => Enum.map(status[:reviews] || [], &Result.review/1)
           }
 
         _ ->

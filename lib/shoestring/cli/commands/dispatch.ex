@@ -6,7 +6,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
 
   @help """
   shoestring dispatch --purpose implement --worker PROVIDER:MODEL --title TEXT
-      --brief FILE [--effort LEVEL] [--file PATH]... [--stay-out PATH]...
+      --brief FILE [--effort LEVEL] [--reviewer PROVIDER:MODEL]
+      [--file PATH]... [--stay-out PATH]...
       [--accept TEXT]... [--gate NAME]... [--test PATH]... [--attempts N]
       [--minutes M] [--batch LABEL --batch-size N] [--session ID]
       [--request-id ID] [--repo PATH] [--dry-run] [--json]
@@ -21,7 +22,10 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   TITLE is one line; FILE is the brief the worker reads (up to 16000
   characters). `--file` hints at files to change, `--stay-out` names paths
   the task must not change, and `--accept` adds acceptance criteria.
-  `--attempts` (default 1) and `--minutes` (default 30) are what the
+  `--reviewer` names a model from another vendor that reviews the change
+  before it is accepted (the grant must allow REVIEW and that model):
+  blocking findings send the task back to the worker once, then it waits
+  for a person. `--attempts` (default 1) and `--minutes` (default 30) are what the
   dispatch reserves from the grant. `--batch` declares a strategy of
   `--batch-size` dispatches; one more is refused.
 
@@ -39,6 +43,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     title: :string,
     brief: :string,
     effort: :string,
+    reviewer: :string,
     file: :keep,
     stay_out: :keep,
     accept: :keep,
@@ -125,12 +130,21 @@ defmodule Shoestring.CLI.Commands.Dispatch do
 
     brief = read_brief!(Command.expand(opts[:brief], context))
 
+    {reviewer_provider, reviewer_model} =
+      case opts[:reviewer] && String.split(opts[:reviewer], ":", parts: 2) do
+        nil -> {nil, nil}
+        [provider, model] when provider != "" and model != "" -> {provider, model}
+        _ -> Refusal.refuse!("Use PROVIDER:MODEL for --reviewer, for example claude:opus")
+      end
+
     request = %{
       session_id: session,
       purpose: opts[:purpose],
       provider: provider,
       model: model,
       effort: opts[:effort],
+      reviewer_provider: reviewer_provider,
+      reviewer_model: reviewer_model,
       title: opts[:title],
       brief: brief,
       repository: Command.expand(opts[:repo], context) || context.cwd,
@@ -190,6 +204,10 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       "purpose" => dispatch.purpose,
       "worker" => "#{dispatch.provider}:#{dispatch.model}",
       "effort" => dispatch.effort,
+      "reviewer" =>
+        if(dispatch.reviewer_provider,
+          do: "#{dispatch.reviewer_provider}:#{dispatch.reviewer_model}"
+        ),
       "title" => dispatch.title,
       "state" => Dispatches.state(dispatch),
       "goal_id" => dispatch.goal_id,
@@ -232,6 +250,13 @@ defmodule Shoestring.CLI.Commands.Dispatch do
 
   def message({:harness_cannot, provider, :implement}, _request),
     do: "#{provider} cannot run tasks."
+
+  def message({:harness_cannot, provider, :review}, _request), do: "#{provider} cannot review."
+
+  def message({:reviewer_same_vendor, reviewer}, request),
+    do:
+      "#{reviewer} is the same vendor as the worker #{request.provider}:#{request.model} " <>
+        "(or its vendor cannot be told); choose a reviewer from another vendor."
 
   def message({:brief_too_large, max}, _request), do: "The brief is over #{max} characters."
 

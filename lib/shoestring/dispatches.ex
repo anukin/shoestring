@@ -10,8 +10,10 @@ defmodule Shoestring.Dispatches do
   and merge; the user's checkout is never changed. The worker, model, effort
   and the coordinator's brief come from this dispatch record, which is what
   the execution binding resolves (`Shoestring.Cobbler.ExecutionProfile`).
-  Dispatched work is not cross-reviewed automatically: the coordinator
-  dispatches a REVIEW from another vendor.
+  With a reviewer (`:reviewer_provider`, `:reviewer_model`) from another
+  vendor than the worker, iteration 8's cross-review runs before the task is
+  accepted: blocking findings send it back to the worker once, then it waits
+  for a person. Without one, dispatched work is not cross-reviewed.
 
   The grant's limits are checked in the same immediate transaction that
   records the dispatch, so two concurrent dispatches cannot both take room
@@ -117,6 +119,7 @@ defmodule Shoestring.Dispatches do
          {:ok, title} <- text(request.title, :title, 200),
          {:ok, brief} <- brief(request.brief),
          :ok <- worker(request),
+         :ok <- reviewer(request),
          {:ok, attempts} <- int(Map.get(request, :attempts, 1), :attempts, 1..20),
          {:ok, seconds} <- int(Map.get(request, :seconds, 1800), :seconds, 60..14_400),
          :ok <- batch(request),
@@ -212,6 +215,35 @@ defmodule Shoestring.Dispatches do
     end
   end
 
+  # A reviewer must be an enabled model on a harness that can review, from
+  # another vendor than the worker (decision 4).
+  defp reviewer(request) do
+    case {Map.get(request, :reviewer_provider), Map.get(request, :reviewer_model)} do
+      {nil, nil} ->
+        :ok
+
+      {provider, model} when is_binary(provider) and is_binary(model) ->
+        cond do
+          not Harnesses.supports?(provider, :review) ->
+            {:error, {:harness_cannot, provider, :review}}
+
+          model not in ModelCatalog.enabled(provider) ->
+            {:error, {:model_not_enabled, "#{provider}:#{model}"}}
+
+          Harnesses.vendor(provider, model) == nil or
+              Harnesses.vendor(provider, model) ==
+                Harnesses.vendor(request.provider, request.model) ->
+            {:error, {:reviewer_same_vendor, "#{provider}:#{model}"}}
+
+          true ->
+            :ok
+        end
+
+      _ ->
+        {:error, {:invalid_dispatch, :reviewer}}
+    end
+  end
+
   defp int(value, field, range) do
     if is_integer(value) and value in range,
       do: {:ok, value},
@@ -290,6 +322,8 @@ defmodule Shoestring.Dispatches do
             provider: request.provider,
             model: request.model,
             effort: Map.get(request, :effort),
+            reviewer_provider: Map.get(request, :reviewer_provider),
+            reviewer_model: Map.get(request, :reviewer_model),
             title: prepared.title,
             brief: prepared.brief,
             brief_digest: digest(prepared.brief),
@@ -394,6 +428,11 @@ defmodule Shoestring.Dispatches do
       provider: prepared.request.provider,
       model: prepared.request.model,
       purpose: prepared.request.purpose,
+      reviewer:
+        case Map.get(prepared.request, :reviewer_provider) do
+          nil -> nil
+          provider -> "#{provider}:#{prepared.request.reviewer_model}"
+        end,
       attempts: prepared.attempts,
       seconds: prepared.seconds
     }
@@ -465,12 +504,26 @@ defmodule Shoestring.Dispatches do
 
   def state(%Dispatch{state: "started"} = dispatch, status) do
     case status.(dispatch.goal_id) do
-      {:ok, %{cancelled?: true}} -> "cancelled"
-      {:ok, %{completed?: true}} -> "completed"
-      {:ok, %{needs_user?: true}} -> "needs_you"
-      {:ok, %{active_run_id: run_id}} when is_binary(run_id) -> "running"
-      {:ok, %{last_admission: %{"result" => "require_confirmation"}}} -> "held"
-      _ -> "queued"
+      {:ok, %{cancelled?: true}} ->
+        "cancelled"
+
+      {:ok, %{completed?: true}} ->
+        "completed"
+
+      {:ok, %{needs_user?: true}} ->
+        "needs_you"
+
+      {:ok, %{active_run_id: run_id}} when is_binary(run_id) ->
+        "running"
+
+      {:ok, %{last_admission: %{"result" => "require_confirmation"}}} ->
+        "held"
+
+      {:ok, %{reviews: [_ | _] = reviews}} ->
+        if(Enum.any?(reviews, &(&1.state == "held")), do: "held", else: "queued")
+
+      _ ->
+        "queued"
     end
   end
 
@@ -496,6 +549,23 @@ defmodule Shoestring.Dispatches do
       }
 
       {:ok, if(dispatch.effort, do: Map.put(binding, "effort", dispatch.effort), else: binding)}
+    else
+      _ -> {:error, :invalid_execution_profile}
+    end
+  end
+
+  def binding(dispatch_id, "Reviewer", repo) do
+    with {:ok, id} <- Ecto.UUID.cast(dispatch_id),
+         %Dispatch{reviewer_provider: provider, reviewer_model: model} = dispatch
+         when is_binary(provider) <- repo.get(Dispatch, id) do
+      {:ok,
+       %{
+         "dispatch_id" => dispatch.id,
+         "grant_id" => dispatch.grant_id,
+         "role" => "Reviewer",
+         "provider" => provider,
+         "model" => model
+       }}
     else
       _ -> {:error, :invalid_execution_profile}
     end

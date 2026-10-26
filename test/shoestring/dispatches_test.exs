@@ -268,6 +268,83 @@ defmodule Shoestring.DispatchesTest do
     refute Dispatches.settled?("queued")
   end
 
+  test "a reviewer must be another vendor's model the grant allows", ctx do
+    claude = %{reviewer_provider: "claude", reviewer_model: "opus"}
+
+    assert Dispatches.create(
+             request(ctx, %{reviewer_provider: "codex", reviewer_model: "gpt-6-luna"})
+           ) ==
+             {:error, {:reviewer_same_vendor, "codex:gpt-6-luna"}}
+
+    assert Dispatches.create(request(ctx, claude)) == {:error, {:outside_grant, :model}}
+
+    {:ok, _} = Grants.revoke(ctx.grant, "human:operator")
+
+    {:ok, _} =
+      Grants.create(
+        grant_attrs(ctx.root, %{
+          models: ["codex:gpt-6-luna", "claude:opus"],
+          purposes: ["implement"]
+        }),
+        "human:operator"
+      )
+
+    assert Dispatches.create(request(ctx, claude)) == {:error, {:outside_grant, :purpose}}
+    assert Repo.all(Dispatch) == []
+  end
+
+  test "a dispatch with a reviewer is cross-reviewed whatever :plan_review says; one without is not",
+       ctx do
+    {:ok, _} = Grants.revoke(ctx.grant, "human:operator")
+
+    {:ok, _} =
+      Grants.create(
+        grant_attrs(ctx.root, %{models: ["codex:gpt-6-luna", "claude:opus"]}),
+        "human:operator"
+      )
+
+    {:ok, reviewed, :recorded} =
+      Dispatches.create(request(ctx, %{reviewer_provider: "claude", reviewer_model: "opus"}))
+
+    {:ok, plain, :recorded} = Dispatches.create(request(ctx, %{request_id: "plain"}))
+
+    execution = fn dispatch ->
+      {:ok, %{execution: execution}} = ExecutionControl.status(dispatch.goal_id)
+      execution
+    end
+
+    alias Shoestring.Cobbler.Review.Configuration
+
+    assert {:ok, {:required, %{public: public}}} =
+             Configuration.load(execution.(reviewed), review_config: [enabled: false])
+
+    assert %{"provider_id" => "claude", "model" => "opus", "implementer_provider" => "codex"} =
+             public
+
+    # The dispatch's reviewer wins over a configured adapter.
+    assert {:ok, {:required, %{public: %{"provider_id" => "claude"}}}} =
+             Configuration.load(execution.(reviewed),
+               review_config: [enabled: true, adapter: :codex, model: "gpt-review"]
+             )
+
+    assert {:ok, :not_required} =
+             Configuration.load(execution.(plain), review_config: [enabled: true])
+
+    held = fn _goal_id ->
+      {:ok,
+       %{
+         cancelled?: false,
+         completed?: false,
+         needs_user?: false,
+         active_run_id: nil,
+         last_admission: nil,
+         reviews: [%{state: "held"}]
+       }}
+    end
+
+    assert Dispatches.state(reviewed, held) == "held"
+  end
+
   test "a dispatch is cancelled under its grant", ctx do
     {:ok, dispatch, :recorded} = Dispatches.create(request(ctx))
     assert {:ok, _} = Dispatches.cancel(dispatch, "Superseded by a smaller change.")

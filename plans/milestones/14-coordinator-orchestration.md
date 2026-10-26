@@ -564,6 +564,18 @@ authorized by this milestone.
   CLIs; a continued session starts a new CLI conversation (no CLI resume id
   is kept) and re-reads Shoestring's records.
 
+- 2026-10-25, package D, review. REVIEW is delivered as `dispatch
+  --reviewer PROVIDER:MODEL` on an IMPLEMENT dispatch rather than a separate
+  read-only review Elf: iteration 8's tool-free cross-review (diff, contract
+  and checks; no tools) runs before acceptance whenever the dispatch names a
+  reviewer, regardless of `:plan_review`, with the dispatch's reviewer
+  overriding any configured adapter. The reviewer must be another vendor's
+  enabled model, and the grant must allow REVIEW and that model. A held
+  review shows as the dispatch state `held`; `runs show` lists review
+  rounds. Still open: a stand-alone REVIEW of an already finished dispatch,
+  EXPLORE, `capacity`, the dry run's admission preview, and spending
+  unread-usage pre-approvals.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

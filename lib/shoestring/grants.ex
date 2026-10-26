@@ -178,6 +178,12 @@ defmodule Shoestring.Grants do
       model not in grant.models ->
         {:error, {:outside_grant, :model}}
 
+      request[:reviewer] && "review" not in grant.purposes ->
+        {:error, {:outside_grant, :purpose}}
+
+      request[:reviewer] && request[:reviewer] not in grant.models ->
+        {:error, {:outside_grant, :model}}
+
       usage.attempts + request.attempts > grant.max_dispatches ->
         {:error, {:outside_grant, :dispatches}}
 

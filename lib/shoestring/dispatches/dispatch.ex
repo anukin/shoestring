@@ -16,6 +16,8 @@ defmodule Shoestring.Dispatches.Dispatch do
     field :provider, :string
     field :model, :string
     field :effort, :string
+    field :reviewer_provider, :string
+    field :reviewer_model, :string
     field :title, :string
     field :brief, :string
     field :brief_digest, :string

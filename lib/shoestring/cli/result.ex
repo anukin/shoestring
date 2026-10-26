@@ -106,7 +106,8 @@ defmodule Shoestring.CLI.Result do
     Enum.each(result.take, &shell.info("  #{&1}"))
   end
 
-  defp review(review) do
+  @doc "One review round as data: reviewer, state, and its findings."
+  def review(review) do
     %{
       plan_task_id: review.plan_task_id,
       attempt: review.attempt,
