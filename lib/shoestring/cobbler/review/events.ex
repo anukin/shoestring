@@ -16,7 +16,11 @@ defmodule Shoestring.Cobbler.Review.Events do
   end
 
   def validate("cobbler.plan.review.confirmed", p),
-    do: check(human?(p["confirmed_by"]) and p["attempt"] >= 1, :confirmed_by)
+    do:
+      check(
+        Shoestring.Authority.identity?(p["confirmed_by"]) and p["attempt"] >= 1,
+        :confirmed_by
+      )
 
   def validate("cobbler.plan.review.attempt.started", p),
     do: check(p["call"] in 1..2 and p["output_token_allowance"] in 1..8192, :call)

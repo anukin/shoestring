@@ -5,6 +5,7 @@ defmodule Shoestring.DispatchesTest do
   mode and no service, provider or network. Scratch repositories are kept.
   """
   use Shoestring.DataCase, async: false
+  import Ecto.Query
 
   alias Shoestring.{Authority, Dispatches, Grants, ModelCatalog, Repo}
   alias Shoestring.Cobbler.{ExecutionControl, ExecutionProfile, Plans}
@@ -343,6 +344,59 @@ defmodule Shoestring.DispatchesTest do
     end
 
     assert Dispatches.state(reviewed, held) == "held"
+  end
+
+  test "a usage hold spends one pre-approved unread-usage dispatch, once; then waits for a person",
+       ctx do
+    {:ok, _} = ModelCatalog.add("opencode", "opencode/fixture-free")
+    {:ok, _} = Grants.revoke(ctx.grant, "human:operator")
+
+    {:ok, grant} =
+      Grants.create(
+        grant_attrs(ctx.root, %{models: ["opencode:opencode/fixture-free"], unread_usage: 1}),
+        "human:operator"
+      )
+
+    opencode = %{provider: "opencode", model: "opencode/fixture-free"}
+    {:ok, first, :recorded} = Dispatches.create(request(ctx, opencode))
+
+    {:ok, second, :recorded} =
+      Dispatches.create(request(ctx, Map.put(opencode, :request_id, "r2")))
+
+    # opencode's remaining usage is never readable, so admission asks.
+    hold! = fn dispatch ->
+      {:ok, %{execution: execution}} = ExecutionControl.status(dispatch.goal_id)
+      task = %{"id" => "dispatch", "execution" => %{"max_duration_seconds" => 1800}}
+
+      assert {:error, {:execution_admission_blocked, _}} =
+               Shoestring.Cobbler.ExecutionAdmission.admit(dispatch.goal_id, execution, task, 1)
+    end
+
+    hold!.(first)
+    assert Dispatches.state(first) == "held"
+
+    assert Dispatches.advance(first) == :confirmed
+    assert Grants.get(grant.id).unread_usage_used == 1
+
+    confirmation =
+      Repo.one!(
+        from e in Shoestring.Trajectory.TrajectoryEvent,
+          where: e.goal_id == ^first.goal_id and e.type == "cobbler.plan.capacity.confirmed"
+      )
+
+    assert confirmation.actor == "grant"
+    assert confirmation.payload["confirmed_by"] == Authority.grant_identity(grant.id)
+
+    # The same hold again replays the same confirmation and spends nothing.
+    assert Dispatches.advance(first) == :confirmed
+    assert Grants.get(grant.id).unread_usage_used == 1
+    assert [_] = Enum.filter(Grants.events(grant.id), &(&1.kind == "unread_usage_used"))
+
+    # None left: the second hold waits for a person.
+    hold!.(second)
+    assert Dispatches.advance(second) == :none
+    assert Dispatches.state(second) == "held"
+    assert Grants.get(grant.id).unread_usage_used == 1
   end
 
   test "a dispatch is cancelled under its grant", ctx do

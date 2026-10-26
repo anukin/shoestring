@@ -121,6 +121,14 @@ shoestring runs show DISPATCH                     # state, use, and the result
 shoestring runs cancel DISPATCH --reason TEXT     # this session's own dispatch
 ```
 
+When a dispatch's task or review is held because its provider's remaining
+usage cannot be read (always for opencode, and for Claude or Codex when the
+last reading is stale — never when a reserve is breached, which defers it),
+`wait` and `runs show` spend one of the grant's `--unread-usage`
+pre-approvals on it. Each hold is paid for once, a failed confirmation is
+refunded, and the grant's history records every spend. With none left the
+dispatch stays `held` for you.
+
 States: `starting`, `queued`, `running`, `held` (its provider's remaining
 usage could not be confirmed; you confirm it with `shoestring follow GOAL`),
 `needs_you` (you decide, with `shoestring follow GOAL`), `completed`,

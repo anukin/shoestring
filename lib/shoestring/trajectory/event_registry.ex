@@ -1573,10 +1573,10 @@ defmodule Shoestring.Trajectory.EventRegistry do
          :ok <- plan_execution_revision(payload),
          :ok <- plan_execution_attempt(payload),
          :ok <- plan_execution_task_id(payload),
-         true <- human_identity?(payload["confirmed_by"]) do
+         true <- Shoestring.Authority.identity?(payload["confirmed_by"]) do
       :ok
     else
-      false -> Contract.invalid(:confirmed_by, "must be a human: identity")
+      false -> Contract.invalid(:confirmed_by, "must be a human: or grant: identity")
       error -> error
     end
   end

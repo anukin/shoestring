@@ -157,6 +157,36 @@ defmodule Shoestring.Grants do
   end
 
   @doc """
+  Returns one unread-usage dispatch spent for `detail`'s hold, when the
+  confirmation it paid for could not be recorded.
+  """
+  def refund_unread(%Grant{id: id}, detail, opts \\ []) do
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+
+    Repo.transaction(fn ->
+      {count, _} =
+        Repo.update_all(
+          from(g in Grant, where: g.id == ^id and g.unread_usage_used > 0),
+          inc: [unread_usage_used: -1]
+        )
+
+      if count != 1, do: Repo.rollback(:nothing_to_refund)
+      grant = Repo.get!(Grant, id)
+      record!(grant, "unread_usage_refunded", Authority.grant_identity(id), detail, now)
+      grant
+    end)
+  end
+
+  @doc "Whether an unread-usage dispatch is already spent (and not refunded) for `hold`."
+  def spent?(grant_id, hold) do
+    Enum.reduce(events(grant_id), 0, fn
+      %Event{kind: "unread_usage_used", payload: %{"hold" => ^hold}}, n -> n + 1
+      %Event{kind: "unread_usage_refunded", payload: %{"hold" => ^hold}}, n -> n - 1
+      _, n -> n
+    end) > 0
+  end
+
+  @doc """
   `:ok`, or `{:error, {:outside_grant, limit}}` naming the first limit the
   dispatch would cross. `request` has `:repository_root`, `:provider`,
   `:model`, `:purpose`, `:attempts` and `:seconds`; `usage` is what the

@@ -42,6 +42,8 @@ defmodule Shoestring.CLI.Commands.Wait do
   end
 
   defp poll(dispatches, deadline, interval, context) do
+    # A hold the grant pre-approved is confirmed here, so it is not settled.
+    Enum.each(dispatches, &Dispatches.advance/1)
     summaries = Enum.map(dispatches, &Dispatch.summary/1)
 
     case Enum.find(summaries, &Dispatches.settled?(&1["state"])) do

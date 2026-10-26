@@ -158,8 +158,13 @@ defmodule Shoestring.Cobbler.PlanReview do
   Records a human confirmation for the next call of one held review.
   `attrs`: `:review_id`, `:confirmation_id` (UUID) and `:confirmed_by`.
   """
-  def confirm(goal_id, attrs) do
-    with %Record{goal_id: ^goal_id, state: state} = record when state in ~w(pending held) <-
+  def confirm(goal_id, attrs, opts \\ []) do
+    by = attrs[:confirmed_by]
+
+    with true <-
+           not Shoestring.Authority.grant?(by) or
+             Shoestring.Authority.check(by, goal_id, nil, opts) == :ok,
+         %Record{goal_id: ^goal_id, state: state} = record when state in ~w(pending held) <-
            get(attrs[:review_id]),
          %{"provider_id" => provider, "scope" => scope} <- record.configuration,
          {:ok, id} <- Ecto.UUID.cast(attrs[:confirmation_id]) do
@@ -177,7 +182,7 @@ defmodule Shoestring.Cobbler.PlanReview do
           "confirmed_by" => attrs[:confirmed_by]
         },
         "plan-review-confirmation:#{id}",
-        "human",
+        if(Shoestring.Authority.grant?(by), do: "grant", else: "human"),
         []
       )
     else

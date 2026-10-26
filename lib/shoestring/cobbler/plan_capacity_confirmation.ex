@@ -1,5 +1,10 @@
 defmodule Shoestring.Cobbler.PlanCapacityConfirmation do
-  @moduledoc "Human confirmation for one admission decision of one approved task attempt."
+  @moduledoc """
+  Confirmation for one admission decision of one approved task attempt: a
+  person's, or — for a coordinator's dispatch — one of the unread-usage
+  dispatches the person pre-approved in its grant (iteration 14 decision 7),
+  passed by the dispatch code with `opts[:dispatch]`.
+  """
   import Ecto.Query
   alias Shoestring.{Repo, Trajectory}
   alias Shoestring.Cobbler.{PlanExecutor, Plans}
@@ -9,11 +14,13 @@ defmodule Shoestring.Cobbler.PlanCapacityConfirmation do
   @extension "shoestring.plan:capacity_confirmation_id"
   def extension, do: @extension
 
-  def confirm(goal_id, attrs) do
+  def confirm(goal_id, attrs, opts \\ []) do
     with {:ok, goal_id} <- Ecto.UUID.cast(goal_id),
          {:ok, command_id} <- Ecto.UUID.cast(attrs[:command_id]),
          by when is_binary(by) <- attrs[:requested_by],
-         true <- Regex.match?(~r/\Ahuman:[A-Za-z0-9][A-Za-z0-9_.@:+-]{0,180}\z/, by),
+         true <-
+           Regex.match?(~r/\Ahuman:[A-Za-z0-9][A-Za-z0-9_.@:+-]{0,180}\z/, by) or
+             Shoestring.Authority.check(by, goal_id, nil, opts) == :ok,
          {:ok, status} <- PlanExecutor.status(goal_id),
          %{execution: execution, completed?: false, needs_user?: false} <- status,
          true <- execution.execution_id == attrs[:execution_id],
@@ -44,18 +51,20 @@ defmodule Shoestring.Cobbler.PlanCapacityConfirmation do
         "confirmed_by" => by
       }
 
-      append_confirmation(goal_id, command_id, payload)
+      append_confirmation(goal_id, command_id, payload, actor(by))
     else
       _ -> {:error, :capacity_confirmation_mismatch}
     end
   end
 
-  defp append_confirmation(goal_id, command_id, payload) do
+  defp actor(by), do: if(Shoestring.Authority.grant?(by), do: "grant", else: "human")
+
+  defp append_confirmation(goal_id, command_id, payload, actor) do
     with {:ok, event} <-
            Trajectory.append(goal_id, %{
              type: @type_name,
              schema_version: 1,
-             actor: "human",
+             actor: actor,
              occurred_at: DateTime.utc_now(),
              idempotency_key: "plan-capacity-confirmation:#{command_id}",
              payload: payload

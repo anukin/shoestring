@@ -527,6 +527,120 @@ defmodule Shoestring.Dispatches do
     end
   end
 
+  @doc """
+  Spends one of the grant's pre-approved unread-usage dispatches on a
+  dispatch held because its provider's remaining usage could not be read
+  (`:require_confirmation`, never a reserve breach), or on a review call held
+  the same way. Returns `:confirmed`, `:none` (nothing held, the grant is
+  revoked or has none left — the hold then waits for a person) or
+  `{:error, reason}`, with the spent dispatch refunded. Each hold is spent
+  at most once and its confirmation id is derived from it, so a retry
+  repeats the same confirmation.
+  """
+  def advance(dispatch, status \\ &ExecutionControl.status/1)
+
+  def advance(%Dispatch{state: "started"} = dispatch, status) do
+    with {:ok, current} <- status.(dispatch.goal_id),
+         {:ok, hold} <- hold(current),
+         %Grant{revoked_at: nil} = grant <- Grants.get(dispatch.grant_id) do
+      spend(dispatch, grant, hold)
+    else
+      _ -> :none
+    end
+  end
+
+  def advance(%Dispatch{}, _status), do: :none
+
+  defp hold(%{completed?: false, needs_user?: false, cancelled?: false} = status) do
+    review = Enum.find(status[:reviews] || [], &(&1.state == "held"))
+    decision = status[:last_admission]
+
+    cond do
+      review ->
+        {:ok,
+         %{
+           kind: :review,
+           key: "review:#{review.review_id}:#{review.calls}",
+           review_id: review.review_id
+         }}
+
+      match?(%{"result" => "require_confirmation"}, decision) and is_nil(status[:active_run_id]) ->
+        {:ok,
+         %{
+           kind: :task,
+           key: "task:#{decision["decision_id"]}",
+           execution_id: status.execution.execution_id,
+           attempt: Map.get(status.attempts, @task_id, 0) + 1
+         }}
+
+      true ->
+        :none
+    end
+  end
+
+  defp hold(_status), do: :none
+
+  defp spend(dispatch, grant, hold) do
+    detail = %{"hold" => hold.key, "dispatch_id" => dispatch.id}
+
+    spent =
+      cond do
+        Grants.spent?(grant.id, hold.key) -> :earlier
+        match?({:ok, _}, Grants.use_unread(grant, detail)) -> :now
+        true -> :exhausted
+      end
+
+    if spent == :exhausted do
+      :none
+    else
+      case confirm(dispatch, hold) do
+        {:ok, _} ->
+          :confirmed
+
+        {:error, reason} ->
+          if spent == :now, do: Grants.refund_unread(grant, detail)
+          {:error, reason}
+      end
+    end
+  end
+
+  defp confirm(dispatch, %{kind: :task} = hold) do
+    ExecutionControl.confirm_capacity(
+      dispatch.goal_id,
+      %{
+        execution_id: hold.execution_id,
+        task_id: @task_id,
+        attempt: hold.attempt,
+        scope: Application.get_env(:shoestring, :run_submission_scope, "subscription"),
+        command_id: uuid_for(hold.key),
+        requested_by: Authority.grant_identity(dispatch.grant_id)
+      },
+      dispatch: dispatch
+    )
+  end
+
+  defp confirm(dispatch, %{kind: :review} = hold) do
+    Shoestring.Cobbler.PlanReview.confirm(
+      dispatch.goal_id,
+      %{
+        review_id: hold.review_id,
+        confirmation_id: uuid_for(hold.key),
+        confirmed_by: Authority.grant_identity(dispatch.grant_id)
+      },
+      dispatch: dispatch
+    )
+  end
+
+  # A version-4-shaped UUID derived from the hold, so a repeated confirmation
+  # carries the same id and replays instead of recording a second one.
+  defp uuid_for(key) do
+    <<head::bitstring-size(48), _::4, mid::bitstring-size(12), _::2, tail::bitstring-size(62),
+      _::bitstring>> =
+      :crypto.hash(:sha256, "shoestring-dispatch-hold:" <> key)
+
+    Ecto.UUID.load!(<<head::bitstring, 4::4, mid::bitstring, 2::2, tail::bitstring>>)
+  end
+
   @doc "Whether `state` ends what a coordinator waits for."
   def settled?(state), do: state in ~w(completed cancelled needs_you held failed_to_start)
 

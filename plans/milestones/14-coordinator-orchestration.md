@@ -576,6 +576,17 @@ authorized by this milestone.
   EXPLORE, `capacity`, the dry run's admission preview, and spending
   unread-usage pre-approvals.
 
+- 2026-10-25, decision 7 in use. `Dispatches.advance/2`, called by `wait`
+  and `runs show`, spends one pre-approved unread-usage dispatch on a task
+  held with `:require_confirmation` (stale or unreadable usage only; reserve
+  breaches defer instead) or a held review call, then confirms it under the
+  grant (`PlanCapacityConfirmation` and `PlanReview.confirm` accept the grant
+  identity only with the dispatch record; events carry `actor: grant`). A
+  hold is spent once, its confirmation id is derived from it so a retry
+  replays, and a failed confirmation is refunded. Without pre-approvals left
+  the hold waits for a person. Confirmation happens when the coordinator
+  polls, not in the service.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

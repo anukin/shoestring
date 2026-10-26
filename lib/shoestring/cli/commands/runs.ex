@@ -30,7 +30,11 @@ defmodule Shoestring.CLI.Commands.Runs do
         end)
 
       {_opts, ["show", id], []} ->
-        context.with_repo.(fn _repo -> Command.json(context, detail(dispatch!(id))) end)
+        context.with_repo.(fn _repo ->
+          dispatch = dispatch!(id)
+          _ = Dispatches.advance(dispatch)
+          Command.json(context, detail(dispatch))
+        end)
 
       {opts, ["cancel", id], []} ->
         reason = opts[:reason] || Refusal.refuse!("runs cancel needs --reason TEXT")
