@@ -617,6 +617,17 @@ authorized by this milestone.
   LiveViewTest; not checked visually in a browser (a dev server would start
   the live provider monitors).
 
+- 2026-10-25, status. Implemented and merged: packages A, B, C, D (IMPLEMENT
+  with `--reviewer`, dry runs, batches, `wait`, `runs`, `capacity`), E, F
+  (first slice), G and I (without usage share). Open before acceptance: a
+  hermetic demo that runs a dispatch through the executor to a verified
+  commit (`ExecutionProfile` has no fake harness, so every hermetic test
+  stops at the queued execution, as iteration 7A's did); EXPLORE dispatches
+  and a stand-alone REVIEW of a finished dispatch; advice's usage share; the
+  installed-release check; and the live session, which needs the person at a
+  terminal (`chat` and `grant` refuse without one) and a budget naming the
+  coordinator, worker and reviewer.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.
