@@ -12,7 +12,7 @@ With an installed release (Homebrew), `shoestring` is already on your `PATH`:
 ```sh
 shoestring init                 # create the state directory
 shoestring doctor --probe-providers   # is the claude CLI installed, signed in, tested?
-shoestring models add claude opus
+shoestring models refresh       # ask each installed CLI for its models (no prompt is sent)
 shoestring agents create builder --worker claude:opus --default
 shoestring start                # in another terminal; leave it running
 ```
@@ -24,8 +24,10 @@ checkout's code and state:
 # 1. Put the wrapper on your PATH.
 ln -s "$PWD/bin/shoestring" /usr/local/bin/shoestring   # or add bin/ to PATH
 
-# 2. Allow a Claude model for agents (Settings in the web UI does the same).
-shoestring models add claude opus
+# 2. Record the models each installed CLI offers. New Claude and Codex
+#    models are enabled; enable opencode ones yourself (shoestring models
+#    enable opencode PROVIDER/MODEL). `models add` names one a CLI did not report.
+shoestring models refresh
 
 # 3. Create the default agent. Its Coordinator plans; its Worker does the work.
 shoestring agents create builder --worker claude:opus --default
@@ -129,7 +131,7 @@ whose model comes from another vendor than its worker's (an opencode
 `openai/…` model is OpenAI, like Codex):
 
 ```sh
-shoestring models add codex gpt-6-luna
+shoestring models refresh codex   # if gpt-6-luna is not enabled yet
 shoestring agents set-role builder Reviewer codex:gpt-6-luna
 ```
 

@@ -22,8 +22,8 @@ defmodule Shoestring.AgentProfiles.Role do
     changeset =
       changeset
       |> validate_inclusion(:provider, Map.keys(catalog))
-      |> validate_inclusion(:effort, Map.get(Shoestring.AgentProfiles.efforts(), provider, []),
-        message: "choose an effort this provider accepts"
+      |> validate_inclusion(:effort, Shoestring.AgentProfiles.efforts(provider, model),
+        message: "choose an effort this model accepts"
       )
 
     if model in Map.get(catalog, provider, []),

@@ -33,6 +33,13 @@ defmodule Shoestring.AgentProfiles do
 
   def efforts, do: @efforts
 
+  @doc """
+  The efforts a role may pin for `model`: the ones its harness reported in
+  its last listing, otherwise the provider's set above.
+  """
+  def efforts(provider, model),
+    do: Shoestring.ModelCatalog.efforts(provider, model) || Map.get(@efforts, provider, [])
+
   def template do
     catalog = catalog()
 

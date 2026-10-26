@@ -45,10 +45,13 @@ defmodule Shoestring.Cobbler.ExecutionProfile do
 
   defp effort(%{"effort" => nil}), do: {:ok, nil}
 
-  defp effort(%{"provider" => provider, "effort" => effort}) do
-    if effort in Map.get(Shoestring.AgentProfiles.efforts(), provider, []),
-      do: {:ok, effort},
-      else: :invalid_effort
+  # A saved revision stays valid when a listing later narrows the model's
+  # efforts: the provider's set or the model's reported ones both resolve.
+  defp effort(%{"provider" => provider, "effort" => effort} = selected) do
+    if effort in Map.get(Shoestring.AgentProfiles.efforts(), provider, []) or
+         effort in Shoestring.AgentProfiles.efforts(provider, selected["model"]),
+       do: {:ok, effort},
+       else: :invalid_effort
   end
 
   defp effort(_selected), do: {:ok, nil}

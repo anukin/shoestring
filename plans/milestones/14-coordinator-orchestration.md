@@ -490,6 +490,22 @@ authorized by this milestone.
   capability declarations for the contract suite (`:read_only`,
   `:structured_report`, `:effort`) arrive with packages B and D.
 
+- 2026-10-25, package B. Preflight probes ran with the user's authorization
+  (evidence: `plans/evidence/14-coordinator-orchestration/README.md`):
+  Codex `model/list` (7 models with per-model efforts), opencode ACP
+  `session/new` `configOptions` (150 models, no efforts before a model is
+  chosen) and Claude Code's `initialize` `models` (13, with efforts and the
+  model each alias resolves to; no inference frame). The Claude listing is
+  therefore VERIFIED, not a fallback. `Shoestring.Harnesses.ModelListing`
+  runs those exchanges and reaps the CLI's process groups;
+  `Shoestring.ModelCatalog` records them in `harness_models` with the enable
+  policy of decision 3; `shoestring models refresh|show|enable|disable` drive
+  it; roles and the agents form use per-model efforts while saved revisions
+  keep resolving with the provider's set. Provider model lists now hold up to
+  64. Deferred: refresh from `setup`, `doctor --probe-providers` and service
+  start (package C); refusing a dispatch that names an unavailable model
+  (package D); a discovered-model view in the web Settings page.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

@@ -81,6 +81,8 @@ plans/evidence/06-cobbler-planning/*
 !/plans/evidence/07a-cli-work-loop/**
 !/plans/evidence/08-verification-cross-review/
 !/plans/evidence/08-verification-cross-review/**
+!/plans/evidence/14-coordinator-orchestration/
+!/plans/evidence/14-coordinator-orchestration/**
 
 # Native capture originals remain local; named review images are versioned.
 /.impeccable/review/Screenshot*.png

@@ -12,9 +12,21 @@ defmodule Shoestring.AgentProfiles.Settings do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @opencode_model ~r/^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:\/-]*$/
+  # Harnesses report more models than people used to type: Claude Code lists
+  # 13 and opencode 150 (2026-10-25), so a list holds up to 64.
+  @max_models 64
+  @max_length 8000
 
   def model_ids(value), do: String.split(value || "", ~r/\s+/, trim: true) |> Enum.uniq()
+
+  @doc "Whether `model` is an identifier a `provider` list can hold."
+  def valid_model?("opencode", model),
+    do:
+      String.length(model) <= 120 and
+        Regex.match?(~r/^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:\/-]*$/, model)
+
+  def valid_model?(_provider, model),
+    do: String.length(model) <= 120 and Regex.match?(~r/^[A-Za-z0-9][A-Za-z0-9._:\/-]*$/, model)
 
   def changeset(settings, attrs) do
     settings
@@ -22,9 +34,9 @@ defmodule Shoestring.AgentProfiles.Settings do
     |> cast(attrs, [:claude_models, :codex_models, :opencode_models], empty_values: [])
     |> validate_required([:refresh_seconds, :claude_models, :codex_models])
     |> validate_inclusion(:refresh_seconds, [0, 60, 300])
-    |> validate_length(:claude_models, max: 2000)
-    |> validate_length(:codex_models, max: 2000)
-    |> validate_length(:opencode_models, max: 2000)
+    |> validate_length(:claude_models, max: @max_length)
+    |> validate_length(:codex_models, max: @max_length)
+    |> validate_length(:opencode_models, max: @max_length)
     |> validate_change(:claude_models, &validate_models/2)
     |> validate_change(:codex_models, &validate_models/2)
     |> validate_change(:opencode_models, &validate_opencode_models/2)
@@ -36,19 +48,18 @@ defmodule Shoestring.AgentProfiles.Settings do
   defp validate_opencode_models(field, value) do
     ids = model_ids(value)
 
-    if length(ids) <= 16 and
-         Enum.all?(ids, &(String.length(&1) <= 120 and Regex.match?(@opencode_model, &1))),
-       do: [],
-       else: [{field, "enter up to 16 provider/model identifiers, separated by whitespace"}]
+    if length(ids) <= @max_models and Enum.all?(ids, &valid_model?("opencode", &1)),
+      do: [],
+      else: [
+        {field, "enter up to #{@max_models} provider/model identifiers, separated by whitespace"}
+      ]
   end
 
   defp validate_models(field, value) do
     ids = model_ids(value)
 
-    if length(ids) in 1..16 and
-         Enum.all?(
-           ids,
-           &(String.length(&1) <= 120 and Regex.match?(~r/^[A-Za-z0-9][A-Za-z0-9._:\/-]*$/, &1))
-         ), do: [], else: [{field, "enter 1–16 model identifiers, separated by whitespace"}]
+    if length(ids) in 1..@max_models and Enum.all?(ids, &valid_model?("claude", &1)),
+      do: [],
+      else: [{field, "enter 1–#{@max_models} model identifiers, separated by whitespace"}]
   end
 end

@@ -112,7 +112,6 @@ defmodule ShoestringWeb.AgentsLive do
       assign(socket,
         form: to_form(changeset, as: :agent),
         catalog: AgentProfiles.catalog(),
-        efforts: AgentProfiles.efforts(),
         form_errors: if(changeset.action, do: changeset.errors, else: []),
         role_count: length(Ecto.Changeset.get_field(changeset, :roles) || [])
       )
@@ -249,7 +248,7 @@ defmodule ShoestringWeb.AgentsLive do
                 type="select"
                 label="Effort"
                 prompt="Provider default"
-                options={Map.get(@efforts, role[:provider].value, [])}
+                options={AgentProfiles.efforts(role[:provider].value, role[:model].value)}
                 class="ss-input"
               />
               <button

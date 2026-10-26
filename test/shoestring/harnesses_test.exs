@@ -62,7 +62,10 @@ defmodule Shoestring.HarnessesTest do
             {"opencode/glm-5.3-flash-free", "zhipu"},
             {"opencode-go/deepseek-v4.1-flash", "deepseek"},
             {"openrouter/qwen/qwen3-coder", "alibaba"},
-            {"azure/o4-mini", "openai"}
+            {"azure/o4-mini", "openai"},
+            {"opencode/nemotron-3-ultra-free", "nvidia"},
+            {"opencode/minimax-m3", "minimax"},
+            {"opencode/mimo-v2.6-flash-free", "xiaomi"}
           ] do
         assert Harnesses.vendor("opencode", model) == vendor, model
       end

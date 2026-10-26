@@ -10,14 +10,18 @@ on Claude or Codex.
 ## Setup
 
 ```sh
-opencode models                                   # identifiers you can use
-shoestring models add opencode opencode/glm-5.3-flash-free
+shoestring models refresh opencode                # record the models opencode offers
+shoestring models show opencode                   # identifiers you can use
+shoestring models enable opencode opencode/glm-5.3-flash-free
 shoestring agents create builder --coordinator claude:opus \
   --worker opencode:opencode/glm-5.3-flash-free --default
 ```
 
-- A model is `provider/model`, exactly as `opencode models` lists it. The list
-  starts empty: an opencode role always names a model, never a default.
+- A model is `provider/model`, exactly as opencode reports it. Refreshing
+  records every model opencode offers (150 on 2026-10-25) but enables none:
+  opencode can reach providers that charge per token, so you choose. An
+  opencode role always names a model, never a default. `models add` still
+  names one opencode did not report.
 - An agent may have an opencode Coordinator, but `shoestring do` drafts
   plans only with a Claude one (`--coordinator claude:MODEL`). A Reviewer role
   cannot be opencode yet: opencode has no review path.
@@ -69,6 +73,9 @@ refused; there is no unsandboxed fallback.
 `opencode auth list` and `opencode models` start opencode's background server
 and leave it running, so Shoestring never runs them; sign-in is not detectable
 and a tested opencode reports `unknown`, never `ready`. Tested version: 2.0.31.
+`shoestring models refresh opencode` instead reads the model choices from an
+`opencode acp` session it creates in a temporary directory and never
+prompts; that session stays in opencode's own history.
 
 ## What has been checked
 

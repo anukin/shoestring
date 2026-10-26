@@ -135,7 +135,10 @@ defmodule Shoestring.Harnesses do
         {~r/(^|[._:-])(qwen|qwq)/, "alibaba"},
         {~r/(^|[._:-])grok/, "xai"},
         {~r/(^|[._:-])llama/, "meta"},
-        {~r/(^|[._:-])(mistral|codestral|devstral|magistral)/, "mistral"}
+        {~r/(^|[._:-])(mistral|codestral|devstral|magistral)/, "mistral"},
+        {~r/(^|[._:-])nemotron/, "nvidia"},
+        {~r/(^|[._:-])minimax/, "minimax"},
+        {~r/(^|[._:-])mimo/, "xiaomi"}
       ],
       fn {pattern, vendor} -> if Regex.match?(pattern, name), do: vendor end
     )
