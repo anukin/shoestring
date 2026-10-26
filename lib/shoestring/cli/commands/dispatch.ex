@@ -33,7 +33,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   from the session, purpose, worker, title and brief) makes a retry return
   the same dispatch. A dispatch the grant does not cover is refused and
   nothing is queued. `--dry-run` checks the grant and the plan and records
-  nothing. Only IMPLEMENT is available so far. Output is JSON on stdout;
+  nothing; it also shows the advice for the worker and its provider's
+  capacity outlook (`shoestring capacity`). Only IMPLEMENT is available so far. Output is JSON on stdout;
   follow it with `shoestring wait` and `shoestring runs show`.
   """
 
@@ -70,8 +71,12 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         if opts[:dry_run] do
           context.with_repo.(fn _repo ->
             case Dispatches.dry_run(request) do
-              {:ok, report} -> Command.json(context, report)
-              {:error, reason} -> Refusal.refuse!(message(reason, request))
+              {:ok, report} ->
+                capacity = Shoestring.CLI.Commands.Capacity.for_provider(request.provider)
+                Command.json(context, Map.put(report, "capacity", capacity))
+
+              {:error, reason} ->
+                Refusal.refuse!(message(reason, request))
             end
           end)
         else

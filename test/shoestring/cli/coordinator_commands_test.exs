@@ -152,7 +152,14 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
     grant!(ctx)
 
     Dispatch.run(dispatch_args(ctx, ["--dry-run"]), context(ctx))
-    assert %{"would_dispatch" => true, "plan" => %{"tasks" => [_]}} = json!()
+
+    assert %{
+             "would_dispatch" => true,
+             "plan" => %{"tasks" => [_]},
+             "advice" => %{"runs" => 0},
+             "capacity" => %{"provider" => "codex", "outlook" => %{"outlook" => "asks"}}
+           } = json!()
+
     assert Repo.all(DispatchRecord) == []
 
     Dispatch.run(dispatch_args(ctx), context(ctx))
@@ -205,6 +212,48 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
              "settled" => %{"dispatch_id" => ^second, "state" => "failed_to_start"},
              "others" => [%{"dispatch_id" => ^first}]
            } = json!()
+  end
+
+  test "capacity shows each provider's reading and outlook against the reserves", ctx do
+    Shoestring.CLI.Commands.Capacity.run([], context(ctx))
+
+    assert %{
+             "reserves" => %{"five_hour_max_used_percent" => 80, "weekly_max_used_percent" => 90},
+             "providers" => providers
+           } = json!()
+
+    assert Enum.map(providers, &{&1["provider"], &1["outlook"]["outlook"]}) == [
+             {"claude", "asks"},
+             {"codex", "asks"},
+             {"opencode", "asks"}
+           ]
+
+    policy = Shoestring.Cobbler.AdmissionPolicy.default()
+    reset = ~U[2026-10-25 15:00:00Z]
+
+    observed = fn five, week ->
+      %{
+        status: "Observed",
+        windows: [
+          %{kind: "five_hour", used_percent: five, reset_at: reset},
+          %{kind: "seven_day", used_percent: week, reset_at: DateTime.add(reset, 86_400)}
+        ]
+      }
+    end
+
+    alias Shoestring.CLI.Commands.Capacity
+    assert Capacity.outlook(observed.(40, 50), policy) == %{"outlook" => "admits"}
+
+    assert Capacity.outlook(observed.(80, 50), policy) == %{
+             "outlook" => "deferred",
+             "until" => reset
+           }
+
+    assert Capacity.outlook(observed.(40, 95), policy) ==
+             %{"outlook" => "deferred", "until" => DateTime.add(reset, 86_400)}
+
+    assert Capacity.outlook(%{status: "Stale"}, policy) == %{"outlook" => "asks"}
+    assert Capacity.outlook(%{status: "Unavailable"}, policy) == %{"outlook" => "refused"}
   end
 
   test "advice prints a list, empty before any run finishes", ctx do

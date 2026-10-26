@@ -4,8 +4,8 @@ Iteration 14 lets a coding CLI you chat with — Claude Code, Codex or opencode
 — act as a coordinator: it plans with you and hands tasks to Shoestring,
 which runs each one as a sandboxed Elf on the harness and model it chose.
 This page covers what exists so far: `shoestring chat`, grants, IMPLEMENT
-dispatches with cross-vendor review, `wait`, `runs` and `advice`. EXPLORE
-dispatches and `capacity` are still to come ([the milestone](../plans/milestones/14-coordinator-orchestration.md)).
+dispatches with cross-vendor review, `wait`, `runs`, `advice` and
+`capacity`. EXPLORE dispatches are still to come ([the milestone](../plans/milestones/14-coordinator-orchestration.md)).
 
 ## Start a coordinator
 
@@ -138,7 +138,21 @@ a coordinator can run it in the background to be woken when it exits. `runs
 show` of a completed dispatch includes the commit, its checks and the
 `git fetch`/`git merge` commands.
 
-## 4. Advice from past runs
+## 4. Capacity
+
+```sh
+shoestring capacity
+```
+
+Each provider's latest usage reading (as on the Usage page) and an outlook
+for a new dispatch against the standing reserves: `admits` (fresh and under
+80% of the 5-hour and 90% of the weekly window), `deferred` (over a reserve,
+until its reset), `asks` (unknown, stale or, for opencode, never readable:
+you confirm, or the grant spends an unread-usage pre-approval) or `refused`.
+It is where admission starts, not its decision. `dispatch --dry-run`
+includes the worker's provider.
+
+## 5. Advice from past runs
 
 ```sh
 shoestring advice

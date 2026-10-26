@@ -602,6 +602,14 @@ authorized by this milestone.
   measurement dataset does; tokens, first-try pass rate, mean attempts and
   median duration are.
 
+- 2026-10-25, package D, capacity. `shoestring capacity` prints each
+  provider's latest reading (`Shoestring.Usage.cards/1`) with an outlook
+  against `AdmissionPolicy.default/0`'s reserves: admits, deferred (until the
+  latest reset among windows over a reserve), asks (unknown, stale, or
+  opencode, which reports none) or refused; it is labelled as the start of
+  admission, not its decision. `dispatch --dry-run` adds the worker
+  provider's entry, which closes the dry run's admission preview.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

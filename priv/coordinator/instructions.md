@@ -41,7 +41,8 @@ Delegate every code change with `{{command}} dispatch`.
    routine work and a stronger one for hard or risky work. `{{command}}
    advice` (and `--dry-run`) shows what past runs of each model on this kind
    of task cost in tokens and how often they passed first time, once there
-   are enough of them.
+   are enough of them. `{{command}} capacity` shows which providers have
+   headroom now; prefer one whose outlook is `admits`.
 5. Wait with `{{command}} wait DISPATCH... --timeout 30`. Run it in the
    background if you are told when a background command exits; otherwise
    run it and continue when it returns.
