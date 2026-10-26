@@ -4,8 +4,8 @@ Iteration 14 lets a coding CLI you chat with — Claude Code, Codex or opencode
 — act as a coordinator: it plans with you and hands tasks to Shoestring,
 which runs each one as a sandboxed Elf on the harness and model it chose.
 This page covers what exists so far: `shoestring chat`, grants, IMPLEMENT
-dispatches, `wait` and `runs`. EXPLORE and REVIEW dispatches, `capacity` and
-advice are still to come ([the milestone](../plans/milestones/14-coordinator-orchestration.md)).
+dispatches with cross-vendor review, `wait`, `runs` and `advice`. EXPLORE
+dispatches and `capacity` are still to come ([the milestone](../plans/milestones/14-coordinator-orchestration.md)).
 
 ## Start a coordinator
 
@@ -137,3 +137,24 @@ usage could not be confirmed; you confirm it with `shoestring follow GOAL`),
 a coordinator can run it in the background to be woken when it exits. `runs
 show` of a completed dispatch includes the commit, its checks and the
 `git fetch`/`git merge` commands.
+
+## 4. Advice from past runs
+
+```sh
+shoestring advice
+```
+
+For each kind of run — harness, model, effort, purpose and task class (the
+checks its task cites) — what its finished runs looked like: the median and
+90th-percentile tokens the harness reported, the share of first attempts
+that were accepted, mean attempts per task and the median duration, with the
+sample count and date range. A kind needs 10 finished runs before any of
+this is shown. It is plain arithmetic over Shoestring's records, makes no
+model call, and never changes admission or dispatch. `dispatch --dry-run`
+includes the line for the worker it names, so a coordinator can pick a
+cheaper model where it does as well.
+
+Tokens come from what each harness reports: Codex's running total, opencode's
+completion usage, and Claude's result usage including cache reads and
+writes. A run that reported none is counted apart, never as zero. Usage as a
+share of a provider's window is not shown yet.

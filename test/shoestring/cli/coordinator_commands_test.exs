@@ -207,6 +207,11 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
            } = json!()
   end
 
+  test "advice prints a list, empty before any run finishes", ctx do
+    Shoestring.CLI.Commands.Advice.run([], context(ctx))
+    assert [] = json!()
+  end
+
   test "runs lists the session's dispatches, shows one and cancels only its own", ctx do
     grant!(ctx)
     Dispatch.run(dispatch_args(ctx), context(ctx))

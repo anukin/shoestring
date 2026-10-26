@@ -270,6 +270,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
         |> maybe_put_number("claude-headless:num_turns", frame["num_turns"])
         |> maybe_put_number("claude-headless:duration_ms", frame["duration_ms"])
         |> maybe_put_number("claude-headless:total_cost_usd", frame["total_cost_usd"])
+        |> maybe_put_usage(frame["usage"])
 
       case build_event(
              run_id: run_id,
@@ -452,6 +453,27 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
   defp maybe_put_bool(map, _key, nil), do: map
   defp maybe_put_bool(map, key, value) when is_boolean(value), do: Map.put(map, key, value)
   defp maybe_put_bool(map, _key, _value), do: map
+
+  # The run's token counts from the final `result` frame (VERIFIED in
+  # `stream-json-smoke-live.jsonl`): integers only, so a missing or malformed
+  # count stays unknown rather than becoming zero.
+  defp maybe_put_usage(map, %{} = usage) do
+    Enum.reduce(
+      ~w(input_tokens output_tokens cache_read_input_tokens cache_creation_input_tokens),
+      map,
+      fn key, acc ->
+        case usage[key] do
+          value when is_integer(value) and value >= 0 ->
+            Map.put(acc, "claude-headless:" <> key, value)
+
+          _ ->
+            acc
+        end
+      end
+    )
+  end
+
+  defp maybe_put_usage(map, _usage), do: map
 
   defp maybe_put_number(map, _key, nil), do: map
   defp maybe_put_number(map, key, value) when is_number(value), do: Map.put(map, key, value)

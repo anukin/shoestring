@@ -372,8 +372,9 @@ coordinator transcripts are neither stored nor canonical.
 - Token sources: Codex `thread/tokenUsage/updated` and opencode's completion
   usage are kept today. Claude's final `result` message carries `usage` and
   `total_cost_usd` (VERIFIED in
-  `plans/evidence/04-single-elf/fixtures/claude/stream-json-smoke-live.jsonl`),
-  but `ClaudeHeadless.EventNormalizer` drops it; keep it.
+  `plans/evidence/04-single-elf/fixtures/claude/stream-json-smoke-live.jsonl`).
+  `ClaudeHeadless.EventNormalizer` keeps `total_cost_usd` but drops the
+  `usage` token counts (corrected 2026-10-25); keep them.
 - `shoestring advice [--json]`: for each kind with at least 10 finished runs,
   the median and 90th-percentile tokens, the first-try pass rate, mean
   attempts, median duration, and usage per run from the runs that ran alone
@@ -586,6 +587,20 @@ authorized by this milestone.
   replays, and a failed confirmation is refunded. Without pre-approvals left
   the hold waits for a person. Confirmation happens when the coordinator
   polls, not in the service.
+
+- 2026-10-25, package I. Claude's result `usage` token counts are kept on
+  the run's result event (regression test fails on the previous normalizer).
+  `Shoestring.Advice` derives per-kind statistics from targeted queries of
+  canonical events — run requests, starts and ends, task dispatches and
+  acceptances, and token-bearing harness events — rather than iteration 10's
+  dataset, whose 10,000-event limit a real store soon exceeds. Codex tokens
+  are read from its namespaced `codex-app-server:token_usage` running total
+  (a test against the real normalizer caught the un-namespaced key).
+  `shoestring advice` prints it; `dispatch --dry-run` includes the worker's
+  line. Deviation: usage per run as a share of a provider's window is not
+  reported yet — it needs the bracketed, ran-alone attribution only the
+  measurement dataset does; tokens, first-try pass rate, mean attempts and
+  median duration are.
 
 ## Completion record
 

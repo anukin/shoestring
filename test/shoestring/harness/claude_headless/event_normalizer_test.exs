@@ -258,4 +258,40 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizerTest do
              ]
     end
   end
+
+  describe "result usage" do
+    # Base (befa8d9): the result frame's `usage` was dropped, so a Claude run's
+    # tokens were never recorded.
+    test "the completed run keeps the token counts its result frame reports" do
+      [result] =
+        "stream-json-smoke-live.jsonl"
+        |> read_frames()
+        |> Enum.filter(&(&1["type"] == "result"))
+
+      assert {:ok, [event]} = EventNormalizer.normalize(result, @run_id, 1, %{})
+
+      assert %{
+               "claude-headless:input_tokens" => 4,
+               "claude-headless:output_tokens" => 306,
+               "claude-headless:cache_read_input_tokens" => 8727,
+               "claude-headless:cache_creation_input_tokens" => 5867
+             } = event.extensions
+    end
+
+    test "a malformed count is left out, never recorded as zero" do
+      frame = %{
+        "type" => "result",
+        "subtype" => "success",
+        "is_error" => false,
+        "terminal_reason" => "completed",
+        "session_id" => "00000000-0000-4000-8000-000000000004",
+        "usage" => %{"input_tokens" => "4", "output_tokens" => -1, "cache_read_input_tokens" => 2}
+      }
+
+      assert {:ok, [event]} = EventNormalizer.normalize(frame, @run_id, 1, %{})
+      assert event.extensions["claude-headless:cache_read_input_tokens"] == 2
+      refute Map.has_key?(event.extensions, "claude-headless:input_tokens")
+      refute Map.has_key?(event.extensions, "claude-headless:output_tokens")
+    end
+  end
 end

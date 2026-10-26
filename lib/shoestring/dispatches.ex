@@ -72,6 +72,7 @@ defmodule Shoestring.Dispatches do
 
       {:ok,
        %{
+         "advice" => advice(prepared),
          "would_dispatch" => Grants.check(grant, check_request(prepared), usage) == :ok,
          "grant_check" => check_result(Grants.check(grant, check_request(prepared), usage)),
          "grant" => room(grant, usage),
@@ -79,6 +80,34 @@ defmodule Shoestring.Dispatches do
          "plan_digest" => prepared.contract.digest
        }}
     end
+  end
+
+  # What past runs of this worker on this kind of task looked like.
+  defp advice(prepared) do
+    request = prepared.request
+    [task] = prepared.contract.content["tasks"]
+
+    kind = %{
+      "harness" => request.provider,
+      "model" => request.model,
+      "effort" => Map.get(request, :effort),
+      "purpose" => request.purpose,
+      "task_class" =>
+        "gates:" <>
+          (task["gates"]
+           |> Enum.map(& &1["gate"])
+           |> Enum.uniq()
+           |> Enum.sort()
+           |> Enum.join(","))
+    }
+
+    Shoestring.Advice.for_kind(kind) ||
+      %{
+        "kind" => kind,
+        "runs" => 0,
+        "estimate" => nil,
+        "note" => "no estimate yet (0 of #{Shoestring.Advice.min_runs()} runs)"
+      }
   end
 
   @doc """

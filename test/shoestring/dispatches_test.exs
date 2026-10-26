@@ -214,6 +214,17 @@ defmodule Shoestring.DispatchesTest do
 
     assert room["attempts"] == %{"used" => 0, "limit" => 3}
 
+    assert {:ok, %{"advice" => advice}} = Dispatches.dry_run(request(ctx))
+    assert advice["note"] == "no estimate yet (0 of 10 runs)"
+
+    assert advice["kind"] == %{
+             "harness" => "codex",
+             "model" => "gpt-6-luna",
+             "effort" => nil,
+             "purpose" => "implement",
+             "task_class" => "gates:python_unittest"
+           }
+
     assert {:ok, %{"would_dispatch" => false, "grant_check" => "outside_grant:dispatches"}} =
              Dispatches.dry_run(request(ctx, %{attempts: 4}))
 

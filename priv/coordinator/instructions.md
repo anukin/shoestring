@@ -38,7 +38,10 @@ Delegate every code change with `{{command}} dispatch`.
 
    Add `--dry-run` first when you are unsure it fits the grant.
 4. Choose the model for each task. {{routing}} Prefer a cheaper model for
-   routine work and a stronger one for hard or risky work.
+   routine work and a stronger one for hard or risky work. `{{command}}
+   advice` (and `--dry-run`) shows what past runs of each model on this kind
+   of task cost in tokens and how often they passed first time, once there
+   are enough of them.
 5. Wait with `{{command}} wait DISPATCH... --timeout 30`. Run it in the
    background if you are told when a background command exits; otherwise
    run it and continue when it returns.

@@ -39,7 +39,8 @@ defmodule Shoestring.CLI.Main do
     {"dispatch", Commands.Dispatch},
     {"wait", Commands.Wait},
     {"runs", Commands.Runs},
-    {"chat", Commands.Chat}
+    {"chat", Commands.Chat},
+    {"advice", Commands.Advice}
   ]
 
   @usage """
@@ -70,6 +71,7 @@ defmodule Shoestring.CLI.Main do
                 return when one of them settles
     runs list | show | cancel ...
                 the session's dispatches
+    advice      what past runs of each harness, model and kind of task looked like
 
   `shoestring COMMAND --help` describes a command. Commands that print data
   accept --json. Data goes to stdout; messages and progress go to stderr.
