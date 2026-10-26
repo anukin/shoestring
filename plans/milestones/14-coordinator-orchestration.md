@@ -45,6 +45,23 @@ REPO-INSPECTION of the user's local Omnigent 0.10.0 install, 2026-10-25:
   `yolo: true`) and each opens a PR. Shoestring keeps its sandboxed Elves and
   hands back a commit to fetch and merge.
 
+REPO-INSPECTION of `google-research/harness2` at HEAD, 2026-10-25 (README,
+`core/ledger.py`, `core/library.py`, `core/selection.py`, `core/proposer.py`;
+the paper was not read):
+
+- Its improvement comes from LLM "improver sessions" (the Claude CLI or
+  OpenCode) that read earlier runs and write files, not from training. Code
+  only counts runs and stores files.
+- Taken here: learn what works as well as what it costs, from recorded runs
+  (package I); budgets declared by strategy and checked as they are spent
+  (its ledger asserts "R = 4k rollouts"; package D's declared batches); a dry
+  run that previews without model calls (package D).
+- Left for the follow-on iteration: an experience library whose entries need
+  a `cue`, a `lesson` and `evidence`; trying one task with several setups;
+  choosing among candidates labelled by a seeded, stable shuffle.
+- Not taken: unrestricted executor network, Codex with its sandbox disabled,
+  per-call API spend, and a model judging correctness.
+
 ## Decisions recorded with the user on 2026-10-25
 
 1. **The coordinator is an existing coding CLI.** Claude Code, Codex or
@@ -64,10 +81,24 @@ REPO-INSPECTION of the user's local Omnigent 0.10.0 install, 2026-10-25:
 4. **Review independence compares the model's vendor, not the harness.**
    opencode running `openai/…` is OpenAI, the same as Codex; iteration 13
    already treats them as sharing one ChatGPT subscription.
+5. **Authority is a session grant.** The human gives each coordinator session
+   an allowance from a real terminal. Dispatches inside it need no further
+   approval and are recorded as the coordinator acting under the grant;
+   anything outside it is refused until the human extends the grant.
+6. **No estimates up front; learn from runs.** A new kind of task runs under
+   the grant's counts, time and usage-floor limits only. Shoestring records
+   every finished run and, after about 10 runs of the same kind, shows plain
+   statistics as advice, always with the sample count. Advice never changes
+   admission. Enforcing a usage budget from estimates keeps iteration 10's
+   bar (100 training and 100 later evaluation runs with attested isolation)
+   and belongs to a later iteration.
+7. **Grants may pre-approve unread usage.** Where remaining usage cannot be
+   read (opencode always, Claude when its reading is stale), a grant may
+   pre-approve a stated number of dispatches, counted and shown separately.
+   Beyond that number each one asks the human, as today.
 
-**Open decision** (confirm with the user in preflight, before package E): how a
-coordinator obtains authority to dispatch without a human approving each task.
-Package E proposes a human-granted session allowance.
+Decisions 5–7 were accepted as proposed on 2026-10-25 ("all of this makes
+sense"), as was the split between this iteration and the follow-on.
 
 ## Target experience
 
@@ -81,10 +112,19 @@ shoestring chat --agent heavy              # another saved team
 shoestring chat --coordinator codex:MODEL  # override for this session only
 ```
 
+The human grants the session an allowance (PROPOSED; refuses without a TTY):
+
+```sh
+shoestring grant --models codex:MODEL,claude:MODEL --purposes explore,implement,review \
+  --max-dispatches 10 --max-parallel 3 --max-hours 4 --unread-usage 5
+```
+
 Inside the session the coordinator calls (PROPOSED; each prints JSON):
 
 ```sh
 shoestring capacity --json                 # which harness:models have headroom now
+shoestring advice --json                   # what past runs of each kind looked like
+shoestring dispatch ... --dry-run          # admission, grant use and advice, nothing started
 shoestring dispatch --purpose explore   --worker opencode:PROVIDER/MODEL --brief question.md
 shoestring dispatch --purpose implement --worker codex:MODEL --effort high --brief task.md
 shoestring dispatch --purpose review    --worker claude:MODEL --of RUN --brief contract.md
@@ -135,7 +175,6 @@ coordinator transcripts are neither stored nor canonical.
 - Decide how a dispatch maps onto goals, tasks and runs: a goal with one
   coordinator-authored task, or a new stream type. Do not invent executable
   tasks to hold conversation.
-- Confirm the authority decision (package E) with the user.
 - Record, without inference, what each installed harness returns when asked
   for models. VERIFIED 2026-10-25: Codex 0.164.0's app-server schema has
   `model/list`, returning `id`, `displayName`, `isDefault`,
@@ -180,8 +219,10 @@ coordinator transcripts are neither stored nor canonical.
   its SDK control protocol if preflight confirms it, otherwise a documented
   alias fallback labelled as such.
 - Store the catalog with its source and `fetched_at`. Refresh it at `setup`,
-  `doctor --probe-providers`, service start and `shoestring models refresh`;
-  no other command queries a provider. Show staleness; never act on it alone.
+  `doctor --probe-providers` and `shoestring models refresh`. The service
+  refreshes at start only when the catalog is more than a day old and its
+  configuration enables it (off in tests). No other command queries a
+  provider. Show staleness; never act on it alone.
 - Enable policy: per decision 3. Change it with `shoestring models enable` /
   `disable` or in Settings.
 - A model that drops out of a listing is marked unavailable. It is never
@@ -239,26 +280,45 @@ coordinator transcripts are neither stored nor canonical.
   Cancel affects exactly its target and reaps that run's process group.
 - Concurrency uses the existing fan-out policy. Dispatches beyond the admitted
   limit queue visibly.
+- `dispatch --dry-run` validates the dispatch and reports the admission
+  decision, the grant limits it would use and any advice, without recording a
+  dispatch, calling a model or starting anything.
+- Declared batches: a coordinator may declare a strategy before spending it
+  (`--batch LABEL --batch-size N`, for example three implements and one
+  review). A dispatch beyond the declared size is refused, `runs list` shows
+  declared against used, and a dry run says whether the grant has room for
+  the whole batch.
 - `do`, `follow`, `result`, `review`, `checks` and `plans` keep their
   arguments, output streams and exit statuses.
 
-### E. Coordinator authority (pending user confirmation)
+### E. Session grants
 
 - Today each plan needs a human decision recorded as `--by human:NAME`. A
   coordinator must never record a human decision.
-- PROPOSED: the human grants a coordinator session an allowance, typed by the
-  human in the way calibration windows are attested. It names the allowed
-  harness:models and purposes, the repository, the maximum number of
-  dispatches, maximum concurrency and attempt ceilings. Dispatches inside it
-  are recorded as `agent:SESSION` acting under that grant. Anything outside it
-  waits for an explicit human decision through the existing approval paths.
+- `shoestring grant` creates a grant for one coordinator session. It refuses
+  without an interactive terminal, so a coordinator cannot grant itself, and
+  saves only after the human confirms the grant it displays. The grant is
+  recorded as `human:NAME`.
+- A grant names the repository; the allowed `harness:model`s; the purposes;
+  the maximum number of dispatches (every attempt counts, retries included);
+  the maximum running at once; total hours and a per-dispatch duration; an
+  optional usage floor per provider window, stricter than the standing
+  reserves; and `--unread-usage N` (decision 7).
+- A dispatch inside the grant is recorded as `agent:SESSION` under the grant
+  id. Outside it, `dispatch` refuses and names the limit it would cross;
+  nothing is queued. The human may extend the grant (`shoestring grant
+  extend`), after which the coordinator dispatches again.
+- Durations use the existing duration budgets: when time is used up no new
+  attempt starts, and a running Elf is never interrupted. The standing
+  reserves (automatic admission stops at 80% of the 5-hour window and 90% of
+  the weekly one) apply to every dispatch, grant or not.
+- A dispatch whose remaining usage cannot be read uses one pre-approved
+  unread-usage dispatch instead of asking; when none are left it asks the
+  human as today.
 - Grants are durable and inspectable (`shoestring grants list/show`), and the
   human can revoke one. Revoking or exhausting a grant stops new dispatches; it
   never interrupts running Elves. A new session or a restart does not
   replenish it.
-- Alternative if the user prefers it: each IMPLEMENT dispatch waits for a human
-  `shoestring approve`, while EXPLORE and REVIEW run under a smaller standing
-  allowance.
 
 ### F. `shoestring chat` and the orchestrator package
 
@@ -302,6 +362,31 @@ coordinator transcripts are neither stored nor canonical.
   reviewer harnesses and their call ceilings. Without it, live acceptance stays
   UNVERIFIED; a scripted transcript is not live proof.
 
+### I. Run records and advice
+
+- For every finished run, derive from canonical events: its kind (harness,
+  model, effort, purpose, task class), the tokens the harness reported, its
+  duration and attempts, whether its checks passed on the first attempt,
+  whether review blocked it, and the usage readings around it with whether it
+  ran alone.
+- Token sources: Codex `thread/tokenUsage/updated` and opencode's completion
+  usage are kept today. Claude's final `result` message carries `usage` and
+  `total_cost_usd` (VERIFIED in
+  `plans/evidence/04-single-elf/fixtures/claude/stream-json-smoke-live.jsonl`),
+  but `ClaudeHeadless.EventNormalizer` drops it; keep it.
+- `shoestring advice [--json]`: for each kind with at least 10 finished runs,
+  the median and 90th-percentile tokens, the first-try pass rate, mean
+  attempts, median duration, and usage per run from the runs that ran alone
+  (with their own count). Below 10 runs it says "no estimate yet" with the
+  count. Every figure carries its sample count and date range.
+- Arithmetic only — counts, medians and percentiles. No model call and no
+  training.
+- Advice reaches the coordinator through `advice --json` and `dispatch
+  --dry-run`, and a grant shows its estimated usage so far. It never changes
+  admission, dispatch or checks.
+- Prompt text, paths and transcripts are excluded, as in iteration 10's
+  measurements.
+
 ## Required hermetic evals
 
 | Case | Required outcome |
@@ -321,6 +406,12 @@ coordinator transcripts are neither stored nor canonical.
 | Chat launch | Each coordinator gets the right CLI, model and instructions (scripted); an unreachable or mismatched service refuses; no service is started. |
 | CLI compatibility | Existing commands keep their arguments, stdout/stderr and exit statuses. |
 | Privacy | Briefs and reports are redacted under the existing artifact rules AND their useful content remains; no coordinator transcript is stored. |
+| Grant creation | Without a TTY `grant` refuses and saves nothing; with one it saves only after confirmation and records `human:NAME`. |
+| Grant limits | Each limit (model, purpose, repository, dispatches, concurrency, hours) refuses the dispatch that would cross it and queues nothing; `extend` lets it through; running work is untouched. |
+| Unread usage | Unreadable capacity uses a pre-approval while any remain, then asks as today; both are counted. |
+| Dry run and batches | A dry run records and starts nothing; a dispatch beyond a declared batch size refuses; a dry run reports whether the grant has room for the batch. |
+| Token capture | Claude's final `usage` is kept on run events alongside Codex and opencode tokens; malformed or missing usage is recorded as unknown, never zero. |
+| Advice | Below 10 runs: no estimate and the count. With fixtures: exact median, 90th percentile, first-try rate and counts. Admission decisions are identical with and without advice. |
 
 Use Fake/scripted local transports and trivial local commands. Label
 new-feature tests honestly; regression claims must fail behaviourally on the
@@ -331,7 +422,8 @@ recorded pre-fix commit. No provider CLI or network in the ordinary gate.
 1. From fresh state, `shoestring setup` discovers models (Fake in the hermetic
    demo) and saves a default agent.
 2. `shoestring chat` starts the coordinator (a scripted coordinator in the
-   hermetic demo) in a scratch repository, and the human grants an allowance.
+   hermetic demo) in a scratch repository, and the human grants an allowance
+   from a terminal.
 3. The coordinator runs an EXPLORE and an IMPLEMENT on different harnesses at
    the same time, waits, has a different vendor REVIEW the change, and presents
    the verified commit with merge instructions.
@@ -339,7 +431,9 @@ recorded pre-fix commit. No provider CLI or network in the ordinary gate.
    leaves the other running.
 5. Restarting the service mid-run loses nothing: `wait` and `runs show` resume
    with no duplicate run.
-6. `do`, `follow`, `result`, `review` and `checks` still work.
+6. After seeded finished runs, `advice` shows statistics for a kind with 10
+   or more runs and "no estimate yet" for one with fewer.
+7. `do`, `follow`, `result`, `review` and `checks` still work.
 
 Acceptance requires all required evals and the hermetic demo, a green full
 `mix precommit` with exact counts, an installed-release check, and a recorded
@@ -362,9 +456,26 @@ separately authorized budget. Missing live evidence leaves acceptance open.
 
 A chat UI or turn engine inside Shoestring; browser chat; remote or multi-user
 sessions; automatic merging; opening PRs (results stay commits to fetch and
-merge); new harness adapters; paid API paths; enabled forecasts. An MCP server
-is the next step after this iteration: a thin layer over the same commands, so
-a coordinator can be allowed Shoestring's tools without a general shell.
+merge); new harness adapters; paid API paths; enabled forecasts; enforcing
+usage budgets from estimates (it keeps iteration 10's evaluation bar).
+
+## Follow-on iteration
+
+Recorded 2026-10-25 for the iteration after this one; nothing here is
+authorized by this milestone.
+
+- **MCP server:** a thin layer over the same commands, so a coordinator can be
+  allowed Shoestring's tools without a general shell.
+- **Lessons library:** per repository, each lesson has a `cue` (when it
+  applies), the `lesson` and its `evidence` (run ids, checks, review
+  findings); a lesson missing any of them is rejected. The coordinator writes
+  them and sees matching ones before similar dispatches. A lesson enters an
+  agent's instructions only when the human approves it, as a new revision.
+- **Try several:** one brief dispatched to two or three harness:models at
+  once; checks decide which pass, and a reviewer from another vendor picks
+  among the passing ones. Same-task comparisons also feed package I.
+- **Blind comparison:** candidates shown to the selecting reviewer as A, B, C
+  in a seeded, stable order, with the mapping recorded separately.
 
 ## Progress
 
@@ -382,7 +493,7 @@ a coordinator can be allowed Shoestring's tools without a general shell.
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.
-- Authority decision, dispatch mapping and schema decisions: to be recorded.
+- Dispatch mapping and schema decisions: to be recorded.
 - Per-harness model listing and coordinator launch findings: to be recorded.
 - Exact automated commands/counts and pre-fix regression evidence: to be recorded.
 - Installed-release demo and separately budgeted live receipt: to be recorded.
