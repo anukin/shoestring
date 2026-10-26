@@ -107,7 +107,10 @@ mix shoestring.forecasts report --dataset-version 2 --split-at ISO8601 --at ISO8
 **Pinned class.** Agent-profile roles can pin a reasoning effort. Model and
 effort travel in the immutable execution binding on `run.requested`, so they
 are recorded before dispatch. A role left at provider default has no effort
-and its rows miss a class feature. The task class is the sorted set of gate
+and its rows miss a class feature. Sandboxed Claude runs before 2026-10-26
+ran at medium whatever effort they recorded: their launch ended with
+`--effort medium`, and Claude Code keeps the last `--effort` (iteration 14).
+The task class is the sorted set of gate
 names the approved plan assigned to the task (`gates:mix_test`), a coarse
 structural class known before dispatch; gate parameters are not used. The
 Shoestring version and the provider CLI version come from the before reading.

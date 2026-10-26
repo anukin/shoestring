@@ -132,6 +132,36 @@ defmodule Shoestring.Harness.ClaudeHeadless.SandboxTest do
     refute "--dangerously-skip-permissions" in args
   end
 
+  # Claude Code keeps the last `--effort` it is given (2.1.310, its requests
+  # captured locally), so a launch carries at most one: the binding's, or the
+  # sandbox's medium when the binding chose none.
+  test "a sandboxed launch runs at the binding's effort, and at medium when it chose none",
+       ctx do
+    {:ok, sandbox} = prepare(ctx, worktree!(ctx, true))
+
+    efforts = fn opts ->
+      session =
+        start_supervised!(
+          {Session,
+           [
+             run_request: request("workspace/fixture"),
+             owner: self(),
+             transport: Shoestring.Test.ArgvCaptureTransport,
+             model: "opus"
+           ] ++ opts},
+          id: make_ref()
+        )
+
+      args = :sys.get_state(:sys.get_state(session).transport_pid) |> Keyword.fetch!(:args)
+      for [flag, value] <- Enum.chunk_every(args, 2, 1, :discard), flag == "--effort", do: value
+    end
+
+    assert efforts.(effort: "high", sandbox_options: sandbox.options) == ["high"]
+    assert efforts.(sandbox_options: sandbox.options) == ["medium"]
+    assert efforts.(effort: "high") == ["high"]
+    assert efforts.([]) == []
+  end
+
   test "plan-bound Claude runs are sandboxed by default; manual and configured launches are not" do
     binding = %{"model" => "opus", "role" => "Worker"}
     key = Shoestring.Cobbler.ExecutionProfile.key()

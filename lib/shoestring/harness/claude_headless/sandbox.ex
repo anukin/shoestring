@@ -94,7 +94,15 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
     }
   end
 
-  # The flag set the live fan-out ran with (CLI 2.1.300 and 2.1.301).
+  @doc """
+  The effort a sandboxed launch runs at when its binding chose none: the
+  live fan-out's. It is not one of `options`, because Claude Code keeps the
+  last `--effort` it is given and a binding's effort must win (2.1.310).
+  """
+  def default_effort, do: "medium"
+
+  # The flag set the live fan-out ran with (CLI 2.1.300 and 2.1.301), except
+  # its `--effort medium`: see `default_effort/0`.
   defp options(settings) do
     [
       "--safe-mode",
@@ -108,8 +116,6 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
       ~s({"mcpServers":{}}),
       "--disable-slash-commands",
       "--no-session-persistence",
-      "--effort",
-      "medium",
       "--permission-mode",
       "dontAsk",
       "--permission-prompts",

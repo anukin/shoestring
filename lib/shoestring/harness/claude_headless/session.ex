@@ -46,7 +46,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   require Logger
 
   alias Shoestring.Harness.{Capacity, CapacitySnapshot, Clock, Error, HarnessEvent, Observatory}
-  alias Shoestring.Harness.ClaudeHeadless.{EventNormalizer, Transport}
+  alias Shoestring.Harness.ClaudeHeadless.{EventNormalizer, Sandbox, Transport}
 
   @default_max_frame_size 262_144
   @default_request_timeout 15_000
@@ -768,10 +768,16 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
         _ -> []
       end
 
+    # A sandboxed launch without a chosen effort keeps the sandbox's default.
     model_args =
       case Keyword.get(state.opts, :effort) do
-        effort when is_binary(effort) and effort != "" -> model_args ++ ["--effort", effort]
-        _ -> model_args
+        effort when is_binary(effort) and effort != "" ->
+          model_args ++ ["--effort", effort]
+
+        _ ->
+          if Keyword.has_key?(state.opts, :sandbox_options),
+            do: model_args ++ ["--effort", Sandbox.default_effort()],
+            else: model_args
       end
 
     # Sandboxed launches carry their settings and flags before the prompt
