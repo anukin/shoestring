@@ -548,6 +548,22 @@ authorized by this milestone.
   limits. A usage hold surfaces as the dispatch state `held`. Still open in D: EXPLORE and REVIEW dispatches, `capacity`, the dry run's
   admission preview, and using unread-usage pre-approvals in admission.
 
+- 2026-10-25, package F (first slice). `shoestring chat` validates the
+  coordinator (the agent's Coordinator role or `--coordinator`; it must be
+  able to coordinate, be enabled and be on PATH), needs a terminal and a
+  running service, proposes and asks for the session's grant when it has
+  none, renders `priv/coordinator/instructions.md` with the session, grant,
+  roles and agent instructions, and writes a launch script that
+  `bin/shoestring` / `shoestringctl` exec so the coordinator's TUI owns the
+  terminal. Delivery: Claude Code `--model` + `--append-system-prompt-file`
+  (REPO-INSPECTION of its help); Codex `-m` + `-c developer_instructions`;
+  opencode `OPENCODE_CONFIG_CONTENT` — the last two UNVERIFIED until a live
+  session. The release wrapper's `chat` path is tested against a stub
+  runtime; the checkout wrapper's identical branch is REPO-INSPECTION only.
+  Deviations: one instructions file instead of separate skills for all three
+  CLIs; a continued session starts a new CLI conversation (no CLI resume id
+  is kept) and re-reads Shoestring's records.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

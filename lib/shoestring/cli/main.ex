@@ -38,7 +38,8 @@ defmodule Shoestring.CLI.Main do
     {"grants", Commands.Grants},
     {"dispatch", Commands.Dispatch},
     {"wait", Commands.Wait},
-    {"runs", Commands.Runs}
+    {"runs", Commands.Runs},
+    {"chat", Commands.Chat}
   ]
 
   @usage """
@@ -59,6 +60,8 @@ defmodule Shoestring.CLI.Main do
                 the step-by-step commands
 
   For a coordinator (Claude Code, Codex or opencode) working under a grant:
+    chat [--agent NAME] [--coordinator PROVIDER:MODEL] [--session ID]
+                start one in this repository, after granting its session
     grant | grants ...
                 give a coordinator session an allowance, or change it
     dispatch --purpose implement --worker PROVIDER:MODEL --title T --brief FILE

@@ -58,6 +58,17 @@ case "${1:-}" in
     exec "$runtime" eval 'Shoestring.Release.text_enqueue()' < /dev/null
     ;;
   version) exec "$runtime" version ;;
+  # `chat` prepares the session in the runtime, then starts the coordinator's
+  # terminal interface from this shell so it owns the terminal.
+  chat)
+    launch=$(mktemp "${TMPDIR:-/tmp}/shoestring-chat.XXXXXX")
+    status=0
+    "$runtime" eval 'Shoestring.CLI.Main.main(System.argv())' "$@" --launch-file "$launch" || status=$?
+    if [ "$status" -ne 0 ]; then rm -f "$launch"; exit "$status"; fi
+    if [ -s "$launch" ]; then exec sh "$launch"; fi
+    rm -f "$launch"
+    exit 0
+    ;;
   # The work commands (do, follow, result, ...), help and usage. stdin stays
   # open: `do` asks for approval and `follow` for capacity confirmations.
   *) exec "$runtime" eval 'Shoestring.CLI.Main.main(System.argv())' "$@" ;;

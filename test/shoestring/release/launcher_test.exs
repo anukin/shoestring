@@ -96,4 +96,29 @@ defmodule Shoestring.Release.LauncherTest do
     {output, 2} = run(ctl, ["doctor", "--verbose"])
     assert output == "Usage: shoestring doctor [--probe-providers] [--json]\n"
   end
+
+  test "chat execs the launch script the runtime wrote, or passes its refusal on", %{tmp_dir: dir} do
+    ctl = release!(dir, %{})
+    runtime = Path.join(dir, "bin/shoestring")
+
+    # The runtime writes a launch script to the --launch-file it was given,
+    # or refuses with exit 1 when told to.
+    File.write!(runtime, """
+    #!/bin/sh
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --refuse) echo refused >&2; exit 1 ;;
+        --launch-file) printf '#!/bin/sh\\nrm -f -- "$0"\\necho coordinator-started\\n' > "$2"; shift ;;
+      esac
+      shift
+    done
+    """)
+
+    {output, 0} = run(ctl, ["chat", "--session", "s1"])
+    assert output == "coordinator-started\n"
+
+    {output, 1} = run(ctl, ["chat", "--refuse"])
+    assert output == "refused\n"
+    refute output =~ "coordinator-started"
+  end
 end

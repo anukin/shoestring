@@ -3,11 +3,45 @@
 Iteration 14 lets a coding CLI you chat with — Claude Code, Codex or opencode
 — act as a coordinator: it plans with you and hands tasks to Shoestring,
 which runs each one as a sandboxed Elf on the harness and model it chose.
-This page covers what exists so far: grants, IMPLEMENT dispatches, `wait`
-and `runs`. `shoestring chat`, EXPLORE and REVIEW dispatches, `capacity` and
+This page covers what exists so far: `shoestring chat`, grants, IMPLEMENT
+dispatches, `wait` and `runs`. EXPLORE and REVIEW dispatches, `capacity` and
 advice are still to come ([the milestone](../plans/milestones/14-coordinator-orchestration.md)).
 
+## Start a coordinator
+
+```sh
+cd ~/code/my-project
+shoestring chat                            # the default agent's Coordinator role
+shoestring chat --coordinator codex:MODEL  # another CLI or model, this session only
+shoestring chat --session ID               # continue an earlier session under its grant
+shoestring chat list                       # sessions, their grants and dispatches
+```
+
+A new session first shows the grant it proposes — the agent's Worker,
+Reviewer and other roles' models, every purpose, and `shoestring grant`'s
+default limits — and starts only after you confirm it. Then it starts the
+coordinator CLI in your terminal with instructions on handing tasks to
+Shoestring (`priv/coordinator/instructions.md`, plus the session, its
+grant, the agent's roles and its instructions). How each CLI receives them:
+
+| Coordinator | Model | Instructions | Status |
+| --- | --- | --- | --- |
+| Claude Code | `--model` | `--append-system-prompt-file` | REPO-INSPECTION of `claude --help` 2.1.310 |
+| Codex | `-m` | `-c developer_instructions='''...'''` | UNVERIFIED in a live session |
+| opencode | `OPENCODE_CONFIG_CONTENT` `model` | its `instructions` | UNVERIFIED in a live session |
+
+The coordinator is your own session of that CLI, under its own permission
+prompts; Shoestring does not sandbox it, and its instructions tell it not to
+edit your checkout. Shoestring's own guarantee that your checkout is never
+changed covers Shoestring and its Elves, not the coordinator CLI. `--session`
+starts a new conversation in the CLI; the coordinator reads what was already
+dispatched with `shoestring runs list`. From the source checkout use
+`bin/shoestring chat`; `mix shoestring.chat` prints the launch instead of
+starting it.
+
 ## 1. Grant the session an allowance
+
+`shoestring chat` asks for this when a session starts. To grant one yourself:
 
 A grant is your decision, so you make it yourself, in a terminal:
 

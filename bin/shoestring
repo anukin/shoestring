@@ -19,4 +19,18 @@ checkout=$(cd "$(dirname "$script")/.." && pwd)
 SHOESTRING_CALLER_DIR=$PWD
 export SHOESTRING_CALLER_DIR
 cd "$checkout"
+
+# `chat` prepares the session in Mix, then starts the coordinator's terminal
+# interface here, so it owns the terminal: Mix writes a launch script and
+# this shell execs it.
+if [ "${1:-}" = "chat" ]; then
+  launch=$(mktemp "${TMPDIR:-/tmp}/shoestring-chat.XXXXXX")
+  status=0
+  mix shoestring "$@" --launch-file "$launch" || status=$?
+  if [ "$status" -ne 0 ]; then rm -f "$launch"; exit "$status"; fi
+  if [ -s "$launch" ]; then exec sh "$launch"; fi
+  rm -f "$launch"
+  exit 0
+fi
+
 exec mix shoestring "$@"
