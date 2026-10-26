@@ -80,12 +80,16 @@ defmodule Shoestring.CLI.Commands.Dispatch do
             end
           end)
         else
-          case context.service.() do
-            :ok -> :ok
-            {:error, reason} -> Refusal.refuse!(Messages.message(reason, context.start_hint))
-          end
+          # Inside the repository: a checkout knows its database only then,
+          # and the check compares it with the service's.
+          context.with_repo.(fn _repo ->
+            case context.service.() do
+              :ok -> :ok
+              {:error, reason} -> Refusal.refuse!(Messages.message(reason, context.start_hint))
+            end
 
-          context.with_repo.(fn _repo -> create(request, context) end)
+            create(request, context)
+          end)
         end
 
       _ ->

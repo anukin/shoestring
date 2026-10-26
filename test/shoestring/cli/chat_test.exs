@@ -56,6 +56,24 @@ defmodule Shoestring.CLI.ChatTest do
 
   defp answer(text), do: send(self(), {:mix_shell_input, :prompt, text})
 
+  # A checkout's database path is set only when its repository opens
+  # (`Shoestring.State.configure_repo!/0`), and the service check compares
+  # that database's fingerprint (`Shoestring.Health.instance/0`).
+  defp checkout(context) do
+    config = Application.fetch_env!(:shoestring, Repo)
+    Application.put_env(:shoestring, Repo, Keyword.delete(config, :database))
+    on_exit(fn -> Application.put_env(:shoestring, Repo, config) end)
+
+    %{
+      context
+      | service: fn -> Shoestring.Health.instance() && :ok end,
+        with_repo: fn fun ->
+          Application.put_env(:shoestring, Repo, config)
+          fun.(Repo)
+        end
+    }
+  end
+
   test "the instructions name the session, the grant, the routing and the agent's own text" do
     grant = %Grants.Grant{
       id: Ecto.UUID.generate(),
@@ -205,6 +223,13 @@ defmodule Shoestring.CLI.ChatTest do
 
     assert [%{"session_id" => "chat-1", "coordinator" => "codex:gpt-6-luna", "dispatches" => 0}] =
              Jason.decode!(json)
+  end
+
+  test "from a checkout, chat checks the service once its repository is open", ctx do
+    launch = Path.join(ctx.dir, "launch.sh")
+    answer("y")
+    Chat.run(["--session", "chat-2", "--launch-file", launch], checkout(context(ctx)))
+    assert File.read!(launch) =~ "SHOESTRING_SESSION=chat-2"
   end
 
   test "a coordinator must be able to coordinate, be enabled and be installed", ctx do

@@ -52,12 +52,16 @@ defmodule Shoestring.CLI.Commands.Chat do
       {opts, [], []} ->
         Grant.terminal!(context)
 
-        case context.service.() do
-          :ok -> :ok
-          {:error, reason} -> Refusal.refuse!(Messages.message(reason, context.start_hint))
-        end
+        # Inside the repository: a checkout knows its database only then, and
+        # the check compares it with the service's.
+        context.with_repo.(fn _repo ->
+          case context.service.() do
+            :ok -> :ok
+            {:error, reason} -> Refusal.refuse!(Messages.message(reason, context.start_hint))
+          end
 
-        context.with_repo.(fn _repo -> chat(opts, context) end)
+          chat(opts, context)
+        end)
 
       _ ->
         Refusal.usage!("chat")

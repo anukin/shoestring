@@ -55,6 +55,24 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
 
   defp answer(text), do: send(self(), {:mix_shell_input, :prompt, text})
 
+  # A checkout's database path is set only when its repository opens
+  # (`Shoestring.State.configure_repo!/0`), and the service check compares
+  # that database's fingerprint (`Shoestring.Health.instance/0`).
+  defp checkout(context) do
+    config = Application.fetch_env!(:shoestring, Repo)
+    Application.put_env(:shoestring, Repo, Keyword.delete(config, :database))
+    on_exit(fn -> Application.put_env(:shoestring, Repo, config) end)
+
+    %{
+      context
+      | service: fn -> Shoestring.Health.instance() && :ok end,
+        with_repo: fn fun ->
+          Application.put_env(:shoestring, Repo, config)
+          fun.(Repo)
+        end
+    }
+  end
+
   defp grant!(ctx, extra \\ []) do
     answer("y")
 
@@ -188,6 +206,12 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
         | service: fn -> {:error, :service_unreachable} end
       })
     end
+  end
+
+  test "from a checkout, dispatch checks the service once its repository is open", ctx do
+    grant!(ctx)
+    Dispatch.run(dispatch_args(ctx), checkout(context(ctx)))
+    assert %{"outcome" => "recorded", "state" => "queued"} = json!()
   end
 
   test "wait returns on the first settled dispatch, or times out with exit 3", ctx do
