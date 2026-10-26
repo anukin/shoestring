@@ -610,6 +610,13 @@ authorized by this milestone.
   admission, not its decision. `dispatch --dry-run` adds the worker
   provider's entry, which closes the dry run's admission preview.
 
+- 2026-10-25, package G. `/cobbler` lists each coordinator session (in local
+  mode, as goals are; grants are not owner-scoped) with its grant's
+  attempts, concurrency and unread-usage use, and each dispatch's title,
+  worker, reviewer and state, linked to its goal page. Tested with
+  LiveViewTest; not checked visually in a browser (a dev server would start
+  the live provider monitors).
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

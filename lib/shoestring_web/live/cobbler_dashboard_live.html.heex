@@ -16,6 +16,63 @@
       </button>
     </div>
 
+    <section :if={not @sessions_empty?} id="coordinator-sessions" class="space-y-4">
+      <h2 class="text-xl font-bold text-zinc-900">Coordinator sessions</h2>
+      <div id="coordinator-sessions-list" phx-update="stream" class="grid gap-4">
+        <div
+          :for={{dom_id, session} <- @streams.sessions}
+          id={dom_id}
+          data-revoked={to_string(session.revoked?)}
+          class="border border-zinc-200 rounded-lg p-5 space-y-3 bg-white shadow-sm"
+        >
+          <div class="flex justify-between items-start">
+            <div>
+              <p class="font-semibold text-zinc-900">Session {session.session_id}</p>
+              <p class="text-xs text-zinc-500 font-mono">grant {session.id}</p>
+            </div>
+            <span :if={session.revoked?} class="text-xs font-medium text-red-700">Revoked</span>
+          </div>
+          <p class="text-sm text-zinc-600">
+            Attempts {session.attempts["used"]} of {session.attempts["limit"]}, {session.running[
+              "now"
+            ]} of {session.running["limit"]} at once,
+            unread-usage {session.unread["used"]} of {session.unread["limit"]}
+          </p>
+          <ul class="divide-y divide-zinc-100">
+            <li
+              :for={dispatch <- session.dispatches}
+              id={"dispatch-#{dispatch.id}"}
+              data-state={dispatch.state}
+              class="py-2 flex justify-between items-center gap-4 text-sm"
+            >
+              <div>
+                <p class="font-medium text-zinc-900">{dispatch.title}</p>
+                <p class="text-xs text-zinc-500">
+                  {dispatch.worker}
+                  <%= if dispatch.reviewer do %>
+                    , reviewed by {dispatch.reviewer}
+                  <% end %>
+                </p>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-xs font-medium text-zinc-700">{dispatch.state}</span>
+                <.link
+                  :if={dispatch.goal_id && dispatch.state != "failed_to_start"}
+                  navigate={~p"/cobbler/goals/#{dispatch.goal_id}"}
+                  class="text-xs font-semibold text-zinc-900 underline"
+                >
+                  Goal
+                </.link>
+              </div>
+            </li>
+            <li :if={session.dispatches == []} class="py-2 text-sm text-zinc-500">
+              No dispatches yet.
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
     <%= if @goals_empty? do %>
       <div
         id="cobbler-empty"

@@ -132,7 +132,9 @@ dispatch stays `held` for you.
 States: `starting`, `queued`, `running`, `held` (its provider's remaining
 usage could not be confirmed; you confirm it with `shoestring follow GOAL`),
 `needs_you` (you decide, with `shoestring follow GOAL`), `completed`,
-`cancelled`, `failed_to_start`.
+`cancelled`, `failed_to_start`. The web dashboard (`/cobbler`) lists each
+coordinator session with its grant's use and its dispatches, each linked to
+its goal.
 `wait` reads Shoestring's records every few seconds and makes no model call;
 a coordinator can run it in the background to be woken when it exits. `runs
 show` of a completed dispatch includes the commit, its checks and the

@@ -1,7 +1,8 @@
 defmodule ShoestringWeb.CobblerDashboardLive do
   @moduledoc """
-  Read-only Cobbler dashboard: one row per quota-aware goal with its
-  presentational lifecycle state.
+  Read-only Cobbler dashboard: each coordinator session (iteration 14) with
+  its grant's use and its dispatches, then one row per quota-aware goal with
+  its presentational lifecycle state.
 
   All data comes from read-only calls (`Repo` reads,
   `Cobbler.list_commands/2`, `Cobbler.active_claim/1`,
@@ -23,13 +24,53 @@ defmodule ShoestringWeb.CobblerDashboardLive do
   @impl true
   def mount(_params, _session, socket) do
     socket = assign_new(socket, :current_scope, fn -> nil end)
-    {:ok, load_goals(socket)}
+    {:ok, socket |> load_sessions() |> load_goals()}
   end
 
   @impl true
   def handle_event("refresh", _params, socket) do
-    {:noreply, load_goals(socket)}
+    {:noreply, socket |> load_sessions() |> load_goals()}
   end
+
+  # Grants are not owner-scoped, so sessions show only in local mode (no
+  # scope), like every goal there.
+  defp load_sessions(%{assigns: %{current_scope: nil}} = socket) do
+    sessions =
+      for grant <- Shoestring.Grants.list() do
+        room = Shoestring.Dispatches.room(grant)
+
+        %{
+          id: grant.id,
+          session_id: grant.session_id,
+          revoked?: not is_nil(grant.revoked_at),
+          attempts: room["attempts"],
+          running: room["running"],
+          unread: room["unread_usage"],
+          dispatches:
+            for dispatch <- Shoestring.Dispatches.list(grant.session_id) do
+              %{
+                id: dispatch.id,
+                title: dispatch.title,
+                worker: "#{dispatch.provider}:#{dispatch.model}",
+                reviewer:
+                  dispatch.reviewer_provider &&
+                    "#{dispatch.reviewer_provider}:#{dispatch.reviewer_model}",
+                state: Shoestring.Dispatches.state(dispatch),
+                goal_id: dispatch.goal_id
+              }
+            end
+        }
+      end
+
+    socket
+    |> assign(:sessions_empty?, sessions == [])
+    |> stream(:sessions, sessions, reset: true, dom_id: &"session-#{&1.id}")
+  rescue
+    _error -> socket |> assign(:sessions_empty?, true) |> stream(:sessions, [], reset: true)
+  end
+
+  defp load_sessions(socket),
+    do: socket |> assign(:sessions_empty?, true) |> stream(:sessions, [], reset: true)
 
   defp load_goals(socket) do
     goals = list_goals(socket.assigns.current_scope)
