@@ -78,11 +78,13 @@ replaceable execution providers. The longer-term product vocabulary is:
 
 ## Product interface
 
-REPO-INSPECTION: an Omnigent-style orchestrator is planned in
+REPO-INSPECTION: an Omnigent-style orchestrator is in progress in
 [iteration 14](plans/milestones/14-coordinator-orchestration.md): you chat with
 Claude Code, Codex or opencode as the coordinator, and it dispatches sandboxed
-Elves through Shoestring. It is proposed and unimplemented; the current CLI
-workflow below handles one request at a time.
+Elves through Shoestring under an allowance you grant. Grants, IMPLEMENT
+dispatches, `wait` and `runs` exist ([working with a coordinator](docs/coordinator.md));
+`shoestring chat`, EXPLORE and REVIEW dispatches and advice do not yet. The
+CLI workflow below handles one request at a time.
 
 ### One command (iteration 7A)
 

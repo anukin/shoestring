@@ -522,6 +522,32 @@ authorized by this milestone.
   `doctor --probe-providers` does not refresh models — it stays read-only;
   `setup`, `models refresh` and the start-up refresh do.
 
+- 2026-10-25, packages D (IMPLEMENT) and E. Dispatch mapping decided: a
+  dispatch is an ordinary goal with a one-task plan, authored and approved
+  under the grant and executed by the existing executor, so sandboxing,
+  admission, checks, cancellation and `follow` are reused unchanged. Grant
+  authority: `grant:UUID` identities (`Shoestring.Authority`) are accepted by
+  `Plans` (author and approve only), `ExecutionControl.start` and
+  `PlanCancellation` only when the dispatch code passes the dispatch record,
+  and only for that dispatch's goal and exact plan digest; replay accepts
+  them with `author_kind: grant`. The `author_kind = 'human'` CHECK on
+  `cobbler_plan_revisions` became `IN ('human', 'grant')` through a table
+  rebuild (VERIFIED on a populated copy: identical rows, integrity and
+  foreign-key checks clean). The execution binding of a dispatch resolves
+  from the dispatch row (worker, model, effort, brief). Grants live in
+  `coordinator_grants` with an append-only `coordinator_grant_events`;
+  limits are counts and reserved times checked in the same immediate
+  transaction that records the dispatch. Commands: `grant`, `grants
+  list|show|extend|revoke` (extend, revoke and grant refuse without a
+  terminal), `dispatch` (with `--dry-run` and declared batches), `wait`,
+  `runs list|show|cancel`. Deviations: a dispatch outside its grant is
+  refused rather than left waiting; dispatched work skips iteration 8's
+  automatic cross-review (the coordinator's REVIEW dispatch replaces it);
+  a session id is not a secret, so any local program that knows it can
+  dispatch under its grant, bounded by the grant's repository, models and
+  limits. A usage hold surfaces as the dispatch state `held`. Still open in D: EXPLORE and REVIEW dispatches, `capacity`, the dry run's
+  admission preview, and using unread-usage pre-approvals in admission.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

@@ -33,7 +33,12 @@ defmodule Shoestring.CLI.Main do
     {"models", Commands.Models},
     {"reservations", Commands.Reservations},
     {"setup", Commands.Setup},
-    {"doctor", Commands.Doctor}
+    {"doctor", Commands.Doctor},
+    {"grant", Commands.Grant},
+    {"grants", Commands.Grants},
+    {"dispatch", Commands.Dispatch},
+    {"wait", Commands.Wait},
+    {"runs", Commands.Runs}
   ]
 
   @usage """
@@ -52,6 +57,16 @@ defmodule Shoestring.CLI.Main do
                 list the checks a goal ran, or print one check's output
     goals | plans | execution | agents | models | reservations ...
                 the step-by-step commands
+
+  For a coordinator (Claude Code, Codex or opencode) working under a grant:
+    grant | grants ...
+                give a coordinator session an allowance, or change it
+    dispatch --purpose implement --worker PROVIDER:MODEL --title T --brief FILE
+                hand Shoestring one task under the session's grant
+    wait DISPATCH...
+                return when one of them settles
+    runs list | show | cancel ...
+                the session's dispatches
 
   `shoestring COMMAND --help` describes a command. Commands that print data
   accept --json. Data goes to stdout; messages and progress go to stderr.

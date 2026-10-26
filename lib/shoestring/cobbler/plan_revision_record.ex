@@ -83,7 +83,10 @@ defmodule Shoestring.Cobbler.PlanRevisionRecord do
     |> put_change(:content, contract.content)
     |> put_change(:status, "proposed")
     |> put_change(:authored_by, authored_by)
-    |> put_change(:author_kind, "human")
+    |> put_change(
+      :author_kind,
+      if(Shoestring.Authority.grant?(authored_by), do: "grant", else: "human")
+    )
     |> put_change(:task_count, length(contract.content["tasks"]))
     |> put_change(:inserted_at, now)
     |> put_change(:updated_at, now)
@@ -95,7 +98,7 @@ defmodule Shoestring.Cobbler.PlanRevisionRecord do
       name: "cobbler_plan_revisions_goal_id_proposal_id_index"
     )
     |> check_constraint(:status, name: "cobbler_plan_revisions_status_valid")
-    |> check_constraint(:author_kind, name: "cobbler_plan_revisions_author_kind_human")
+    |> check_constraint(:author_kind, name: "cobbler_plan_revisions_author_kind_valid")
     |> check_constraint(:parent_revision_number,
       name: "cobbler_plan_revisions_parent_before_child"
     )

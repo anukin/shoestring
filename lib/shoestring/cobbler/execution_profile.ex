@@ -1,5 +1,11 @@
 defmodule Shoestring.Cobbler.ExecutionProfile do
-  @moduledoc "Immutable saved-agent selection for one approved execution."
+  @moduledoc """
+  Immutable worker selection for one approved execution: a saved agent's
+  revision and role, or — for a coordinator's dispatch (iteration 14) — the
+  dispatch record, which fixes the worker, model, effort and brief the grant
+  authorized. Either way the binding is re-derived from durable rows and must
+  equal what was recorded.
+  """
   alias Shoestring.AgentProfiles.Revision
   alias Shoestring.Harness.{ClaudeHeadless, CodexAppServer, OpencodeAcp}
 
@@ -9,6 +15,15 @@ defmodule Shoestring.Cobbler.ExecutionProfile do
   def resolve(nil, _repo), do: {:ok, nil}
 
   def resolve(attrs, repo) when is_map(attrs) do
+    case value(attrs, :dispatch_id) do
+      nil -> resolve_revision(attrs, repo)
+      dispatch_id -> Shoestring.Dispatches.binding(dispatch_id, value(attrs, :role), repo)
+    end
+  end
+
+  def resolve(_, _repo), do: {:error, :invalid_execution_profile}
+
+  defp resolve_revision(attrs, repo) do
     with {:ok, id} <- Ecto.UUID.cast(value(attrs, :profile_id)),
          number when is_integer(number) and number > 0 <- value(attrs, :revision),
          %Revision{} = revision <- repo.get_by(Revision, definition_id: id, number: number),
@@ -40,8 +55,6 @@ defmodule Shoestring.Cobbler.ExecutionProfile do
       _ -> {:error, :invalid_execution_profile}
     end
   end
-
-  def resolve(_, _repo), do: {:error, :invalid_execution_profile}
 
   defp effort(%{"effort" => nil}), do: {:ok, nil}
 
@@ -98,6 +111,9 @@ defmodule Shoestring.Cobbler.ExecutionProfile do
         end
     end
   end
+
+  @doc false
+  def adapter_for(provider), do: adapter(provider)
 
   defp adapter("codex"), do: {:ok, CodexAppServer}
   defp adapter("claude"), do: {:ok, ClaudeHeadless}

@@ -1511,11 +1511,16 @@ defmodule Shoestring.Trajectory.EventRegistry do
       Map.get(payload, "task_count") != length(contract.content["tasks"]) ->
         Contract.invalid(:task_count, "must match the number of tasks in plan_content")
 
-      Map.get(payload, "author_kind") != "human" ->
-        Contract.invalid(:author_kind, "must be human in this slice")
+      Map.get(payload, "author_kind") not in ["human", "grant"] ->
+        Contract.invalid(:author_kind, "must be human or grant")
 
-      not human_identity?(Map.get(payload, "authored_by")) ->
-        Contract.invalid(:authored_by, "must be a human: identity in this slice")
+      Map.get(payload, "author_kind") == "human" and
+          not human_identity?(Map.get(payload, "authored_by")) ->
+        Contract.invalid(:authored_by, "must be a human: identity")
+
+      Map.get(payload, "author_kind") == "grant" and
+          not Shoestring.Authority.grant?(Map.get(payload, "authored_by")) ->
+        Contract.invalid(:authored_by, "must be a grant: identity")
 
       true ->
         :ok
@@ -1527,22 +1532,24 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
   defp human_identity?(_value), do: false
 
-  # Only a human decides on a plan revision. The Plans API refuses a
-  # non-`human:` decider, so an event carrying one could never have been
-  # written through it; refusing here keeps replay from laundering a forged
-  # or backfilled decision into authority.
+  # Only a human, or a human's grant approving its own dispatch, decides on
+  # a plan revision. The Plans API refuses any other decider, so an event
+  # carrying one could never have been written through it; refusing here
+  # keeps replay from laundering a forged or backfilled decision into
+  # authority. A grant never rejects.
   defp validate_plan_decision(type, 1, payload, _opts)
        when type in ["cobbler.plan.approved", "cobbler.plan.rejected"] do
-    case Map.get(payload, "decided_by") do
-      decided_by when is_binary(decided_by) ->
-        if Regex.match?(@human_identity_pattern, decided_by) do
-          :ok
-        else
-          Contract.invalid(:decided_by, "must be a human: identity in this slice")
-        end
+    decided_by = Map.get(payload, "decided_by")
 
-      _other ->
-        Contract.invalid(:decided_by, "must be a human: identity in this slice")
+    cond do
+      is_binary(decided_by) and Regex.match?(@human_identity_pattern, decided_by) ->
+        :ok
+
+      type == "cobbler.plan.approved" and Shoestring.Authority.grant?(decided_by) ->
+        :ok
+
+      true ->
+        Contract.invalid(:decided_by, "must be a human: identity, or a grant: identity approving")
     end
   end
 
@@ -1796,7 +1803,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
   defp validate_plan_execution("cobbler.plan.cancellation.requested", 1, payload, _opts) do
     with :ok <- plan_execution_digest(payload),
          :ok <- plan_execution_revision(payload),
-         true <- human_identity?(payload["requested_by"]) || {:field, :requested_by},
+         true <-
+           Shoestring.Authority.identity?(payload["requested_by"]) || {:field, :requested_by},
          {:ok, _} <- Contract.text(payload["reason"], :reason, max: 2000),
          true <-
            ((payload["scope"] == "child" and is_binary(payload["run_id"])) or
@@ -1804,9 +1812,14 @@ defmodule Shoestring.Trajectory.EventRegistry do
              {:field, :scope} do
       :ok
     else
-      {:field, :requested_by} -> Contract.invalid(:requested_by, "must be a human: identity")
-      {:field, :scope} -> Contract.invalid(:scope, "must be child with a run or goal without")
-      error -> error
+      {:field, :requested_by} ->
+        Contract.invalid(:requested_by, "must be a human: or grant: identity")
+
+      {:field, :scope} ->
+        Contract.invalid(:scope, "must be child with a run or goal without")
+
+      error ->
+        error
     end
   end
 

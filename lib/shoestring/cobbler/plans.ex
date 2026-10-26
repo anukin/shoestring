@@ -22,9 +22,14 @@ defmodule Shoestring.Cobbler.Plans do
     revision number and the exact content digest it was taken against. A
     digest that does not match the stored revision is stale and is refused,
     so an operator cannot authorize content they never saw.
-  - **Human decisions only.** Authors and deciders are `human:`-prefixed
-    identities. A planner may be recorded inside the plan as provenance,
-    but it cannot author a revision and cannot approve one.
+  - **Human decisions, or a human's grant.** Authors and deciders are
+    `human:`-prefixed identities, or — for a coordinator's dispatch
+    (iteration 14) — the `grant:` identity of the allowance a person gave
+    that coordinator. A grant identity is accepted only when the dispatch
+    code passes the dispatch record (`opts[:dispatch]`), only for that
+    dispatch's goal and exact plan digest, and only to approve. A planner
+    may be recorded inside the plan as provenance, but it cannot author a
+    revision and cannot approve one.
   - **One authority at a time.** A partial unique index allows at most one
     `approved` revision per goal, and a unique index allows at most one
     decision per revision. Two concurrent approvals cannot both commit:
@@ -148,10 +153,11 @@ defmodule Shoestring.Cobbler.Plans do
 
     with {:ok, goal_id} <- cast_goal_id(goal_id),
          {:ok, proposal_id} <- identifier(attrs, :proposal_id),
-         {:ok, authored_by} <- human_identity(attrs, :authored_by),
+         {:ok, authored_by} <- identity(attrs, :authored_by),
          {:ok, parent} <- optional_revision_number(attrs, :parent_revision_number),
          {:ok, parent_digest} <- optional_parent_digest(attrs, parent),
          {:ok, contract} <- plan_contract(attrs),
+         :ok <- authority_check(authored_by, goal_id, contract.digest, opts),
          :ok <- ensure_goal(repo, goal_id) do
       repo
       |> run_transaction(fn ->
@@ -541,6 +547,7 @@ defmodule Shoestring.Cobbler.Plans do
 
     with {:ok, goal_id} <- cast_goal_id(goal_id),
          {:ok, decision} <- decision_attrs(attrs, kind),
+         :ok <- grant_decision(decision, goal_id, opts),
          :ok <- ensure_goal(repo, goal_id) do
       repo
       |> run_transaction(fn -> decide_transaction(repo, goal_id, decision, now(opts)) end)
@@ -1309,7 +1316,7 @@ defmodule Shoestring.Cobbler.Plans do
 
   defp decision_attrs(attrs, kind) do
     with {:ok, decision_id} <- identifier(attrs, :decision_id),
-         {:ok, decided_by} <- human_identity(attrs, :decided_by),
+         {:ok, decided_by} <- identity(attrs, :decided_by),
          {:ok, revision_number} <- required_revision_number(attrs, :revision_number),
          {:ok, digest} <- digest(attrs),
          {:ok, reason} <- reason(attrs, kind),
@@ -1341,14 +1348,16 @@ defmodule Shoestring.Cobbler.Plans do
     end
   end
 
-  # Only a human authors a revision and only a human decides on one. A
-  # planner identity is recorded inside the plan as provenance and is
-  # refused here, which is what makes "the planner cannot approve itself"
-  # a property of the API rather than a convention.
-  defp human_identity(attrs, field) do
+  # Only a human, or a human's grant through its dispatch, authors a revision
+  # or decides on one. A planner identity is recorded inside the plan as
+  # provenance and is refused here, which is what makes "the planner cannot
+  # approve itself" a property of the API rather than a convention. A
+  # `grant:` identity passes this syntax check and is then held to its
+  # dispatch record by `authority_check/4`.
+  defp identity(attrs, field) do
     case Contract.fetch(attrs, field) do
       {:ok, value} when is_binary(value) ->
-        if Regex.match?(@human_identity_pattern, value) do
+        if Regex.match?(@human_identity_pattern, value) or Shoestring.Authority.grant?(value) do
           {:ok, value}
         else
           {:error, {:non_human_identity, %{"field" => field, "value" => value}}}
@@ -1356,6 +1365,28 @@ defmodule Shoestring.Cobbler.Plans do
 
       _other ->
         {:error, {:invalid_plan_request, field, "can't be blank"}}
+    end
+  end
+
+  defp authority_check(identity, goal_id, digest, opts) do
+    case Shoestring.Authority.check(identity, goal_id, digest, opts) do
+      :ok -> :ok
+      {:error, :grant_does_not_cover} -> {:error, {:grant_does_not_cover, goal_id}}
+      {:error, _} -> {:error, {:non_human_identity, %{"value" => identity}}}
+    end
+  end
+
+  # A grant approves the one plan its dispatch authored; it never rejects.
+  defp grant_decision(decision, goal_id, opts) do
+    cond do
+      not Shoestring.Authority.grant?(decision.decided_by) ->
+        :ok
+
+      decision.kind != "approve" ->
+        {:error, {:non_human_identity, %{"value" => decision.decided_by}}}
+
+      true ->
+        authority_check(decision.decided_by, goal_id, decision.digest, opts)
     end
   end
 

@@ -49,7 +49,7 @@ defmodule Shoestring.Cobbler.PlanCancellation do
     repo = Keyword.get(opts, :repo, Repo)
 
     with {:ok, goal_id} <- Ecto.UUID.cast(goal_id),
-         {:ok, command} <- command(attrs) do
+         {:ok, command} <- command(attrs, goal_id, opts) do
       ReservationWriter.run(repo, fn ->
         repo.transaction(
           fn ->
@@ -178,12 +178,16 @@ defmodule Shoestring.Cobbler.PlanCancellation do
     end)
   end
 
-  defp command(attrs) do
+  # A person cancels, or a person's grant cancels its own dispatch (the
+  # dispatch code passes the dispatch record as `opts[:dispatch]`).
+  defp command(attrs, goal_id, opts) do
     with {:ok, id} <- Ecto.UUID.cast(attrs[:command_id]),
          {:ok, execution_id} <- Ecto.UUID.cast(attrs[:execution_id]),
          {:ok, run_id} <- optional_uuid(attrs[:run_id]),
          by when is_binary(by) <- attrs[:requested_by],
-         true <- Regex.match?(@human, by),
+         true <-
+           Regex.match?(@human, by) or
+             Shoestring.Authority.check(by, goal_id, nil, opts) == :ok,
          reason when is_binary(reason) <- attrs[:reason],
          reason = String.trim(reason),
          true <- reason != "" and String.length(reason) <= 2000 do

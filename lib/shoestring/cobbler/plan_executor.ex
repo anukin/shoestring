@@ -1881,6 +1881,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
   defp profile_instructions(nil), do: ""
 
+  defp profile_instructions(%{"dispatch_id" => _} = profile),
+    do: "\nCoordinator brief:\n" <> profile["instructions"]
+
   defp profile_instructions(profile),
     do: "\nSaved agent instructions:\n" <> profile["instructions"]
 

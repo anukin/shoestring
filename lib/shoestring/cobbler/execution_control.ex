@@ -87,7 +87,7 @@ defmodule Shoestring.Cobbler.ExecutionControl do
 
   def start(goal_id, attrs, opts \\ []) do
     with {:ok, path} <- repository(attrs[:repository_path]),
-         {:ok, by} <- human(attrs[:requested_by]) do
+         {:ok, by} <- requester(attrs[:requested_by], goal_id, opts) do
       attrs = Map.merge(attrs, %{repository_path: path, requested_by: by})
 
       Repo.transaction(
@@ -265,6 +265,19 @@ defmodule Shoestring.Cobbler.ExecutionControl do
   end
 
   defp human(_), do: {:error, :human_execution_identity_required}
+
+  # A person, or a person's grant starting its own dispatch: the dispatch
+  # code passes the dispatch record that ties this goal to the grant.
+  defp requester(by, goal_id, opts) do
+    if Shoestring.Authority.grant?(by) do
+      case Shoestring.Authority.check(by, goal_id, nil, opts) do
+        :ok -> {:ok, by}
+        {:error, _} -> {:error, :human_execution_identity_required}
+      end
+    else
+      human(by)
+    end
+  end
 
   defp repository(path) when is_binary(path) and byte_size(path) > 0 do
     with true <- Shoestring.Harness.Contract.safe_term?(path),
