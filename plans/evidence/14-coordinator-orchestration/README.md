@@ -61,3 +61,19 @@ prompt) are not kept.
 UNVERIFIED: the interactive start `shoestring chat` uses (`claude`, `codex`
 and `opencode` with no prompt) takes the same flags and configuration, but
 was not run against the capture server.
+
+## Offline explorer checks, 2026-10-26
+
+`Shoestring.Dispatches.Explore.ClaudeHeadless` and `.CodexExec` were run
+through their real code against `capture_server.py`. A wrapper executable
+gave each CLI a scratch home, a dummy key and the local address; Codex got
+a `model_providers.capture` entry. No model was called.
+
+| CLI | Read from the request | Result |
+| --- | --- | --- |
+| Claude Code 2.1.310 | `tools`, `output_config` | `Glob`, `Grep`, `Read` and `StructuredOutput` only; effort `low` as given; the brief present |
+| Codex 0.164.0, `gpt-5.1-codex` | `tools`, `reasoning`, `text.format`, the environment message | `exec_command`, `write_stdin`, `request_user_input` (web search, images, multi-agent and goals off); effort `low`; `json_schema`; "`sandbox_mode` is `read-only`" and "Network access is restricted" |
+| Codex 0.164.0, `gpt-6-luna` | `tools` | none: under the stand-in provider Codex has no metadata for that model. With the real provider its catalog has it; UNVERIFIED |
+
+`request_user_input` cannot be switched off in 0.164.0. An explorer that
+calls it fails as `explorer_used_tools`, closed.

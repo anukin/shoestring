@@ -11,6 +11,10 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       [--accept TEXT]... [--gate NAME]... [--test PATH]... [--attempts N]
       [--minutes M] [--batch LABEL --batch-size N] [--session ID]
       [--request-id ID] [--repo PATH] [--dry-run] [--json]
+  shoestring dispatch --purpose explore --worker PROVIDER:MODEL --title TEXT
+      --brief FILE [--effort LEVEL] [common options]
+  shoestring dispatch --purpose review --of DISPATCH --worker PROVIDER:MODEL
+      --title TEXT --brief FILE [common options]
 
   For a coordinator (Claude Code, Codex or opencode) acting under the grant
   a person gave its session (`shoestring grant`). The task runs as a
@@ -34,8 +38,17 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   the same dispatch. A dispatch the grant does not cover is refused and
   nothing is queued. `--dry-run` checks the grant and the plan and records
   nothing; it also shows the advice for the worker and its provider's
-  capacity outlook (`shoestring capacity`). Only IMPLEMENT is available so far. Output is JSON on stdout;
+  capacity outlook (`shoestring capacity`). Output is JSON on stdout;
   follow it with `shoestring wait` and `shoestring runs show`.
+
+  EXPLORE answers the brief from a private copy of the repository at its
+  `HEAD`, read-only and without network, in one call to WORKER: `runs show`
+  then has a report of findings, each citing files and lines, and open
+  questions. REVIEW has WORKER, a model of another vendor than the one that
+  wrote it, review the completed IMPLEMENT dispatch DISPATCH of this session:
+  its diff from its base, its contract and its checks. The findings' rules,
+  not the reviewer, decide `approved` or `changes_requested`. Neither
+  changes anything; each needs the grant to allow its purpose and model.
   """
 
   @switches [
@@ -45,6 +58,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     brief: :string,
     effort: :string,
     reviewer: :string,
+    of: :string,
     file: :keep,
     stay_out: :keep,
     accept: :keep,
@@ -139,6 +153,20 @@ defmodule Shoestring.CLI.Commands.Dispatch do
 
     brief = read_brief!(Command.expand(opts[:brief], context))
 
+    cond do
+      opts[:purpose] == "review" and is_nil(opts[:of]) ->
+        Refusal.refuse!("A review needs --of DISPATCH, the completed IMPLEMENT to review")
+
+      opts[:purpose] != "review" and opts[:of] ->
+        Refusal.refuse!("--of is only for --purpose review")
+
+      opts[:purpose] in ["explore", "review"] and opts[:reviewer] ->
+        Refusal.refuse!("--reviewer is only for --purpose implement")
+
+      true ->
+        :ok
+    end
+
     {reviewer_provider, reviewer_model} =
       case opts[:reviewer] && String.split(opts[:reviewer], ":", parts: 2) do
         nil -> {nil, nil}
@@ -156,6 +184,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       reviewer_model: reviewer_model,
       title: opts[:title],
       brief: brief,
+      target: opts[:of],
       repository: Command.expand(opts[:repo], context) || context.cwd,
       files: Keyword.get_values(opts, :file),
       stay_out: Keyword.get_values(opts, :stay_out),
@@ -196,7 +225,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
              request.model,
              request.title,
              request.brief
-           ],
+           ] ++ if(request.target, do: [request.target], else: []),
            <<0>>
          )
        )
@@ -217,6 +246,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         if(dispatch.reviewer_provider,
           do: "#{dispatch.reviewer_provider}:#{dispatch.reviewer_model}"
         ),
+      "of" => if(dispatch.purpose == "review", do: dispatch.plan["target_dispatch_id"]),
       "title" => dispatch.title,
       "state" => Dispatches.state(dispatch),
       "goal_id" => dispatch.goal_id,
@@ -261,6 +291,28 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     do: "#{provider} cannot run tasks."
 
   def message({:harness_cannot, provider, :review}, _request), do: "#{provider} cannot review."
+
+  def message({:harness_cannot, provider, :explore}, _request),
+    do: "#{provider} cannot explore; use Claude Code or Codex."
+
+  def message(:review_target_not_found, _request),
+    do: "No such dispatch in this session to review."
+
+  def message(:review_target_not_implement, _request),
+    do: "Only an IMPLEMENT dispatch can be reviewed."
+
+  def message({:review_target_not_completed, state}, _request),
+    do: "That dispatch is #{state}; only a completed IMPLEMENT can be reviewed."
+
+  def message(:review_target_other_repository, _request),
+    do: "That dispatch is in another repository."
+
+  def message(reason, _request)
+      when reason in [:review_target_unavailable, :review_worktree_missing],
+      do: "The reviewed dispatch's result can no longer be read (#{reason})."
+
+  def message(:review_packet_too_large, _request),
+    do: "The change is too large to review in one call (its diff is over 200 kB)."
 
   def message({:reviewer_same_vendor, reviewer}, request),
     do:

@@ -780,6 +780,54 @@ authorized by this milestone.
   and the grant then pre-confirms the next attempt. That attempt's admission
   would have asked anyway.
 
+- 2026-10-26, package D: EXPLORE and REVIEW. Each is one model call made by
+  the service (`Shoestring.Dispatches.Calls`, `CallWorker`, a
+  `coordinator_dispatch_calls` row), not an Elf run. It is admitted as a
+  `read_only` call of its provider like iteration 8's reviewer. Claude and
+  Codex are conservative candidates, so a call is held until a grant
+  pre-approval confirms it, or deferred (`waiting`) on a breached reserve.
+  It runs once, within four minutes for explore and three for review, under
+  `Oban.Lifeline`'s five-minute rescue. A call found running when its job
+  restarts fails as `call_lost`; it is never resent. Cancelling a running
+  call discards its result.
+  - EXPLORE: Claude gets only `Read`, `Grep` and `Glob`, plus the Elf safety
+    flags; Codex gets its `read-only` sandbox, with web search and other
+    features off. Both run in a private worktree at the dispatch's base, and
+    a worktree that changed fails the call (`explorer_wrote`). The report is
+    checked by `Explore.validate/2`:
+    - a citation of a file the copy does not track, or of a line past its
+      end, is marked `supported: false`;
+    - a report over 64 KiB fails;
+    - secret-looking text is redacted.
+  - REVIEW (`--of DISPATCH`): reviews a completed IMPLEMENT of the same
+    session and repository, with a model of another vendor. It uses
+    iteration 8's packet (diff from base, goal and task contract, checks
+    recorded at completion) and `Review.Findings`; code decides `approved`
+    or `changes_requested`.
+  - A dispatch rebuilds its call input from its own row and checks it
+    against the recorded digest, so an interrupted dispatch resumes with
+    exactly what was granted.
+
+  Tests:
+  - `dispatch_calls_test.exs`, with stand-ins:
+    - explore through hold, grant confirmation and report checks;
+    - writes, oversized reports and transport failures leave no report;
+    - deferral, a lost call, cancel;
+    - review refusals: not completed, same vendor, other session, missing
+      `--of`.
+  - The end-to-end test now has a Codex model review the Claude worker's
+    completed commit through the real job, packet and findings rules.
+
+  Offline request checks are in the evidence README. Claude's explorer is
+  offered exactly `Read`, `Grep`, `Glob` and the report tool. Codex's, with
+  a model it knows, is offered `exec_command`, `write_stdin` and
+  `request_user_input`, under "read-only" and "Network access is
+  restricted". With `gpt-6-luna` under the stand-in provider it was offered
+  no tools (no model metadata); with the real provider this is UNVERIFIED.
+  Neither explorer nor reviewer has run live.
+
+  Not yet: advice does not count these calls (they have no runs).
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

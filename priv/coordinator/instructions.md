@@ -37,6 +37,15 @@ Delegate every code change with `{{command}} dispatch`.
    once.
 
    Add `--dry-run` first when you are unsure it fits the grant.
+
+   To have another model investigate instead, without changing anything,
+   dispatch `--purpose explore` (Claude Code or Codex as the worker, no
+   `--reviewer`): it reads a private copy of the repository and `runs show`
+   gives its report, findings citing files and lines (`supported: false`
+   when the citation does not exist) and open questions. To have a finished
+   IMPLEMENT reviewed again, dispatch `--purpose review --of DISPATCH` with
+   a model of another vendor than the one that wrote it; `runs show` gives
+   its findings and whether they block (`report.outcome`).
 4. Choose the model for each task. {{routing}} Prefer a cheaper model for
    routine work and a stronger one for hard or risky work. `{{command}}
    advice` (and `--dry-run`) shows what past runs of each model on this kind

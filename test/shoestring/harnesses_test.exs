@@ -10,8 +10,8 @@ defmodule Shoestring.HarnessesTest do
   alias Shoestring.Harnesses
 
   test "each harness declares only the jobs it has a path for" do
-    assert Harnesses.capabilities("claude") == [:coordinate, :plan, :implement, :review]
-    assert Harnesses.capabilities("codex") == [:coordinate, :implement, :review]
+    assert Harnesses.capabilities("claude") == [:coordinate, :plan, :implement, :review, :explore]
+    assert Harnesses.capabilities("codex") == [:coordinate, :implement, :review, :explore]
     assert Harnesses.capabilities("opencode") == [:coordinate, :implement]
     assert Harnesses.capabilities("unknown") == []
     refute Harnesses.supports?("opencode", :review)

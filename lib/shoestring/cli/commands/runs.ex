@@ -14,7 +14,8 @@ defmodule Shoestring.CLI.Commands.Runs do
   dispatch without either) with their states. `show` adds the attempts and
   time used, what a `waiting` dispatch waits for (`waiting.until`,
   `waiting.reason`) and, once it completes, the verified commit, its checks
-  and the commands to take it. `cancel` cancels a dispatch of this session through
+  and the commands to take it; for EXPLORE and REVIEW, its call and its
+  `report`. `cancel` cancels a dispatch of this session through
   the ordinary cancellation path, which reaps everything it started; other
   dispatches keep running. Output is JSON on stdout.
   """
@@ -70,7 +71,7 @@ defmodule Shoestring.CLI.Commands.Runs do
       end
 
     result =
-      if summary["state"] == "completed" do
+      if summary["state"] == "completed" and dispatch.purpose == "implement" do
         case Result.fetch(dispatch.goal_id) do
           {:ok, result} ->
             %{
@@ -86,20 +87,66 @@ defmodule Shoestring.CLI.Commands.Runs do
         end
       end
 
+    call = Dispatches.Calls.get(dispatch.id)
+
     summary
     |> Map.merge(status)
+    |> Map.merge(call_detail(call))
     |> Map.put("result", result)
     |> Map.put(
       "next",
-      case summary["state"] do
-        "needs_you" -> "A person decides: shoestring follow #{dispatch.goal_id}"
-        "held" -> "A person confirms the usage: shoestring follow #{dispatch.goal_id}"
-        "waiting" -> waiting_next(dispatch, status["waiting"])
-        "completed" -> "Take the commit with the commands in result.take"
-        _ -> nil
-      end
+      next(summary["state"], dispatch, call, Map.merge(status, call_detail(call)))
     )
   end
+
+  # An EXPLORE or REVIEW dispatch's one call (`Shoestring.Dispatches.Calls`).
+  defp call_detail(nil), do: %{}
+
+  defp call_detail(call) do
+    %{
+      "call" => %{
+        "state" => call.state,
+        "error" => call.error_code,
+        "output_tokens" => call.output_tokens,
+        "confirmed_by" => call.confirmed_by,
+        "admission" => call.admission && Map.take(call.admission, ["result", "reason_code"])
+      },
+      "report" => Dispatches.Calls.report(call),
+      "waiting" =>
+        if(Dispatches.Calls.state(call) == "waiting",
+          do: %{"until" => call.defer_until, "reason" => call.admission["reason_code"]}
+        )
+    }
+  end
+
+  defp next("needs_you", dispatch, _call, _detail),
+    do: "A person decides: shoestring follow #{dispatch.goal_id}"
+
+  defp next("held", dispatch, %Dispatches.Call{}, _detail),
+    do:
+      "Its provider's usage needs a confirmation and the grant has no unread-usage " <>
+        "pre-approval left. A person allows more, in a terminal: shoestring grants extend " <>
+        "#{dispatch.grant_id} --unread-usage 1; the next wait or runs show then confirms it"
+
+  defp next("held", dispatch, nil, _detail),
+    do: "A person confirms the usage: shoestring follow #{dispatch.goal_id}"
+
+  defp next("waiting", dispatch, _call, detail), do: waiting_next(dispatch, detail["waiting"])
+
+  defp next("completed", %{purpose: "implement"}, _call, _detail),
+    do: "Take the commit with the commands in result.take"
+
+  defp next("completed", %{purpose: "review"}, _call, %{"report" => %{"outcome" => outcome}}),
+    do:
+      if(outcome == "changes_requested",
+        do: "Blocking findings: dispatch an IMPLEMENT that addresses them, or tell the person",
+        else: "Approved: no supported blocking finding"
+      )
+
+  defp next("failed", _dispatch, call, _detail),
+    do: "The call failed (#{call.error_code}); dispatch it again with another --request-id"
+
+  defp next(_state, _dispatch, _call, _detail), do: nil
 
   defp waiting_next(dispatch, %{"until" => until}),
     do:

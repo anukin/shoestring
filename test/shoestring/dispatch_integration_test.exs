@@ -53,6 +53,7 @@ defmodule Shoestring.DispatchIntegrationTest do
 
       restart!()
       _ = ModelCatalog.add("claude", "opus")
+      _ = ModelCatalog.add("codex", "gpt-6-luna")
       %{log: log}
     end
 
@@ -191,6 +192,48 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert Enum.any?(shown["result"]["checks"], &(&1["exit_status"] == 0))
       assert Grants.get(grant.id).unread_usage_used == 1
 
+      # A Codex model reviews the completed change: its diff from the base,
+      # its contract and its checks. Only the reviewer is a stand-in.
+      Application.put_env(:shoestring, :dispatch_calls,
+        adapters: %{{"review", "codex"} => Shoestring.Test.ReviewStandIn},
+        adapter_opts: [test_pid: self()]
+      )
+
+      {:ok, review, :recorded} =
+        Dispatches.create(%{
+          session_id: "s1",
+          request_id: "r2",
+          purpose: "review",
+          provider: "codex",
+          model: "gpt-6-luna",
+          title: "Review the sum",
+          brief: "REVIEW - check add()\n",
+          repository: source,
+          target: dispatch.id
+        })
+
+      call_job =
+        Repo.one!(from j in Oban.Job, where: j.worker == "Shoestring.Dispatches.CallWorker")
+
+      assert {:snooze, 30} = Shoestring.Dispatches.CallWorker.perform(call_job)
+      assert Dispatches.advance(review) == :confirmed
+      assert :ok = Shoestring.Dispatches.CallWorker.perform(call_job)
+
+      assert_received {:review_input, input, packet}
+      assert input["model"] == "gpt-6-luna"
+      assert packet["base_commit"] == base
+      assert packet["commit"] == commit
+      assert packet["diff"] =~ "+    return a + b"
+      assert packet["task"]["id"] == "dispatch"
+      assert [%{"gate" => "python_unittest", "exit_status" => 0}] = packet["gates"]
+
+      reviewed = runs_show!(review.id)
+      assert reviewed["state"] == "completed"
+      assert reviewed["of"] == dispatch.id
+      assert %{"outcome" => "changes_requested", "blocking_count" => 1} = reviewed["report"]
+      assert reviewed["next"] =~ "Blocking findings"
+      assert Grants.get(grant.id).unread_usage_used == 2
+
       # The user's checkout is untouched until they take the commit.
       assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
       assert git!(source, ["status", "--porcelain"]) == ""
@@ -311,13 +354,13 @@ defmodule Shoestring.DispatchIntegrationTest do
           %{
             session_id: session,
             repository_root: root,
-            models: ["claude:opus"],
-            purposes: ["implement"],
-            max_dispatches: 2,
+            models: ["claude:opus", "codex:gpt-6-luna"],
+            purposes: ["implement", "review"],
+            max_dispatches: 3,
             max_parallel: 1,
             max_total_seconds: 3_600,
             max_dispatch_seconds: 1_800,
-            unread_usage: 1
+            unread_usage: 2
           },
           "human:operator"
         )

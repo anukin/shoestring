@@ -7,7 +7,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
 
   The child runs in its own process group (`Shoestring.Elves.PortRunner`)
   from an empty working directory, so it sees no repository and no project
-  instructions. This module enforces its own deadline (the caller's timeout
+  instructions. An EXPLORE call (`Shoestring.Dispatches.Explore.ClaudeHeadless`)
+  instead names read-only `:tools`, its `:workdir` (a private copy of the
+  repository) and `:extra_args`. This module enforces its own deadline (the caller's timeout
   minus a margin, at least one second) and kills the whole group on overrun;
   killing the calling task alone could leave a `claude` process spending
   quota. `CLAUDE_CODE_MAX_OUTPUT_TOKENS` carries the charged output allowance,
@@ -35,14 +37,21 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
           required(:prompt) => String.t(),
           required(:max_output_tokens) => pos_integer(),
           required(:timeout_ms) => pos_integer(),
-          required(:scratch_prefix) => String.t()
+          required(:scratch_prefix) => String.t(),
+          optional(:tools) => String.t(),
+          optional(:workdir) => Path.t(),
+          optional(:extra_args) => [String.t()]
         }
 
   @spec call(input()) ::
           {:ok, %{json: String.t(), output_tokens: non_neg_integer()}} | {:error, atom()}
   def call(input) do
-    workdir = Path.join(System.tmp_dir!(), "#{input.scratch_prefix}-#{Ecto.UUID.generate()}")
-    File.mkdir_p!(workdir)
+    workdir =
+      Map.get_lazy(input, :workdir, fn ->
+        dir = Path.join(System.tmp_dir!(), "#{input.scratch_prefix}-#{Ecto.UUID.generate()}")
+        File.mkdir_p!(dir)
+        dir
+      end)
 
     argv = [
       input.endpoint,
@@ -51,15 +60,21 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
       "json",
       "--model",
       input.model,
-      "--tools=",
+      "--tools=" <> Map.get(input, :tools, ""),
       "--strict-mcp-config",
-      "--no-session-persistence",
-      "--json-schema",
-      Jason.encode!(input.schema),
-      "--system-prompt",
-      input.system_prompt,
-      input.prompt
+      "--no-session-persistence"
     ]
+
+    argv =
+      argv ++
+        Map.get(input, :extra_args, []) ++
+        [
+          "--json-schema",
+          Jason.encode!(input.schema),
+          "--system-prompt",
+          input.system_prompt,
+          input.prompt
+        ]
 
     env = [
       {"CLAUDE_CODE_MAX_OUTPUT_TOKENS", Integer.to_string(input.max_output_tokens)},

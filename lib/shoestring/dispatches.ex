@@ -26,14 +26,16 @@ defmodule Shoestring.Dispatches do
 
   alias Shoestring.{AgentProfiles, Authority, Grants, Harnesses, ModelCatalog, Repo}
   alias Shoestring.Cobbler.{ExecutionControl, ExecutionProfile, Intake, PlanContract, Plans}
-  alias Shoestring.Dispatches.Dispatch
+  alias Shoestring.Dispatches.{Call, Calls, Dispatch}
   alias Shoestring.Grants.Grant
   alias Shoestring.Trajectory.Goal
 
   @task_id "dispatch"
   @max_brief 16_000
   @request_id ~r/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,99}\z/
-  @available ~w(implement)
+  @available ~w(implement explore review)
+  @calls ~w(explore review)
+  @capability %{"implement" => :implement, "explore" => :explore, "review" => :review}
 
   @type request :: %{
           required(:session_id) => String.t(),
@@ -63,7 +65,8 @@ defmodule Shoestring.Dispatches do
 
   @doc """
   Validates `request` and checks it against the session's grant without
-  recording anything. Returns the plan it would run and the grant's room.
+  recording anything. Returns the plan it would run (an EXPLORE or REVIEW
+  call's contract) and the grant's room.
   """
   def dry_run(request) do
     with {:ok, prepared} <- prepare(request),
@@ -72,7 +75,7 @@ defmodule Shoestring.Dispatches do
 
       {:ok,
        %{
-         "advice" => advice(prepared),
+         "advice" => if(request.purpose == "implement", do: advice(prepared)),
          "would_dispatch" => Grants.check(grant, check_request(prepared), usage) == :ok,
          "grant_check" => check_result(Grants.check(grant, check_request(prepared), usage)),
          "grant" => room(grant, usage),
@@ -148,33 +151,87 @@ defmodule Shoestring.Dispatches do
          {:ok, title} <- text(request.title, :title, 200),
          {:ok, brief} <- brief(request.brief),
          :ok <- worker(request),
-         :ok <- reviewer(request),
+         :ok <- batch(request),
+         {:ok, facts} <- Intake.repository(request.repository) do
+      prepared = %{
+        request: request,
+        title: title,
+        brief: brief,
+        root: facts.root,
+        head: facts.head
+      }
+
+      prepare(request.purpose, prepared, facts)
+    end
+  end
+
+  defp prepare("implement", %{request: request} = prepared, facts) do
+    with :ok <- reviewer(request),
          {:ok, attempts} <- int(Map.get(request, :attempts, 1), :attempts, 1..20),
          {:ok, seconds} <- int(Map.get(request, :seconds, 1800), :seconds, 60..14_400),
-         :ok <- batch(request),
-         {:ok, facts} <- Intake.repository(request.repository),
          {:ok, gates} <-
            Intake.gates(facts,
              gates: Map.get(request, :gates, []),
              tests: Map.get(request, :tests, [])
            ),
          {:ok, goal} <-
-           Intake.goal_contract(title, facts, gates,
+           Intake.goal_contract(prepared.title, facts, gates,
              constraints: Enum.map(Map.get(request, :stay_out, []), &"Do not change #{&1}.")
            ),
-         {:ok, contract} <- PlanContract.new(plan(goal, title, request, gates, attempts, seconds)) do
-      {:ok,
-       %{
-         request: request,
-         title: title,
-         brief: brief,
-         root: facts.root,
-         head: facts.head,
-         contract: contract,
-         attempts: attempts,
-         seconds: seconds
-       }}
+         {:ok, contract} <-
+           PlanContract.new(plan(goal, prepared.title, request, gates, attempts, seconds)) do
+      {:ok, Map.merge(prepared, %{contract: contract, attempts: attempts, seconds: seconds})}
     end
+  end
+
+  # EXPLORE and REVIEW are one model call each (`Shoestring.Dispatches.Calls`):
+  # the dispatch records the call's contract instead of a plan.
+  defp prepare("explore", %{request: request} = prepared, _facts) do
+    input = Calls.explore_input(request, prepared.title, prepared.brief, prepared.head)
+    {:ok, call(prepared, input)}
+  end
+
+  defp prepare("review", %{request: request} = prepared, _facts) do
+    with {:ok, target} <- review_target(request, prepared),
+         {:ok, input} <- Calls.review_input(request, target) do
+      {:ok, call(prepared, input)}
+    end
+  end
+
+  defp call(prepared, input) do
+    Map.merge(prepared, %{
+      contract: %{content: Calls.contract(input), digest: PlanContract.digest(input)},
+      attempts: 1,
+      seconds: Calls.seconds(input["purpose"])
+    })
+  end
+
+  # A REVIEW reviews a completed IMPLEMENT dispatch of the same session and
+  # repository, with a model of another vendor than the one that wrote it.
+  defp review_target(request, prepared) do
+    with id when is_binary(id) <-
+           Map.get(request, :target) || {:error, {:invalid_dispatch, :target}},
+         %Dispatch{} = target <- get(id) || {:error, :review_target_not_found},
+         true <- target.session_id == request.session_id || {:error, :review_target_not_found},
+         true <- target.purpose == "implement" || {:error, :review_target_not_implement},
+         :ok <- review_vendor(request, target),
+         "completed" <- state(target),
+         true <-
+           target.repository_root == prepared.root || {:error, :review_target_other_repository},
+         true do
+      {:ok, target}
+    else
+      state when is_binary(state) -> {:error, {:review_target_not_completed, state}}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp review_vendor(request, target) do
+    reviewer = Harnesses.vendor(request.provider, request.model)
+
+    if reviewer == nil or reviewer == Harnesses.vendor(target.provider, target.model),
+      do: {:error, {:reviewer_same_vendor, "#{request.provider}:#{request.model}"}},
+      else: :ok
   end
 
   defp request_id(id) when is_binary(id),
@@ -227,8 +284,8 @@ defmodule Shoestring.Dispatches do
       provider not in Harnesses.ids() ->
         {:error, {:invalid_dispatch, :worker}}
 
-      not Harnesses.supports?(provider, :implement) ->
-        {:error, {:harness_cannot, provider, :implement}}
+      not Harnesses.supports?(provider, @capability[request.purpose]) ->
+        {:error, {:harness_cannot, provider, @capability[request.purpose]}}
 
       model not in ModelCatalog.enabled(provider) ->
         {:error, {:model_not_enabled, "#{provider}:#{model}"}}
@@ -362,7 +419,7 @@ defmodule Shoestring.Dispatches do
             max_duration_seconds: prepared.seconds,
             batch_label: Map.get(request, :batch_label),
             batch_size: Map.get(request, :batch_size),
-            goal_id: Ecto.UUID.generate(),
+            goal_id: if(request.purpose == "implement", do: Ecto.UUID.generate()),
             plan: prepared.contract.content,
             plan_digest: prepared.contract.digest,
             state: "creating",
@@ -378,6 +435,41 @@ defmodule Shoestring.Dispatches do
     |> case do
       {:ok, dispatch} -> start(dispatch, opts, :recorded)
       error -> error
+    end
+  end
+
+  # A call's input is rebuilt from the recorded dispatch and must match the
+  # digest recorded with it, so a dispatch interrupted part-way resumes with
+  # exactly what was granted.
+  defp start(%Dispatch{purpose: purpose} = dispatch, opts, outcome) when purpose in @calls do
+    request = %{provider: dispatch.provider, model: dispatch.model, effort: dispatch.effort}
+
+    input =
+      case purpose do
+        "explore" ->
+          {:ok,
+           Calls.explore_input(request, dispatch.title, dispatch.brief, dispatch.base_revision)}
+
+        "review" ->
+          case get(dispatch.plan["target_dispatch_id"]) do
+            %Dispatch{} = target -> Calls.review_input(request, target)
+            nil -> {:error, :review_target_not_found}
+          end
+      end
+
+    with {:ok, input} <- input,
+         true <-
+           PlanContract.digest(input) == dispatch.plan_digest || {:error, :call_input_changed},
+         :ok <- Calls.start(dispatch, input, Keyword.take(opts, [:oban])) do
+      dispatch = dispatch |> Ecto.Changeset.change(state: "started") |> Repo.update!()
+      {:ok, dispatch, outcome}
+    else
+      {:error, reason} ->
+        dispatch
+        |> Ecto.Changeset.change(state: "failed", error: error_code(reason))
+        |> Repo.update!()
+
+        {:error, reason}
     end
   end
 
@@ -532,6 +624,14 @@ defmodule Shoestring.Dispatches do
   def state(%Dispatch{state: "creating"}, _status), do: "starting"
   def state(%Dispatch{state: "failed"}, _status), do: "failed_to_start"
 
+  def state(%Dispatch{state: "started", purpose: purpose} = dispatch, _status)
+      when purpose in @calls do
+    case Calls.get(dispatch.id) do
+      %Call{} = call -> Calls.state(call)
+      nil -> "starting"
+    end
+  end
+
   def state(%Dispatch{state: "started"} = dispatch, status) do
     case status.(dispatch.goal_id) do
       {:ok, %{cancelled?: true}} ->
@@ -589,6 +689,20 @@ defmodule Shoestring.Dispatches do
   repeats the same confirmation.
   """
   def advance(dispatch, status \\ &ExecutionControl.status/1)
+
+  def advance(%Dispatch{state: "started", purpose: purpose} = dispatch, _status)
+      when purpose in @calls do
+    with %Call{state: "held", confirmed_by: nil} = call <- Calls.get(dispatch.id),
+         %Grant{revoked_at: nil} = grant <- Grants.get(dispatch.grant_id) do
+      spend(dispatch, grant, %{
+        kind: :call,
+        key: "call:#{call.id}:#{call.admission["decision_id"]}",
+        call: call
+      })
+    else
+      _ -> :none
+    end
+  end
 
   def advance(%Dispatch{state: "started"} = dispatch, status) do
     with {:ok, current} <- status.(dispatch.goal_id),
@@ -670,6 +784,9 @@ defmodule Shoestring.Dispatches do
     )
   end
 
+  defp confirm(dispatch, %{kind: :call, call: call}),
+    do: Calls.confirm(call, Authority.grant_identity(dispatch.grant_id))
+
   defp confirm(dispatch, %{kind: :review} = hold) do
     Shoestring.Cobbler.PlanReview.confirm(
       dispatch.goal_id,
@@ -693,7 +810,7 @@ defmodule Shoestring.Dispatches do
   end
 
   @doc "Whether `state` ends what a coordinator waits for."
-  def settled?(state), do: state in ~w(completed cancelled needs_you held failed_to_start)
+  def settled?(state), do: state in ~w(completed cancelled needs_you held failed failed_to_start)
 
   @doc """
   The execution binding a dispatch fixes for `role` (only the `Worker`): the
@@ -743,6 +860,14 @@ defmodule Shoestring.Dispatches do
   groups through the ordinary cancellation path. Options: `:oban`.
   """
   def cancel(dispatch, reason, opts \\ [])
+
+  def cancel(%Dispatch{state: "started", purpose: purpose} = dispatch, _reason, _opts)
+      when purpose in @calls do
+    case Calls.get(dispatch.id) do
+      %Call{} = call -> Calls.cancel(call)
+      nil -> {:error, :not_started}
+    end
+  end
 
   def cancel(%Dispatch{state: "started"} = dispatch, reason, opts) do
     ExecutionControl.cancel(

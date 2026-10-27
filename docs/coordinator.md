@@ -136,6 +136,22 @@ none left the dispatch stays `held` for you. So a grant whose Worker or
 Reviewer is a Claude model needs `--unread-usage` at least the number of
 Claude tasks and reviews you want to start without being asked.
 
+EXPLORE and REVIEW are one model call each, made by the service, not a
+worker run. `dispatch --purpose explore` has Claude Code (only its `Read`,
+`Grep` and `Glob` tools) or Codex (its read-only sandbox, without network or
+web search) read a private copy of the repository at `HEAD` and answer the
+brief with a report: a summary, findings each citing files and lines, and
+open questions. Code checks the report: a citation of a file the copy does
+not track, or of a line past its end, is marked `supported: false`; a report
+over 64 KiB fails; secret-looking text is redacted; and a copy that changed
+fails the call. `dispatch --purpose review --of DISPATCH` has a model of
+another vendor review a completed IMPLEMENT of the session with iteration
+8's packet (its diff from its base, its contract and its checks) and
+findings rules: `report.outcome` is `changes_requested` exactly when a
+supported blocking finding remains. Like every Claude or Codex call they
+are held until confirmed, which a grant's `--unread-usage` pre-approval can
+do; `runs show` has the report or the error. Neither changes anything.
+
 A dispatch deferred until a usage window resets (a reserve breached, or a
 worker that stopped at its limit) is `waiting`: `runs show` gives the reset
 time and the reason (`waiting.until`, `waiting.reason`), and it starts again

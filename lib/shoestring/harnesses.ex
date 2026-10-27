@@ -10,15 +10,17 @@ defmodule Shoestring.Harnesses do
     * `:plan` - drafts a plan through Shoestring's tool-free planner call.
     * `:implement` - runs a plan task as a sandboxed Elf.
     * `:review` - reviews a task through Shoestring's tool-free review call.
+    * `:explore` - answers a brief from a read-only copy of the repository in
+      one call (`Shoestring.Dispatches.Explore`).
 
-  `:plan`, `:implement` and `:review` each name the module that provides
+  `:plan`, `:implement`, `:review` and `:explore` each name the module that provides
   them, so the table cannot claim a capability without an implementation.
   """
 
   alias Shoestring.Cobbler.{Planner, Review}
   alias Shoestring.Harness.{ClaudeHeadless, CodexAppServer, OpencodeAcp}
 
-  @capabilities [:coordinate, :plan, :implement, :review]
+  @capabilities [:coordinate, :plan, :implement, :review, :explore]
   @role_capabilities %{
     "Coordinator" => :coordinate,
     "Worker" => :implement,
@@ -49,13 +51,15 @@ defmodule Shoestring.Harnesses do
         coordinate: true,
         plan: Planner.ClaudeHeadless,
         implement: ClaudeHeadless,
-        review: Review.ClaudeHeadless
+        review: Review.ClaudeHeadless,
+        explore: Shoestring.Dispatches.Explore.ClaudeHeadless
       },
       "codex" => %{
         name: "Codex",
         coordinate: true,
         implement: CodexAppServer,
-        review: Review.CodexExec
+        review: Review.CodexExec,
+        explore: Shoestring.Dispatches.Explore.CodexExec
       },
       "opencode" => %{name: "opencode", coordinate: true, implement: OpencodeAcp}
     }

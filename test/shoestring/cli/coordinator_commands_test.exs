@@ -192,7 +192,7 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
       Dispatch.run(dispatch_args(ctx, ["--worker", "codex:gpt-6.1-sol"]), context(ctx))
     end
 
-    assert_raise Refusal, ~r/REVIEW dispatches are not available yet/, fn ->
+    assert_raise Refusal, ~r/A review needs --of DISPATCH/, fn ->
       Dispatch.run(dispatch_args(ctx, ["--purpose", "review"]), context(ctx))
     end
 
@@ -261,6 +261,27 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
 
     # It still holds its place among the grant's dispatches at once.
     assert %{running: 1} = Dispatches.usage(Shoestring.Grants.active("s1"))
+  end
+
+  test "dispatch takes an explore; --of and --reviewer only where they apply", ctx do
+    grant!(ctx)
+
+    explore =
+      ["--purpose", "explore", "--worker", "codex:gpt-6-luna", "--title", "Why the test fails"] ++
+        ["--brief", ctx.brief]
+
+    Dispatch.run(explore, context(ctx))
+
+    assert %{"purpose" => "explore", "state" => "queued", "of" => nil, "outcome" => "recorded"} =
+             json!()
+
+    assert_raise Refusal, ~r/--of is only for --purpose review/, fn ->
+      Dispatch.run(explore ++ ["--of", Ecto.UUID.generate()], context(ctx))
+    end
+
+    assert_raise Refusal, ~r/--reviewer is only for --purpose implement/, fn ->
+      Dispatch.run(explore ++ ["--reviewer", "claude:opus"], context(ctx))
+    end
   end
 
   test "wait returns on the first settled dispatch, or times out with exit 3", ctx do

@@ -115,7 +115,7 @@ defmodule Shoestring.DispatchesTest do
   test "every grant limit refuses before anything is recorded", ctx do
     refusals = [
       {%{model: "opus", provider: "claude"}, {:error, {:outside_grant, :model}}},
-      {%{purpose: "review"}, {:error, {:purpose_not_available, "review"}}},
+      {%{purpose: "review"}, {:error, {:invalid_dispatch, :target}}},
       {%{attempts: 4}, {:error, {:outside_grant, :dispatches}}},
       {%{seconds: 3_601}, {:error, {:outside_grant, :dispatch_duration}}},
       {%{session_id: "nobody"}, {:error, :no_grant}}
