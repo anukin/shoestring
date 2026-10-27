@@ -441,6 +441,81 @@ defmodule Shoestring.DispatchesTest do
     assert by == Authority.grant_identity(ctx.grant.id)
   end
 
+  test "cancelling one dispatch leaves its sibling queued and uncancelled", ctx do
+    {:ok, first, :recorded} = Dispatches.create(request(ctx, %{request_id: "a"}))
+    {:ok, sibling, :recorded} = Dispatches.create(request(ctx, %{request_id: "b"}))
+    assert {:ok, _} = Dispatches.cancel(first, "Superseded.")
+
+    summary = &Shoestring.Cobbler.PlanCancellation.summary(Repo, &1.goal_id, &1.execution_id)
+    assert [_] = summary.(first)
+    assert [] = summary.(sibling)
+    assert Dispatches.state(sibling) == "queued"
+  end
+
+  test "a dispatch interrupted before recording its start resumes into the same execution",
+       ctx do
+    {:ok, dispatch, :recorded} = Dispatches.create(request(ctx))
+    # As if the process stopped after starting the execution, before
+    # recording that it had.
+    dispatch |> Ecto.Changeset.change(state: "creating", execution_id: nil) |> Repo.update!()
+    assert Dispatches.state(Dispatches.get(dispatch.id)) == "starting"
+
+    assert {:ok, resumed, :replayed} = Dispatches.create(request(ctx))
+    assert resumed.id == dispatch.id
+    assert resumed.state == "started"
+    assert resumed.execution_id == dispatch.execution_id
+    assert [_job] = jobs()
+    assert {:ok, %{consistent?: true, divergences: []}} = Plans.rebuild(dispatch.goal_id)
+  end
+
+  # Regression: the store refuses secrets, so a title or brief with one
+  # failed the dispatch (on 74190b7 this test fails at the first assertion:
+  # the goal statement "must not contain secrets"; a brief alone failed at
+  # `cobbler.plan.execution.requested`).
+  test "secret-looking text in the title, brief or cancel reason is redacted; the rest is kept",
+       ctx do
+    brief =
+      "IMPLEMENT - make add() return the sum\n" <>
+        "The fixture uses api_key=sk-test-abcdef1234567890; send authorization: Bearer abc.def\n" <>
+        "Contract: test/test_calc.py passes.\n"
+
+    title = "Make add return the sum, token: hunter2"
+    secret_request = request(ctx, %{brief: brief, title: title})
+
+    assert {:ok, %Dispatch{state: "started"} = dispatch, :recorded} =
+             Dispatches.create(secret_request)
+
+    for text <- [dispatch.brief, dispatch.title] do
+      refute Shoestring.Harness.Security.secret_value?(text)
+      refute text =~ "sk-test-abcdef"
+      refute text =~ "abc.def"
+      refute text =~ "hunter2"
+    end
+
+    assert dispatch.brief =~ "IMPLEMENT - make add() return the sum\nThe fixture uses "
+    assert dispatch.brief =~ "\nContract: test/test_calc.py passes.\n"
+    assert dispatch.title =~ "Make add return the sum, "
+
+    # The worker reads the redacted brief, and a retry replays the dispatch.
+    assert {:ok, %{execution: execution}} = ExecutionControl.status(dispatch.goal_id)
+    assert execution.agent_profile["instructions"] == dispatch.brief
+    assert {:ok, ^dispatch, :replayed} = Dispatches.create(secret_request)
+
+    assert {:ok, _} = Dispatches.cancel(dispatch, "Superseded; password=hunter2 was wrong.")
+
+    assert [reason] =
+             Repo.all(
+               from e in Shoestring.Trajectory.TrajectoryEvent,
+                 where:
+                   e.goal_id == ^dispatch.goal_id and
+                     e.type == "cobbler.plan.cancellation.requested",
+                 select: fragment("json_extract(?, '$.reason')", e.payload)
+             )
+
+    assert reason =~ "Superseded; "
+    refute reason =~ "hunter2"
+  end
+
   test "creating, extending and revoking a grant needs a person and records each change", ctx do
     assert Grants.create(
              grant_attrs(ctx.root, %{session_id: "s2"}),

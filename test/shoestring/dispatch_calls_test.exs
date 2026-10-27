@@ -138,6 +138,22 @@ defmodule Shoestring.DispatchCallsTest do
 
     # The same request replays the same dispatch.
     assert {:ok, ^dispatch, :replayed} = Dispatches.create(explore(ctx))
+
+    # `runs log` tells the call's history from its timestamps.
+    Shoestring.CLI.Commands.Runs.run(["log", dispatch.id], %{
+      shell: Mix.Shell.Process,
+      with_repo: fn fun -> fun.(Repo) end
+    })
+
+    assert_receive {:mix_shell, :info, [json]}
+
+    assert Enum.map(Jason.decode!(json)["entries"], & &1["line"]) == [
+             "Dispatched: explore with claude:opus.",
+             "Usage confirmed by grant:#{dispatch.grant_id}.",
+             "Latest admission: admit (confirmed_unknown_capacity).",
+             "The call started.",
+             "The call completed (120 output tokens)."
+           ]
   end
 
   test "an explorer that writes, an oversized report or a failed call keeps no report", ctx do

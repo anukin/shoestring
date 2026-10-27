@@ -25,6 +25,9 @@ defmodule Shoestring.Measurement.Dataset do
 
   def version, do: @version
   def max_events, do: @max_events
+
+  @doc "The provider a run's adapter id belongs to, or nil."
+  def provider(adapter_id), do: @adapters[adapter_id]
   def encode(dataset), do: PlanContract.canonical_json(dataset) <> "\n"
 
   def digest(value),

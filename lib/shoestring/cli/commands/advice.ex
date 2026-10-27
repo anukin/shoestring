@@ -9,8 +9,9 @@ defmodule Shoestring.CLI.Commands.Advice do
   For each kind of run — harness, model, effort, purpose and task class (the
   checks its task cites) — what its finished runs looked like: the median
   and 90th-percentile tokens the harness reported, the share of first
-  attempts that were accepted, mean attempts per task and the median
-  duration. A kind needs #{Shoestring.Advice.min_runs()} finished runs before any of this
+  attempts that were accepted, mean attempts per task, the median duration
+  and, for Codex runs measured inside a collection window, the share of the
+  provider's usage window a run used. A kind needs #{Shoestring.Advice.min_runs()} finished runs before any of this
   is shown; until then it says so, with its count. Every figure carries its
   sample count and date range.
 

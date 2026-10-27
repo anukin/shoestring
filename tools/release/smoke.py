@@ -18,7 +18,8 @@ def smoke(release, state):
     state.mkdir(parents=True, exist_ok=False)
     guard = state / "cli-guard"
     guard.mkdir()
-    for provider in ("claude", "codex", "ollama", "mix", "elixir", "erl", "cargo", "rustc"):
+    for provider in ("claude", "codex", "opencode", "ollama", "mix", "elixir", "erl", "cargo",
+                     "rustc"):
         shim = guard / provider
         shim.write_text('#!/bin/sh\necho unexpected >> "$SHOESTRING_GUARD_LOG"\nexit 99\n')
         shim.chmod(0o755)
@@ -64,6 +65,21 @@ def smoke(release, state):
     assert [item["id"] for item in json.loads(run("goals", "list", "--json"))] == [goal["id"]]
     assert json.loads(run("agents", "list", "--json")) == []
     assert "shoestring do" in run("do", "--help")
+    # Iteration 14: the coordinator commands and their instructions ship in the
+    # release, and what needs a person refuses without a terminal.
+    for name in ("setup", "chat", "grant", "grants", "dispatch", "wait", "runs", "advice",
+                 "capacity"):
+        assert f"shoestring {name}" in run(name, "--help"), f"Release {name} --help"
+    assert len(list(release.glob("lib/shoestring-*/priv/coordinator/instructions.md"))) == 1
+    assert refused("grant", "--models", "codex:gpt-6-luna").startswith(
+        "A grant is a person's decision")
+    assert refused("chat").startswith("A grant is a person's decision")
+    assert refused("setup").startswith("setup asks questions.")
+    assert json.loads(run("advice", "--json")) == []
+    assert json.loads(run("grants", "list", "--json")) == []
+    assert json.loads(run("runs", "list", "--session", "smoke", "--json")) == []
+    assert json.loads(run("chat", "list", "--json")) == []
+    assert "providers" in json.loads(run("capacity", "--json"))
     preview = json.loads(run("diagnostics-preview"))
     export = state / "diagnostics.json"
     run("diagnostics-export", str(export), preview["confirmation_sha256"])
@@ -106,6 +122,7 @@ def smoke(release, state):
                       "helper": doctor["helper"], "database": doctor["database"],
                       "health_http": 200, "ui_http": 200, "diagnostic_export": "confirmed_private",
                       "work_commands": "goals_agents_refusals",
+                      "coordinator_commands": "help_lists_refusals_instructions",
                       "provider_or_toolchain_launches": 0, "clean_machine": "not_verified"}, sort_keys=True))
 
 

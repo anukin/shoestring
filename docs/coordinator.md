@@ -90,7 +90,9 @@ and approved under the grant (recorded as `grant:ID`, with
 `author_kind: grant`), and an execution the service runs in a private copy
 of the repository at its `HEAD`. The checks decide acceptance; the result is
 a verified commit to fetch and merge, and your checkout is never changed.
-The worker reads the brief under "Coordinator brief".
+The worker reads the brief under "Coordinator brief". Secret-looking values
+in the title or brief (`api_key=…`, `token: …`, `sk-…`) are recorded, and
+given to the worker, as `[REDACTED]`; `dispatch` says so on stderr.
 
 `--reviewer` names a model from another vendor than the worker's (the grant
 must allow REVIEW and that model). Iteration 8's cross-review then runs
@@ -122,8 +124,16 @@ bound that.
 shoestring wait DISPATCH... [--timeout MINUTES]   # first one to settle, or exit 3
 shoestring runs list                              # this session's dispatches
 shoestring runs show DISPATCH                     # state, use, and the result
+shoestring runs log DISPATCH [--after SEQUENCE]   # what happened, oldest first
 shoestring runs cancel DISPATCH --reason TEXT     # this session's own dispatch
 ```
+
+`runs log` prints the lines `follow` prints for the dispatch's goal (task
+started, checks, review, acceptance), never the worker's transcript or the
+brief, up to 500 events a time; pass its `last_sequence` back as `--after`
+for what happened since. An EXPLORE or REVIEW dispatch has no goal, so its
+log is its record and its call's times: dispatched, confirmed, admitted,
+started, finished.
 
 When a dispatch's task or review is held because its provider's remaining
 usage cannot be confirmed — always for opencode, which reports none; always
@@ -212,5 +222,15 @@ cheaper model where it does as well.
 
 Tokens come from what each harness reports: Codex's running total, opencode's
 completion usage, and Claude's result usage including cache reads and
-writes. A run that reported none is counted apart, never as zero. Usage as a
-share of a provider's window is not shown yet.
+writes. A run that reported none is counted apart, never as zero.
+
+The usage share is how much of its provider's shortest usage window a run
+used, as a median and 90th percentile per window length. Only runs the
+measurement dataset can attribute have one: Codex runs with readings taken
+just before and after them, inside a collection window you opened with
+`mix shoestring.measurements collection open` (an agent never opens one),
+with no other Codex run, EXPLORE/REVIEW call or plan review overlapping
+them in any goal and no unexplained change between runs. Every other run is counted apart.
+A Codex coordinator's own turns are not recorded, so close the window, or
+use another coordinator, while measuring. Past the dataset's 10,000-event
+limit the share says `usage_share_unavailable`.

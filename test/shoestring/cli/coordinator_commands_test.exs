@@ -377,4 +377,37 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
     assert %{"dispatch_id" => ^id} = json!()
     assert_received {:mix_shell, :error, ["Cancellation requested for " <> _]}
   end
+
+  test "runs log prints a dispatch's history as follow does, and continues after a sequence",
+       ctx do
+    grant!(ctx)
+    Dispatch.run(dispatch_args(ctx), context(ctx))
+    %{"dispatch_id" => id} = json!()
+
+    Runs.run(["log", id], context(ctx))
+    assert %{"dispatch_id" => ^id, "entries" => entries, "last_sequence" => last} = json!()
+    assert "Execution requested." in Enum.map(entries, & &1["line"])
+    assert Enum.all?(entries, &(is_integer(&1["sequence"]) and &1["sequence"] <= last))
+    # Only follow's lines: never the brief.
+    refute Jason.encode!(entries) =~ "make add() return the sum"
+
+    Runs.run(["log", id, "--after", to_string(last)], context(ctx))
+    assert %{"entries" => [], "last_sequence" => ^last} = json!()
+
+    # An explore has no goal: its record and its call are its history.
+    explore =
+      ["--purpose", "explore", "--worker", "codex:gpt-6-luna", "--title", "Why the test fails"] ++
+        ["--brief", ctx.brief]
+
+    Dispatch.run(explore, context(ctx))
+    %{"dispatch_id" => explore_id} = json!()
+    Runs.run(["log", explore_id], context(ctx))
+
+    assert %{
+             "entries" => [
+               %{"line" => "Dispatched: explore with codex:gpt-6-luna.", "sequence" => nil}
+             ],
+             "last_sequence" => nil
+           } = json!()
+  end
 end

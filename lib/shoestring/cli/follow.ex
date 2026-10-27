@@ -278,13 +278,18 @@ defmodule Shoestring.CLI.Follow do
     end
   end
 
+  @page_size 500
+
+  @doc false
+  def page_size, do: @page_size
+
   @doc false
   def events_after(goal_id, sequence) do
     Repo.all(
       from e in TrajectoryEvent,
         where: e.goal_id == ^goal_id and e.sequence > ^sequence,
         order_by: [asc: e.sequence],
-        limit: 500
+        limit: @page_size
     )
   end
 

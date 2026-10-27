@@ -828,6 +828,89 @@ authorized by this milestone.
 
   Not yet: advice does not count these calls (they have no runs).
 
+- 2026-10-26, advice's usage share (package I, closing the deviation
+  above). `Advice.usage_shares/1` builds `Measurement.DatasetV2` over the
+  goals that hold a `measurement-before:` reading plus the Observatory goal
+  (its collection windows), not the whole store, so the dataset's
+  10,000-event limit applies to measured goals only; past it every kind
+  reports `usage_share_unavailable`. Because that scoped dataset cannot see
+  other goals, each assignable row is also checked against every run of the
+  provider in any goal, every EXPLORE/REVIEW call that started and every
+  iteration 8 plan review that made a call (over its whole life, since it
+  records no per-call times), with the dataset's own overlap rule; an
+  overlap excludes it. `advice` and
+  `dispatch --dry-run` show `usage_share` (median and p90 percent per window
+  length, with its count) and `runs_without_usage_share`.
+
+  Tests: `advice_test.exs` (per window length, never zero-filled,
+  unavailable reason); `dataset_v2_test.exs` (a measured run's share
+  through the real plan, bracket and collection paths; a run in an
+  unmeasured goal, an overlapping call and an unsettled plan review each
+  exclude it). With the cross-goal check removed, the unmeasured-goal case
+  fails at `dataset_v2_test.exs:446` (the run is given a share); with plan
+  reviews left out, the review case fails at `:473`. These are tests of a
+  new feature, not regression locks on earlier code.
+
+  Limits: a Codex coordinator's own turns during a measured run are not
+  recorded and cannot be separated; the window's attestation has to cover
+  them. No live measurement has been taken.
+
+- 2026-10-26, `runs log` (package D's `runs list/show/log`). `runs log
+  DISPATCH [--after SEQUENCE]` prints an IMPLEMENT's goal history through
+  `CLI.Follow.line/1` (the lines `follow` prints; events without one are
+  left out), 500 events a page with `last_sequence` to continue from. An
+  EXPLORE or REVIEW dispatch has no goal: its log is the dispatch record
+  and the call's admission, confirmation, start and finish times. No
+  transcript, prompt or brief is printed (the CLI test checks the brief is
+  absent). Tests: `coordinator_commands_test.exs` (implement, paging,
+  explore) and `dispatch_calls_test.exs` (a completed call's five lines in
+  order).
+
+- 2026-10-26, a coordinator's secrets in its text. Found while auditing
+  the privacy eval: the store refuses secret-looking values, so a title or
+  brief containing one (`api_key=sk-…`, `token: …`) failed the dispatch
+  (the goal statement, or `cobbler.plan.execution.requested`, was
+  refused). The title, brief and cancellation reason are now redacted with
+  `Security.redact_retained/1` (the redactor built so its output never
+  trips `secret_value?/1`) before they are checked or recorded; a retry of
+  the same request still replays. `dispatch` says on stderr when it
+  redacted something; the worker reads the redacted brief. Regression test
+  in `dispatches_test.exs` asserts both directions (secrets gone, the rest
+  kept) and fails at its first assertion on `74190b7`. Not covered:
+  `--file`/`--stay-out` paths are not redacted (a path such as `token:x`
+  would still be refused).
+
+- 2026-10-26, required hermetic evals audit. Each case against the tests
+  that cover it; labels as in the contract.
+
+  | Case | Covered by | Status |
+  | --- | --- | --- |
+  | Capability roles | `harnesses_test`, `opencode_worker_test`, `shoestring_agents_test`, `model_catalog_test` (old revisions resolve) | VERIFIED; deviation: opencode cannot be Reviewer (no review path), refused by name |
+  | Review independence | `harnesses_test` (vendors), `review_contract_test`, `dispatches_test`, `dispatch_calls_test` (`reviewer_same_vendor`) | VERIFIED |
+  | Model discovery | `model_catalog_test`, `model_listing_test`, `shoestring_models_test` | VERIFIED |
+  | Setup | `setup_test` (flags, rerun saves nothing, non-TTY refuses) | VERIFIED; "no credential read or written" REPO-INSPECTION (setup has no credential path) |
+  | Dispatch idempotency | `dispatches_test` (same request replays; new: interrupted before recording its start resumes into the same execution), `dispatch_calls_test` | VERIFIED |
+  | Authority | `dispatches_test` (grant identity outside its dispatch decides nothing; limits; revoke), `coordinator_commands_test` | VERIFIED; deviation: outside the grant refuses rather than waits |
+  | Explore read-only | `dispatch_calls_test` | VERIFIED with stand-ins; live UNVERIFIED |
+  | Review packet | `dispatch_integration_test` (Codex review of the Claude commit), `review_contract_test` | VERIFIED with stand-ins; live UNVERIFIED |
+  | Wait | `coordinator_commands_test` (first settled, timeout exit 3, newly waiting) | VERIFIED |
+  | Concurrency | `dispatches_test` (limits; siblings stay `queued`), existing executor claim tests | Partly: the reservation race is not tested (in the SQL sandbox two processes share one connection, so a race test proves nothing); reservation is one `:immediate` transaction (REPO-INSPECTION) |
+  | Cancel | `dispatches_test` (new: cancelling one leaves its sibling queued and uncancelled), `dispatch_calls_test` | VERIFIED at dispatch level; process-group reaping is the existing `ExecutionControl.cancel` path (iteration 4 tests) |
+  | Capacity | `lease_renewal_confirmation_test`, `probe_test`, `opencode_worker_test`, `dispatch_integration_test` (limit waits for reset) | VERIFIED |
+  | Chat launch | `chat_test` (per-CLI argv, instructions, refuses without terminal/service, checkout fingerprint) | VERIFIED; "no service is started" REPO-INSPECTION |
+  | CLI compatibility | `shoestring_do_test`, `follow_test`, `main_test`, `work_loop_test` keep every earlier expectation (since `9a0f1af` they only gained cases); `shoestring_agents_test` output snapshots | VERIFIED; the one changed expectation (opencode may coordinate) is decision 1 |
+  | Privacy | `dispatch_calls_test` (report redaction both ways), `dispatches_test` (new: brief/title/reason redaction both ways), `runs log` test (brief absent) | VERIFIED; no coordinator transcript is stored (REPO-INSPECTION) |
+  | Grant creation | `coordinator_commands_test`, `dispatches_test` | VERIFIED |
+  | Grant limits | `dispatches_test` (each limit, extend lets it through) | VERIFIED; "running work untouched" REPO-INSPECTION |
+  | Unread usage | `dispatches_test`, `dispatch_calls_test`, `lease_renewal_confirmation_test` | VERIFIED |
+  | Dry run and batches | `dispatches_test` | VERIFIED |
+  | Token capture | `event_normalizer_test` (kept; malformed left out, never zero), `advice_test` | VERIFIED |
+  | Advice | `advice_test`, `advice_store_test`, `dataset_v2_test` (usage share) | VERIFIED; "admission identical with and without advice" REPO-INSPECTION: only `dry_run`, the `advice` command and its mix task call `Shoestring.Advice` |
+
+  The new tests for idempotency, sibling cancel and redaction (other than
+  the redaction regression) cover behaviour that already held; they are
+  evals, not regression locks.
+
 ## Completion record
 
 - Final status/date: not implemented; fill only at acceptance.

@@ -5,7 +5,9 @@ defmodule Shoestring.Measurement.DatasetV2Test do
   network is started.
   """
   use Shoestring.DataCase, async: false
-  alias Shoestring.{AgentProfiles, Cobbler, Measurement, Trajectory}
+  alias Shoestring.{Advice, AgentProfiles, Cobbler, Measurement, Trajectory}
+  alias Shoestring.Dispatches.{Call, Dispatch}
+  alias Shoestring.Grants.Grant
   alias Shoestring.Harness.Capacity
   alias Shoestring.Harness.Capacity.Fixtures
   alias Shoestring.Measurement.{Brackets, Collection, DatasetV2}
@@ -415,5 +417,126 @@ defmodule Shoestring.Measurement.DatasetV2Test do
   test "Claude rows can never be assignable" do
     assert DatasetV2.version() == 2
     refute "claude" in Brackets.readable_providers()
+  end
+
+  describe "advice's usage share (iteration 14 package I)" do
+    test "a measured run's share of its provider's shortest window", c do
+      assert Advice.usage_shares(Repo) == {:ok, %{}}
+      open_window!()
+      run_id = measured_run!(start_goal!(c), timeline())
+      # A call that finished before the run's first reading does not overlap it.
+      codex_call!(0, 9)
+
+      assert Advice.usage_shares(Repo) ==
+               {:ok, %{run_id => %{"percent" => 2, "window_minutes" => 300}}}
+    end
+
+    test "a run in an unmeasured goal or a call overlapping the readings excludes the run", c do
+      open_window!()
+      a = start_goal!(c)
+      b = start_goal!(c)
+      measured = measured_run!(a, timeline())
+      # Goal b holds no bracket reading, so the dataset advice builds never sees it.
+      measured_run!(b, timeline(%{requested: 8, before: nil, after: nil}))
+
+      assert "concurrent_shoestring_runs" in row(dataset!(), measured)["capacity"][
+               "exclusion_reasons"
+             ]
+
+      assert Advice.usage_shares(Repo) == {:ok, %{}}
+
+      later =
+        measured_run!(
+          start_goal!(c),
+          timeline(%{
+            requested: 405,
+            before: {410, 56},
+            started: 420,
+            finished: 480,
+            after: {490, 58}
+          })
+        )
+
+      assert {:ok, shares} = Advice.usage_shares(Repo)
+      assert Map.keys(shares) == [later]
+      codex_call!(450, 500)
+      assert Advice.usage_shares(Repo) == {:ok, %{}}
+    end
+
+    test "a plan review of the provider counts from its creation until it settles", c do
+      open_window!()
+      g = start_goal!(c)
+      run_id = measured_run!(g, timeline())
+      plan_review!(g.goal.id, "approved", -100, 5)
+      assert {:ok, %{^run_id => _}} = Advice.usage_shares(Repo)
+      plan_review!(g.goal.id, "running", -100, -50)
+      assert Advice.usage_shares(Repo) == {:ok, %{}}
+    end
+  end
+
+  defp plan_review!(goal_id, state, created, updated) do
+    Repo.insert!(%Shoestring.Cobbler.Review.Record{
+      goal_id: goal_id,
+      execution_id: Ecto.UUID.generate(),
+      plan_task_id: "alpha",
+      attempt: 1,
+      run_id: Ecto.UUID.generate(),
+      round: 1,
+      base_commit: "base",
+      commit: "head",
+      packet_json: "{}",
+      packet_digest: "digest",
+      gates: %{},
+      configuration: %{"provider_id" => "codex"},
+      state: state,
+      calls: 1,
+      inserted_at: at(created),
+      updated_at: at(updated)
+    })
+  end
+
+  # A finished Codex EXPLORE or REVIEW call between `started` and `finished`.
+  defp codex_call!(started, finished) do
+    grant =
+      Repo.insert!(%Grant{
+        session_id: "s1",
+        granted_by: "human:operator",
+        repository_root: "/repo",
+        models: ["codex:fixture-model-v1"],
+        purposes: ["review"],
+        max_dispatches: 1,
+        max_parallel: 1,
+        max_total_seconds: 600,
+        max_dispatch_seconds: 600
+      })
+
+    dispatch =
+      Repo.insert!(%Dispatch{
+        grant_id: grant.id,
+        session_id: "s1",
+        request_id: Ecto.UUID.generate(),
+        purpose: "review",
+        provider: "codex",
+        model: "fixture-model-v1",
+        title: "Review",
+        brief: "REVIEW - check it\n",
+        brief_digest: "digest",
+        repository_root: "/repo",
+        base_revision: "base",
+        max_attempts: 1,
+        max_duration_seconds: 600,
+        plan: %{},
+        plan_digest: "digest",
+        state: "started"
+      })
+
+    Repo.insert!(%Call{
+      dispatch_id: dispatch.id,
+      state: "completed",
+      input_json: "{}",
+      input_digest: "digest",
+      started_at: at(started),
+      finished_at: at(finished)
+    })
   end
 end

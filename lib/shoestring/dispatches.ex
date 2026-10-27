@@ -21,6 +21,13 @@ defmodule Shoestring.Dispatches do
   same request returns the same dispatch, and one interrupted part-way
   resumes from its recorded plan. A dry run validates and checks the grant
   without recording anything.
+
+  The coordinator's free text (the title, the brief and a cancellation
+  reason) is redacted with `Shoestring.Harness.Security.redact_retained/1`
+  before anything is checked or recorded: secret-looking values become
+  `[REDACTED]` and the rest of the text stays, so it can be stored in the
+  plan and the run's events, which refuse secrets. The worker gets the
+  redacted brief.
   """
   import Ecto.Query
 
@@ -28,6 +35,7 @@ defmodule Shoestring.Dispatches do
   alias Shoestring.Cobbler.{ExecutionControl, ExecutionProfile, Intake, PlanContract, Plans}
   alias Shoestring.Dispatches.{Call, Calls, Dispatch}
   alias Shoestring.Grants.Grant
+  alias Shoestring.Harness.Security
   alias Shoestring.Trajectory.Goal
 
   @task_id "dispatch"
@@ -134,7 +142,8 @@ defmodule Shoestring.Dispatches do
         nil
 
       dispatch ->
-        if dispatch.brief_digest == digest(request.brief) and dispatch.model == request.model and
+        if dispatch.brief_digest == digest(redact(request.brief)) and
+             dispatch.model == request.model and
              dispatch.provider == request.provider and dispatch.purpose == request.purpose,
            do: {:ok, dispatch},
            else: {:error, :request_id_conflict}
@@ -148,8 +157,8 @@ defmodule Shoestring.Dispatches do
   defp prepare(request) do
     with :ok <- request_id(request.request_id),
          :ok <- purpose(request.purpose),
-         {:ok, title} <- text(request.title, :title, 200),
-         {:ok, brief} <- brief(request.brief),
+         {:ok, title} <- text(redact(request.title), :title, 200),
+         {:ok, brief} <- brief(redact(request.brief)),
          :ok <- worker(request),
          :ok <- batch(request),
          {:ok, facts} <- Intake.repository(request.repository) do
@@ -876,7 +885,7 @@ defmodule Shoestring.Dispatches do
         command_id: Ecto.UUID.generate(),
         execution_id: dispatch.execution_id,
         requested_by: Authority.grant_identity(dispatch.grant_id),
-        reason: reason
+        reason: redact(reason)
       },
       Keyword.take(opts, [:oban]) ++ [dispatch: dispatch]
     )
@@ -885,6 +894,10 @@ defmodule Shoestring.Dispatches do
   def cancel(%Dispatch{}, _reason, _opts), do: {:error, :not_started}
 
   defp digest(text), do: :crypto.hash(:sha256, to_string(text)) |> Base.encode16(case: :lower)
+
+  # Secret-looking values in the coordinator's text, removed; the rest kept.
+  defp redact(text) when is_binary(text), do: Security.redact_retained(text)
+  defp redact(other), do: other
 
   defp error_code(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp error_code({reason, _}) when is_atom(reason), do: Atom.to_string(reason)

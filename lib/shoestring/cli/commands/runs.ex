@@ -2,12 +2,13 @@ defmodule Shoestring.CLI.Commands.Runs do
   @moduledoc "`shoestring runs`: a coordinator session's dispatches."
 
   alias Shoestring.Dispatches
-  alias Shoestring.CLI.{Command, Jobs, Refusal, Result}
+  alias Shoestring.CLI.{Command, Follow, Jobs, Refusal, Result}
   alias Shoestring.CLI.Commands.Dispatch
 
   @help """
   shoestring runs list [--session ID] [--json]
   shoestring runs show DISPATCH [--json]
+  shoestring runs log DISPATCH [--after SEQUENCE] [--json]
   shoestring runs cancel DISPATCH --reason TEXT [--session ID]
 
   `list` prints the session's dispatches (ID or SHOESTRING_SESSION; every
@@ -15,7 +16,10 @@ defmodule Shoestring.CLI.Commands.Runs do
   time used, what a `waiting` dispatch waits for (`waiting.until`,
   `waiting.reason`) and, once it completes, the verified commit, its checks
   and the commands to take it; for EXPLORE and REVIEW, its call and its
-  `report`. `cancel` cancels a dispatch of this session through
+  `report`. `log` prints what happened, oldest first, from the recorded
+  history (the lines `follow` prints, never the worker's transcript), up
+  to #{Shoestring.CLI.Follow.page_size()} events at a time; pass its `last_sequence` back as
+  `--after` for what happened since. `cancel` cancels a dispatch of this session through
   the ordinary cancellation path, which reaps everything it started; other
   dispatches keep running. Output is JSON on stdout.
   """
@@ -23,7 +27,9 @@ defmodule Shoestring.CLI.Commands.Runs do
   def help, do: @help
 
   def run(args, context) do
-    case OptionParser.parse(args, strict: [session: :string, reason: :string, json: :boolean]) do
+    case OptionParser.parse(args,
+           strict: [session: :string, reason: :string, after: :integer, json: :boolean]
+         ) do
       {opts, ["list"], []} ->
         session = session(opts, context)
 
@@ -36,6 +42,11 @@ defmodule Shoestring.CLI.Commands.Runs do
           dispatch = dispatch!(id)
           _ = Dispatches.advance(dispatch)
           Command.json(context, detail(dispatch))
+        end)
+
+      {opts, ["log", id], []} ->
+        context.with_repo.(fn _repo ->
+          Command.json(context, log(dispatch!(id), max(opts[:after] || 0, 0)))
         end)
 
       {opts, ["cancel", id], []} ->
@@ -155,6 +166,66 @@ defmodule Shoestring.CLI.Commands.Runs do
         "#{dispatch.id} --reason TEXT, then dispatch it again with another --worker"
 
   defp waiting_next(_dispatch, _waiting), do: nil
+
+  # An IMPLEMENT's goal history, rendered as `follow` renders it.
+  defp log(%{goal_id: goal_id} = dispatch, after_sequence) when is_binary(goal_id) do
+    events = Follow.events_after(goal_id, after_sequence)
+
+    %{
+      "dispatch_id" => dispatch.id,
+      "entries" =>
+        for event <- events, line = Follow.line(event) do
+          %{"sequence" => event.sequence, "at" => event.occurred_at, "line" => line}
+        end,
+      "last_sequence" =>
+        case List.last(events) do
+          nil -> after_sequence
+          event -> event.sequence
+        end
+    }
+  end
+
+  # An EXPLORE or REVIEW dispatch, or one that never started, has no goal:
+  # its record and its call's timestamps are its history.
+  defp log(dispatch, _after_sequence) do
+    entries =
+      [
+        {dispatch.inserted_at,
+         "Dispatched: #{dispatch.purpose} with #{dispatch.provider}:#{dispatch.model}."}
+        | call_entries(Dispatches.Calls.get(dispatch.id))
+      ]
+      |> Enum.reject(fn {at, line} -> is_nil(at) or is_nil(line) end)
+      |> Enum.sort_by(&elem(&1, 0), DateTime)
+      |> Enum.map(fn {at, line} -> %{"sequence" => nil, "at" => at, "line" => line} end)
+
+    %{"dispatch_id" => dispatch.id, "entries" => entries, "last_sequence" => nil}
+  end
+
+  defp call_entries(nil), do: []
+
+  defp call_entries(call) do
+    admission = call.admission || %{}
+
+    evaluated =
+      case DateTime.from_iso8601(admission["evaluated_at"] || "") do
+        {:ok, at, _} -> at
+        _ -> nil
+      end
+
+    [
+      {evaluated, "Latest admission: #{admission["result"]} (#{admission["reason_code"]})."},
+      {call.confirmed_at, "Usage confirmed by #{call.confirmed_by}."},
+      {call.started_at, "The call started."},
+      {call.finished_at, finished(call)}
+    ]
+  end
+
+  defp finished(%{state: "completed", output_tokens: tokens}),
+    do: "The call completed (#{tokens} output tokens)."
+
+  defp finished(%{state: "failed", error_code: code}), do: "The call failed (#{code})."
+  defp finished(%{state: "cancelled"}), do: "The call was cancelled."
+  defp finished(_call), do: nil
 
   defp cancel(dispatch, reason, session, context) do
     if session != dispatch.session_id,

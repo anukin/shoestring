@@ -173,8 +173,57 @@ defmodule Shoestring.AdviceTest do
              "runs_without_tokens" => 0,
              "first_try_pass_rate" => %{"passed" => 8, "of" => 10},
              "mean_attempts" => 1.2,
-             "median_duration_ms" => 40_000
+             "median_duration_ms" => 40_000,
+             "usage_share" => nil,
+             "runs_without_usage_share" => 12
            }
+  end
+
+  test "the usage share is per window length, over attributable runs only, never zero-filled" do
+    luna = binding("codex", "gpt-6-luna", "high")
+    runs = for i <- 1..12, do: run(luna, at: i)
+    [first, second | _] = run_ids = Enum.map(runs, &elem(&1, 0))
+
+    shares =
+      run_ids
+      |> Enum.take(10)
+      |> Enum.with_index(1)
+      |> Map.new(fn {run_id, i} -> {run_id, %{"percent" => i, "window_minutes" => 300}} end)
+      # A share of another window length is reported apart.
+      |> Map.put(first, %{"percent" => 1, "window_minutes" => 10_080})
+      |> Map.delete(second)
+
+    [advice] =
+      Advice.build(
+        Enum.flat_map(runs, &elem(&1, 1)),
+        [],
+        %{},
+        revisions([%{"gate" => "mix_test"}]),
+        {:ok, shares}
+      )
+
+    assert advice["estimate"]["usage_share"] == [
+             %{"window_minutes" => 300, "median_percent" => 6, "p90_percent" => 10, "runs" => 8},
+             %{"window_minutes" => 10_080, "median_percent" => 1, "p90_percent" => 1, "runs" => 1}
+           ]
+
+    assert advice["estimate"]["runs_without_usage_share"] == 3
+    refute Map.has_key?(advice["estimate"], "usage_share_unavailable")
+
+    [advice] =
+      Advice.build(
+        Enum.flat_map(runs, &elem(&1, 1)),
+        [],
+        %{},
+        revisions([%{"gate" => "mix_test"}]),
+        {:error, :measurement_event_limit}
+      )
+
+    assert %{
+             "usage_share" => nil,
+             "runs_without_usage_share" => 12,
+             "usage_share_unavailable" => "measurement_event_limit"
+           } = advice["estimate"]
   end
 
   test "Claude counts cache reads and writes; a run without usage is counted apart, never as zero" do

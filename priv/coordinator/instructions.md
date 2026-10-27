@@ -55,7 +55,8 @@ Delegate every code change with `{{command}} dispatch`.
 5. Wait with `{{command}} wait DISPATCH... --timeout 30`. Run it in the
    background if you are told when a background command exits; otherwise
    run it and continue when it returns.
-6. Inspect with `{{command}} runs show DISPATCH`. When it completes, give the
+6. Inspect with `{{command}} runs show DISPATCH`; `{{command}} runs log
+   DISPATCH` tells what happened so far, step by step. When it completes, give the
    person the commit and the `result.take` commands; they merge it. When it
    is `needs_you` or `held`, tell the person the command in `next`. When it
    is `waiting`, its provider's usage limit is reached: tell the person when
@@ -77,4 +78,5 @@ Contract: <what must be true when done, and the checks that prove it>
 ```
 
 Keep briefs short and specific: the worker sees only the brief, the task's
-files and the repository, never this conversation.
+files and the repository, never this conversation. Never put credentials in
+a brief: secret-looking values reach the worker as `[REDACTED]`.

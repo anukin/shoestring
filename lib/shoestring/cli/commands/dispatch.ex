@@ -24,7 +24,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   checkout is never changed.
 
   TITLE is one line; FILE is the brief the worker reads (up to 16000
-  characters). `--file` hints at files to change, `--stay-out` names paths
+  characters). Secret-looking values in either are recorded, and given to
+  the worker, as `[REDACTED]`. `--file` hints at files to change, `--stay-out` names paths
   the task must not change, and `--accept` adds acceptance criteria.
   `--reviewer` names a model from another vendor that reviews the change
   before it is accepted (the grant must allow REVIEW and that model):
@@ -120,6 +121,13 @@ defmodule Shoestring.CLI.Commands.Dispatch do
 
     case result do
       {:ok, dispatch, outcome} ->
+        if dispatch.title != request.title or dispatch.brief != request.brief do
+          context.shell.error(
+            "Secret-looking text in the title or brief was recorded as [REDACTED]; " <>
+              "the worker reads the redacted brief."
+          )
+        end
+
         context.shell.error(
           if(outcome == :replayed,
             do: "Already dispatched as #{dispatch.id}.",
