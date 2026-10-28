@@ -190,9 +190,12 @@ defmodule Shoestring.CLI.ChatTest do
 
     assert %{
              models: ["codex:gpt-6-luna", "claude:opus"],
-             purposes: ["explore", "implement", "review"]
+             purposes: ["explore", "implement", "review"],
+             max_turns: 20
            } =
              Grants.active("chat-1")
+
+    assert_received {:mix_shell, :error, ["  Coordinator turns: 20"]}
 
     script = File.read!(launch)
     assert script =~ "SHOESTRING_SESSION=chat-1"

@@ -305,9 +305,17 @@ defmodule Shoestring.Trajectory.EventRegistry do
     "conversation.turn.requested" => %{
       1 => %{
         required: [:turn_id, :message_ids, :inbox_ids],
-        optional: [],
-        uuid_fields: [:turn_id],
-        types: %{message_ids: {:array, :string}, inbox_ids: {:array, :string}}
+        optional: [:grant_id, :admission],
+        uuid_fields: [:turn_id, :grant_id],
+        types: %{message_ids: {:array, :string}, inbox_ids: {:array, :string}, admission: :map}
+      }
+    },
+    "conversation.turn.held" => %{
+      1 => %{
+        required: [:reason],
+        optional: [:grant_id, :defer_until],
+        uuid_fields: [:grant_id],
+        types: %{defer_until: :utc_datetime}
       }
     },
     "conversation.turn.ended" => %{

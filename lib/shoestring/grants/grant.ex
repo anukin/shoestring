@@ -15,6 +15,8 @@ defmodule Shoestring.Grants.Grant do
     field :max_dispatch_seconds, :integer
     field :unread_usage, :integer, default: 0
     field :unread_usage_used, :integer, default: 0
+    field :max_turns, :integer, default: 0
+    field :turns_used, :integer, default: 0
     field :limits_revision, :integer, default: 1
     field :revoked_at, :utc_datetime_usec
     field :revoked_by, :string

@@ -50,6 +50,34 @@ defmodule Shoestring.Conversations.EventsTest do
              })
   end
 
+  test "a turn's admission is only its decision id, result and reason; a hold names a reason" do
+    turn = %{"turn_id" => @turn, "message_ids" => [@turn], "inbox_ids" => [], "grant_id" => @turn}
+
+    assert {:ok, _} =
+             validate(
+               "conversation.turn.requested",
+               Map.put(turn, "admission", %{
+                 "decision_id" => @turn,
+                 "result" => "admit",
+                 "reason_code" => "confirmed_unknown_capacity"
+               })
+             )
+
+    assert {:error, _} =
+             validate(
+               "conversation.turn.requested",
+               Map.put(turn, "admission", %{
+                 "decision_id" => @turn,
+                 "result" => "admit",
+                 "reason_code" => "confirmed_unknown_capacity",
+                 "explanation" => "free text"
+               })
+             )
+
+    assert {:ok, _} = validate("conversation.turn.held", %{"reason" => "turns_exhausted"})
+    assert {:error, _} = validate("conversation.turn.held", %{"reason" => "no reason given"})
+  end
+
   test "tool events carry a call id and tool name, never the tool's input" do
     assert {:ok, _} =
              validate("conversation.tool.called", %{

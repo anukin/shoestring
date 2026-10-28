@@ -124,6 +124,9 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
     assert grant["limits"]["max_dispatches"] == 4
     assert grant["purposes"] == ["explore", "implement", "review"]
     assert grant["room"]["attempts"] == %{"used" => 0, "limit" => 4}
+    assert grant["limits"]["max_turns"] == 20
+    assert grant["turns"] == %{"used" => 0, "left" => 20}
+    assert_received {:mix_shell, :error, ["  Coordinator turns: 20"]}
 
     assert_received {:mix_shell, :error,
                      ["Granted. In the coordinator's shell: export SHOESTRING_SESSION=s1"]}
@@ -145,11 +148,15 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
     answer("y")
 
     Grants.run(
-      ["extend", id, "--dispatches", "2", "--hours", "1"],
+      ["extend", id, "--dispatches", "2", "--hours", "1", "--turns", "5"],
       context(ctx, interactive: true)
     )
 
-    assert %{"limits_revision" => 2, "limits" => %{"max_dispatches" => 6}} = json!()
+    assert %{
+             "limits_revision" => 2,
+             "limits" => %{"max_dispatches" => 6, "max_turns" => 25},
+             "turns" => %{"left" => 25}
+           } = json!()
 
     Grants.run(["show", id], context(ctx))
     assert %{"history" => [%{"kind" => "created"}, %{"kind" => "extended"}]} = json!()

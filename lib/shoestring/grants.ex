@@ -5,13 +5,15 @@ defmodule Shoestring.Grants do
   A grant names one repository, the `provider:model`s and purposes the
   coordinator may dispatch, and its limits: attempts (every attempt counts,
   retries included), how many dispatches may run at once, total and
-  per-dispatch duration, and how many dispatches whose remaining usage
-  cannot be read it pre-approves (decision 7). Every limit is checked before
-  a dispatch is recorded; nothing is estimated (decision 6).
+  per-dispatch duration, how many dispatches whose remaining usage cannot be
+  read it pre-approves (decision 7), and how many turns a coordinator
+  conversation may take (iteration 15 package D; `use_turn/2`). Every limit
+  is checked before a dispatch is recorded or a turn taken; nothing is
+  estimated (decision 6).
 
   Only a `human:` identity creates, extends or revokes a grant, and the CLI
   does so only from a terminal. Revoking or exhausting a grant stops new
-  dispatches; it never interrupts running work. Each change is appended to
+  dispatches and turns; it never interrupts running work. Each change is appended to
   `coordinator_grant_events`.
   """
   import Ecto.Query
@@ -28,7 +30,8 @@ defmodule Shoestring.Grants do
     max_parallel: 1..16,
     max_total_seconds: 60..604_800,
     max_dispatch_seconds: 60..14_400,
-    unread_usage: 0..100
+    unread_usage: 0..100,
+    max_turns: 0..1000
   ]
 
   def purposes, do: @purposes
@@ -62,13 +65,14 @@ defmodule Shoestring.Grants do
   @doc """
   Creates a grant. `attrs`: `:session_id`, `:repository_root` (canonical),
   `:models` (`["provider:model"]`), `:purposes`, and each limit in
-  `#{inspect(Keyword.keys(@limits))}`.
+  `#{inspect(Keyword.keys(@limits))}`. A grant given no `:max_turns`
+  allows no coordinator turns.
   """
   def create(attrs, granted_by, opts \\ []) do
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
 
     with :ok <- human(granted_by),
-         {:ok, fields} <- validate(attrs) do
+         {:ok, fields} <- validate(Map.put_new(attrs, :max_turns, 0)) do
       Repo.transaction(fn ->
         grant = Repo.insert!(struct(Grant, Map.put(fields, :granted_by, granted_by)))
         record!(grant, "created", granted_by, snapshot(grant), now)
@@ -79,7 +83,8 @@ defmodule Shoestring.Grants do
 
   @doc """
   Widens a grant: `:add_dispatches`, `:add_seconds`, `:add_unread_usage`,
-  `:add_models`, `:add_purposes`, and `:max_parallel` to replace it.
+  `:add_turns`, `:add_models`, `:add_purposes`, and `:max_parallel` to
+  replace it.
   """
   def extend(%Grant{} = grant, changes, by, opts \\ []) do
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
@@ -93,7 +98,8 @@ defmodule Shoestring.Grants do
       max_parallel: Map.get(changes, :max_parallel, grant.max_parallel),
       max_total_seconds: grant.max_total_seconds + Map.get(changes, :add_seconds, 0),
       max_dispatch_seconds: grant.max_dispatch_seconds,
-      unread_usage: grant.unread_usage + Map.get(changes, :add_unread_usage, 0)
+      unread_usage: grant.unread_usage + Map.get(changes, :add_unread_usage, 0),
+      max_turns: grant.max_turns + Map.get(changes, :add_turns, 0)
     }
 
     with :ok <- human(by),
@@ -173,6 +179,52 @@ defmodule Shoestring.Grants do
       if count != 1, do: Repo.rollback(:nothing_to_refund)
       grant = Repo.get!(Grant, id)
       record!(grant, "unread_usage_refunded", Authority.grant_identity(id), detail, now)
+      grant
+    end)
+  end
+
+  @doc """
+  Charges one coordinator turn, atomically, before the turn is handed to the
+  coordinator. `detail` names the turn (`"turn_id"`). `{:ok, grant}`, or
+  `{:error, :turns_exhausted}` when none is left (or the grant was revoked).
+  """
+  def use_turn(%Grant{id: id}, detail, opts \\ []) do
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+
+    Repo.transaction(fn ->
+      {count, _} =
+        Repo.update_all(
+          from(g in Grant,
+            where: g.id == ^id and is_nil(g.revoked_at) and g.turns_used < g.max_turns
+          ),
+          inc: [turns_used: 1]
+        )
+
+      if count != 1, do: Repo.rollback(:turns_exhausted)
+      grant = Repo.get!(Grant, id)
+      record!(grant, "turn_used", Authority.grant_identity(id), detail, now)
+      grant
+    end)
+  end
+
+  @doc """
+  Returns the turn charged for `detail` when it never reached the
+  coordinator (it ended `unsent`). A turn that may have reached it stays
+  charged.
+  """
+  def refund_turn(%Grant{id: id}, detail, opts \\ []) do
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+
+    Repo.transaction(fn ->
+      {count, _} =
+        Repo.update_all(
+          from(g in Grant, where: g.id == ^id and g.turns_used > 0),
+          inc: [turns_used: -1]
+        )
+
+      if count != 1, do: Repo.rollback(:nothing_to_refund)
+      grant = Repo.get!(Grant, id)
+      record!(grant, "turn_refunded", Authority.grant_identity(id), detail, now)
       grant
     end)
   end

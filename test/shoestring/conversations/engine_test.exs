@@ -15,7 +15,7 @@ defmodule Shoestring.Conversations.EngineTest do
 
   @brief "IMPLEMENT - make add() return the sum\nContract: test/test_calc.py passes.\n"
 
-  setup do
+  setup ctx do
     repo = Path.join(System.tmp_dir!(), "shoestring-engine-#{Ecto.UUID.generate()}")
     File.mkdir_p!(Path.join(repo, "test"))
     on_exit(fn -> File.rm_rf!(repo) end)
@@ -35,8 +35,36 @@ defmodule Shoestring.Conversations.EngineTest do
       })
 
     Phoenix.PubSub.subscribe(Shoestring.PubSub, Trajectory.topic(conversation.id))
-    %{repo: repo, conversation: conversation}
+    {:ok, _} = ModelCatalog.add("codex", "gpt-6-luna")
+
+    # `@tag grant: false` starts with no grant; `@tag max_turns: N` sets its turns.
+    if ctx[:grant] != false, do: grant!(repo, ctx[:max_turns] || 20)
+
+    %{repo: repo, conversation: conversation, binding: %{session_id: "s1", repository: repo}}
   end
+
+  defp grant!(repo, max_turns) do
+    send(self(), {:mix_shell_input, :prompt, "y"})
+
+    Grant.run(
+      ~w(--models codex:gpt-6-luna --session s1 --max-dispatches 4 --max-parallel 2) ++
+        ["--max-turns", to_string(max_turns)],
+      %{
+        shell: Mix.Shell.Process,
+        with_repo: fn fun -> fun.(Repo) end,
+        cwd: repo,
+        service: fn -> :ok end,
+        start_hint: "mix phx.server",
+        interactive?: fn -> true end,
+        env: fn "SHOESTRING_SESSION" -> "s1" end
+      }
+    )
+
+    assert_receive {:mix_shell, :info, [json]}
+    Jason.decode!(json)
+  end
+
+  defp grant, do: Shoestring.Grants.active("s1")
 
   defp git!(dir, args), do: {_, 0} = System.cmd("git", ["-C", dir | args], stderr_to_stdout: true)
 
@@ -255,32 +283,138 @@ defmodule Shoestring.Conversations.EngineTest do
              await("conversation.turn.ended")
   end
 
+  describe "grant and admission" do
+    defp kinds(grant), do: Enum.map(Shoestring.Grants.events(grant.id), & &1.kind)
+
+    @tag grant: false
+    test "without a grant the message waits and says why once; a grant releases it", ctx do
+      engine = start_engine(ctx.conversation)
+
+      assert :ok = say(engine, "SAY hi")
+      assert %{payload: %{"reason" => "no_grant"}} = await("conversation.turn.held")
+      assert %{state: :idle, pending_messages: 1, hold: "no_grant"} = Engine.status(engine)
+
+      assert :ok = Engine.poll(engine)
+      assert [_] = of_type(ctx.conversation, "conversation.turn.held")
+      assert of_type(ctx.conversation, "conversation.turn.requested") == []
+
+      %{"grant_id" => grant_id} = grant!(ctx.repo, 20)
+      assert :ok = Engine.poll(engine)
+
+      # No usage reading here: the grant's turn is the confirmation.
+      assert %{
+               payload: %{
+                 "grant_id" => ^grant_id,
+                 "admission" => %{"result" => "admit", "reason_code" => "confirmed_" <> _}
+               }
+             } = await("conversation.turn.requested")
+
+      assert %{payload: %{"status" => "completed"}} = await("conversation.turn.ended")
+      assert %{turns_used: 1, max_turns: 20} = grant()
+      assert %{hold: nil} = Engine.status(engine)
+    end
+
+    @tag max_turns: 1
+    test "the turn cap holds the turn that would cross it until the grant is extended", ctx do
+      engine = start_engine(ctx.conversation)
+
+      assert :ok = say(engine, "SAY one")
+      await("conversation.turn.ended")
+      assert :ok = say(engine, "SAY two")
+
+      assert %{payload: %{"reason" => "turns_exhausted"}} = await("conversation.turn.held")
+      assert %{state: :idle, pending_messages: 1, hold: "turns_exhausted"} = Engine.status(engine)
+      assert :ok = Engine.poll(engine)
+      assert [_] = of_type(ctx.conversation, "conversation.turn.held")
+      assert [_] = of_type(ctx.conversation, "conversation.turn.requested")
+
+      {:ok, _} = Shoestring.Grants.extend(grant(), %{add_turns: 1}, "human:operator")
+      assert :ok = Engine.poll(engine)
+      await("conversation.turn.requested")
+      await("conversation.turn.ended")
+
+      assert [_, %{"text" => "two"}] =
+               of_type(ctx.conversation, "conversation.message.coordinator")
+
+      assert %{turns_used: 2, max_turns: 2} = grant()
+    end
+
+    test "a turn is charged once: a restart charges nothing again", ctx do
+      engine = start_engine(ctx.conversation)
+      assert :ok = say(engine, "SLOW 60000 never")
+      await("conversation.turn.requested")
+
+      ref = Process.monitor(engine)
+      Process.exit(engine, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^engine, :killed}
+
+      engine = start_engine(ctx.conversation)
+      assert %{payload: %{"status" => "uncertain"}} = await("conversation.turn.ended")
+      assert :ok = Engine.poll(engine)
+
+      assert %{turns_used: 1} = grant()
+      assert kinds(grant()) == ["created", "turn_used"]
+    end
+
+    test "a turn that never reached the coordinator is refunded", ctx do
+      engine =
+        start_engine(ctx.conversation, conversation_opts: [refuse_model: "claude-test-model"])
+
+      assert :ok = say(engine, "SAY hello")
+      assert %{payload: %{"status" => "unsent"}} = await("conversation.turn.ended")
+
+      assert %{turns_used: 0} = grant()
+      assert kinds(grant()) == ["created", "turn_used", "turn_refunded"]
+    end
+
+    test "a breached reserve defers the turn, charging nothing and starting nothing", ctx do
+      now = DateTime.utc_now()
+      resets = now |> DateTime.add(3_600) |> DateTime.to_unix()
+
+      {:ok, reading} =
+        Shoestring.Harness.Capacity.normalize(
+          :claude,
+          :headless_stream_json,
+          %{
+            "type" => "rate_limit_event",
+            "rate_limit_info" => %{
+              "status" => "allowed",
+              "unifiedWindows" => %{
+                "five_hour" => %{
+                  "utilization" => 0.95,
+                  "resetsAt" => resets,
+                  "status" => "allowed"
+                },
+                "seven_day" => %{
+                  "utilization" => 0.1,
+                  "resetsAt" => resets,
+                  "status" => "allowed"
+                }
+              }
+            }
+          },
+          version: "2.1.310",
+          now: now,
+          captured_at: now,
+          adapter_id: "claude_headless_stream_json",
+          scope: "subscription"
+        )
+
+      {:ok, _, _} = Shoestring.Harness.Observatory.ingest(reading, now: now)
+      engine = start_engine(ctx.conversation)
+
+      assert :ok = say(engine, "SAY hi")
+      assert %{payload: %{"defer_until" => until}} = await("conversation.turn.held")
+      {:ok, until, _} = DateTime.from_iso8601(until)
+      assert DateTime.to_unix(until) == resets
+
+      assert of_type(ctx.conversation, "conversation.turn.requested") == []
+      assert %{turns_used: 0} = grant()
+      assert %{adapter: nil} = :sys.get_state(engine)
+    end
+  end
+
   describe "inbox and wake" do
-    setup ctx do
-      {:ok, _} = ModelCatalog.add("codex", "gpt-6-luna")
-      grant!(ctx.repo)
-      %{binding: %{session_id: "s1", repository: ctx.repo}}
-    end
-
-    defp grant!(repo) do
-      send(self(), {:mix_shell_input, :prompt, "y"})
-
-      Grant.run(
-        ~w(--models codex:gpt-6-luna --session s1 --max-dispatches 4 --max-parallel 2),
-        %{
-          shell: Mix.Shell.Process,
-          with_repo: fn fun -> fun.(Repo) end,
-          cwd: repo,
-          service: fn -> :ok end,
-          start_hint: "mix phx.server",
-          interactive?: fn -> true end,
-          env: fn "SHOESTRING_SESSION" -> "s1" end
-        }
-      )
-
-      assert_receive {:mix_shell, :info, [_json]}
-    end
-
     defp dispatch!(binding, title) do
       args = %{
         "purpose" => "implement",

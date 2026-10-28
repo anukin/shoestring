@@ -7,7 +7,9 @@ defmodule Shoestring.Conversations.History do
 
   A human message or inbox entry is *pending* until a turn delivers it. A
   turn is *open* from `conversation.turn.requested` until its
-  `conversation.turn.ended`; at most one is open.
+  `conversation.turn.ended`; at most one is open. `hold` is the latest
+  `conversation.turn.held` (why pending input is not being delivered) until
+  the next turn is requested.
   """
 
   alias Shoestring.Trajectory.TrajectoryEvent
@@ -18,6 +20,7 @@ defmodule Shoestring.Conversations.History do
             inbox: [],
             delivered: MapSet.new(),
             open_turn: nil,
+            hold: nil,
             provider_session_id: nil,
             last_sequence: 0
 
@@ -76,6 +79,8 @@ defmodule Shoestring.Conversations.History do
       status: :open,
       message_ids: payload["message_ids"],
       inbox_ids: payload["inbox_ids"],
+      grant_id: payload["grant_id"],
+      admission: payload["admission"],
       tools: [],
       reason: nil,
       usage: %{},
@@ -89,7 +94,8 @@ defmodule Shoestring.Conversations.History do
         turn_order: history.turn_order ++ [turn.id],
         delivered:
           MapSet.union(history.delivered, MapSet.new(turn.message_ids ++ turn.inbox_ids)),
-        open_turn: turn.id
+        open_turn: turn.id,
+        hold: nil
     }
   end
 
@@ -127,6 +133,17 @@ defmodule Shoestring.Conversations.History do
 
       %{turn | tools: tools}
     end)
+  end
+
+  defp fold(history, "conversation.turn.held", payload, event) do
+    hold = %{
+      reason: payload["reason"],
+      grant_id: payload["grant_id"],
+      defer_until: payload["defer_until"],
+      at: event.occurred_at
+    }
+
+    %{history | hold: hold}
   end
 
   defp fold(history, "conversation.provider_session.bound", payload, _event),

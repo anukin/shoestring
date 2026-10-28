@@ -215,7 +215,8 @@ defmodule Shoestring.CLI.Commands.Chat do
       max_parallel: 3,
       max_total_seconds: 4 * 3600,
       max_dispatch_seconds: 3600,
-      unread_usage: 0
+      unread_usage: 0,
+      max_turns: 20
     }
 
     Grant.describe(attrs, context)

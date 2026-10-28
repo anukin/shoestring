@@ -24,6 +24,23 @@ defmodule Shoestring.Conversations.Engine do
       coordinator reply interrupts the turn, which ends `failed` with reason
       `reply_too_large`; nothing is truncated.
 
+  **Grant and admission** (package D). A turn needs the session's active
+  grant, admission and one of the grant's turns, in that order, before its
+  intent is recorded:
+
+    * Admission treats the turn as a `read_only` call of the coordinator's
+      provider on its subscription, against the standing reserves. The
+      grant's turns are the person's attributable confirmation (decided with
+      the user on 2026-10-28), so unread usage does not hold a granted turn;
+      a breached reserve defers it, with no other model or provider.
+    * The turn is charged (`Shoestring.Grants.use_turn/2`) once, before it
+      is handed over. A turn that ends `unsent` is refunded; one that may
+      have reached the coordinator stays charged.
+    * Without a grant, turns or admission, the input stays pending and a
+      `conversation.turn.held` records why, once per reason. Each poll tries
+      again, so extending the grant or a reset of the reserve releases it.
+      Nothing running is interrupted.
+
   **Inbox.** Every `poll_ms` (default 2 s) the engine reads the session's
   dispatches as `shoestring wait` does: it confirms holds the grant
   pre-approved (`Shoestring.Dispatches.advance/1`) and records an inbox entry
@@ -45,7 +62,8 @@ defmodule Shoestring.Conversations.Engine do
 
   require Logger
 
-  alias Shoestring.{Dispatches, Harnesses, Trajectory}
+  alias Shoestring.{Authority, Dispatches, Grants, Harnesses, Trajectory}
+  alias Shoestring.Cobbler.{AdmissionEvaluation, WakeupObserve}
   alias Shoestring.Conversations.{Conversation, Events, History}
   alias Shoestring.Coordinator.ToolTokens
   alias Shoestring.Harness.{ConversationEvent, Error}
@@ -54,6 +72,7 @@ defmodule Shoestring.Conversations.Engine do
   @max_message_bytes 32_768
   @max_reply_bytes 262_144
   @poll_ms 2_000
+  @scope "subscription"
 
   def max_message_bytes, do: @max_message_bytes
 
@@ -169,7 +188,8 @@ defmodule Shoestring.Conversations.Engine do
        turn_id: state.turn && state.turn.id,
        pending_messages: length(pending.messages),
        pending_inbox: length(pending.inbox),
-       provider_session_id: state.history.provider_session_id
+       provider_session_id: state.history.provider_session_id,
+       hold: state.history.hold && state.history.hold.reason
      }, state}
   end
 
@@ -235,41 +255,151 @@ defmodule Shoestring.Conversations.Engine do
   defp start_turn(state, pending) do
     turn_id = Ecto.UUID.generate()
 
-    payload = %{
-      "turn_id" => turn_id,
-      "message_ids" => Enum.map(pending.messages, & &1.id),
-      "inbox_ids" => Enum.map(pending.inbox, & &1.id)
-    }
+    with {:ok, grant} <- grant(state),
+         {:ok, admission} <- admit(state, grant),
+         {:ok, grant} <- charge(state, grant, turn_id) do
+      payload = %{
+        "turn_id" => turn_id,
+        "message_ids" => Enum.map(pending.messages, & &1.id),
+        "inbox_ids" => Enum.map(pending.inbox, & &1.id),
+        "grant_id" => grant.id,
+        "admission" => admission
+      }
 
+      case record(
+             state,
+             "conversation.turn.requested",
+             payload,
+             "turn-requested:#{turn_id}",
+             "conversation"
+           ) do
+        {:ok, state} ->
+          send_turn(state, grant, turn_id, turn_text(pending))
+
+        # Nothing was handed over; the inputs stay pending for the next turn.
+        {:error, _reason} ->
+          refund(state, grant, turn_id)
+          state
+      end
+    else
+      {:hold, reason, detail} -> hold(state, reason, detail)
+    end
+  end
+
+  defp grant(state) do
+    case Grants.active(state.conversation.session_id) do
+      nil -> {:hold, "no_grant", %{}}
+      grant -> {:ok, grant}
+    end
+  end
+
+  # A turn is a `read_only` call of the coordinator's provider on its
+  # subscription, admitted against the standing reserves like an EXPLORE or
+  # REVIEW call. The grant's turns are the person's attributable
+  # confirmation, so unknown or unread usage does not hold a granted turn; a
+  # breached reserve still defers it, with no other model or provider.
+  defp admit(state, grant) do
+    provider = state.conversation.provider
+    now = DateTime.utc_now()
+
+    {:ok, decision} =
+      AdmissionEvaluation.evaluate(
+        %{
+          requested_capability: "read_only",
+          scope: @scope,
+          override: %{
+            "confirmed_by" => Authority.grant_identity(grant.id),
+            "confirmed_at" => DateTime.to_iso8601(now),
+            "intent" => "coordinator_turn"
+          }
+        },
+        %{
+          provider_id: provider,
+          adapter_id: "converse.#{provider}",
+          scope: @scope,
+          support_tier: :conservative_partial,
+          compatibility_state: :compatible,
+          capabilities: ["read_only"]
+        },
+        observation(provider),
+        nil,
+        now: now
+      )
+
+    case decision.result do
+      :admit ->
+        {:ok,
+         %{
+           "decision_id" => decision.decision_id,
+           "result" => "admit",
+           "reason_code" => decision.reason_code
+         }}
+
+      :defer_until ->
+        {:hold, decision.reason_code,
+         %{"grant_id" => grant.id, "defer_until" => DateTime.to_iso8601(decision.defer_until)}}
+
+      _held_or_rejected ->
+        {:hold, decision.reason_code, %{"grant_id" => grant.id}}
+    end
+  end
+
+  defp observation(provider) do
+    case WakeupObserve.observe(%{provider_id: provider, scope: @scope}) do
+      {:ok, snapshot} -> snapshot
+      _ -> nil
+    end
+  end
+
+  defp charge(state, grant, turn_id) do
+    case Grants.use_turn(grant, turn_detail(state, turn_id)) do
+      {:ok, grant} -> {:ok, grant}
+      {:error, :turns_exhausted} -> {:hold, "turns_exhausted", %{"grant_id" => grant.id}}
+      {:error, _reason} -> {:hold, "grant_unavailable", %{"grant_id" => grant.id}}
+    end
+  end
+
+  defp refund(state, grant, turn_id), do: Grants.refund_turn(grant, turn_detail(state, turn_id))
+
+  defp turn_detail(state, turn_id),
+    do: %{"turn_id" => turn_id, "conversation_id" => state.conversation.id}
+
+  # Recorded once per reason, so a poll that finds the same hold records
+  # nothing; the pending input stays pending.
+  defp hold(%{history: %{hold: %{reason: reason}}} = state, reason, _detail), do: state
+
+  defp hold(state, reason, detail) do
     case record(
            state,
-           "conversation.turn.requested",
-           payload,
-           "turn-requested:#{turn_id}",
+           "conversation.turn.held",
+           Map.put(detail, "reason", reason),
+           "held:#{Ecto.UUID.generate()}",
            "conversation"
          ) do
-      {:ok, state} -> send_turn(state, turn_id, turn_text(pending))
-      # Nothing was handed over; the inputs stay pending for the next turn.
+      {:ok, state} -> state
       {:error, _reason} -> state
     end
   end
 
-  defp send_turn(state, turn_id, text) do
+  defp send_turn(state, grant, turn_id, text) do
     case ensure_coordinator(state) do
       {:ok, state} ->
         case state.module.send_turn(state.adapter, turn_id, text) do
           :ok ->
             %{state | turn: %{id: turn_id, item: 0, failure: nil}}
 
-          # A closed session may have taken the turn before it went away.
+          # A closed session may have taken the turn before it went away, so
+          # the turn stays charged.
           {:error, %Error{code: "conversation_closed"}} ->
             end_turn(%{state | adapter: nil}, turn_id, "uncertain", "conversation_closed")
 
           {:error, error} ->
+            refund(state, grant, turn_id)
             end_turn(state, turn_id, "unsent", reason_code(error))
         end
 
       {:error, reason, state} ->
+        refund(state, grant, turn_id)
         end_turn(state, turn_id, "unsent", reason_code(reason))
     end
   end

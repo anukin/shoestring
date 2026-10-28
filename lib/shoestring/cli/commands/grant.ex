@@ -8,7 +8,8 @@ defmodule Shoestring.CLI.Commands.Grant do
   shoestring grant --models PROVIDER:MODEL[,PROVIDER:MODEL...]
       [--purposes explore,implement,review] [--max-dispatches N]
       [--max-parallel N] [--max-hours H] [--max-dispatch-minutes M]
-      [--unread-usage N] [--session ID] [--repo PATH] [--by human:NAME] [--json]
+      [--unread-usage N] [--max-turns N] [--session ID] [--repo PATH]
+      [--by human:NAME] [--json]
 
   Lets a coordinator (Claude Code, Codex or opencode in a chat session) hand
   work to Shoestring without asking you each time, within these limits:
@@ -21,6 +22,8 @@ defmodule Shoestring.CLI.Commands.Grant do
     --max-dispatch-minutes  the most one dispatch may use (default 60)
     --unread-usage N        dispatches it may start when a provider's
                             remaining usage cannot be read (default 0)
+    --max-turns N           turns a coordinator conversation Shoestring
+                            drives may take, wake-ups included (default 20)
 
   The grant covers one repository (PATH, default the current one) and one
   session: ID, or a new one, which it prints for SHOESTRING_SESSION. A
@@ -39,6 +42,7 @@ defmodule Shoestring.CLI.Commands.Grant do
     max_hours: :integer,
     max_dispatch_minutes: :integer,
     unread_usage: :integer,
+    max_turns: :integer,
     session: :string,
     repo: :string,
     by: :string,
@@ -79,7 +83,8 @@ defmodule Shoestring.CLI.Commands.Grant do
       max_parallel: Keyword.get(opts, :max_parallel, 3),
       max_total_seconds: Keyword.get(opts, :max_hours, 4) * 3600,
       max_dispatch_seconds: Keyword.get(opts, :max_dispatch_minutes, 60) * 60,
-      unread_usage: Keyword.get(opts, :unread_usage, 0)
+      unread_usage: Keyword.get(opts, :unread_usage, 0),
+      max_turns: Keyword.get(opts, :max_turns, 20)
     }
 
     describe(attrs, context)
@@ -113,6 +118,7 @@ defmodule Shoestring.CLI.Commands.Grant do
     )
 
     shell.error("  Dispatches started with unreadable usage: #{attrs.unread_usage}")
+    shell.error("  Coordinator turns: #{attrs.max_turns}")
   end
 
   @doc false
@@ -135,7 +141,12 @@ defmodule Shoestring.CLI.Commands.Grant do
         "max_parallel" => grant.max_parallel,
         "max_total_seconds" => grant.max_total_seconds,
         "max_dispatch_seconds" => grant.max_dispatch_seconds,
-        "unread_usage" => grant.unread_usage
+        "unread_usage" => grant.unread_usage,
+        "max_turns" => grant.max_turns
+      },
+      "turns" => %{
+        "used" => grant.turns_used,
+        "left" => max(grant.max_turns - grant.turns_used, 0)
       },
       "limits_revision" => grant.limits_revision,
       "room" => Dispatches.room(grant),

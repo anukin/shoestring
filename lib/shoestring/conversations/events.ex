@@ -24,9 +24,22 @@ defmodule Shoestring.Conversations.Events do
   end
 
   def validate("conversation.turn.requested", payload) do
-    if payload["message_ids"] != [] or payload["inbox_ids"] != [],
+    cond do
+      payload["message_ids"] == [] and payload["inbox_ids"] == [] ->
+        Contract.invalid(:message_ids, "a turn delivers at least one message or entry")
+
+      not admission?(payload["admission"]) ->
+        Contract.invalid(:admission, "must be an admission decision's id, result and reason")
+
+      true ->
+        :ok
+    end
+  end
+
+  def validate("conversation.turn.held", payload) do
+    if name?(payload["reason"]),
       do: :ok,
-      else: Contract.invalid(:message_ids, "a turn delivers at least one message or entry")
+      else: Contract.invalid(:reason, "must be a reason code")
   end
 
   def validate("conversation.message.coordinator", payload) do
@@ -52,6 +65,15 @@ defmodule Shoestring.Conversations.Events do
   def validate(_type, _payload), do: :ok
 
   defp name?(value), do: is_binary(value) and Regex.match?(@name, value)
+
+  defp admission?(nil), do: true
+
+  defp admission?(admission) when is_map(admission),
+    do:
+      Enum.sort(Map.keys(admission)) == ~w(decision_id reason_code result) and
+        Enum.all?(Map.values(admission), &name?/1)
+
+  defp admission?(_admission), do: false
 
   defp usage?(nil), do: true
 

@@ -9,15 +9,15 @@ defmodule Shoestring.CLI.Commands.Grants do
   shoestring grants list [--json]
   shoestring grants show GRANT [--json]
   shoestring grants extend GRANT [--dispatches N] [--hours H] [--unread-usage N]
-      [--models PROVIDER:MODEL,...] [--purposes P,...] [--max-parallel N]
+      [--turns N] [--models PROVIDER:MODEL,...] [--purposes P,...] [--max-parallel N]
       [--by human:NAME]
   shoestring grants revoke GRANT [--by human:NAME]
 
   `list` and `show` print each grant, what its dispatches use against its
   limits and its history. `extend` adds to a grant's attempts, hours,
-  unread-usage dispatches, models or purposes, or sets how many may run at
-  once. `revoke` stops new dispatches under it; work already running keeps
-  running. Both are a person's decision: they show the change, ask, and
+  unread-usage dispatches, coordinator turns, models or purposes, or sets
+  how many may run at once. `revoke` stops new dispatches and turns under
+  it; work already running keeps running. Both are a person's decision: they show the change, ask, and
   refuse without a terminal. Output is JSON on stdout.
   """
 
@@ -25,6 +25,7 @@ defmodule Shoestring.CLI.Commands.Grants do
     dispatches: :integer,
     hours: :integer,
     unread_usage: :integer,
+    turns: :integer,
     models: :string,
     purposes: :string,
     max_parallel: :integer,
@@ -63,6 +64,7 @@ defmodule Shoestring.CLI.Commands.Grants do
       |> put(:add_dispatches, opts[:dispatches])
       |> put(:add_seconds, opts[:hours] && opts[:hours] * 3600)
       |> put(:add_unread_usage, opts[:unread_usage])
+      |> put(:add_turns, opts[:turns])
       |> put(:add_models, opts[:models] && Grant.list(opts[:models]))
       |> put(:add_purposes, opts[:purposes] && Grant.list(opts[:purposes]))
       |> put(:max_parallel, opts[:max_parallel])
@@ -120,6 +122,7 @@ defmodule Shoestring.CLI.Commands.Grants do
       {:add_dispatches, n} -> "+#{n} attempts"
       {:add_seconds, s} -> "+#{div(s, 3600)} hours"
       {:add_unread_usage, n} -> "+#{n} unread-usage dispatches"
+      {:add_turns, n} -> "+#{n} coordinator turns"
       {:add_models, models} -> "models #{Enum.join(models, ", ")}"
       {:add_purposes, purposes} -> "purposes #{Enum.join(purposes, ", ")}"
       {:max_parallel, n} -> "#{n} at once"
