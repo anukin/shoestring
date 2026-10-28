@@ -112,7 +112,7 @@ defmodule Shoestring.MixProject do
 
   def cli do
     [
-      preferred_envs: [precommit: :test]
+      preferred_envs: [precommit: :test, "test.partitioned": :test]
     ]
   end
 
@@ -164,7 +164,7 @@ defmodule Shoestring.MixProject do
         "format --check-formatted",
         "compile --warnings-as-errors",
         "terminal.check",
-        "test",
+        "test.partitioned",
         "gate_0a.node_test",
         "ui.node_test"
       ]
