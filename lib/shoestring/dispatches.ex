@@ -866,32 +866,49 @@ defmodule Shoestring.Dispatches do
 
   @doc """
   Cancels a dispatch's execution under its grant, reaping its process
-  groups through the ordinary cancellation path. Options: `:oban`.
+  groups through the ordinary cancellation path. Options: `:oban`, and
+  `:requested_by`, a `human:` identity when a person asked (the chat screen;
+  anything else is refused), else the grant's.
   """
   def cancel(dispatch, reason, opts \\ [])
 
-  def cancel(%Dispatch{state: "started", purpose: purpose} = dispatch, _reason, _opts)
-      when purpose in @calls do
+  def cancel(%Dispatch{} = dispatch, reason, opts) do
+    case Keyword.fetch(opts, :requested_by) do
+      {:ok, identity} ->
+        if Authority.human?(identity),
+          do: do_cancel(dispatch, reason, opts),
+          else: {:error, :non_human_identity}
+
+      :error ->
+        do_cancel(dispatch, reason, opts)
+    end
+  end
+
+  defp do_cancel(%Dispatch{state: "started", purpose: purpose} = dispatch, _reason, _opts)
+       when purpose in @calls do
     case Calls.get(dispatch.id) do
       %Call{} = call -> Calls.cancel(call)
       nil -> {:error, :not_started}
     end
   end
 
-  def cancel(%Dispatch{state: "started"} = dispatch, reason, opts) do
+  defp do_cancel(%Dispatch{state: "started"} = dispatch, reason, opts) do
     ExecutionControl.cancel(
       dispatch.goal_id,
       %{
         command_id: Ecto.UUID.generate(),
         execution_id: dispatch.execution_id,
-        requested_by: Authority.grant_identity(dispatch.grant_id),
+        requested_by:
+          Keyword.get_lazy(opts, :requested_by, fn ->
+            Authority.grant_identity(dispatch.grant_id)
+          end),
         reason: redact(reason)
       },
       Keyword.take(opts, [:oban]) ++ [dispatch: dispatch]
     )
   end
 
-  def cancel(%Dispatch{}, _reason, _opts), do: {:error, :not_started}
+  defp do_cancel(%Dispatch{}, _reason, _opts), do: {:error, :not_started}
 
   defp digest(text), do: :crypto.hash(:sha256, to_string(text)) |> Base.encode16(case: :lower)
 

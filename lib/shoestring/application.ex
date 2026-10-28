@@ -56,12 +56,28 @@ defmodule Shoestring.Application do
         [
           {DNSCluster, query: Application.get_env(:shoestring, :dns_cluster_query) || :ignore},
           ShoestringWeb.Endpoint
-        ]
+        ] ++
+        conversation_resume_children()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Shoestring.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      if Phoenix.Endpoint.server?(:shoestring, ShoestringWeb.Endpoint),
+        do: Shoestring.Banner.print(ShoestringWeb.Endpoint.url())
+
+      {:ok, pid}
+    end
+  end
+
+  # Engines of conversations whose session still has a grant, so a dispatch
+  # that settles with no client attached still wakes the coordinator.
+  # Disabled in test via `:conversation_resume`.
+  defp conversation_resume_children do
+    if Application.get_env(:shoestring, :conversation_resume, true),
+      do: [Shoestring.Conversations.Resume],
+      else: []
   end
 
   # Tell Phoenix to update the endpoint configuration

@@ -1,0 +1,85 @@
+# Chat channel
+
+The native chat screen (`shoestring chat`, a Rust terminal client) talks to
+the running service over one Phoenix channel. The service owns the
+conversation (`Shoestring.Conversations`); the client renders what the
+channel sends and sends back what the person types. Losing the client loses
+nothing.
+
+## Transport
+
+- `ws://localhost:PORT/chat/socket/websocket`, the endpoint's existing
+  listener. The service binds loopback only; there is no other listener and
+  no Erlang distribution.
+- A connection is refused unless its peer address is loopback, the request
+  names a local host (`localhost`, `127.0.0.1` or `::1`, so DNS rebinding
+  cannot reach it), it carries no `Origin` or a local one (a web page on
+  another site cannot open it), and it presents the conversation's token.
+- Frames are at most 128 KiB. A message the person sends is at most 32 KiB
+  (`Shoestring.Conversations.Engine`).
+
+## Authentication: the token file
+
+Each conversation has one token, in a file only the person can read:
+
+    STATE_ROOT/chat/SESSION/chat-token     (directory 0700, file 0600)
+
+- `Shoestring.Conversations.ChatToken.ensure/1` creates it (32 random bytes,
+  base64url) the first time and returns the same token afterwards, so a
+  client that reattaches presents the same token. It makes the directory
+  0700 first, then writes a temporary file, makes it 0600 and renames it into
+  place, so no one else can reach the token, even briefly.
+- Connecting sends `session` and `token`. The service reads the file and
+  compares in constant time. It refuses if the file is missing, is not a
+  regular file, or can be read or written by anyone but its owner. The
+  token is never logged, stored in the database or sent back.
+- Whoever can read the file is the person: the state root is already theirs
+  alone. Removing the file refuses every later connection until a new one is
+  made; connections already open stay open.
+
+## Channel: `conversation:SESSION`
+
+Joining needs the socket's own session. Join parameters: `after`, the last
+event sequence the client has (0 for none).
+
+On join the service starts the conversation's engine if it is not running,
+subscribes to the conversation's events, and only then reads the stored
+events after `after` and pushes them in order. Live events that arrive
+before the backlog is out are left to the backlog. An event committed while the
+backlog is read is in the backlog or arrives afterwards, never both shown;
+the client also drops any sequence it has already seen. Delivery is at least
+once; a reconnect with the last acknowledged sequence resumes with no gap.
+
+Pushed to the client:
+
+| Event | Payload |
+| --- | --- |
+| `events` | Up to 100 conversation events in sequence order, each with `id`, `sequence`, `type`, `actor`, `occurred_at` and `payload` (already redacted; never reasoning, tool inputs or provider frames). The backlog comes in such batches; a live event comes alone. |
+| `state` | A snapshot, pushed when it changes and at most once a second: the engine (`idle` or `in_turn`, pending counts, hold), the grant (limits, room, turns) and each dispatch of the session as `shoestring runs list` prints it. |
+| `detached` | `reason: "slow_consumer"`, then the channel closes. The client reconnects with `after`. |
+
+Sent by the client, each answered with `ok` or `error` and a `reason`:
+
+| Event | Payload | Does |
+| --- | --- | --- |
+| `say` | `message_id` (a UUID the client picks), `text` | Records the message; it is sent to the coordinator when it is idle. A resent `message_id` records nothing twice. |
+| `cancel_turn` | — | Interrupts the coordinator's running turn. |
+| `cancel_dispatch` | `dispatch_id`, `reason` | Cancels one dispatch of this session, recorded as the person's request. The client confirms with the person first. |
+
+## Backpressure
+
+Conversation events come at the rate of turns, and the state snapshot is
+coalesced to one a second, so a client's normal load is small (spike 5 saw
+1–2 Elf events a second; Elf events reach the client only as snapshot
+changes). A client that stops reading cannot block anything: the channel
+checks its connection's outgoing queue before each push and, past 1,000
+waiting messages, detaches it. Nothing is lost, since the client resumes from
+the trajectory with `after`.
+
+## Engines without a client
+
+`/exit` or a lost terminal leaves the conversation and every Elf running.
+At boot the service starts the engine of each conversation whose session
+still has an active grant, so a dispatch that settles while no client is
+attached still wakes the coordinator. Starting an engine makes no model
+call.

@@ -9,6 +9,8 @@ defmodule Shoestring.Conversations do
   alias Shoestring.Conversations.{Conversation, Engine, History}
   alias Shoestring.Trajectory.Goal
 
+  @session ~r/\A[a-z0-9][a-z0-9_-]{0,62}\z/
+
   @doc """
   The session's conversation, recorded on first use. `attrs`: `:session_id`,
   `:provider` (a harness that can `:converse`), `:model`, `:effort` and
@@ -19,13 +21,21 @@ defmodule Shoestring.Conversations do
   def open(attrs) do
     attrs = Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
 
-    with :ok <- converses(attrs["provider"]),
+    with :ok <- session(attrs["session_id"]),
+         :ok <- converses(attrs["provider"]),
          {:ok, conversation} <- find_or_insert(attrs),
          :ok <- same_coordinator(conversation, attrs),
          {:ok, _event} <- record_opened(conversation) do
       {:ok, conversation}
     end
   end
+
+  # The session names the conversation's directory (its chat token), so it
+  # has the grant's session format.
+  defp session(id) when is_binary(id),
+    do: if(Regex.match?(@session, id), do: :ok, else: {:error, :invalid_session})
+
+  defp session(_id), do: {:error, :invalid_session}
 
   defp converses(provider) when is_binary(provider) do
     if Harnesses.supports?(provider, :converse),

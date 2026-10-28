@@ -23,6 +23,16 @@ defmodule ShoestringWeb.Endpoint do
     ],
     longpoll: false
 
+  # The native chat client (docs/chat-channel.md): a token file, not a
+  # browser session, and no Origin but a local one.
+  socket "/chat/socket", ShoestringWeb.ChatSocket,
+    websocket: [
+      check_origin: ["//localhost", "//127.0.0.1", "//[::1]"],
+      max_frame_size: 131_072,
+      connect_info: [:peer_data, :uri]
+    ],
+    longpoll: false
+
   # Serve the browser clients from the locked OTP dependencies. Only these
   # JavaScript assets are exposed; no provider or external CDN is involved.
   plug Plug.Static,

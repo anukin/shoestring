@@ -510,6 +510,9 @@ defmodule Shoestring.Conversations.EngineTest do
                Conversations.open(%{attrs | session_id: "s2", provider: "codex"})
 
       assert Conversations.get("s2") == nil
+
+      assert {:error, :invalid_session} =
+               Conversations.open(%{attrs | session_id: "../elsewhere"})
     end
   end
 end
