@@ -153,59 +153,97 @@ defmodule Shoestring.CLI.Commands.Dispatch do
           "No coordinator session: pass --session ID or set SHOESTRING_SESSION (shoestring grant prints it)"
         )
 
-    {provider, model} =
-      case String.split(opts[:worker], ":", parts: 2) do
-        [provider, model] when provider != "" and model != "" -> {provider, model}
-        _ -> Refusal.refuse!("Use PROVIDER:MODEL for --worker, for example codex:gpt-6-luna")
-      end
+    fields =
+      opts
+      |> Map.new()
+      |> Map.merge(%{
+        session_id: session,
+        brief: read_brief!(Command.expand(opts[:brief], context)),
+        repository: Command.expand(opts[:repo], context) || context.cwd,
+        files: Keyword.get_values(opts, :file),
+        stay_out: Keyword.get_values(opts, :stay_out),
+        accept: Keyword.get_values(opts, :accept),
+        gates: Keyword.get_values(opts, :gate),
+        tests: Keyword.get_values(opts, :test)
+      })
 
-    brief = read_brief!(Command.expand(opts[:brief], context))
+    case build_request(fields) do
+      {:ok, request} -> request
+      {:error, message} -> Refusal.refuse!(message)
+    end
+  end
 
+  @doc """
+  A dispatch request from already-resolved fields, as `Shoestring.Dispatches`
+  takes it, or `{:error, message}`. Shared by this command and the
+  coordinator's MCP `dispatch` tool (`Shoestring.Coordinator.Tools`), so both
+  refuse the same way. `fields`: `:session_id`, `:repository`, `:brief` (its
+  text) and the options as named in `@switches`, with `:files`, `:stay_out`,
+  `:accept`, `:gates` and `:tests` as lists.
+  """
+  @spec build_request(map()) :: {:ok, map()} | {:error, String.t()}
+  def build_request(fields) do
+    with {:ok, {provider, model}} <-
+           model_pair(
+             fields[:worker],
+             "Use PROVIDER:MODEL for --worker, for example codex:gpt-6-luna"
+           ),
+         :ok <- purpose_options(fields),
+         {:ok, {reviewer_provider, reviewer_model}} <-
+           reviewer_pair(fields[:reviewer]) do
+      request = %{
+        session_id: fields.session_id,
+        purpose: fields[:purpose],
+        provider: provider,
+        model: model,
+        effort: fields[:effort],
+        reviewer_provider: reviewer_provider,
+        reviewer_model: reviewer_model,
+        title: fields[:title],
+        brief: fields.brief,
+        target: fields[:of],
+        repository: fields.repository,
+        files: Map.get(fields, :files, []),
+        stay_out: Map.get(fields, :stay_out, []),
+        accept: Map.get(fields, :accept, []),
+        gates: Map.get(fields, :gates, []),
+        tests: Map.get(fields, :tests, []),
+        attempts: fields[:attempts] || 1,
+        seconds: (fields[:minutes] || 30) * 60,
+        batch_label: fields[:batch],
+        batch_size: fields[:batch_size]
+      }
+
+      {:ok, Map.put(request, :request_id, fields[:request_id] || derived_request_id(request))}
+    end
+  end
+
+  defp model_pair(value, refusal) do
+    case is_binary(value) && String.split(value, ":", parts: 2) do
+      [provider, model] when provider != "" and model != "" -> {:ok, {provider, model}}
+      _ -> {:error, refusal}
+    end
+  end
+
+  defp reviewer_pair(nil), do: {:ok, {nil, nil}}
+
+  defp reviewer_pair(value),
+    do: model_pair(value, "Use PROVIDER:MODEL for --reviewer, for example claude:opus")
+
+  defp purpose_options(fields) do
     cond do
-      opts[:purpose] == "review" and is_nil(opts[:of]) ->
-        Refusal.refuse!("A review needs --of DISPATCH, the completed IMPLEMENT to review")
+      fields[:purpose] == "review" and is_nil(fields[:of]) ->
+        {:error, "A review needs --of DISPATCH, the completed IMPLEMENT to review"}
 
-      opts[:purpose] != "review" and opts[:of] ->
-        Refusal.refuse!("--of is only for --purpose review")
+      fields[:purpose] != "review" and fields[:of] ->
+        {:error, "--of is only for --purpose review"}
 
-      opts[:purpose] in ["explore", "review"] and opts[:reviewer] ->
-        Refusal.refuse!("--reviewer is only for --purpose implement")
+      fields[:purpose] in ["explore", "review"] and fields[:reviewer] ->
+        {:error, "--reviewer is only for --purpose implement"}
 
       true ->
         :ok
     end
-
-    {reviewer_provider, reviewer_model} =
-      case opts[:reviewer] && String.split(opts[:reviewer], ":", parts: 2) do
-        nil -> {nil, nil}
-        [provider, model] when provider != "" and model != "" -> {provider, model}
-        _ -> Refusal.refuse!("Use PROVIDER:MODEL for --reviewer, for example claude:opus")
-      end
-
-    request = %{
-      session_id: session,
-      purpose: opts[:purpose],
-      provider: provider,
-      model: model,
-      effort: opts[:effort],
-      reviewer_provider: reviewer_provider,
-      reviewer_model: reviewer_model,
-      title: opts[:title],
-      brief: brief,
-      target: opts[:of],
-      repository: Command.expand(opts[:repo], context) || context.cwd,
-      files: Keyword.get_values(opts, :file),
-      stay_out: Keyword.get_values(opts, :stay_out),
-      accept: Keyword.get_values(opts, :accept),
-      gates: Keyword.get_values(opts, :gate),
-      tests: Keyword.get_values(opts, :test),
-      attempts: Keyword.get(opts, :attempts, 1),
-      seconds: Keyword.get(opts, :minutes, 30) * 60,
-      batch_label: opts[:batch],
-      batch_size: opts[:batch_size]
-    }
-
-    Map.put(request, :request_id, opts[:request_id] || derived_request_id(request))
   end
 
   defp read_brief!(path) do

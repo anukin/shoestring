@@ -59,7 +59,8 @@ defmodule Shoestring.CLI.Commands.Runs do
     end
   end
 
-  defp detail(dispatch) do
+  @doc "`runs show`'s data for `dispatch` (also the coordinator's `runs_show` tool)."
+  def detail(dispatch) do
     summary = Dispatch.summary(dispatch)
 
     status =
@@ -167,8 +168,11 @@ defmodule Shoestring.CLI.Commands.Runs do
 
   defp waiting_next(_dispatch, _waiting), do: nil
 
+  @doc "`runs log`'s data (also the coordinator's `runs_log` tool)."
+  def log(dispatch, after_sequence)
+
   # An IMPLEMENT's goal history, rendered as `follow` renders it.
-  defp log(%{goal_id: goal_id} = dispatch, after_sequence) when is_binary(goal_id) do
+  def log(%{goal_id: goal_id} = dispatch, after_sequence) when is_binary(goal_id) do
     events = Follow.events_after(goal_id, after_sequence)
 
     %{
@@ -187,7 +191,7 @@ defmodule Shoestring.CLI.Commands.Runs do
 
   # An EXPLORE or REVIEW dispatch, or one that never started, has no goal:
   # its record and its call's timestamps are its history.
-  defp log(dispatch, _after_sequence) do
+  def log(dispatch, _after_sequence) do
     entries =
       [
         {dispatch.inserted_at,

@@ -29,22 +29,24 @@ defmodule Shoestring.CLI.Commands.Capacity do
   def run(args, context) do
     case OptionParser.parse(args, strict: [json: :boolean]) do
       {_opts, [], []} ->
-        context.with_repo.(fn _repo ->
-          policy = AdmissionPolicy.default()
-
-          Command.json(context, %{
-            "reserves" => %{
-              "five_hour_max_used_percent" => policy.five_hour_max_used_percent,
-              "weekly_max_used_percent" => policy.weekly_max_used_percent
-            },
-            "providers" =>
-              Enum.map(Shoestring.Usage.cards(), &provider(&1, policy)) ++ [opencode()]
-          })
-        end)
+        context.with_repo.(fn _repo -> Command.json(context, report()) end)
 
       _ ->
         Refusal.usage!("capacity")
     end
+  end
+
+  @doc "What `shoestring capacity` prints (also the coordinator's `capacity` tool)."
+  def report do
+    policy = AdmissionPolicy.default()
+
+    %{
+      "reserves" => %{
+        "five_hour_max_used_percent" => policy.five_hour_max_used_percent,
+        "weekly_max_used_percent" => policy.weekly_max_used_percent
+      },
+      "providers" => Enum.map(Shoestring.Usage.cards(), &provider(&1, policy)) ++ [opencode()]
+    }
   end
 
   @doc "The capacity entry for one harness, as `shoestring capacity` prints it."

@@ -40,4 +40,14 @@ defmodule ShoestringWeb.Router do
 
     get "/health", HealthController, :show
   end
+
+  # The coordinator's MCP tool endpoint (iteration 15, package B). No
+  # `accepts`: Claude Code probes `GET /mcp` with `Accept: text/event-stream`,
+  # and the MCP spec answers 405 when no event stream is offered, where
+  # content negotiation would give 406.
+  scope "/", ShoestringWeb do
+    post "/mcp", McpController, :post
+    get "/mcp", McpController, :not_allowed
+    delete "/mcp", McpController, :not_allowed
+  end
 end
