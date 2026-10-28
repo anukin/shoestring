@@ -10,12 +10,37 @@ defmodule Shoestring.HarnessesTest do
   alias Shoestring.Harnesses
 
   test "each harness declares only the jobs it has a path for" do
-    assert Harnesses.capabilities("claude") == [:coordinate, :plan, :implement, :review, :explore]
+    assert Harnesses.capabilities("claude") == [
+             :coordinate,
+             :converse,
+             :plan,
+             :implement,
+             :review,
+             :explore
+           ]
+
     assert Harnesses.capabilities("codex") == [:coordinate, :implement, :review, :explore]
     assert Harnesses.capabilities("opencode") == [:coordinate, :implement]
     assert Harnesses.capabilities("unknown") == []
     refute Harnesses.supports?("opencode", :review)
     assert Harnesses.module("opencode", :review) == :error
+  end
+
+  test "a converse capability is a conversation module, and only Claude has one" do
+    assert {:ok, Shoestring.Harness.ClaudeHeadless.Conversation} =
+             Harnesses.module("claude", :converse)
+
+    assert Harnesses.module("codex", :converse) == :error
+    assert Harnesses.module("opencode", :converse) == :error
+
+    for id <- Harnesses.ids(), Harnesses.supports?(id, :converse) do
+      {:ok, module} = Harnesses.module(id, :converse)
+
+      behaviours =
+        module.module_info(:attributes) |> Keyword.get_values(:behaviour) |> List.flatten()
+
+      assert Shoestring.Harness.Conversation in behaviours
+    end
   end
 
   test "an implement capability is the adapter Elves run for that harness" do

@@ -27,7 +27,11 @@ defmodule Shoestring.Harness.Capacity.Codex.StdioTransport do
     * `:args` - command-line arguments (default: `["app-server", "--stdio"]`).
     * `:max_frame_size` - maximum allowed frame size in bytes (default: `262_144`).
     * `:env` - `[{name, value}]` set in the process environment on top of the
-      inherited one (default: none).
+      inherited one (default: none). A `false` value unsets the variable.
+    * `:cd` - the child's working directory; it must exist.
+
+  The child leads its own process group (OTP's child setup runs `setsid`;
+  `StdioTransportGroupTest` checks pid == pgid), so its group can be reaped.
   """
   @impl Shoestring.Harness.Capacity.Codex.Transport
   def start_link(opts) do
@@ -35,10 +39,12 @@ defmodule Shoestring.Harness.Capacity.Codex.StdioTransport do
     explicit_path = Keyword.get(opts, :executable)
     exec_path = explicit_path || System.find_executable(command)
 
-    if is_nil(exec_path) do
-      {:error, :executable_not_found}
-    else
-      GenServer.start_link(__MODULE__, Keyword.put(opts, :executable, exec_path))
+    cd = Keyword.get(opts, :cd)
+
+    cond do
+      is_nil(exec_path) -> {:error, :executable_not_found}
+      not is_nil(cd) and not File.dir?(cd) -> {:error, {:invalid_workdir, cd}}
+      true -> GenServer.start_link(__MODULE__, Keyword.put(opts, :executable, exec_path))
     end
   end
 
@@ -83,20 +89,31 @@ defmodule Shoestring.Harness.Capacity.Codex.StdioTransport do
         {:stop, :executable_not_found}
 
       path when is_binary(path) ->
-        open_port(path, args, max_frame_size, owner, Keyword.get(opts, :env, []))
+        open_port(path, args, max_frame_size, owner, opts)
     end
   end
 
-  defp open_port(exec_path, args, max_frame_size, owner, env) do
-    port_opts = [
-      :binary,
-      :stream,
-      {:line, max_frame_size},
-      :use_stdio,
-      :exit_status,
-      args: args,
-      env: Enum.map(env, fn {key, value} -> {to_charlist(key), to_charlist(value)} end)
-    ]
+  defp open_port(exec_path, args, max_frame_size, owner, opts) do
+    env =
+      Enum.map(Keyword.get(opts, :env, []), fn
+        {key, false} -> {to_charlist(key), false}
+        {key, value} -> {to_charlist(key), to_charlist(value)}
+      end)
+
+    port_opts =
+      [
+        :binary,
+        :stream,
+        {:line, max_frame_size},
+        :use_stdio,
+        :exit_status,
+        args: args,
+        env: env
+      ] ++
+        case Keyword.get(opts, :cd) do
+          nil -> []
+          dir -> [cd: to_charlist(dir)]
+        end
 
     try do
       port = Port.open({:spawn_executable, exec_path}, port_opts)

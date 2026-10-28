@@ -7,20 +7,26 @@ defmodule Shoestring.Harnesses do
   Capabilities:
 
     * `:coordinate` - an interactive coding CLI a person can chat with.
+    * `:converse` - a coordinator session Shoestring drives from code
+      (`Shoestring.Harness.Conversation`, iteration 15): read-only in the
+      repository and able to reach Shoestring's tools. Codex and opencode
+      do not have it yet; opencode's Code Mode can reach the network without
+      a permission prompt, so it cannot be held read-only (Phase 0).
     * `:plan` - drafts a plan through Shoestring's tool-free planner call.
     * `:implement` - runs a plan task as a sandboxed Elf.
     * `:review` - reviews a task through Shoestring's tool-free review call.
     * `:explore` - answers a brief from a read-only copy of the repository in
       one call (`Shoestring.Dispatches.Explore`).
 
-  `:plan`, `:implement`, `:review` and `:explore` each name the module that provides
-  them, so the table cannot claim a capability without an implementation.
+  `:converse`, `:plan`, `:implement`, `:review` and `:explore` each name the
+  module that provides them, so the table cannot claim a capability without an
+  implementation.
   """
 
   alias Shoestring.Cobbler.{Planner, Review}
   alias Shoestring.Harness.{ClaudeHeadless, CodexAppServer, OpencodeAcp}
 
-  @capabilities [:coordinate, :plan, :implement, :review, :explore]
+  @capabilities [:coordinate, :converse, :plan, :implement, :review, :explore]
   @role_capabilities %{
     "Coordinator" => :coordinate,
     "Worker" => :implement,
@@ -49,6 +55,7 @@ defmodule Shoestring.Harnesses do
       "claude" => %{
         name: "Claude Code",
         coordinate: true,
+        converse: ClaudeHeadless.Conversation,
         plan: Planner.ClaudeHeadless,
         implement: ClaudeHeadless,
         review: Review.ClaudeHeadless,
@@ -82,7 +89,7 @@ defmodule Shoestring.Harnesses do
   def supports?(id, capability), do: capability in capabilities(id)
 
   @doc "The module providing `capability` for `id`."
-  def module(id, capability) when capability in [:plan, :implement, :review] do
+  def module(id, capability) when capability in [:converse, :plan, :implement, :review] do
     case get_in(harnesses(), [id, capability]) do
       nil -> :error
       module -> {:ok, module}

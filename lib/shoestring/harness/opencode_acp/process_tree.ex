@@ -89,7 +89,9 @@ defmodule Shoestring.Harness.OpencodeAcp.ProcessTree do
     end
   end
 
-  defp alive?(pgid) do
+  @doc "Whether any process in group `pgid` is still running."
+  @spec alive?(pos_integer()) :: boolean()
+  def alive?(pgid) when is_integer(pgid) and pgid > 1 do
     match?({_, 0}, System.cmd("kill", ["-0", "-#{pgid}"], stderr_to_stdout: true))
   end
 

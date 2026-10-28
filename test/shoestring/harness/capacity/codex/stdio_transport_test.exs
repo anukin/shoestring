@@ -13,6 +13,47 @@ defmodule Shoestring.Harness.Capacity.Codex.StdioTransportTest do
 
       assert result == {:error, :executable_not_found}
     end
+
+    test "refuses a working directory that does not exist, before starting" do
+      missing = Path.join(System.tmp_dir!(), "no-such-dir-#{System.unique_integer([:positive])}")
+
+      assert StdioTransport.start_link(
+               owner: self(),
+               executable: System.find_executable("cat"),
+               cd: missing
+             ) ==
+               {:error, {:invalid_workdir, missing}}
+    end
+  end
+
+  describe "working directory and environment" do
+    @tag :tmp_dir
+    test "runs the child in :cd and unsets a variable given as false", %{tmp_dir: dir} do
+      python = System.find_executable("python3")
+
+      script =
+        "import os, json; print(json.dumps([os.getcwd(), os.environ.get('HOME') is None, os.environ.get('KEPT')]), flush=True)"
+
+      {:ok, transport} =
+        StdioTransport.start_link(
+          owner: self(),
+          executable: python,
+          args: ["-I", "-c", script],
+          cd: dir,
+          env: [{"HOME", false}, {"KEPT", "yes"}]
+        )
+
+      assert_receive {:codex_transport_frame, ^transport, line}, 5_000
+      [cwd, home_unset, kept] = Jason.decode!(line)
+      assert realpath(cwd) == realpath(dir)
+      assert home_unset
+      assert kept == "yes"
+    end
+  end
+
+  defp realpath(path) do
+    {out, 0} = System.cmd("realpath", [path])
+    String.trim(out)
   end
 
   describe "stdio communication with real OS executable" do
