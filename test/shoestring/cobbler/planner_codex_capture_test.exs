@@ -19,7 +19,7 @@ defmodule Shoestring.Cobbler.PlannerCodexCaptureTest do
     assert {:ok, %{exit_status: 0, output: output}} =
              GateProcess.run(argv, File.cwd!(), 20_000, 65_536)
 
-    assert output =~ "Ran 13 tests"
+    assert output =~ "Ran 14 tests"
     assert output =~ "OK"
   end
 end

@@ -1,7 +1,9 @@
 """Hermetic capture checks: local Python children only, never Codex or network."""
 
 import json
+import os
 from pathlib import Path
+import select
 import subprocess
 import sys
 import unittest
@@ -122,6 +124,47 @@ print(json.dumps({'type':'turn.completed','usage':{'output_tokens':7}}))
     def test_hung_owned_process_is_bounded(self):
         with self.assertRaisesRegex(proposal.Rejected, "^timeout$"):
             self.collect_local("import signal; signal.pause()", timeout=0.1)
+
+    def test_a_child_that_exits_just_after_the_poll_is_still_stopped(self):
+        process = subprocess.Popen([sys.executable, "-B", "-c", "import sys; sys.stdin.read()"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
+        exited_unreaped(process)
+        first_poll_misses_the_exit(process)
+        proposal.stop_owned_group(process)
+        self.assertEqual(process.returncode, 0)
+
+
+def exited_unreaped(process):
+    """Let the child exit and wait for it without reaping it."""
+    if hasattr(os, "waitid"):
+        process.stdin.close()
+        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+        return
+    queue = select.kqueue()
+    try:
+        exit_event = select.kevent(process.pid, select.KQ_FILTER_PROC,
+                                   select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                                   select.KQ_NOTE_EXIT)
+        queue.control([exit_event], 0)
+        process.stdin.close()
+        queue.control(None, 1, 5)
+    finally:
+        queue.close()
+
+
+def first_poll_misses_the_exit(process):
+    """The child exits between stop_owned_group's poll and its killpg."""
+    real_poll = process.poll
+    polled = []
+
+    def poll():
+        if not polled:
+            polled.append(True)
+            return None
+        return real_poll()
+
+    process.poll = poll
 
 
 if __name__ == "__main__":

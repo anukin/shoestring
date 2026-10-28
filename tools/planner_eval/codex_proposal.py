@@ -176,6 +176,10 @@ def stop_owned_group(process):
             os.killpg(process.pid, sig)
         except ProcessLookupError:
             break
+        except PermissionError:
+            # macOS refuses to signal a group whose only member exited after
+            # the poll above and is not yet reaped: nothing is left to stop.
+            break
         try:
             process.wait(timeout=2)
         except subprocess.TimeoutExpired:
