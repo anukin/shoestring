@@ -284,6 +284,61 @@ defmodule Shoestring.Trajectory.EventRegistry do
         types: %{}
       }
     },
+    "conversation.opened" => %{
+      1 => %{
+        required: [:session_id, :provider, :model, :repository_root],
+        optional: [:effort],
+        uuid_fields: []
+      }
+    },
+    "conversation.message.human" => %{
+      1 => %{required: [:message_id, :text], optional: [], uuid_fields: [:message_id]}
+    },
+    "conversation.message.coordinator" => %{
+      1 => %{
+        required: [:turn_id, :item, :text],
+        optional: [],
+        uuid_fields: [:turn_id],
+        types: %{item: :integer}
+      }
+    },
+    "conversation.turn.requested" => %{
+      1 => %{
+        required: [:turn_id, :message_ids, :inbox_ids],
+        optional: [],
+        uuid_fields: [:turn_id],
+        types: %{message_ids: {:array, :string}, inbox_ids: {:array, :string}}
+      }
+    },
+    "conversation.turn.ended" => %{
+      1 => %{
+        required: [:turn_id, :status],
+        optional: [:reason, :usage],
+        uuid_fields: [:turn_id],
+        types: %{usage: :map}
+      }
+    },
+    "conversation.tool.called" => %{
+      1 => %{required: [:turn_id, :call_id, :tool], optional: [], uuid_fields: [:turn_id]}
+    },
+    "conversation.tool.returned" => %{
+      1 => %{
+        required: [:turn_id, :call_id, :is_error],
+        optional: [],
+        uuid_fields: [:turn_id],
+        types: %{is_error: :boolean}
+      }
+    },
+    "conversation.provider_session.bound" => %{
+      1 => %{required: [:provider_session_id], optional: [], uuid_fields: []}
+    },
+    "conversation.inbox.recorded" => %{
+      1 => %{
+        required: [:entry_id, :dispatch_id, :state],
+        optional: [:purpose, :title, :worker],
+        uuid_fields: [:entry_id, :dispatch_id]
+      }
+    },
     "run.starting" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
     "run.running" => %{
       1 => %{
@@ -1304,7 +1359,8 @@ defmodule Shoestring.Trajectory.EventRegistry do
            :ok <- Shoestring.Cobbler.Planner.Events.validate(type, validated),
            :ok <- Shoestring.Cobbler.Review.Events.validate(type, validated),
            :ok <- Shoestring.Terminal.Events.validate(type, validated),
-           :ok <- Shoestring.Measurement.Events.validate(type, validated) do
+           :ok <- Shoestring.Measurement.Events.validate(type, validated),
+           :ok <- Shoestring.Conversations.Events.validate(type, validated) do
         {:ok, validated}
       else
         {:error, changeset} -> {:error, {:invalid_payload, type, version, changeset}}

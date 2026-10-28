@@ -8,6 +8,8 @@ defmodule Shoestring.Coordinator.Tools do
     * `runs_list`, `runs_show`, `runs_log`, `runs_cancel` — `shoestring runs`.
     * `capacity` — `shoestring capacity`.
     * `advice` — `shoestring advice`.
+    * `read_inbox` — the session's inbox (`Shoestring.Conversations.inbox/1`),
+      which has no command.
 
   The session and repository come from the caller's token binding
   (`Shoestring.Coordinator.ToolTokens`), never from arguments, so a
@@ -126,6 +128,14 @@ defmodule Shoestring.Coordinator.Tools do
         "What finished runs of each kind looked like (tokens, first-try acceptance, " <>
           "duration), with sample counts. It never changes admission.",
       "inputSchema" => %{"type" => "object", "properties" => %{}}
+    },
+    %{
+      "name" => "read_inbox",
+      "description" =>
+        "Every time one of this session's dispatches settled (completed, failed, " <>
+          "cancelled, waiting, held or needs you), oldest first, and whether a turn " <>
+          "has delivered it. Shoestring starts a turn with new entries when you are idle.",
+      "inputSchema" => %{"type" => "object", "properties" => %{}}
     }
   ]
 
@@ -184,6 +194,7 @@ defmodule Shoestring.Coordinator.Tools do
 
   def call("capacity", _args, _binding), do: {:ok, Capacity.report()}
   def call("advice", _args, _binding), do: {:ok, Shoestring.Advice.report(Shoestring.Repo)}
+  def call("read_inbox", _args, binding), do: Shoestring.Conversations.inbox(binding.session_id)
   def call(name, _args, _binding), do: {:error, "Unknown tool: #{name}"}
 
   defp dry_run(request) do
