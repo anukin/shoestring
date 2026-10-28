@@ -53,7 +53,8 @@ defmodule Shoestring.Conversations.Engine do
   `conversation.provider_session.bound`.
 
   Options: `:conversation_module` (default: the provider's `:converse`
-  module), `:conversation_opts`, `:instructions`, `:tools_url` (default the
+  module), `:conversation_opts`, `:instructions` (default: the file
+  `Shoestring.Conversations.instructions_path/1` names), `:tools_url` (default the
   endpoint's `/mcp`; nil for no tools), `:poll_ms` (nil turns the timer off;
   `poll/1` still works), `:max_reply_bytes` (default 256 KiB).
   """
@@ -62,7 +63,7 @@ defmodule Shoestring.Conversations.Engine do
 
   require Logger
 
-  alias Shoestring.{Authority, Dispatches, Grants, Harnesses, Trajectory}
+  alias Shoestring.{Authority, Conversations, Dispatches, Grants, Harnesses, Trajectory}
   alias Shoestring.Cobbler.{AdmissionEvaluation, WakeupObserve}
   alias Shoestring.Conversations.{Conversation, Events, History}
   alias Shoestring.Coordinator.ToolTokens
@@ -422,7 +423,7 @@ defmodule Shoestring.Conversations.Engine do
       workdir: conversation.repository_root,
       model: conversation.model,
       effort: conversation.effort,
-      instructions: Keyword.get(opts, :instructions),
+      instructions: Keyword.get_lazy(opts, :instructions, fn -> instructions(conversation) end),
       tools: tools,
       resume: state.history.provider_session_id
     }
@@ -430,6 +431,15 @@ defmodule Shoestring.Conversations.Engine do
     case state.module.start_link(spec, Keyword.get(opts, :conversation_opts, [])) do
       {:ok, pid} -> {:ok, %{state | adapter: pid}}
       {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  # Written by `shoestring chat`; read again at each start, so a resumed
+  # coordinator gets the instructions its session was opened with.
+  defp instructions(conversation) do
+    case File.read(Conversations.instructions_path(conversation.session_id)) do
+      {:ok, text} -> text
+      {:error, _} -> nil
     end
   end
 

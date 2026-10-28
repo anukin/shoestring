@@ -159,11 +159,12 @@ defmodule Shoestring.MixProject do
       "ecto.migrate": &one_connection("ecto.migrate", &1),
       "ecto.rollback": &one_connection("ecto.rollback", &1),
       test: ["shoestring.state.prepare", "ecto.create --quiet", "ecto.migrate --quiet", "test"],
-      "assets.deploy": ["terminal.build", "phx.digest"],
+      "assets.deploy": ["terminal.build", "chat_client.build", "phx.digest"],
       precommit: [
         "format --check-formatted",
         "compile --warnings-as-errors",
         "terminal.check",
+        "chat_client.check",
         "test.partitioned",
         "gate_0a.node_test",
         "ui.node_test"

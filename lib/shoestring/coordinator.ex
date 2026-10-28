@@ -47,6 +47,41 @@ defmodule Shoestring.Coordinator do
     end
   end
 
+  @doc """
+  The instructions of a coordinator Shoestring drives in its chat screen
+  (iteration 15): the same work as `instructions/1`, through the MCP tools
+  rather than shell commands. `context`: `:session`, `:grant`, `:roles` and
+  `:agent_instructions`.
+  """
+  def conversation_instructions(context) do
+    template =
+      :shoestring
+      |> Application.app_dir("priv")
+      |> Path.join("coordinator/conversation.md")
+      |> File.read!()
+
+    text =
+      template
+      |> String.replace("{{session}}", context.session)
+      |> String.replace("{{grant}}", conversation_grant_line(context.grant))
+      |> String.replace("{{routing}}", routing(context.roles))
+
+    case context[:agent_instructions] do
+      instructions when is_binary(instructions) and instructions != "" ->
+        text <> "\n## The person's instructions for this agent\n\n" <> instructions <> "\n"
+
+      _ ->
+        text
+    end
+  end
+
+  defp conversation_grant_line(grant),
+    do:
+      "Grant `#{grant.id}`: models #{Enum.join(grant.models, ", ")}; purposes " <>
+        "#{Enum.join(grant.purposes, ", ")}; up to #{grant.max_dispatches} attempts, " <>
+        "#{grant.max_parallel} at once, and #{grant.max_turns} of your turns (each reply " <>
+        "to the person or to an inbox message is one)."
+
   defp grant_line(nil, command),
     do: "No grant yet: every dispatch is refused until the person runs `#{command} grant`."
 

@@ -11,18 +11,52 @@ dispatches with cross-vendor review, `wait`, `runs`, `advice` and
 
 ```sh
 cd ~/code/my-project
-shoestring chat                            # the default agent's Coordinator role
-shoestring chat --coordinator codex:MODEL  # another CLI or model, this session only
-shoestring chat --session ID               # continue an earlier session under its grant
+shoestring chat                            # Shoestring's chat screen, the default agent's Coordinator
+shoestring chat --coordinator claude:MODEL # another model, this session only
+shoestring chat --session ID               # reattach an earlier session
+shoestring chat --external                 # the coordinator's own CLI instead (below)
 shoestring chat list                       # sessions, their grants and dispatches
 ```
 
 A new session first shows the grant it proposes — the agent's Worker,
 Reviewer and other roles' models, every purpose, and `shoestring grant`'s
-default limits — and starts only after you confirm it. Then it starts the
-coordinator CLI in your terminal with instructions on handing tasks to
-Shoestring (`priv/coordinator/instructions.md`, plus the session, its
-grant, the agent's roles and its instructions). How each CLI receives them:
+default limits, including 20 coordinator turns — and starts only after you
+confirm it.
+
+### The chat screen (iteration 15)
+
+`shoestring chat` opens a terminal screen: the conversation, an Agents pane
+with every dispatch of the session, an input line, and a status line with
+the grant's turns and each provider's usage. The service drives the
+coordinator headlessly (Claude Code for now; Codex and opencode later) with
+instructions on using Shoestring's tools (`priv/coordinator/conversation.md`),
+read-only in your checkout: it can read files and nothing else, and hands
+every change to Shoestring. It is never sent a message mid-turn; when a
+dispatch settles Shoestring wakes it with an inbox message.
+
+- Enter sends; Alt+Enter or Ctrl+J adds a line; pasting keeps line breaks.
+- `/cancel` interrupts the coordinator's turn, `/status` shows the session
+  from Shoestring's own state, `/help` lists the keys, `/exit` or Ctrl+C
+  leaves.
+- Leaving, or losing the terminal, leaves the conversation and every
+  dispatch running; `shoestring chat --session ID` shows it all again. The
+  service starts the conversation again when it restarts, and a turn whose
+  end it never saw is shown as such and never sent twice.
+- Each coordinator turn counts against the grant (`--max-turns`, wake-ups
+  included) and goes through admission like any call to its provider.
+- Model and agent text is shown with terminal control sequences removed.
+
+The screen is a separate program (`native/chat_client`, built by
+`mix chat_client.check` in a checkout and shipped in the release). It
+connects to the service on loopback with a token only you can read
+(`docs/chat-channel.md`).
+
+### Your own coordinator CLI (`--external`)
+
+`--external` starts the coordinator CLI in your terminal with instructions
+on handing tasks to Shoestring (`priv/coordinator/instructions.md`, plus the
+session, its grant, the agent's roles and its instructions). How each CLI
+receives them:
 
 | Coordinator | Model | Instructions | Status |
 | --- | --- | --- | --- |
@@ -32,13 +66,14 @@ grant, the agent's roles and its instructions). How each CLI receives them:
 
 Each was checked offline against a local stand-in for the model API, in the
 CLI's non-interactive mode (`plans/evidence/14-coordinator-orchestration`);
-the interactive start `chat` uses is not yet checked in a live session.
+the interactive start `chat --external` uses is not yet checked in a live
+session.
 
-The coordinator is your own session of that CLI, under its own permission
+That coordinator is your own session of that CLI, under its own permission
 prompts; Shoestring does not sandbox it, and its instructions tell it not to
 edit your checkout. Shoestring's own guarantee that your checkout is never
-changed covers Shoestring and its Elves, not the coordinator CLI. `--session`
-starts a new conversation in the CLI; the coordinator reads what was already
+changed covers Shoestring and its Elves, not that CLI. `--session` starts a
+new conversation in the CLI; the coordinator reads what was already
 dispatched with `shoestring runs list`. From the source checkout use
 `bin/shoestring chat`; `mix shoestring.chat` prints the launch instead of
 starting it.
@@ -69,12 +104,14 @@ itself. The grant covers one repository and these limits:
 | `--max-hours` | 4 | the time its dispatches may reserve in total |
 | `--max-dispatch-minutes` | 60 | the most one dispatch may reserve |
 | `--unread-usage` | 0 | dispatches it may start when a provider's remaining usage cannot be read |
+| `--max-turns` | 20 | turns of a coordinator conversation in the chat screen, wake-ups included |
 
 Nothing is estimated: each limit is a count or a time Shoestring checks
 before it records a dispatch. The standing usage reserves still apply to
 every dispatch. `shoestring grants list|show` print each grant, its use and
-its history; `grants extend` widens one and `grants revoke` stops new
-dispatches (running work continues) — both ask you, in a terminal.
+its history; `grants extend` widens one (`--turns N` adds coordinator
+turns) and `grants revoke` stops new dispatches and turns (running work
+continues) — both ask you, in a terminal.
 
 ## 2. The coordinator dispatches
 

@@ -1,0 +1,20 @@
+[package]
+name = "shoestring-chat"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+crossterm = { version = "0.28", features = ["event-stream"] }
+futures-util = "0.3"
+ratatui = "0.29"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
+tokio-tungstenite = "0.24"
+unicode-width = "0.2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

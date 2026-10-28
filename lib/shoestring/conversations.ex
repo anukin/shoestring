@@ -108,6 +108,13 @@ defmodule Shoestring.Conversations do
     })
   end
 
+  @doc """
+  Where `shoestring chat` writes the coordinator's instructions for the
+  session; the engine reads them each time it starts the coordinator.
+  """
+  def instructions_path(session_id),
+    do: Path.join([Shoestring.State.root(), "chat", session_id, "conversation-instructions.md"])
+
   @doc "The session's conversation, or nil."
   def get(session_id) when is_binary(session_id),
     do: Repo.get_by(Conversation, session_id: session_id)

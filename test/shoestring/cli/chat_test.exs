@@ -175,18 +175,18 @@ defmodule Shoestring.CLI.ChatTest do
     end
   end
 
-  test "a new session asks for its grant, then writes the launch", ctx do
+  test "with --external, a new session asks for its grant, then writes the launch", ctx do
     answer("n")
 
     assert_raise Refusal, ~r/Not started: the session needs a grant/, fn ->
-      Chat.run(["--session", "chat-1"], context(ctx))
+      Chat.run(["--session", "chat-1", "--external"], context(ctx))
     end
 
     assert Grants.list() == []
 
     launch = Path.join(ctx.dir, "launch.sh")
     answer("y")
-    Chat.run(["--session", "chat-1", "--launch-file", launch], context(ctx))
+    Chat.run(["--session", "chat-1", "--external", "--launch-file", launch], context(ctx))
 
     assert %{
              models: ["codex:gpt-6-luna", "claude:opus"],
@@ -213,7 +213,12 @@ defmodule Shoestring.CLI.ChatTest do
     # The same session again: its grant is reused, nothing is asked.
     assert_received {:mix_shell, :prompt, ["Grant this and start? [y/N] "]}
     assert_received {:mix_shell, :prompt, ["Grant this and start? [y/N] "]}
-    Chat.run(["--session", "chat-1", "--coordinator", "codex:gpt-6-luna"], context(ctx))
+
+    Chat.run(
+      ["--session", "chat-1", "--external", "--coordinator", "codex:gpt-6-luna"],
+      context(ctx)
+    )
+
     assert_receive {:mix_shell, :info, [json]}
 
     assert %{"session_id" => "chat-1", "argv" => ["codex", "-m", "gpt-6-luna" | _]} =
@@ -228,10 +233,15 @@ defmodule Shoestring.CLI.ChatTest do
              Jason.decode!(json)
   end
 
-  test "from a checkout, chat checks the service once its repository is open", ctx do
+  test "from a checkout, chat --external checks the service once its repository is open", ctx do
     launch = Path.join(ctx.dir, "launch.sh")
     answer("y")
-    Chat.run(["--session", "chat-2", "--launch-file", launch], checkout(context(ctx)))
+
+    Chat.run(
+      ["--session", "chat-2", "--external", "--launch-file", launch],
+      checkout(context(ctx))
+    )
+
     assert File.read!(launch) =~ "SHOESTRING_SESSION=chat-2"
   end
 
@@ -242,6 +252,87 @@ defmodule Shoestring.CLI.ChatTest do
 
     assert_raise Refusal, ~r/The codex CLI is not on PATH/, fn ->
       Chat.run(["--coordinator", "codex:gpt-6-luna"], %{context(ctx) | find: fn _ -> nil end})
+    end
+  end
+
+  describe "the chat screen" do
+    setup ctx do
+      client = Path.join(ctx.dir, "shoestring-chat")
+      File.write!(client, "#!/bin/sh\n")
+      %{client: client}
+    end
+
+    defp screen(ctx, opts \\ []), do: Map.put(context(ctx, opts), :chat_client, ctx.client)
+
+    test "opens the conversation, its instructions and its token, then runs the client", ctx do
+      launch = Path.join(ctx.dir, "launch.sh")
+      answer("y")
+      Chat.run(["--session", "chat-3", "--launch-file", launch], screen(ctx))
+
+      assert %{max_turns: 20} = Grants.active("chat-3")
+
+      assert %{provider: "claude", model: "opus", repository_root: root} =
+               conversation = Shoestring.Conversations.get("chat-3")
+
+      assert root == Grants.active("chat-3").repository_root
+
+      token_file = Shoestring.Conversations.ChatToken.path("chat-3")
+      assert Bitwise.band(File.stat!(token_file).mode, 0o777) == 0o600
+      token = File.read!(token_file)
+
+      script = File.read!(launch)
+      assert script =~ ctx.client
+      assert script =~ ~r"--url ws://127\.0\.0\.1:\d+/chat/socket"
+      assert script =~ "--session chat-3"
+      assert script =~ "--token-file " <> token_file
+      refute script =~ token
+
+      instructions = File.read!(Shoestring.Conversations.instructions_path("chat-3"))
+      assert instructions =~ "Session `chat-3`"
+      assert instructions =~ "`read_inbox`"
+      assert instructions =~ "20 of your turns"
+      assert instructions =~ "Prefer small diffs."
+      refute instructions =~ "bin/shoestring"
+
+      # Reattaching asks nothing and keeps the conversation and its token.
+      assert_received {:mix_shell, :prompt, ["Grant this and start? [y/N] "]}
+      Chat.run(["--session", "chat-3"], screen(ctx))
+      assert_receive {:mix_shell, :info, [json]}
+      assert %{"session_id" => "chat-3", "argv" => [_client | _]} = Jason.decode!(json)
+      refute_received {:mix_shell, :prompt, _}
+      assert Shoestring.Conversations.get("chat-3").id == conversation.id
+      assert File.read!(token_file) == token
+    end
+
+    test "needs a coordinator that converses, with an explicit model", ctx do
+      assert_raise Refusal, ~r/Codex cannot coordinate in the chat screen yet.*--external/, fn ->
+        Chat.run(["--coordinator", "codex:gpt-6-luna"], screen(ctx))
+      end
+
+      assert_raise Refusal, ~r/needs an explicit coordinator model/, fn ->
+        Chat.run(["--coordinator", "claude:default"], screen(ctx))
+      end
+    end
+
+    test "a session keeps its coordinator", ctx do
+      {:ok, _} = ModelCatalog.add("claude", "sonnet")
+      answer("y")
+      Chat.run(["--session", "chat-4"], screen(ctx))
+
+      assert_raise Refusal, ~r/already has claude:opus as its coordinator/, fn ->
+        Chat.run(["--session", "chat-4", "--coordinator", "claude:sonnet"], screen(ctx))
+      end
+    end
+
+    test "refuses before asking anything when the client is not installed", ctx do
+      context = Map.put(context(ctx), :chat_client, Path.join(ctx.dir, "missing"))
+
+      assert_raise Refusal, ~r/The chat client is not installed.*--external/, fn ->
+        Chat.run(["--session", "chat-5"], context)
+      end
+
+      refute_received {:mix_shell, :prompt, _}
+      assert Grants.active("chat-5") == nil
     end
   end
 end

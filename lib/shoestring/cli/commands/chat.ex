@@ -6,20 +6,30 @@ defmodule Shoestring.CLI.Commands.Chat do
   terminal interface owns the terminal.
   """
 
-  alias Shoestring.{AgentProfiles, Dispatches, Grants, Harnesses, ModelCatalog}
+  alias Shoestring.{AgentProfiles, Conversations, Dispatches, Grants, Harnesses, ModelCatalog}
   alias Shoestring.CLI.{Command, Messages, Refusal}
   alias Shoestring.CLI.Commands.Grant
   alias Shoestring.Coordinator
+  alias Shoestring.Conversations.ChatToken
 
   @help """
-  shoestring chat [--agent NAME] [--coordinator PROVIDER:MODEL] [--session ID]
+  shoestring chat [--agent NAME] [--coordinator PROVIDER:MODEL] [--session ID] [--external]
   shoestring chat list [--json]
 
-  Starts a coordinator in this repository: the coding CLI you chat with
-  (Claude Code, Codex or opencode), told how to hand tasks to Shoestring
-  with `shoestring dispatch`. The CLI and model are the agent's Coordinator
-  role (NAME, else the default agent), or --coordinator for this session
-  only. The service must be running.
+  Opens Shoestring's chat screen in this repository. You talk to a
+  coordinator (Claude Code, driven by the service, read-only in this
+  checkout) that hands tasks to Shoestring with its tools; the screen shows
+  the conversation, every dispatch and the grant. The coordinator and model
+  are the agent's Coordinator role (NAME, else the default agent), or
+  --coordinator for this session only. The service must be running.
+
+  --session ID reattaches an earlier session: its whole conversation is
+  shown again and its coordinator resumes where it left off. Leaving the
+  screen (/exit) leaves the conversation and every dispatch running.
+
+  --external starts the coordinator's own CLI in this terminal instead
+  (Claude Code, Codex or opencode), told how to hand tasks to Shoestring with
+  `shoestring dispatch`, as before.
 
   A new session (or --session ID without a grant) first shows the grant it
   proposes — the agent's other roles' models, every purpose and the default
@@ -28,10 +38,10 @@ defmodule Shoestring.CLI.Commands.Chat do
   coordinator CLI starts a new conversation and can read what was
   dispatched with `shoestring runs list`.
 
-  The coordinator runs as your own session of that CLI, under its own
-  permission prompts. Its instructions say not to edit this checkout and to
-  delegate every change. `chat list` prints the sessions with their grants
-  and dispatches. Needs a terminal.
+  With --external the coordinator runs as your own session of that CLI,
+  under its own permission prompts; its instructions say not to edit this
+  checkout and to delegate every change. `chat list` prints the sessions with
+  their grants and dispatches. Needs a terminal.
   """
 
   @switches [
@@ -39,6 +49,7 @@ defmodule Shoestring.CLI.Commands.Chat do
     coordinator: :string,
     session: :string,
     launch_file: :string,
+    external: :boolean,
     json: :boolean
   ]
 
@@ -72,6 +83,126 @@ defmodule Shoestring.CLI.Commands.Chat do
     {agent, roles} = agent!(opts[:agent])
     find = Map.get(context, :find, &System.find_executable/1)
     coordinator = coordinator!(opts[:coordinator], roles, find)
+
+    if opts[:external],
+      do: external(opts, context, agent, roles, coordinator),
+      else: native(opts, context, agent, roles, coordinator)
+  end
+
+  # The chat screen: the service drives the coordinator; this terminal runs
+  # the client, which `bin/shoestring` execs from the launch file.
+  defp native(opts, context, agent, roles, coordinator) do
+    converses!(coordinator)
+    client = client!(context)
+    session = opts[:session] || Grants.new_session_id()
+    grant = Grants.active(session) || grant!(session, roles, coordinator, context)
+    conversation = conversation!(session, coordinator, grant)
+
+    instructions =
+      Coordinator.conversation_instructions(%{
+        session: session,
+        grant: grant,
+        roles: roles,
+        agent_instructions: agent && agent.instructions
+      })
+
+    path = Conversations.instructions_path(session)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, instructions)
+
+    token_file =
+      case ChatToken.ensure(session) do
+        {:ok, _token} ->
+          ChatToken.path(session)
+
+        {:error, reason} ->
+          Refusal.refuse!("Could not prepare the chat token: #{inspect(reason)}")
+      end
+
+    argv = [client, "--url", socket_url(), "--session", session, "--token-file", token_file]
+
+    context.shell.error(
+      "Opening session #{session}: #{Harnesses.name(conversation.provider)} " <>
+        "(#{conversation.model}) coordinates, read-only in #{conversation.repository_root}."
+    )
+
+    case opts[:launch_file] do
+      nil ->
+        Command.json(context, %{"session_id" => session, "argv" => argv})
+
+      file ->
+        File.write!(file, Coordinator.script(%{argv: argv, env: []}, context.cwd))
+        :ok
+    end
+  end
+
+  defp converses!(%{"provider" => provider, "model" => model}) do
+    cond do
+      not Harnesses.supports?(provider, :converse) ->
+        Refusal.refuse!(
+          "#{Harnesses.name(provider)} cannot coordinate in the chat screen yet " <>
+            "(#{Harnesses.offering(:converse)} can). Use --external to start its own CLI."
+        )
+
+      model == "default" ->
+        Refusal.refuse!(
+          "The chat screen needs an explicit coordinator model; pass --coordinator PROVIDER:MODEL."
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  defp client!(context) do
+    path =
+      Map.get_lazy(context, :chat_client, fn ->
+        System.get_env("SHOESTRING_CHAT_CLIENT") ||
+          Application.app_dir(:shoestring, "priv/bin/shoestring-chat")
+      end)
+
+    if File.regular?(path),
+      do: path,
+      else:
+        Refusal.refuse!(
+          "The chat client is not installed (#{path}). In a checkout: mix chat_client.check. " <>
+            "Or use --external."
+        )
+  end
+
+  defp conversation!(session, coordinator, grant) do
+    attrs = %{
+      session_id: session,
+      provider: coordinator["provider"],
+      model: coordinator["model"],
+      effort: coordinator["effort"],
+      repository_root: grant.repository_root
+    }
+
+    case Conversations.open(attrs) do
+      {:ok, conversation} ->
+        conversation
+
+      {:error, :conversation_has_another_coordinator} ->
+        existing = Conversations.get(session)
+
+        Refusal.refuse!(
+          "Session #{session} already has #{existing.provider}:#{existing.model} as its " <>
+            "coordinator. Reattach with --coordinator #{existing.provider}:#{existing.model}, " <>
+            "or start a new session."
+        )
+
+      {:error, reason} ->
+        Refusal.refuse!("Could not open the conversation: #{inspect(reason)}")
+    end
+  end
+
+  defp socket_url do
+    http = Application.get_env(:shoestring, ShoestringWeb.Endpoint, [])[:http] || []
+    "ws://127.0.0.1:#{Keyword.get(http, :port, 4000)}/chat/socket"
+  end
+
+  defp external(opts, context, agent, roles, coordinator) do
     session = opts[:session] || Grants.new_session_id()
     grant = Grants.active(session) || grant!(session, roles, coordinator, context)
 

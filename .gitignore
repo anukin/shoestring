@@ -112,3 +112,6 @@ __pycache__/
 !/priv/static/assets/vendor/xterm/addon-fit.js
 !/plans/evidence/09-interactive-terminal/
 !/plans/evidence/09-interactive-terminal/**
+# Iteration 15's native chat client.
+/native/chat_client/target/
+/priv/bin/shoestring-chat
