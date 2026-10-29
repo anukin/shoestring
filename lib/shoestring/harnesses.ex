@@ -9,9 +9,10 @@ defmodule Shoestring.Harnesses do
     * `:coordinate` - an interactive coding CLI a person can chat with.
     * `:converse` - a coordinator session Shoestring drives from code
       (`Shoestring.Harness.Conversation`, iteration 15): read-only in the
-      repository and able to reach Shoestring's tools. Claude and Codex have
-      it; opencode's Code Mode can reach the network without
-      a permission prompt, so it cannot be held read-only (Phase 0).
+      repository and able to reach Shoestring's tools. All three have it;
+      opencode (2.0.31 or later) runs a private agent with Code Mode off, so
+      its `execute` tool, whose `fetch` reached the network unprompted in
+      Phase 0, is never offered.
     * `:plan` - drafts a plan through Shoestring's tool-free planner call.
     * `:implement` - runs a plan task as a sandboxed Elf.
     * `:review` - reviews a task through Shoestring's tool-free review call.
@@ -69,7 +70,12 @@ defmodule Shoestring.Harnesses do
         review: Review.CodexExec,
         explore: Shoestring.Dispatches.Explore.CodexExec
       },
-      "opencode" => %{name: "opencode", coordinate: true, implement: OpencodeAcp}
+      "opencode" => %{
+        name: "opencode",
+        coordinate: true,
+        converse: OpencodeAcp.Conversation,
+        implement: OpencodeAcp
+      }
     }
   end
 

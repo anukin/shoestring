@@ -304,14 +304,10 @@ defmodule Shoestring.CLI.ChatTest do
       assert File.read!(token_file) == token
     end
 
-    test "needs a coordinator that converses, with an explicit model", ctx do
-      {:ok, _} = ModelCatalog.add("opencode", "openai/test-model")
-
-      assert_raise Refusal,
-                   ~r/opencode cannot coordinate in the chat screen yet.*--external/,
-                   fn ->
-                     Chat.run(["--coordinator", "opencode:openai/test-model"], screen(ctx))
-                   end
+    test "needs an explicit coordinator model", ctx do
+      assert_raise Refusal, ~r/needs an explicit coordinator model/, fn ->
+        Chat.run(["--coordinator", "opencode:default"], screen(ctx))
+      end
 
       assert_raise Refusal, ~r/needs an explicit coordinator model/, fn ->
         Chat.run(["--coordinator", "claude:default"], screen(ctx))

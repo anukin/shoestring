@@ -28,7 +28,7 @@ confirm it.
 `shoestring chat` opens a terminal screen: the conversation, an Agents pane
 with every dispatch of the session, an input line, and a status line with
 the grant's turns and each provider's usage. The service drives the
-coordinator headlessly (Claude Code for now; Codex and opencode later) with
+coordinator headlessly (Claude Code, Codex or opencode) with
 instructions on using Shoestring's tools (`priv/coordinator/conversation.md`),
 read-only in your checkout: it can read files and nothing else, and hands
 every change to Shoestring. It is never sent a message mid-turn; when a
@@ -282,16 +282,29 @@ the selected dispatch. Leaving the screen leaves agents running. Interactive
 Elves show their `/runs/RUN/terminal` link; a headless Elf cannot be steered.
 The `/cobbler` dispatch rows also link to Run and, where supported, Terminal.
 
-Claude and Codex can coordinate the native screen with an explicit model.
+Claude Code, Codex and opencode can coordinate the native screen with an
+explicit model.
 Codex uses app-server's initialize, model/list, thread/start or thread/resume,
 and turn/start; all repository access is read-only with approvals refused.
 The engine queues messages while a turn runs. MCP bearer tokens travel through
 the child environment, not argv. Model listing verifies catalog membership,
 not account entitlement. These paths are tested with scripted local transports;
 real subscription execution remains unverified without a separately authorized
-live budget. Opencode continues to refuse native coordination: Code Mode's
-unprompted network access has no verified read-only confinement yet. Use
-`--external` for its existing interactive coordinator path.
+live budget.
+
+opencode (2.0.31 or later) runs `opencode acp` with a private configuration
+directory and no project or Claude Code configuration. Its agent,
+`shoestring-coordinator`, denies every tool but read, glob, grep and
+Shoestring's, and the Shoestring MCP server is set `codemode: false`, so the
+tools are offered directly and Code Mode's `execute` (whose `fetch` reached
+the network with no permission request in Phase 0) is never offered. The
+agent, model and effort are each selected and read back before the first
+prompt; a refusal or a silent fallback to opencode's default model closes the
+session instead. Verified offline against opencode 2.0.31 with a scripted
+model: the model was offered only read, glob, grep and `shoestring_dispatch`;
+`execute`, `edit`, `write`, `bash`, `webfetch` and `task` were "not
+available"; the file was unchanged; resume kept the session. Configuration
+an opencode organisation pushes to a signed-in account was not exercised.
 
 Native macOS arm64 releases build `priv/bin/shoestring-chat` during assets.deploy
 and include it alongside the terminal helper. `shoestring chat` resolves that

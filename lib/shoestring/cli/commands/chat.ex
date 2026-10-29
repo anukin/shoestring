@@ -17,11 +17,12 @@ defmodule Shoestring.CLI.Commands.Chat do
   shoestring chat list [--json]
 
   Opens Shoestring's chat screen in this repository. You talk to a
-  coordinator (Claude Code or Codex, driven by the service, read-only in this
-  checkout) that hands tasks to Shoestring with its tools; the screen shows
-  the conversation, every dispatch and the grant. The coordinator and model
-  are the agent's Coordinator role (NAME, else the default agent), or
-  --coordinator for this session only. The service must be running.
+  coordinator (Claude Code, Codex or opencode, driven by the service,
+  read-only in this checkout) that hands tasks to Shoestring with its tools;
+  the screen shows the conversation, every dispatch and the grant. The
+  coordinator and model are the agent's Coordinator role (NAME, else the
+  default agent), or --coordinator for this session only. The service must
+  be running.
 
   --session ID reattaches an earlier session: its whole conversation is
   shown again and its coordinator resumes where it left off. Leaving the
