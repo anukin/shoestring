@@ -36,6 +36,26 @@ defmodule Shoestring.Release.LauncherTest do
 
   defp run(ctl, args), do: System.cmd(ctl, args, stderr_to_stdout: true)
 
+  test "the foreground launcher passes Python checks for its signal forwarding" do
+    argv = [
+      "python3",
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "test/shoestring/release",
+      "-p",
+      "test_release_launcher.py"
+    ]
+
+    assert {:ok, %{exit_status: 0, output: output}} =
+             Shoestring.Cobbler.GateProcess.run(argv, File.cwd!(), 20_000, 65_536)
+
+    assert output =~ "Ran 2 tests"
+    assert output =~ "OK"
+  end
+
   test "a missing OpenSSL 3 library is named before the runtime starts", %{tmp_dir: dir} do
     missing = Path.join(dir, "absent/libcrypto.3.dylib")
     ctl = release!(dir, %{"openssl_library" => missing})
