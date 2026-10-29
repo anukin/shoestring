@@ -204,7 +204,7 @@ defmodule Shoestring.Trajectory.ArtifactStore do
 
   defp write_new_file(_root, location, path, bytes) do
     with :ok <- File.mkdir_p(Path.dirname(path)) do
-      temp = "#{path}.tmp-#{System.unique_integer([:positive, :monotonic])}"
+      temp = "#{path}.tmp-#{System.pid()}-#{System.unique_integer([:positive, :monotonic])}"
 
       result =
         try do

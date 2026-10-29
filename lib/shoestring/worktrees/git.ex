@@ -62,7 +62,9 @@ defmodule Shoestring.Worktrees.Git do
   defp observer_index_path do
     Path.join(
       System.tmp_dir!(),
-      "shoestring-observer-index-#{System.unique_integer([:positive, :monotonic])}"
+      # Unique integers restart in every VM; the OS pid keeps concurrent VMs
+      # sharing this directory from naming the same copy.
+      "shoestring-observer-index-#{System.pid()}-#{System.unique_integer([:positive, :monotonic])}"
     )
   end
 

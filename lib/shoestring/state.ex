@@ -102,7 +102,9 @@ defmodule Shoestring.State do
   end
 
   defp verify_writable(state_root) do
-    probe = Path.join(state_root, ".writable-#{System.unique_integer([:positive, :monotonic])}")
+    # The OS pid keeps a CLI and the service checking one root from colliding.
+    unique = "#{System.pid()}-#{System.unique_integer([:positive, :monotonic])}"
+    probe = Path.join(state_root, ".writable-#{unique}")
 
     case File.open(probe, [:write, :exclusive]) do
       {:ok, file} ->

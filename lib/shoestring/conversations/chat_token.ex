@@ -66,7 +66,7 @@ defmodule Shoestring.Conversations.ChatToken do
   defp create(session) do
     dir = Path.dirname(path(session))
     token = 32 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
-    temp = Path.join(dir, ".#{@name}-#{System.unique_integer([:positive])}")
+    temp = Path.join(dir, ".#{@name}-#{System.pid()}-#{System.unique_integer([:positive])}")
 
     with :ok <- File.mkdir_p(dir),
          :ok <- File.chmod(dir, 0o700),
