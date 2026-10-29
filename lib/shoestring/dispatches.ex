@@ -64,6 +64,18 @@ defmodule Shoestring.Dispatches do
     end
   end
 
+  @doc "Latest durable harness run for a dispatch's goal, including completed runs."
+  def latest_run(%{goal_id: nil}), do: nil
+
+  def latest_run(%{goal_id: goal_id}) do
+    Repo.one(
+      from r in Shoestring.Harness.RunRecord,
+        where: r.goal_id == ^goal_id,
+        order_by: [desc: r.inserted_at, desc: r.id],
+        limit: 1
+    )
+  end
+
   def list(session_id \\ nil) do
     Dispatch
     |> then(&if(session_id, do: where(&1, [d], d.session_id == ^session_id), else: &1))

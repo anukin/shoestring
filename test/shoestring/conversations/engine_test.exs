@@ -506,8 +506,8 @@ defmodule Shoestring.Conversations.EngineTest do
       assert {:error, :conversation_has_another_coordinator} =
                Conversations.open(%{attrs | model: "claude-other"})
 
-      assert {:error, {:cannot_converse, "codex"}} =
-               Conversations.open(%{attrs | session_id: "s2", provider: "codex"})
+      assert {:error, {:cannot_converse, "opencode"}} =
+               Conversations.open(%{attrs | session_id: "s2", provider: "opencode"})
 
       assert Conversations.get("s2") == nil
 

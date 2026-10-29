@@ -29,6 +29,23 @@ pub struct Dispatch {
     pub worker: String,
     pub title: String,
     pub state: String,
+    pub reviewer: String,
+    pub elapsed: u64,
+    pub waiting_until: String,
+    pub latest_step: String,
+    pub next: String,
+    pub run_id: String,
+    pub terminal: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Detail {
+    pub id: String,
+    pub lines: Vec<String>,
+    pub steps: Vec<String>,
+    pub last_sequence: u64,
+    pub terminal: Option<String>,
+    pub scroll: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -55,6 +72,10 @@ pub struct Model {
     pub connection: Connection,
     pub notice: Option<String>,
     pub editor: Editor,
+    pub agents_focus: bool,
+    pub selected: Option<String>,
+    pub detail: Option<Detail>,
+    pub confirm: Option<Dispatch>,
     pub help: bool,
     pub dirty: bool,
     pub quit: bool,
@@ -161,9 +182,23 @@ impl Model {
                 worker: clean_line(d["worker"].as_str().unwrap_or("?")),
                 title: clean_line(d["title"].as_str().unwrap_or_default()),
                 state: clean_line(d["state"].as_str().unwrap_or("?")),
+                reviewer: clean_line(d["reviewer"].as_str().unwrap_or("none")),
+                elapsed: d["elapsed_seconds"].as_u64().unwrap_or(0),
+                waiting_until: clean_line(d["waiting_until"].as_str().unwrap_or_default()),
+                latest_step: clean_line(d["latest_step"].as_str().unwrap_or_default()),
+                next: clean_line(d["next"].as_str().unwrap_or_default()),
+                run_id: clean_line(d["run_id"].as_str().unwrap_or_default()),
+                terminal: clean_line(d["terminal"].as_str().unwrap_or_default()),
             })
             .collect();
 
+        if !self
+            .dispatches
+            .iter()
+            .any(|d| Some(&d.id) == self.selected.as_ref())
+        {
+            self.selected = self.dispatches.first().map(|d| d.id.clone());
+        }
         self.capacity = state["capacity"]["providers"]
             .as_array()
             .into_iter()
@@ -171,6 +206,69 @@ impl Model {
             .filter_map(capacity)
             .collect();
 
+        self.dirty = true;
+    }
+
+    pub fn select(&mut self, delta: isize) {
+        if self.dispatches.is_empty() {
+            self.selected = None;
+            return;
+        }
+        let current = self
+            .dispatches
+            .iter()
+            .position(|d| Some(&d.id) == self.selected.as_ref())
+            .unwrap_or(0);
+        let index = current
+            .saturating_add_signed(delta)
+            .min(self.dispatches.len() - 1);
+        self.selected = Some(self.dispatches[index].id.clone());
+    }
+
+    pub fn apply_dispatch(&mut self, payload: &Value, reset: bool) {
+        let Some(detail) = &mut self.detail else {
+            return;
+        };
+        if payload["dispatch_id"].as_str() != Some(detail.id.as_str()) {
+            return;
+        }
+        detail.lines = payload["lines"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str().map(clean))
+            .collect();
+        detail.terminal = payload["terminal"].as_str().map(clean_line);
+        if reset {
+            detail.steps.clear();
+            detail.last_sequence = 0;
+        }
+        let steps = &payload["steps"];
+        // Call histories have no sequence: they are complete snapshots.
+        if steps["last_sequence"].is_null() {
+            detail.steps.clear();
+        }
+        if let Some(omitted) = steps["omitted"].as_u64().filter(|n| *n > 0) {
+            detail
+                .steps
+                .push(format!("… {omitted} earlier entries omitted"));
+        }
+        for entry in steps["entries"].as_array().into_iter().flatten() {
+            let sequence = entry["sequence"].as_u64();
+            if sequence.is_none_or(|n| n > detail.last_sequence) {
+                detail
+                    .steps
+                    .push(clean(entry["line"].as_str().unwrap_or_default()));
+            }
+            if let Some(n) = sequence {
+                detail.last_sequence = detail.last_sequence.max(n);
+            }
+        }
+        if let Some(n) = steps["last_sequence"].as_u64() {
+            detail.last_sequence = detail.last_sequence.max(n);
+        }
+        let excess = detail.steps.len().saturating_sub(500);
+        detail.steps.drain(..excess);
         self.dirty = true;
     }
 
@@ -256,6 +354,25 @@ mod tests {
     }
 
     #[test]
+    fn detail_filters_text_deduplicates_steps_and_ignores_stale_dispatches() {
+        let mut model = Model::new("s1");
+        model.detail = Some(Detail {
+            id: "d1".into(),
+            ..Detail::default()
+        });
+        let data = json!({"dispatch_id": "d1", "lines": ["checks: ok\u{1b}[2J"],
+            "terminal": "/runs/r1/terminal\u{1b}[0m", "steps": {"last_sequence": 2,
+            "entries": [{"sequence": 1, "line": "read\u{1b}[31m file"}, {"sequence": 2, "line": "checked"}]}});
+        model.apply_dispatch(&data, true);
+        model.apply_dispatch(&data, false);
+        model.apply_dispatch(&json!({"dispatch_id": "d2", "lines": ["wrong"]}), true);
+        let detail = model.detail.unwrap();
+        assert_eq!(detail.lines, vec!["checks: ok"]);
+        assert_eq!(detail.steps, vec!["read file", "checked"]);
+        assert_eq!(detail.terminal.as_deref(), Some("/runs/r1/terminal"));
+    }
+
+    #[test]
     fn events_fold_once_in_order_and_repeats_are_dropped() {
         let mut model = Model::new("s1");
         let batch = json!({"events": [
@@ -300,7 +417,8 @@ mod tests {
             "engine": {"state": "idle", "pending_messages": 1, "pending_inbox": 1, "hold": "turns_exhausted"},
             "grant": {"turns": {"used": 20, "left": 0}},
             "dispatches": [{"dispatch_id": "d-41aaaaaa-1", "purpose": "explore", "worker": "codex:m",
-                            "title": "Find\u{1b}[0m it", "state": "running"}],
+                            "title": "Find\u{1b}[0m it", "state": "running", "reviewer": "claude\u{1b}[31m:opus",
+                            "latest_step": "read\u{1b}[2J file", "waiting_until": "tomorrow\u{1b}[0m", "next": "wait\u{1b}[0m"}],
             "capacity": {"providers": [
                 {"provider": "claude", "windows": [{"kind": "five_hour", "used_percent": 41.2}]},
                 {"provider": "opencode"}
@@ -311,6 +429,10 @@ mod tests {
         assert_eq!(model.hold.as_deref(), Some("turns_exhausted"));
         assert_eq!(model.turns, Some((20, 0)));
         assert_eq!(model.dispatches[0].title, "Find it");
+        assert_eq!(model.dispatches[0].reviewer, "claude:opus");
+        assert_eq!(model.dispatches[0].latest_step, "read file");
+        assert_eq!(model.dispatches[0].waiting_until, "tomorrow");
+        assert_eq!(model.dispatches[0].next, "wait");
         assert_eq!(model.capacity, vec!["claude 5h 41%".to_string()]);
     }
 

@@ -24,6 +24,9 @@ cd "$checkout"
 # interface here, so it owns the terminal: Mix writes a launch script and
 # this shell execs it.
 if [ "${1:-}" = "chat" ]; then
+  case "${2:-}" in
+    --help|-h|list) exec mix shoestring "$@" ;;
+  esac
   launch=$(mktemp "${TMPDIR:-/tmp}/shoestring-chat.XXXXXX")
   status=0
   mix shoestring "$@" --launch-file "$launch" || status=$?

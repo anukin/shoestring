@@ -271,3 +271,30 @@ them in any goal and no unexplained change between runs. Every other run is coun
 A Codex coordinator's own turns are not recorded, so close the window, or
 use another coordinator, while measuring. Past the dataset's 10,000-event
 limit the share says `usage_share_unavailable`.
+
+### Native dispatch inspection and Codex coordinator
+
+The chat screen's agents pane shows purpose, worker, reviewer, domain state,
+elapsed time, reset time when waiting, and latest progress. Tab focuses it,
+arrows select, Enter opens the Elf's canonical progress, checks and review
+findings. Escape closes detail. `c`, then `y`, requests cancellation of exactly
+the selected dispatch. Leaving the screen leaves agents running. Interactive
+Elves show their `/runs/RUN/terminal` link; a headless Elf cannot be steered.
+The `/cobbler` dispatch rows also link to Run and, where supported, Terminal.
+
+Claude and Codex can coordinate the native screen with an explicit model.
+Codex uses app-server's initialize, model/list, thread/start or thread/resume,
+and turn/start; all repository access is read-only with approvals refused.
+The engine queues messages while a turn runs. MCP bearer tokens travel through
+the child environment, not argv. Model listing verifies catalog membership,
+not account entitlement. These paths are tested with scripted local transports;
+real subscription execution remains unverified without a separately authorized
+live budget. Opencode continues to refuse native coordination: Code Mode's
+unprompted network access has no verified read-only confinement yet. Use
+`--external` for its existing interactive coordinator path.
+
+Native macOS arm64 releases build `priv/bin/shoestring-chat` during assets.deploy
+and include it alongside the terminal helper. `shoestring chat` resolves that
+binary from the installed application's priv directory; cargo is a build-time
+dependency. `tools/release/smoke.py` verifies the relocated chat binary and its
+instructions using a PATH that refuses provider and build-tool invocations.

@@ -97,6 +97,34 @@ defmodule Shoestring.Release.LauncherTest do
     assert output == "Usage: shoestring doctor [--probe-providers] [--json]\n"
   end
 
+  test "chat help and listing preserve their arguments without preparing a launch", %{
+    tmp_dir: dir
+  } do
+    ctl = release!(dir, %{})
+    File.write!(Path.join(dir, "bin/shoestring"), "#!/bin/sh\necho runtime-ran \"$@\"\n")
+
+    for args <- [["chat", "--help"], ["chat", "-h"], ["chat", "list", "--json"]] do
+      {output, 0} = run(ctl, args)
+      assert output =~ Enum.join(args, " ") <> "\n"
+      refute output =~ "--launch-file"
+    end
+  end
+
+  test "checkout chat help and listing also bypass launch handling", %{tmp_dir: dir} do
+    shim = Path.join(dir, "mix")
+    File.write!(shim, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+    File.chmod!(shim, 0o755)
+    wrapper = Path.expand("../../../bin/shoestring", __DIR__)
+
+    for args <- [["chat", "--help"], ["chat", "-h"], ["chat", "list", "--json"]] do
+      {output, 0} =
+        System.cmd(wrapper, args, env: [{"PATH", dir <> ":" <> System.get_env("PATH")}])
+
+      assert output == Enum.join(["shoestring" | args], "\n") <> "\n"
+      refute output =~ "--launch-file"
+    end
+  end
+
   test "chat execs the launch script the runtime wrote, or passes its refusal on", %{tmp_dir: dir} do
     ctl = release!(dir, %{})
     runtime = Path.join(dir, "bin/shoestring")

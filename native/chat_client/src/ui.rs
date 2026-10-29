@@ -15,6 +15,8 @@ const MAX_AGENTS: usize = 6;
 const MAX_INPUT: usize = 6;
 
 pub const HELP: &str = "\
+Tab          focus agents; Up/Down select; Enter opens; c cancels (confirm)
+Esc          close detail; Up/Down scroll detail
 Enter        send the message (the coordinator gets it when it is idle)
 Alt+Enter    new line (Ctrl+J too); paste keeps line breaks
 /cancel      interrupt the coordinator's running turn
@@ -24,7 +26,7 @@ Alt+Enter    new line (Ctrl+J too); paste keeps line breaks
 Ctrl+C       same as /exit";
 
 pub fn draw(frame: &mut Frame, model: &Model) {
-    let agents = model.dispatches.len().clamp(1, MAX_AGENTS) as u16 + 2;
+    let agents = (model.dispatches.len() * 3).clamp(1, MAX_AGENTS) as u16 + 2;
     let input = model.editor.line_count().clamp(1, MAX_INPUT) as u16 + 2;
     let [header, conversation, agents_area, input_area, status] = Layout::vertical([
         Constraint::Length(1),
@@ -43,6 +45,67 @@ pub fn draw(frame: &mut Frame, model: &Model) {
 
     if model.help {
         draw_help(frame);
+    }
+    if let Some(detail) = &model.detail {
+        let area = frame.area();
+        let rect = Rect::new(
+            area.x + 1,
+            area.y + 1,
+            area.width.saturating_sub(2),
+            area.height.saturating_sub(2),
+        );
+        let width = rect.width.saturating_sub(2).max(1) as usize;
+        let terminal = detail
+            .terminal
+            .as_ref()
+            .map(|url| format!("Interactive terminal: {url}"))
+            .unwrap_or_else(|| "Headless Elf: cannot be steered".into());
+        let mut lines = vec![terminal];
+        lines.extend(detail.lines.clone());
+        lines.extend(detail.steps.clone());
+        let rows: Vec<Line> = lines
+            .iter()
+            .flat_map(|l| wrap(l, width))
+            .map(Line::from)
+            .collect();
+        let scroll = detail.scroll.min(
+            rows.len()
+                .saturating_sub(rect.height.saturating_sub(2) as usize),
+        );
+        frame.render_widget(Clear, rect);
+        frame.render_widget(
+            Paragraph::new(rows)
+                .scroll((scroll.min(u16::MAX as usize) as u16, 0))
+                .block(Block::bordered().title(format!(
+                    " Elf {} · Esc close · ↑↓ scroll · c cancel ",
+                    short(&detail.id)
+                ))),
+            rect,
+        );
+    }
+    if let Some(dispatch) = &model.confirm {
+        let area = frame.area();
+        let rect = Rect::new(
+            area.x,
+            area.y + area.height.saturating_sub(7) / 2,
+            area.width,
+            7.min(area.height),
+        );
+        let text = format!(
+            "Cancel {} {} on {}?\n{} · {}\ny confirms · any other key keeps it running",
+            short(&dispatch.id),
+            dispatch.purpose,
+            dispatch.worker,
+            dispatch.title,
+            dispatch.state
+        );
+        frame.render_widget(Clear, rect);
+        frame.render_widget(
+            Paragraph::new(text)
+                .wrap(ratatui::widgets::Wrap { trim: false })
+                .block(Block::bordered().title(" Confirm cancellation · Shoestring ")),
+            rect,
+        );
     }
 }
 
@@ -93,25 +156,44 @@ fn draw_conversation(frame: &mut Frame, model: &Model, area: Rect) {
 }
 
 fn draw_agents(frame: &mut Frame, model: &Model, area: Rect) {
-    let block = Block::new().borders(Borders::ALL).title(" Agents ");
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .title(" Agents · Tab focus · ↑↓ select · Enter detail · c cancel ");
     let lines: Vec<Line> = if model.dispatches.is_empty() {
         vec![Line::styled("none yet", Style::new().fg(Color::DarkGray))]
     } else {
+        let selected = model
+            .dispatches
+            .iter()
+            .position(|d| Some(&d.id) == model.selected.as_ref())
+            .unwrap_or(0);
+        let start = selected.saturating_sub(MAX_AGENTS / 3 - 1);
         model
             .dispatches
             .iter()
-            .rev()
-            .take(MAX_AGENTS)
-            .map(|d| {
-                Line::from(format!(
-                    "{} {} {:<9} {:<24} {:<10} {}",
-                    glyph(&d.state),
-                    short(&d.id),
-                    d.purpose,
-                    d.worker,
-                    d.state,
-                    d.title
-                ))
+            .skip(start)
+            .take(MAX_AGENTS / 3)
+            .flat_map(|d| {
+                let style = if model.agents_focus && Some(&d.id) == model.selected.as_ref() {
+                    Style::new().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::new()
+                };
+                [
+                    format!(
+                        "{} {} {:<9} {} · {}s {}",
+                        glyph(&d.state),
+                        short(&d.id),
+                        d.purpose,
+                        d.state,
+                        d.elapsed,
+                        d.waiting_until
+                    ),
+                    format!("  {} · reviewer {} · {}", d.worker, d.reviewer, d.title),
+                    format!("  {} {}", d.latest_step, d.next),
+                ]
+                .into_iter()
+                .map(move |line| Line::styled(line, style))
             })
             .collect()
     };
@@ -147,8 +229,10 @@ fn draw_input(frame: &mut Frame, model: &Model, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 
     let x = inner.x + (2 + cursor_col).min(inner.width.saturating_sub(1) as usize) as u16;
-    let y = inner.y + (cursor_row - top) as u16;
-    frame.set_cursor_position(Position::new(x, y));
+    let y = inner.y + cursor_row.saturating_sub(top) as u16;
+    if !model.agents_focus && model.detail.is_none() && model.confirm.is_none() {
+        frame.set_cursor_position(Position::new(x, y));
+    }
 }
 
 fn status_line(model: &Model) -> Line<'static> {
@@ -272,6 +356,31 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn tiny_terminal_does_not_underflow_input_cursor() {
+        let model = Model::new("s1");
+        let _ = screen(&model, 20, 1);
+    }
+
+    #[test]
+    fn detail_and_confirmation_draw_from_state_at_narrow_widths() {
+        let mut model = Model::new("s1");
+        model.apply_state(&json!({"dispatches": [{"dispatch_id": "d1", "purpose": "explore", "worker": "codex:m", "title": "Find it", "state": "held"}]}));
+        model.detail = Some(crate::model::Detail {
+            id: "d1".into(),
+            lines: vec!["checks: passed".into()],
+            ..Default::default()
+        });
+        let text = screen(&model, 70, 20);
+        assert!(text.contains("Headless Elf: cannot be steered"));
+        assert!(text.contains("checks: passed"));
+        model.confirm = Some(model.dispatches[0].clone());
+        let text = screen(&model, 70, 20);
+        assert!(text.contains("Cancel d1 explore on codex:m?"));
+        assert!(text.contains("y confirms"));
+        let _ = screen(&model, 20, 8);
     }
 
     #[test]

@@ -57,8 +57,36 @@ defmodule ShoestringWeb.CobblerDashboardLiveTest do
         error: "goal_not_created"
       })
 
+    goal = create_goal!(Repo, "Dispatch run")
+    dispatch = dispatch |> Ecto.Changeset.change(goal_id: goal.id) |> Repo.update!()
+
+    run =
+      Repo.insert!(%Shoestring.Harness.RunRecord{
+        id: Ecto.UUID.generate(),
+        dispatch_id: Ecto.UUID.generate(),
+        goal_id: goal.id,
+        provider_id: "codex_interactive_pty",
+        workspace_ref: "fixture",
+        request_version: 1,
+        prompt: "fixture",
+        policy: %{},
+        requested_capabilities: %{},
+        extensions: %{}
+      })
+
     {:ok, view, _html} = live(conn, "/cobbler")
 
+    assert has_element?(view, "#dispatch-run-#{dispatch.id}[href='/runs/#{run.id}']")
+
+    assert has_element?(
+             view,
+             "#dispatch-terminal-#{dispatch.id}[href='/runs/#{run.id}/terminal']"
+           )
+
+    run |> Ecto.Changeset.change(provider_id: "codex_app_server_stdio") |> Repo.update!()
+    view |> element("#cobbler-refresh") |> render_click()
+    assert has_element?(view, "#dispatch-run-#{dispatch.id}")
+    refute has_element?(view, "#dispatch-terminal-#{dispatch.id}")
     assert has_element?(view, "#coordinator-sessions")
     # A dispatch that failed to start reserves nothing.
     assert has_element?(view, "#session-#{grant.id}", "Attempts 0 of 4")

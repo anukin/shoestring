@@ -19,18 +19,27 @@ defmodule Shoestring.HarnessesTest do
              :explore
            ]
 
-    assert Harnesses.capabilities("codex") == [:coordinate, :implement, :review, :explore]
+    assert Harnesses.capabilities("codex") == [
+             :coordinate,
+             :converse,
+             :implement,
+             :review,
+             :explore
+           ]
+
     assert Harnesses.capabilities("opencode") == [:coordinate, :implement]
     assert Harnesses.capabilities("unknown") == []
     refute Harnesses.supports?("opencode", :review)
     assert Harnesses.module("opencode", :review) == :error
   end
 
-  test "a converse capability is a conversation module, and only Claude has one" do
+  test "a converse capability is a conversation module, for Claude and Codex" do
     assert {:ok, Shoestring.Harness.ClaudeHeadless.Conversation} =
              Harnesses.module("claude", :converse)
 
-    assert Harnesses.module("codex", :converse) == :error
+    assert Harnesses.module("codex", :converse) ==
+             {:ok, Shoestring.Harness.CodexAppServer.Conversation}
+
     assert Harnesses.module("opencode", :converse) == :error
 
     for id <- Harnesses.ids(), Harnesses.supports?(id, :converse) do

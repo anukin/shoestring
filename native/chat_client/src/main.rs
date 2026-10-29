@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 
 use shoestring_chat::connection::{self, Config, Outgoing, Shared, lock};
 use shoestring_chat::editor::Command;
-use shoestring_chat::model::Model;
+use shoestring_chat::model::{Connection, Detail, Model};
 use shoestring_chat::ui;
 
 const FRAME: Duration = Duration::from_millis(33);
@@ -187,6 +187,70 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
 
+    if control && key.code == KeyCode::Char('c') {
+        return true;
+    }
+    if let Some(dispatch) = model.confirm.take() {
+        if key.code == KeyCode::Char('y') {
+            if model.connection == Connection::Live {
+                let _ = outbox.send(Outgoing::CancelDispatch {
+                    id: dispatch.id,
+                    reason: "Cancelled by the person from the chat screen".into(),
+                });
+                model.note("Cancellation requested");
+            } else {
+                model.note("Disconnected; cancellation was not sent");
+            }
+        }
+        return false;
+    }
+    if let Some(detail) = &mut model.detail {
+        match key.code {
+            KeyCode::Esc => {
+                model.detail = None;
+                let _ = outbox.send(Outgoing::Unwatch);
+            }
+            KeyCode::Up => detail.scroll = detail.scroll.saturating_sub(1),
+            KeyCode::Down => detail.scroll = detail.scroll.saturating_add(1),
+            KeyCode::Char('c') => {
+                model.confirm = model.dispatches.iter().find(|d| d.id == detail.id).cloned();
+            }
+            _ => {}
+        }
+        return false;
+    }
+    if key.code == KeyCode::Tab {
+        model.agents_focus = !model.agents_focus;
+        if model.selected.is_none() {
+            model.select(0);
+        }
+        return false;
+    }
+    if model.agents_focus {
+        match key.code {
+            KeyCode::Up => model.select(-1),
+            KeyCode::Down => model.select(1),
+            KeyCode::Esc => model.agents_focus = false,
+            KeyCode::Enter => {
+                if let Some(id) = &model.selected {
+                    model.detail = Some(Detail {
+                        id: id.clone(),
+                        ..Detail::default()
+                    });
+                    let _ = outbox.send(Outgoing::Watch { id: id.clone() });
+                }
+            }
+            KeyCode::Char('c') => {
+                model.confirm = model
+                    .dispatches
+                    .iter()
+                    .find(|d| Some(&d.id) == model.selected.as_ref())
+                    .cloned()
+            }
+            _ => {}
+        }
+        return false;
+    }
     match key.code {
         KeyCode::Char('c') if control => return true,
         KeyCode::Char('j') if control => model.editor.newline(),
@@ -240,4 +304,48 @@ fn message_id() -> io::Result<String> {
         &hex[16..20],
         &hex[20..32]
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    fn key(model: &mut Model, code: KeyCode, tx: &mpsc::UnboundedSender<Outgoing>) {
+        key_pressed(model, KeyEvent::new(code, KeyModifiers::NONE), tx);
+    }
+    #[test]
+    fn selection_watch_and_confirm_cancel_exactly_the_displayed_dispatch() {
+        let mut model = Model::new("s1");
+        model.connection = Connection::Live;
+        model.apply_state(&json!({"dispatches": [
+            {"dispatch_id": "one", "title": "first", "state": "running"},
+            {"dispatch_id": "two", "title": "second", "state": "held"}]}));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        key(&mut model, KeyCode::Tab, &tx);
+        key(&mut model, KeyCode::Down, &tx);
+        key(&mut model, KeyCode::Enter, &tx);
+        assert_eq!(rx.try_recv().unwrap(), Outgoing::Watch { id: "two".into() });
+        key(&mut model, KeyCode::Char('c'), &tx);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(model.confirm.as_ref().unwrap().title, "second");
+        model.selected = Some("one".into());
+        key(&mut model, KeyCode::Char('y'), &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Outgoing::CancelDispatch {
+                id: "two".into(),
+                reason: "Cancelled by the person from the chat screen".into()
+            }
+        );
+        key(&mut model, KeyCode::Esc, &tx);
+        assert_eq!(rx.try_recv().unwrap(), Outgoing::Unwatch);
+        assert!(model.detail.is_none());
+        key(&mut model, KeyCode::Char('c'), &tx);
+        key(&mut model, KeyCode::Char('n'), &tx);
+        assert!(rx.try_recv().is_err());
+        key(&mut model, KeyCode::Char('c'), &tx);
+        model.connection = Connection::Connecting;
+        key(&mut model, KeyCode::Char('y'), &tx);
+        assert!(rx.try_recv().is_err());
+    }
 }

@@ -27,6 +27,9 @@ const LAST_RETRY: Duration = Duration::from_secs(5);
 pub enum Outgoing {
     Say { message_id: String, text: String },
     CancelTurn,
+    Watch { id: String },
+    Unwatch,
+    CancelDispatch { id: String, reason: String },
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +85,13 @@ pub async fn run(config: Config, model: Shared, mut outbox: mpsc::UnboundedRecei
 
 fn set(model: &Shared, connection: Connection) {
     let mut model = lock(model);
-    model.connection = connection;
+    model.connection = match connection {
+        Connection::Reconnecting(reason) => {
+            Connection::Reconnecting(crate::text::clean_line(&reason))
+        }
+        Connection::Refused(reason) => Connection::Refused(crate::text::clean_line(&reason)),
+        other => other,
+    };
     model.dirty = true;
 }
 
@@ -176,6 +185,20 @@ async fn session(
         }
     }
 
+    let watched = lock(model).detail.as_ref().map(|d| d.id.clone());
+    if let Some(id) = watched
+        && !send(
+            &mut sink,
+            &topic,
+            &join_ref,
+            &mut refs,
+            &mut pending,
+            Outgoing::Watch { id },
+        )
+        .await
+    {
+        return lost("the connection closed", true);
+    }
     let mut heartbeat = tokio::time::interval(HEARTBEAT);
     heartbeat.tick().await;
 
@@ -190,6 +213,7 @@ async fn session(
                     match frame.event.as_str() {
                         "events" => lock(model).apply_events(&frame.payload),
                         "state" => lock(model).apply_state(&frame.payload),
+                        "dispatch" => lock(model).apply_dispatch(&frame.payload, false),
                         "detached" => return lost("the screen fell behind; catching up", true),
                         "phx_reply" => reply(model, unsent, &mut pending, &frame),
                         "phx_error" | "phx_close" => return lost("the channel closed", true),
@@ -245,6 +269,12 @@ where
             ("say", json!({"message_id": message_id, "text": text}))
         }
         Outgoing::CancelTurn => ("cancel_turn", json!({})),
+        Outgoing::Watch { id } => ("watch_dispatch", json!({"dispatch_id": id})),
+        Outgoing::Unwatch => ("unwatch_dispatch", json!({})),
+        Outgoing::CancelDispatch { id, reason } => (
+            "cancel_dispatch",
+            json!({"dispatch_id": id, "reason": reason}),
+        ),
     };
     let reference = refs.next();
     let frame = Frame {
@@ -271,13 +301,17 @@ fn reply(
     // Answered either way: a refused message is not sent again.
     unsent.retain(|o| o != &outgoing);
 
+    if frame.payload["status"] == "ok" && matches!(outgoing, Outgoing::Watch { .. }) {
+        lock(model).apply_dispatch(&frame.payload["response"], true);
+    }
     if frame.payload["status"] != "ok" {
         let reason = frame.payload["response"]["reason"]
             .as_str()
             .unwrap_or("refused");
         let what = match outgoing {
             Outgoing::Say { .. } => "Not sent",
-            Outgoing::CancelTurn => "Nothing to cancel",
+            Outgoing::CancelTurn | Outgoing::CancelDispatch { .. } => "Nothing to cancel",
+            Outgoing::Watch { .. } | Outgoing::Unwatch => "Dispatch unavailable",
         };
         lock(model).note(format!("{what}: {}", describe(reason)));
     }
@@ -301,4 +335,26 @@ fn lost(reason: &str, joined: bool) -> Ended {
 
 fn short_error(error: &str) -> String {
     error.chars().take(80).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn connection_reasons_clean_service_text_and_keep_readable_words() {
+        let model = Arc::new(Mutex::new(Model::new("s1")));
+        set(
+            &model,
+            Connection::Reconnecting("refused\u{1b}[2J readable".into()),
+        );
+        assert_eq!(
+            lock(&model).connection,
+            Connection::Reconnecting("refused readable".into())
+        );
+        set(&model, Connection::Refused("bad\u{1b}[31m token".into()));
+        assert_eq!(
+            lock(&model).connection,
+            Connection::Refused("bad token".into())
+        );
+    }
 }

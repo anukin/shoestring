@@ -61,6 +61,9 @@ case "${1:-}" in
   # `chat` prepares the session in the runtime, then starts the coordinator's
   # terminal interface from this shell so it owns the terminal.
   chat)
+    case "${2:-}" in
+      --help|-h|list) exec "$runtime" eval 'Shoestring.CLI.Main.main(System.argv())' "$@" ;;
+    esac
     launch=$(mktemp "${TMPDIR:-/tmp}/shoestring-chat.XXXXXX")
     status=0
     "$runtime" eval 'Shoestring.CLI.Main.main(System.argv())' "$@" --launch-file "$launch" || status=$?

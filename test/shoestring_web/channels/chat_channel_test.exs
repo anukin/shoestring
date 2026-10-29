@@ -231,6 +231,27 @@ defmodule ShoestringWeb.ChatChannelTest do
         binding
       )
 
+    ref = push(socket, "watch_dispatch", %{"dispatch_id" => id})
+
+    assert_reply ref, :ok, %{
+      "dispatch_id" => ^id,
+      "lines" => lines,
+      "steps" => steps,
+      "terminal" => nil
+    }
+
+    assert Enum.any?(lines, &String.contains?(&1, "codex:gpt-6-luna"))
+    assert is_list(steps["entries"])
+    send(socket.channel_pid, :state)
+
+    assert_push "state", %{
+      "dispatches" => [
+        %{"dispatch_id" => ^id, "reviewer" => nil, "elapsed_seconds" => elapsed, "run_id" => nil}
+      ]
+    }
+
+    assert elapsed >= 0
+
     ref = push(socket, "cancel_dispatch", %{"dispatch_id" => id, "reason" => " "})
     assert_reply ref, :error, %{"reason" => "invalid_reason"}
 
@@ -244,6 +265,13 @@ defmodule ShoestringWeb.ChatChannelTest do
 
     dispatch = Shoestring.Dispatches.get(id)
     assert Shoestring.Dispatches.state(dispatch) == "cancelled"
+    send(socket.channel_pid, :state)
+    assert_push "dispatch", %{"dispatch_id" => ^id, "lines" => changed}
+    assert "state: cancelled" in changed
+    ref = push(socket, "unwatch_dispatch", %{})
+    assert_reply ref, :ok
+    _ = :sys.get_state(socket.channel_pid)
+    assert :sys.get_state(socket.channel_pid).assigns.watched == nil
     {:ok, events} = Trajectory.replay(dispatch.goal_id)
     # The cancellation itself names the person, not the grant.
     assert [%{payload: %{"requested_by" => by}}] =
@@ -269,8 +297,59 @@ defmodule ShoestringWeb.ChatChannelTest do
         %{}
       )
 
+    ref = push(other, "watch_dispatch", %{"dispatch_id" => id})
+    assert_reply ref, :error, %{"reason" => "dispatch_not_found"}
+
     ref = push(other, "cancel_dispatch", %{"dispatch_id" => id, "reason" => "mine now"})
     assert_reply ref, :error, %{"reason" => "dispatch_not_found"}
+  end
+
+  test "dispatch logs keep the latest 500 lines, count omissions and freeze final rows", ctx do
+    {:ok, %{"dispatch_id" => id}} =
+      Tools.call(
+        "dispatch",
+        %{
+          "purpose" => "implement",
+          "worker" => "codex:gpt-6-luna",
+          "title" => "Make add return the sum",
+          "brief" => @brief,
+          "files" => ["calc.py"]
+        },
+        %{session_id: ctx.session, repository: ctx.repo}
+      )
+
+    dispatch = Shoestring.Dispatches.get(id)
+    {:ok, before} = Trajectory.replay(dispatch.goal_id)
+    start = List.last(before).sequence
+    now = DateTime.utc_now()
+    # Canonical progress envelopes, no harness/provider is started.
+    for n <- 1..510 do
+      Repo.insert!(%Trajectory.TrajectoryEvent{
+        goal_id: dispatch.goal_id,
+        sequence: start + n,
+        type: "cobbler.plan.gate.started",
+        actor: "system",
+        occurred_at: now,
+        schema_version: 1,
+        payload: %{"gate" => "check-#{n}"}
+      })
+    end
+
+    steps = ShoestringWeb.ChatDispatches.steps(dispatch, start)
+    assert length(steps["entries"]) == 500
+    assert steps["omitted"] == 10
+    assert hd(steps["entries"])["sequence"] == start + 11
+    assert List.last(steps["entries"])["line"] =~ "check-510"
+    assert steps["last_sequence"] == start + 510
+    assert ShoestringWeb.ChatDispatches.steps(dispatch, start + 510)["entries"] == []
+
+    {:ok, _} =
+      Shoestring.Dispatches.cancel(dispatch, "not needed", requested_by: "human:operator")
+
+    {rows, cache} = ShoestringWeb.ChatDispatches.rows(ctx.session, %{}, now)
+    {same, _} = ShoestringWeb.ChatDispatches.rows(ctx.session, cache, DateTime.add(now, 60))
+    assert rows == same
+    assert hd(rows)["state"] == "cancelled"
   end
 
   test "a cancel names a person or the grant, nothing else", ctx do

@@ -83,3 +83,30 @@ At boot the service starts the engine of each conversation whose session
 still has an active grant, so a dispatch that settles while no client is
 attached still wakes the coordinator. Starting an engine makes no model
 call.
+
+## Dispatch inspection
+
+`state.dispatches` contains the session's dispatch rows: `dispatch_id`, purpose,
+worker, reviewer, state, title, elapsed_seconds, waiting_until, latest_step, next,
+run_id and terminal. Terminal is `/runs/RUN/terminal` only for an interactive
+harness; headless Elves cannot be steered. Rows derive from `runs show` and
+incremental canonical `runs log`, never raw provider output. Final rows are
+cached for this channel connection.
+
+Send `watch_dispatch` with `dispatch_id`. A dispatch outside this session is
+indistinguishable from a missing dispatch (`dispatch_not_found`). The reply
+contains dispatch_id, lines, terminal and steps. Steps contains entries
+(sequence, at, line), last_sequence and omitted. It retains the latest 500
+rendered entries, reporting earlier omissions. Each state tick pushes `dispatch`
+when detail changes or entries arrive; sequence cursors suppress duplicates.
+Call histories without a goal have null sequences and replace the previous
+snapshot. `unwatch_dispatch` stops those pushes. Rejoining must watch again.
+Inspection never advances, confirms or cancels execution.
+
+In the native client, Tab focuses agents; arrows select; Enter opens details;
+Escape closes them. Arrows scroll details. `c` asks for confirmation for the
+selected dispatch using service state; only `y` sends `cancel_dispatch`. It
+names that exact dispatch and records the person's request. Cancels are never
+resent after a reconnect; only unanswered messages are. An open detail is
+watched again after reconnecting. Service text is cleaned before display,
+including detail, waiting reasons, review findings and terminal links.

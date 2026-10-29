@@ -17,7 +17,7 @@ defmodule Shoestring.CLI.Commands.Chat do
   shoestring chat list [--json]
 
   Opens Shoestring's chat screen in this repository. You talk to a
-  coordinator (Claude Code, driven by the service, read-only in this
+  coordinator (Claude Code or Codex, driven by the service, read-only in this
   checkout) that hands tasks to Shoestring with its tools; the screen shows
   the conversation, every dispatch and the grant. The coordinator and model
   are the agent's Coordinator role (NAME, else the default agent), or
@@ -154,12 +154,15 @@ defmodule Shoestring.CLI.Commands.Chat do
     end
   end
 
+  @doc "Native client location in a checkout or relocated installed release."
+  def client_path do
+    System.get_env("SHOESTRING_CHAT_CLIENT") ||
+      Application.app_dir(:shoestring, "priv/bin/shoestring-chat")
+  end
+
   defp client!(context) do
     path =
-      Map.get_lazy(context, :chat_client, fn ->
-        System.get_env("SHOESTRING_CHAT_CLIENT") ||
-          Application.app_dir(:shoestring, "priv/bin/shoestring-chat")
-      end)
+      Map.get_lazy(context, :chat_client, &client_path/0)
 
     if File.regular?(path),
       do: path,

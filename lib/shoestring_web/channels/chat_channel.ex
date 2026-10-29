@@ -20,7 +20,8 @@ defmodule ShoestringWeb.ChatChannel do
   require Logger
 
   alias Shoestring.{Conversations, Dispatches, Grants, Trajectory}
-  alias Shoestring.CLI.Commands.{Capacity, Dispatch, Grant}
+  alias Shoestring.CLI.Commands.{Capacity, Grant}
+  alias ShoestringWeb.ChatDispatches
   alias Shoestring.CLI.WorkLoop
   alias Shoestring.Conversations.{Conversation, Engine}
 
@@ -42,7 +43,9 @@ defmodule ShoestringWeb.ChatChannel do
          conversation: conversation,
          last: after_sequence,
          ready: false,
-         snapshot: nil
+         snapshot: nil,
+         dispatch_cache: %{},
+         watched: nil
        )}
     else
       nil -> {:error, %{reason: "no_conversation"}}
@@ -106,13 +109,22 @@ defmodule ShoestringWeb.ChatChannel do
 
   def handle_info(:state, socket) do
     Process.send_after(self(), :state, @state_ms)
-    snapshot = snapshot(socket.assigns.conversation)
+
+    {rows, cache} =
+      ChatDispatches.rows(
+        socket.assigns.conversation.session_id,
+        socket.assigns.dispatch_cache,
+        DateTime.utc_now()
+      )
+
+    socket = assign(socket, :dispatch_cache, cache)
+    snapshot = snapshot(socket.assigns.conversation, rows)
 
     if snapshot == socket.assigns.snapshot do
-      {:noreply, socket}
+      watch_tick(socket)
     else
       with {:noreply, socket} <- push_bounded(socket, "state", snapshot) do
-        {:noreply, assign(socket, :snapshot, snapshot)}
+        watch_tick(assign(socket, :snapshot, snapshot))
       end
     end
   end
@@ -148,13 +160,13 @@ defmodule ShoestringWeb.ChatChannel do
     }
   end
 
-  defp snapshot(conversation) do
+  defp snapshot(conversation, rows) do
     grant = Grants.active(conversation.session_id)
 
     %{
       "engine" => engine_status(conversation),
       "grant" => grant && Grant.show(grant),
-      "dispatches" => Enum.map(Dispatches.list(conversation.session_id), &Dispatch.summary/1),
+      "dispatches" => rows,
       "capacity" => Capacity.report()
     }
   end
@@ -209,8 +221,56 @@ defmodule ShoestringWeb.ChatChannel do
     end
   end
 
+  def handle_in("watch_dispatch", %{"dispatch_id" => id}, socket) when is_binary(id) do
+    session = socket.assigns.conversation.session_id
+
+    case Dispatches.get(id) do
+      %{session_id: ^session} = dispatch ->
+        detail = ChatDispatches.detail(dispatch)
+        steps = ChatDispatches.steps(dispatch, 0)
+        watched = %{id: id, detail: detail, steps: steps, cursor: steps["last_sequence"] || 0}
+        {:reply, {:ok, Map.put(detail, "steps", steps)}, assign(socket, :watched, watched)}
+
+      _ ->
+        {:reply, {:error, %{"reason" => "dispatch_not_found"}}, socket}
+    end
+  end
+
+  def handle_in("unwatch_dispatch", _payload, socket),
+    do: {:reply, :ok, assign(socket, :watched, nil)}
+
   def handle_in(_event, _payload, socket),
     do: {:reply, {:error, %{"reason" => "invalid_request"}}, socket}
+
+  defp watch_tick(%{assigns: %{watched: nil}} = socket), do: {:noreply, socket}
+
+  defp watch_tick(socket) do
+    watched = socket.assigns.watched
+
+    case Dispatches.get(watched.id) do
+      nil ->
+        {:noreply, assign(socket, :watched, nil)}
+
+      dispatch ->
+        detail = ChatDispatches.detail(dispatch)
+        steps = ChatDispatches.steps(dispatch, watched.cursor)
+
+        if detail != watched.detail or (steps["entries"] != [] and steps != watched.steps) do
+          with {:noreply, socket} <-
+                 push_bounded(socket, "dispatch", Map.put(detail, "steps", steps)) do
+            {:noreply,
+             assign(socket, :watched, %{
+               watched
+               | detail: detail,
+                 steps: steps,
+                 cursor: steps["last_sequence"] || 0
+             })}
+          end
+        else
+          {:noreply, socket}
+        end
+    end
+  end
 
   defp to_engine(socket, fun) do
     with {:ok, _pid} <- engine(socket.assigns.conversation) do

@@ -71,6 +71,18 @@ def smoke(release, state):
                  "capacity"):
         assert f"shoestring {name}" in run(name, "--help"), f"Release {name} --help"
     assert len(list(release.glob("lib/shoestring-*/priv/coordinator/instructions.md"))) == 1
+    assert len(list(release.glob("lib/shoestring-*/priv/coordinator/conversation.md"))) == 1
+    [chat] = release.glob("lib/shoestring-*/priv/bin/shoestring-chat")
+    assert os.access(chat, os.X_OK), "Native chat client is not executable"
+    resolved = subprocess.run([str(release / "bin/shoestring"), "eval",
+        "IO.puts(Shoestring.CLI.Commands.Chat.client_path())"], env=env,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    assert resolved.returncode == 0 and pathlib.Path(resolved.stdout.decode().strip()).resolve() == chat.resolve(), \
+        "Installed chat command did not resolve the relocated client"
+    native = subprocess.run([str(chat)], env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+    assert native.returncode == 2 and b"usage: shoestring-chat" in native.stderr
+
     assert refused("grant", "--models", "codex:gpt-6-luna").startswith(
         "A grant is a person's decision")
     assert refused("chat").startswith("A grant is a person's decision")
@@ -123,6 +135,7 @@ def smoke(release, state):
                       "health_http": 200, "ui_http": 200, "diagnostic_export": "confirmed_private",
                       "work_commands": "goals_agents_refusals",
                       "coordinator_commands": "help_lists_refusals_instructions",
+                      "native_chat": "relocated_binary_and_instructions",
                       "provider_or_toolchain_launches": 0, "clean_machine": "not_verified"}, sort_keys=True))
 
 

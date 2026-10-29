@@ -305,9 +305,13 @@ defmodule Shoestring.CLI.ChatTest do
     end
 
     test "needs a coordinator that converses, with an explicit model", ctx do
-      assert_raise Refusal, ~r/Codex cannot coordinate in the chat screen yet.*--external/, fn ->
-        Chat.run(["--coordinator", "codex:gpt-6-luna"], screen(ctx))
-      end
+      {:ok, _} = ModelCatalog.add("opencode", "openai/test-model")
+
+      assert_raise Refusal,
+                   ~r/opencode cannot coordinate in the chat screen yet.*--external/,
+                   fn ->
+                     Chat.run(["--coordinator", "opencode:openai/test-model"], screen(ctx))
+                   end
 
       assert_raise Refusal, ~r/needs an explicit coordinator model/, fn ->
         Chat.run(["--coordinator", "claude:default"], screen(ctx))

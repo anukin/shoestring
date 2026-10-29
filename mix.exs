@@ -44,6 +44,19 @@ defmodule Shoestring.MixProject do
         "shoestring-terminal"
       ])
 
+    chat =
+      Path.join([
+        release.path,
+        "lib",
+        "shoestring-#{release.version}",
+        "priv",
+        "bin",
+        "shoestring-chat"
+      ])
+
+    unless File.regular?(chat) and Bitwise.band(File.stat!(chat).mode, 0o111) != 0,
+      do: Mix.raise("Release is missing its executable native chat client")
+
     {os_version, 0} = System.cmd("/usr/bin/sw_vers", ["-productVersion"])
     {revision, status} = System.cmd("git", ["rev-parse", "HEAD"], stderr_to_stdout: true)
 

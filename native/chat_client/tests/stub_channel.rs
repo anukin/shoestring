@@ -171,12 +171,21 @@ async fn an_unanswered_message_is_sent_again_with_its_id_and_a_cancel_is_not() {
         })
         .unwrap();
     outbox.send(Outgoing::CancelTurn).unwrap();
+    outbox
+        .send(Outgoing::CancelDispatch {
+            id: "d1".into(),
+            reason: "person".into(),
+        })
+        .unwrap();
     let say = next(&mut first).await;
     assert_eq!(
         (say.event.as_str(), &say.payload["message_id"]),
         ("say", &json!("m-1"))
     );
     assert_eq!(next(&mut first).await.event, "cancel_turn");
+    let cancel = next(&mut first).await;
+    assert_eq!(cancel.event, "cancel_dispatch");
+    assert_eq!(cancel.payload["dispatch_id"], "d1");
     drop(first);
 
     let (mut second, _) = accept(&listener).await;
@@ -277,4 +286,59 @@ async fn a_join_for_a_missing_conversation_is_refused_for_good() {
         lock(&model).connection,
         Connection::Refused("join refused: no_conversation".into())
     );
+}
+
+#[tokio::test]
+async fn rewatch_open_detail_after_reconnect_and_receive_live_steps() {
+    use shoestring_chat::model::Detail;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (model, outbox, task) = start(listener.local_addr().unwrap().port());
+    let (mut first, _) = accept(&listener).await;
+    let join = next(&mut first).await;
+    reply(&mut first, &join, "ok", json!({})).await;
+    until(&model, |m| m.connection == Connection::Live).await;
+    lock(&model).detail = Some(Detail {
+        id: "d1".into(),
+        ..Detail::default()
+    });
+    outbox.send(Outgoing::Watch { id: "d1".into() }).unwrap();
+    let watch = next(&mut first).await;
+    assert_eq!(watch.event, "watch_dispatch");
+    reply(
+        &mut first,
+        &watch,
+        "ok",
+        json!({"dispatch_id": "d1", "lines": ["state: running"],
+        "steps": {"last_sequence": 1, "entries": [{"sequence": 1, "line": "started"}]}}),
+    )
+    .await;
+    until(&model, |m| m.detail.as_ref().unwrap().steps.len() == 1).await;
+    drop(first);
+    let (mut second, _) = accept(&listener).await;
+    let join = next(&mut second).await;
+    reply(&mut second, &join, "ok", json!({})).await;
+    let watch = next(&mut second).await;
+    assert_eq!(watch.event, "watch_dispatch");
+    assert_eq!(watch.payload["dispatch_id"], "d1");
+    reply(
+        &mut second,
+        &watch,
+        "ok",
+        json!({"dispatch_id": "d1", "lines": ["state: running"],
+        "steps": {"last_sequence": 1, "entries": [{"sequence": 1, "line": "started"}]}}),
+    )
+    .await;
+    push(
+        &mut second,
+        "dispatch",
+        json!({"dispatch_id": "d1", "lines": ["checks: passed"],
+        "steps": {"last_sequence": 2, "entries": [{"sequence": 2, "line": "checked"}]}}),
+    )
+    .await;
+    until(&model, |m| m.detail.as_ref().unwrap().steps.len() == 2).await;
+    assert_eq!(
+        lock(&model).detail.as_ref().unwrap().steps,
+        vec!["started", "checked"]
+    );
+    task.abort();
 }

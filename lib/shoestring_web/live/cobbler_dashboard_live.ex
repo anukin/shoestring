@@ -48,7 +48,11 @@ defmodule ShoestringWeb.CobblerDashboardLive do
           unread: room["unread_usage"],
           dispatches:
             for dispatch <- Shoestring.Dispatches.list(grant.session_id) do
+              run = Shoestring.Dispatches.latest_run(dispatch)
+
               %{
+                run_id: run && run.id,
+                terminal?: ShoestringWeb.TerminalAccess.interactive?(run),
                 id: dispatch.id,
                 title: dispatch.title,
                 worker: "#{dispatch.provider}:#{dispatch.model}",
