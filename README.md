@@ -191,6 +191,12 @@ mix precommit
 Tests use isolated SQLite state and do not require vendor executables,
 provider credentials, or network access.
 
+`mix precommit` runs the suite as 16 partitions, 8 at a time
+(`mix test.partitioned`). While changing code, run the affected test files
+(`mix test path/to/file_test.exs`) and `mix test --failed` instead;
+`mix test --stale` is not much shorter here, since a change to a widely used
+module marks most of the suite stale. Run `mix precommit` before merging.
+
 To recreate the test database explicitly:
 
 ```sh

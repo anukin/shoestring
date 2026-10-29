@@ -2,17 +2,22 @@ defmodule Mix.Tasks.Test.Partitioned do
   @shortdoc "Runs the ExUnit suite as concurrent partitions"
 
   @moduledoc """
-  Runs `mix test --partitions N` as N concurrent OS processes, one per
-  `MIX_TEST_PARTITION`, so the synchronous database tests no longer run one
-  file after another in a single VM. Each partition already gets its own state
-  root and SQLite database (`config/runtime.exs`).
+  Runs `mix test --partitions N` as N OS processes, one per
+  `MIX_TEST_PARTITION`, at most `--jobs` at a time, so the synchronous
+  database tests no longer run one file after another in a single VM. Each
+  partition already gets its own state root and SQLite database
+  (`config/runtime.exs`).
+
+  There are more partitions than jobs because a few test files take most of
+  the time and hashing cannot spread them evenly: with small partitions a
+  job that finishes early takes the next one instead of sitting idle.
 
   Prints each partition's exit status, seed and counts, then the summed
   counts. A failed partition's whole output is printed with the command that
   reproduces it, and the task raises when any partition fails.
 
       mix test.partitioned
-      mix test.partitioned --partitions 4
+      mix test.partitioned --partitions 8 --jobs 4
 
   ExUnit assigns test files to partitions by hash, so the same file always
   lands in the same partition for a given N.
@@ -20,14 +25,17 @@ defmodule Mix.Tasks.Test.Partitioned do
 
   use Mix.Task
 
-  @default_partitions 8
+  @default_partitions 16
+  @default_jobs 8
   @count_keys ~w(doctests tests failures invalid skipped excluded)
 
   @impl Mix.Task
   def run(args) do
-    {opts, _argv} = OptionParser.parse!(args, strict: [partitions: :integer])
+    {opts, _argv} = OptionParser.parse!(args, strict: [partitions: :integer, jobs: :integer])
     total = Keyword.get(opts, :partitions, @default_partitions)
+    jobs = Keyword.get(opts, :jobs, @default_jobs)
     if total < 1, do: Mix.raise("--partitions must be a positive integer")
+    if jobs < 1, do: Mix.raise("--jobs must be a positive integer")
 
     mix = System.find_executable("mix") || Mix.raise("mix executable not found on PATH")
     started = System.monotonic_time(:millisecond)
@@ -35,7 +43,7 @@ defmodule Mix.Tasks.Test.Partitioned do
     results =
       1..total
       |> Task.async_stream(&run_partition(mix, &1, total),
-        max_concurrency: total,
+        max_concurrency: jobs,
         timeout: :infinity,
         ordered: false
       )
