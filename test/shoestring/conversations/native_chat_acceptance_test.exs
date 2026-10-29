@@ -176,9 +176,11 @@ defmodule Shoestring.Conversations.NativeChatAcceptanceTest do
       assert Enum.any?(review_lines, &String.contains?(&1, "approved"))
 
       # Implement executions run one at a time across goals: while the first
-      # holds the execution claim the second waits (scope_occupied). Cancelling
-      # the running one from the chat channel reaps exactly its owned group and
-      # leaves the waiting dispatch untouched; the waiting one then runs.
+      # holds the execution claim the second waits (scope_occupied). An explore
+      # call runs alongside it in its own process group, as real explorers do.
+      # Cancelling the running implement from the chat channel reaps exactly
+      # its owned group; the running explore and its group, and the waiting
+      # dispatch, are untouched. The waiting one then runs.
       working = Shoestring.Test.FanoutNodeHelpers.working_scenario()
       configure_worker(port, working)
       first = dispatch!(binding, "implement", "claude:opus", "Cancel only this")
@@ -195,6 +197,22 @@ defmodule Shoestring.Conversations.NativeChatAcceptanceTest do
       [first_pgid, first_child] = group_ids(first_group)
       assert {:snooze, 60} = PlanExecutionWorker.perform(job!(second))
       assert Dispatches.advance(second) == :none
+
+      calls = Application.fetch_env!(:shoestring, :dispatch_calls)
+
+      Application.put_env(
+        :shoestring,
+        :dispatch_calls,
+        Keyword.update!(calls, :adapter_opts, &Keyword.put(&1, :scenario, :process_group))
+      )
+
+      alongside = dispatch!(binding, "explore", "codex:gpt-6-luna", "Explore alongside")
+      assert {:snooze, 30} = Shoestring.Dispatches.Calls.step(alongside.id)
+      assert Dispatches.advance(alongside) == :confirmed
+      exploring = Task.async(fn -> Shoestring.Dispatches.Calls.step(alongside.id) end)
+      assert_receive {:explore_group, explore_pgid, explorer}, 5_000
+      assert Shoestring.Elves.PortRunner.alive_id?(explore_pgid)
+      assert Dispatches.state(alongside) == "running"
       first_ref = Process.monitor(first_elf)
 
       ref =
@@ -209,8 +227,15 @@ defmodule Shoestring.Conversations.NativeChatAcceptanceTest do
       refute Shoestring.Elves.PortRunner.alive_id?(first_pgid)
       assert {_, 1} = System.cmd("kill", ["-0", to_string(first_child)], stderr_to_stdout: true)
       assert Dispatches.state(first) == "cancelled"
+      assert Shoestring.Elves.PortRunner.alive_id?(explore_pgid)
+      assert Dispatches.state(alongside) == "running"
       assert Dispatches.state(second) == "waiting"
       assert Dispatches.latest_run(second) == nil
+
+      send(explorer, :release_explore)
+      assert :done = Task.await(exploring, 10_000)
+      assert Dispatches.state(alongside) == "completed"
+      Application.put_env(:shoestring, :dispatch_calls, calls)
 
       second_elf = start_worker!(second)
       assert_receive {:udp, ^udp, _, _, second_group}, 5_000
@@ -286,7 +311,7 @@ defmodule Shoestring.Conversations.NativeChatAcceptanceTest do
       assert turns() == charged
 
       IO.puts(
-        "NATIVE_CHAT_ACCEPTANCE: explore + implement + review, checks/take, exact group cancellation, restart, turn cap/extension, edit refusal; zero provider invocations"
+        "NATIVE_CHAT_ACCEPTANCE: explore + implement + review, checks/take, exact group cancellation beside a running explore, restart, turn cap/extension, edit refusal; zero provider invocations"
       )
     end
 

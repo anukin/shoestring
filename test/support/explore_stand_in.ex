@@ -3,7 +3,9 @@ defmodule Shoestring.Test.ExploreStandIn do
   An explorer for hermetic tests; never a provider. It reports what it was
   given to `opts[:test_pid]` and answers per `opts[:scenario]`: `:report`
   (cites `calc.py:1`, `calc.py:999` and `missing.py:3`), `:write` (edits the
-  copy first), `:oversized` or `{:error, code}`.
+  copy first), `:oversized` or `{:error, code}`. `:process_group` holds an
+  owned process group for the call, as the real explorers do, sends
+  `{:explore_group, pgid, self()}` and reports once sent `:release_explore`.
   """
   @behaviour Shoestring.Dispatches.Explore.Adapter
 
@@ -33,6 +35,20 @@ defmodule Shoestring.Test.ExploreStandIn do
 
         {:ok,
          %{json: Jason.encode!(report) <> String.duplicate(" ", 40_000), output_tokens: 7000}}
+
+      :process_group ->
+        {:ok, runner} = Shoestring.Elves.PortRunner.spawn(["sleep", "60"], cd: input["workdir"])
+        send(opts[:test_pid], {:explore_group, runner.pgid, self()})
+
+        receive do
+          :release_explore -> :ok
+        after
+          30_000 -> :ok
+        end
+
+        _ = Shoestring.Elves.PortRunner.terminate(runner)
+        Shoestring.Elves.PortRunner.close(runner)
+        {:ok, %{json: Jason.encode!(report()), output_tokens: 120}}
 
       {:error, code} ->
         {:error, code}
