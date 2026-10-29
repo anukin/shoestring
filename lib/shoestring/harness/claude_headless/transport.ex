@@ -390,7 +390,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
         {:error, :setsid_unavailable}
 
       python3 ->
-        {:ok, {python3, ["-c", PortRunner.setsid_wrapper(), executable | args]}}
+        {:ok, {python3, PortRunner.wrapper_args(executable, args)}}
     end
   end
 

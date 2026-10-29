@@ -113,9 +113,11 @@ defmodule Shoestring.Elves.PortRunner do
   @default_handshake_timeout_ms 15_000
 
   @doc false
-  # The wrapper and its handshake line, shared with the Claude headless
-  # transport so the two launchers cannot drift apart.
-  def setsid_wrapper, do: @setsid_wrapper
+  # The wrapper's interpreter arguments and its handshake line, shared with
+  # the Claude headless transport so the two launchers cannot drift apart.
+  # The wrapper needs only os and sys: isolated mode without site starts in
+  # about two thirds of the time and ignores PYTHON* variables.
+  def wrapper_args(executable, args), do: ["-I", "-S", "-c", @setsid_wrapper, executable | args]
 
   @doc false
   def handshake_prefix, do: @handshake_prefix
@@ -323,7 +325,7 @@ defmodule Shoestring.Elves.PortRunner do
           end
 
         python3 ->
-          {:ok, {python3, ["-c", @setsid_wrapper, executable | args]}, true}
+          {:ok, {python3, wrapper_args(executable, args)}, true}
       end
     else
       {:ok, {executable, args}, false}
