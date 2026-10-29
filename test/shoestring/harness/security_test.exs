@@ -82,4 +82,42 @@ defmodule Shoestring.Harness.SecurityTest do
       refute Security.capacity_forbidden_value?("stale_observation: capacity probe overdue")
     end
   end
+
+  describe "compound secret and key shapes in long text" do
+    # The compound patterns once retried from every position of a long
+    # identifier run whenever "secret" or "key" appeared later: about 2 s for
+    # each pattern on 20 KB, growing with the square of the length.
+    @run String.duplicate("x", 20_000)
+
+    test "redaction stays linear and still redacts and keeps the right parts" do
+      text = @run <> " aws_secret_access_key=SUPERSECRETVALUE123 custom_key=hunter2 end"
+
+      # The diagnostic preview is cut short, but every pattern runs first.
+      {micros, preview} = :timer.tc(fn -> Security.redact(text) end)
+      assert micros < 500_000
+      assert String.starts_with?(@run, preview)
+
+      {micros, retained} = :timer.tc(fn -> Security.redact_retained(text) end)
+      assert micros < 500_000
+      refute retained =~ "SUPERSECRETVALUE123"
+      refute retained =~ "hunter2"
+      assert retained =~ "aws_secret_access_key=[REDACTED]"
+      assert retained =~ "custom_key=[REDACTED]"
+      assert String.starts_with?(retained, @run <> " ")
+    end
+
+    test "detection stays linear in both directions" do
+      {micros, found?} =
+        :timer.tc(fn -> Security.capacity_forbidden_value?(@run <> " secret _key") end)
+
+      assert micros < 500_000
+      refute found?
+
+      {micros, found?} =
+        :timer.tc(fn -> Security.capacity_forbidden_value?(@run <> " deploy_key: abc") end)
+
+      assert micros < 500_000
+      assert found?
+    end
+  end
 end

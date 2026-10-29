@@ -142,6 +142,22 @@ defmodule ShoestringWeb.RunRedactionRenderTest do
     refute Map.has_key?(sanitized, "raw_transcript")
   end
 
+  test "unit: compound secret and key redaction stays linear in long output", _ctx do
+    # Once about 2 s for each compound pattern on 20 KB, growing with the
+    # square of the length, whenever "secret" or "key" appeared later.
+    run = String.duplicate("x", 20_000)
+    text = run <> " sk-ant-api03-abcdef1234567890abcdef123456 \"db_secret\" => \"hunter2\""
+
+    {micros, redacted} = :timer.tc(fn -> RunPresentation.redact_text(text) end)
+
+    assert micros < 500_000
+    refute redacted =~ "sk-ant-api03"
+    refute redacted =~ "hunter2"
+    assert redacted =~ "db_secret"
+    assert redacted =~ "[REDACTED_API_KEY]"
+    assert String.starts_with?(redacted, run <> " ")
+  end
+
   test "unit: pane cap applies after redaction with explicit notice (B5)", _ctx do
     big = String.duplicate("x", 40_000) <> " sk-ant-api03-abcdef1234567890abcdef123456"
     {visible, omitted, truncated?} = RunPresentation.cap_text(big)

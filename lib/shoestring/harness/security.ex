@@ -35,12 +35,16 @@ defmodule Shoestring.Harness.Security do
     {:xml_wrapped_secret, ~r/<secret\b[^>]*>.*?<\s*\/\s*secret\s*>/is},
     # Compound identifiers containing "secret" (e.g. "aws_secret_access_key=").
     # The \b-anchored credential_marker above misses these because "_" is a
-    # word character, so there is no word boundary before "secret".
-    {:compound_secret_assignment, ~r/[A-Za-z0-9_.-]*secret[A-Za-z0-9_.-]*\s*[:=]/i},
+    # word character, so there is no word boundary before "secret". The
+    # lookbehind starts a match only where an identifier starts, as every
+    # match does; without it a long identifier run is rescanned from each
+    # position (quadratic).
+    {:compound_secret_assignment,
+     ~r/(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]*secret[A-Za-z0-9_.-]*+\s*[:=]/i},
     # Compound "*-key" identifiers (e.g. "custom_key=", "deploy-key:").
     # Requires a "_" or "-" separator before "key" so plain words ending in
     # "key" (e.g. "monkey", "turkey") do not match.
-    {:compound_key_assignment, ~r/[A-Za-z0-9_.-]*[_-]key\s*[:=]/i}
+    {:compound_key_assignment, ~r/(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]*[_-]key\s*[:=]/i}
   ]
 
   # Filesystem path patterns specifically forbidden in capacity observations and test fixtures.
@@ -425,15 +429,16 @@ defmodule Shoestring.Harness.Security do
       "\\1\\2[REDACTED]"
     )
     # Redact compound "*-secret-*" assignments the word-boundary pass misses
-    # (e.g. aws_secret_access_key=...). Idempotent with the pass above.
+    # (e.g. aws_secret_access_key=...). Idempotent with the pass above. Both
+    # compound passes start only where an identifier starts (see above).
     |> String.replace(
-      ~r/([A-Za-z0-9_.-]*secret[A-Za-z0-9_.-]*)\s*([:=])[ \t]*(?:["'][^"'\r\n]*["']|[^\s,;]+)?/i,
+      ~r/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]*secret[A-Za-z0-9_.-]*+)\s*([:=])[ \t]*(?:["'][^"'\r\n]*["']|[^\s,;]+)?/i,
       "\\1\\2[REDACTED]"
     )
     # Redact compound "*-key" assignments (e.g. custom_key=..., deploy-key:...).
     # Idempotent with the pass above.
     |> String.replace(
-      ~r/([A-Za-z0-9_.-]*[_-]key)\s*([:=])[ \t]*(?:["'][^"'\r\n]*["']|[^\s,;]+)?/i,
+      ~r/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]*[_-]key)\s*([:=])[ \t]*(?:["'][^"'\r\n]*["']|[^\s,;]+)?/i,
       "\\1\\2[REDACTED]"
     )
     # Redact any other authorization assignments (not already Bearer, Basic, or REDACTED)
