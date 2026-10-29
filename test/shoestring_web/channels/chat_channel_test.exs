@@ -349,6 +349,8 @@ defmodule ShoestringWeb.ChatChannelTest do
     {rows, cache} = ShoestringWeb.ChatDispatches.rows(ctx.session, %{}, now)
     {same, _} = ShoestringWeb.ChatDispatches.rows(ctx.session, cache, DateTime.add(now, 60))
     assert rows == same
+    {fresh, _} = ShoestringWeb.ChatDispatches.rows(ctx.session, %{}, DateTime.add(now, 60))
+    assert fresh == rows
     assert hd(rows)["state"] == "cancelled"
   end
 

@@ -23,11 +23,20 @@ defmodule ShoestringWeb.ChatDispatches do
             end
 
           run = Dispatches.latest_run(dispatch)
+          final? = detail["state"] in @final
+
+          latest_at =
+            case List.last(steps["entries"]) do
+              nil -> previous && previous.latest_at
+              entry -> entry["at"]
+            end
+
+          ended_at = if final?, do: latest_at || dispatch.updated_at, else: now
 
           row =
             Map.take(detail, ~w(dispatch_id purpose worker reviewer state title next))
             |> Map.merge(%{
-              "elapsed_seconds" => max(DateTime.diff(now, dispatch.inserted_at), 0),
+              "elapsed_seconds" => max(DateTime.diff(ended_at, dispatch.inserted_at), 0),
               "waiting_until" => get_in(detail, ["waiting", "until"]),
               "latest_step" => latest,
               "run_id" => run && run.id,
@@ -38,7 +47,8 @@ defmodule ShoestringWeb.ChatDispatches do
            Map.put(cache, dispatch.id, %{
              row: row,
              cursor: steps["last_sequence"] || 0,
-             final: row["state"] in @final
+             latest_at: latest_at,
+             final: final?
            })}
       end
     end)
