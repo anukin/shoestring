@@ -24,7 +24,9 @@ defmodule Shoestring.Conversations.ChatTokenTest do
 
     assert :ok = ChatToken.verify(ctx.session, token)
     assert :error = ChatToken.verify(ctx.session, token <> "x")
-    assert :error = ChatToken.verify(ctx.session, String.replace(token, ~r/^./, "-"))
+    # The alphabet includes "-", so a fixed substitute could leave the token unchanged.
+    {first, rest} = String.split_at(token, 1)
+    assert :error = ChatToken.verify(ctx.session, if(first == "-", do: "_", else: "-") <> rest)
     assert :error = ChatToken.verify("other-session", token)
     assert :error = ChatToken.verify(ctx.session, nil)
   end
