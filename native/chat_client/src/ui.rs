@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
-use crate::model::{Connection, Kind, Model, short};
+use crate::model::{Connection, ConversationView, Kind, Model, short};
 
 const MAX_AGENTS: usize = 6;
 const MAX_INPUT: usize = 6;
@@ -17,6 +17,7 @@ const MAX_INPUT: usize = 6;
 pub const HELP: &str = "\
 Tab          focus agents; Up/Down select; Enter opens; c cancels (confirm)
 Esc          close detail; Up/Down scroll detail
+PgUp/PgDn    scroll the conversation back and forward
 Enter        send the message (the coordinator gets it when it is idle)
 Alt+Enter    new line (Ctrl+J too); paste keeps line breaks
 /cancel      interrupt the coordinator's running turn
@@ -25,7 +26,8 @@ Alt+Enter    new line (Ctrl+J too); paste keeps line breaks
 /exit        leave; the conversation and every agent keep running
 Ctrl+C       same as /exit";
 
-pub fn draw(frame: &mut Frame, model: &Model) {
+/// Draws `model`; returns the conversation as drawn, for scrolling it.
+pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
     let agents = (model.dispatches.len() * 3).clamp(1, MAX_AGENTS) as u16 + 2;
     let input = model.editor.line_count().clamp(1, MAX_INPUT) as u16 + 2;
     let [header, conversation, agents_area, input_area, status] = Layout::vertical([
@@ -38,7 +40,7 @@ pub fn draw(frame: &mut Frame, model: &Model) {
     .areas(frame.area());
 
     frame.render_widget(Paragraph::new(header_line(model)), header);
-    draw_conversation(frame, model, conversation);
+    let view = draw_conversation(frame, model, conversation);
     draw_agents(frame, model, agents_area);
     draw_input(frame, model, input_area);
     frame.render_widget(Paragraph::new(status_line(model)), status);
@@ -107,6 +109,7 @@ pub fn draw(frame: &mut Frame, model: &Model) {
             rect,
         );
     }
+    view
 }
 
 fn header_line(model: &Model) -> Line<'static> {
@@ -124,9 +127,8 @@ fn header_line(model: &Model) -> Line<'static> {
     ])
 }
 
-fn draw_conversation(frame: &mut Frame, model: &Model, area: Rect) {
-    let block = Block::new().borders(Borders::ALL).title(" Conversation ");
-    let inner = block.inner(area);
+fn draw_conversation(frame: &mut Frame, model: &Model, area: Rect) -> ConversationView {
+    let inner = Block::new().borders(Borders::ALL).inner(area);
     let width = inner.width.max(1) as usize;
 
     let mut lines: Vec<Line> = Vec::new();
@@ -151,8 +153,18 @@ fn draw_conversation(frame: &mut Frame, model: &Model, area: Rect) {
         }
     }
 
-    let skip = lines.len().saturating_sub(inner.height as usize);
-    frame.render_widget(Paragraph::new(lines.split_off(skip)).block(block), area);
+    let height = inner.height as usize;
+    let last_top = lines.len().saturating_sub(height);
+    let top = model.scroll_top.map_or(last_top, |top| top.min(last_top));
+    let title = if top < last_top {
+        format!(" Conversation · {} more below · PgDn ", last_top - top)
+    } else {
+        " Conversation · PgUp scroll back ".to_string()
+    };
+    let block = Block::new().borders(Borders::ALL).title(title);
+    let shown: Vec<Line> = lines.into_iter().skip(top).take(height).collect();
+    frame.render_widget(Paragraph::new(shown).block(block), area);
+    ConversationView { last_top, height }
 }
 
 fn draw_agents(frame: &mut Frame, model: &Model, area: Rect) {
@@ -345,17 +357,23 @@ mod tests {
     use serde_json::json;
 
     fn screen(model: &Model, width: u16, height: u16) -> String {
+        drawn(model, width, height).0
+    }
+
+    fn drawn(model: &Model, width: u16, height: u16) -> (String, ConversationView) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|frame| draw(frame, model)).unwrap();
+        let mut view = ConversationView::default();
+        terminal.draw(|frame| view = draw(frame, model)).unwrap();
         let buffer = terminal.backend().buffer();
-        (0..height)
+        let text = (0..height)
             .map(|y| {
                 (0..width)
                     .map(|x| buffer[(x, y)].symbol().to_string())
                     .collect::<String>()
             })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        (text, view)
     }
 
     #[test]
@@ -414,6 +432,55 @@ mod tests {
         assert!(text.contains("● d41aaaaa explore"));
         assert!(text.contains("connected · working"));
         assert!(!text.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn the_conversation_scrolls_back_holds_still_for_new_lines_and_returns_to_the_latest() {
+        let said = |range: std::ops::RangeInclusive<u64>| {
+            let events: Vec<_> = range
+                .map(|i| json!({"sequence": i, "type": "conversation.message.coordinator", "payload": {"text": format!("line {i}")}}))
+                .collect();
+            json!({ "events": events })
+        };
+        let mut model = Model::new("s1");
+        model.apply_events(&said(1..=40));
+        let (text, view) = drawn(&model, 60, 16);
+        assert!(text.contains("line 40"));
+        assert!(text.contains("PgUp scroll back"));
+        model.conversation_view = view;
+
+        model.scroll_conversation(-1);
+        let (text, view) = drawn(&model, 60, 16);
+        assert!(!text.contains("line 40"));
+        assert!(text.contains(&format!("line {}", 40 - view.height + 1)));
+        assert!(text.contains(&format!("{} more below", view.height - 1)));
+        model.conversation_view = view;
+
+        // New lines arrive below; what is being read stays where it is.
+        model.apply_events(&said(41..=45));
+        let (later, view) = drawn(&model, 60, 16);
+        let rows = |screen: &str| {
+            screen
+                .lines()
+                .filter(|l| l.contains("line "))
+                .map(String::from)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rows(&later), rows(&text));
+        model.conversation_view = view;
+
+        // As far back as it goes, then forward to the latest, which it follows again.
+        for _ in 0..10 {
+            model.scroll_conversation(-1);
+        }
+        assert_eq!(model.scroll_top, Some(0));
+        assert!(screen(&model, 60, 16).contains("line 1\u{20}"));
+        for _ in 0..10 {
+            model.scroll_conversation(1);
+        }
+        assert_eq!(model.scroll_top, None);
+        model.apply_events(&said(46..=46));
+        assert!(screen(&model, 60, 16).contains("line 46"));
     }
 
     #[test]

@@ -77,8 +77,20 @@ pub struct Model {
     pub detail: Option<Detail>,
     pub confirm: Option<Dispatch>,
     pub help: bool,
+    /// The conversation's first shown row while scrolled back; None follows
+    /// the latest.
+    pub scroll_top: Option<usize>,
+    /// The conversation as last drawn: its last possible first row, and its
+    /// height.
+    pub conversation_view: ConversationView,
     pub dirty: bool,
     pub quit: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ConversationView {
+    pub last_top: usize,
+    pub height: usize,
 }
 
 impl Model {
@@ -89,6 +101,20 @@ impl Model {
             dirty: true,
             ..Model::default()
         }
+    }
+
+    /// Scrolls the conversation back (negative) or forward by `pages`; at
+    /// the end it follows the latest again.
+    pub fn scroll_conversation(&mut self, pages: isize) {
+        let view = self.conversation_view;
+        let page = view.height.saturating_sub(1).max(1);
+        let top = self.scroll_top.unwrap_or(view.last_top);
+        let top = if pages < 0 {
+            top.saturating_sub(page * pages.unsigned_abs())
+        } else {
+            top.saturating_add(page * pages as usize)
+        };
+        self.scroll_top = (top < view.last_top).then_some(top);
     }
 
     /// An `events` push. A sequence already seen is dropped, so a resumed

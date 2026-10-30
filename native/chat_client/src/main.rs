@@ -150,7 +150,11 @@ fn draw_thread(model: Shared) -> thread::JoinHandle<io::Result<()>> {
                 }
             };
             if let Some(view) = view {
-                terminal.draw(|frame| ui::draw(frame, &view))?;
+                let mut drawn = Default::default();
+                terminal.draw(|frame| drawn = ui::draw(frame, &view))?;
+                // Scrolling needs the conversation as drawn; that is no
+                // change to draw again.
+                lock(&model).conversation_view = drawn;
             }
             thread::sleep(FRAME);
         }
@@ -258,11 +262,14 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
         KeyCode::Enter if alt || key.modifiers.contains(KeyModifiers::SHIFT) => {
             model.editor.newline()
         }
+        KeyCode::PageUp => model.scroll_conversation(-1),
+        KeyCode::PageDown => model.scroll_conversation(1),
         KeyCode::Enter => match model.editor.submit() {
             Command::Say(text) => match message_id() {
                 Ok(message_id) => {
                     let _ = outbox.send(Outgoing::Say { message_id, text });
                     model.notice = None;
+                    model.scroll_top = None;
                 }
                 Err(error) => model.note(format!("Not sent: no message id ({error})")),
             },
@@ -347,5 +354,26 @@ mod tests {
         model.connection = Connection::Connecting;
         key(&mut model, KeyCode::Char('y'), &tx);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn page_keys_scroll_the_conversation_and_sending_returns_to_the_latest() {
+        let mut model = Model::new("s1");
+        model.conversation_view = shoestring_chat::model::ConversationView {
+            last_top: 30,
+            height: 11,
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        key(&mut model, KeyCode::PageUp, &tx);
+        assert_eq!(model.scroll_top, Some(20));
+        key(&mut model, KeyCode::PageUp, &tx);
+        key(&mut model, KeyCode::PageDown, &tx);
+        assert_eq!(model.scroll_top, Some(20));
+        // Typing and sending leave the scrolled conversation for the latest.
+        key(&mut model, KeyCode::Char('h'), &tx);
+        assert_eq!(model.scroll_top, Some(20));
+        key(&mut model, KeyCode::Enter, &tx);
+        assert!(matches!(rx.try_recv().unwrap(), Outgoing::Say { text, .. } if text == "h"));
+        assert_eq!(model.scroll_top, None);
     }
 }
