@@ -66,7 +66,10 @@ needs initialized state (`init`). `start` stays
 in the foreground. Stop it explicitly with Ctrl-C or SIGTERM (Ctrl-C is passed
 on as SIGTERM, so both shut it down the same way). A stop that arrives while
 state is still being initialized is kept: initialization ends and the service
-is not started. There is no
+is not started. Stopping the service stops its running workers too: when it
+starts again, each such run is recorded as failed (`supervisor_crash`), or,
+if its worker process outlived the service, watched until that exits. No run
+is restarted or retried for you. There is no
 automatic service installation, daemon/reaper, forced shutdown of another
 instance or file cleanup.
 

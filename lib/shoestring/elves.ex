@@ -51,6 +51,8 @@ defmodule Shoestring.Elves do
   alias Shoestring.Trajectory.TrajectoryEvent
 
   @default_spawn_grace_ms 30_000
+  @run_lifecycle ~w(run.requested run.starting run.running run.pausing run.suspended
+                    run.cancelling run.completed run.failed run.interrupted run.cancelled)
 
   @doc """
   Persists run intent + Oban delivery, then starts the supervising Elf.
@@ -307,6 +309,54 @@ defmodule Shoestring.Elves do
           reconcile_orphan(run, opts)
       end
     end
+  end
+
+  @doc """
+  Reconciles, as `reconcile/2` does, every run whose latest lifecycle event
+  is `run.running`. An Elf never outlives the node that ran it, so after a
+  restart each such run is either adopted (its owned group is alive) or has
+  its exit recorded (the group is gone). Nothing is spawned, interrupted or
+  retried, and runs not yet started, suspended, cancelling or finished are
+  left alone. `Shoestring.Elves.Reconciler` runs this once when the
+  application starts.
+  """
+  @spec reconcile_unfinished(keyword()) ::
+          {:ok, %{repaired_count: non_neg_integer(), failures: [map()]}}
+  def reconcile_unfinished(opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    # The run projection is rebuilt lazily, so read the lifecycle events.
+    latest =
+      from event in TrajectoryEvent,
+        where: event.type in @run_lifecycle and not is_nil(event.run_id),
+        group_by: event.run_id,
+        select: %{run_id: event.run_id, sequence: max(event.sequence)}
+
+    run_ids =
+      repo.all(
+        from event in TrajectoryEvent,
+          join: last in subquery(latest),
+          on: last.run_id == event.run_id and last.sequence == event.sequence,
+          where: event.type == "run.running",
+          order_by: [asc: event.occurred_at],
+          select: event.run_id
+      )
+
+    result =
+      Enum.reduce(run_ids, %{repaired_count: 0, failures: []}, fn run_id, result ->
+        case reconcile(run_id, opts) do
+          {:ok, outcome} when outcome in [:adopted, :reconciled_terminal] ->
+            %{result | repaired_count: result.repaired_count + 1}
+
+          {:ok, _unchanged} ->
+            result
+
+          {:error, reason} ->
+            %{result | failures: [%{run_id: run_id, reason: reason} | result.failures]}
+        end
+      end)
+
+    {:ok, %{result | failures: Enum.reverse(result.failures)}}
   end
 
   @doc "Reads the recorded terminal state for a run, if any."

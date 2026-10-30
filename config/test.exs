@@ -20,6 +20,7 @@ config :shoestring, Oban,
 config :shoestring, dispatch_reconciler: false
 config :shoestring, wakeup_reconciler: false
 config :shoestring, handoff_reconciler: false
+config :shoestring, elf_reconciler: false
 config :shoestring, plan_execution_reconciler: false
 config :shoestring, reservation_control_reconciler: false
 config :shoestring, plan_child_inbox_reconciler: false

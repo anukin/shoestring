@@ -121,6 +121,7 @@ if config_env() == :prod do
           :dispatch_reconciler,
           :wakeup_reconciler,
           :handoff_reconciler,
+          :elf_reconciler,
           :plan_execution_reconciler,
           :reservation_control_reconciler,
           :plan_child_inbox_reconciler,

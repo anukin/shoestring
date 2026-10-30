@@ -49,6 +49,7 @@ defmodule Shoestring.Application do
         handoff_reconciler_children() ++
         capacity_supervisor_children() ++
         elves_children() ++
+        elf_reconciler_children() ++
         plan_execution_reconciler_children() ++
         reservation_control_reconciler_children() ++
         plan_child_inbox_reconciler_children() ++
@@ -156,6 +157,16 @@ defmodule Shoestring.Application do
       {Registry, keys: :unique, name: Shoestring.Elves.Registry},
       Supervisor.child_spec(Shoestring.Elves.Supervisor, restart: :transient)
     ]
+  end
+
+  # Startup-only Elf repair: adopts or records the exit of runs left
+  # `running` by the previous node. Disabled in test via `:elf_reconciler`.
+  defp elf_reconciler_children do
+    if Application.get_env(:shoestring, :elf_reconciler, true) do
+      [Shoestring.Elves.Reconciler]
+    else
+      []
+    end
   end
 
   defp plan_execution_reconciler_children do
