@@ -1,7 +1,7 @@
 defmodule Shoestring.CLI.Commands.Runs do
   @moduledoc "`shoestring runs`: a coordinator session's dispatches."
 
-  alias Shoestring.Dispatches
+  alias Shoestring.{Dispatches, Grants}
   alias Shoestring.CLI.{Command, Follow, Jobs, Refusal, Result}
   alias Shoestring.CLI.Commands.Dispatch
 
@@ -134,11 +134,24 @@ defmodule Shoestring.CLI.Commands.Runs do
   defp next("needs_you", dispatch, _call, _detail),
     do: "A person decides: shoestring follow #{dispatch.goal_id}"
 
-  defp next("held", dispatch, %Dispatches.Call{}, _detail),
-    do:
-      "Its provider's usage needs a confirmation and the grant has no unread-usage " <>
-        "pre-approval left. A person allows more, in a terminal: shoestring grants extend " <>
-        "#{dispatch.grant_id} --unread-usage 1; the next wait or runs show then confirms it"
+  # Shown after `Dispatches.advance/1`, so a grant with a pre-approval left
+  # has already confirmed it unless the grant is revoked.
+  defp next("held", dispatch, %Dispatches.Call{}, _detail) do
+    case Grants.get(dispatch.grant_id) do
+      %Grants.Grant{revoked_at: nil} = grant when grant.unread_usage_used < grant.unread_usage ->
+        "Its provider's usage needs a confirmation; the grant's next unread-usage " <>
+          "pre-approval confirms it at the next wait or runs show"
+
+      %Grants.Grant{revoked_at: nil} ->
+        "Its provider's usage needs a confirmation and the grant has no unread-usage " <>
+          "pre-approval left. A person allows more, in a terminal: shoestring grants extend " <>
+          "#{dispatch.grant_id} --unread-usage 1; the next wait or runs show then confirms it"
+
+      _revoked ->
+        "Its provider's usage needs a confirmation and its grant is revoked, so nothing " <>
+          "confirms it: shoestring runs cancel #{dispatch.id} --reason TEXT"
+    end
+  end
 
   defp next("held", dispatch, nil, _detail),
     do: "A person confirms the usage: shoestring follow #{dispatch.goal_id}"

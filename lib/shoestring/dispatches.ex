@@ -667,6 +667,10 @@ defmodule Shoestring.Dispatches do
       {:ok, %{active_run_id: run_id}} when is_binary(run_id) ->
         "running"
 
+      # Confirmed: the next admission uses the confirmation.
+      {:ok, %{last_admission: %{"result" => "require_confirmation"}, hold_confirmed?: true}} ->
+        "queued"
+
       {:ok, %{last_admission: %{"result" => "require_confirmation"}}} ->
         "held"
 
@@ -679,7 +683,11 @@ defmodule Shoestring.Dispatches do
   end
 
   defp queued_or_held(%{reviews: [_ | _] = reviews}),
-    do: if(Enum.any?(reviews, &(&1.state == "held")), do: "held", else: "queued")
+    do:
+      if(Enum.any?(reviews, &(&1.state == "held" and not Map.get(&1, :confirmed?, false))),
+        do: "held",
+        else: "queued"
+      )
 
   defp queued_or_held(_status), do: "queued"
 

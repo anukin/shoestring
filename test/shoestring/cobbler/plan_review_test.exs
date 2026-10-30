@@ -63,7 +63,18 @@ defmodule Shoestring.Cobbler.PlanReviewTest do
     assert {:ok, %{reason: :review_held}} = complete(c, first, opts)
     assert count("admission.decided", c.goal.id) == decisions
 
+    # A dispatch of this goal, once its run has ended, reads held until the
+    # confirmation, then queued until the review's next check admits the call.
+    dispatch = %Shoestring.Dispatches.Dispatch{state: "started", goal_id: c.goal.id}
+
+    ended = fn goal_id ->
+      {:ok, status} = Shoestring.Cobbler.ExecutionControl.status(goal_id)
+      {:ok, %{status | active_run_id: nil}}
+    end
+
+    assert Shoestring.Dispatches.state(dispatch, ended) == "held"
     confirm!(c, record)
+    assert Shoestring.Dispatches.state(dispatch, ended) == "queued"
     assert {:ok, %{disposition: :accepted}} = complete(c, first, opts)
 
     record = record!(first)

@@ -449,7 +449,9 @@ defmodule Shoestring.Dispatches.Calls do
 
   @doc "The dispatch state of a call."
   def state(%Call{state: "pending"}), do: "queued"
-  def state(%Call{state: "held"}), do: "held"
+  def state(%Call{state: "held", confirmed_by: nil}), do: "held"
+  # Confirmed: its job admits it at its next check.
+  def state(%Call{state: "held"}), do: "queued"
 
   def state(%Call{state: "waiting", defer_until: until}),
     do: if(DateTime.compare(until, DateTime.utc_now()) == :gt, do: "waiting", else: "queued")

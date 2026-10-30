@@ -178,8 +178,9 @@ for Claude, whose own usage reports can defer work but never admit it alone;
 for Codex when its last reading is stale; never when a reserve is breached,
 which defers it — `wait` and `runs show` spend one of the grant's
 `--unread-usage` pre-approvals on it. Each hold is paid for once, a failed
-confirmation is refunded, and the grant's history records every spend. With
-none left the dispatch stays `held` for you. So a grant whose Worker or
+confirmation is refunded, and the grant's history records every spend. A
+confirmed hold reads `queued` until the service starts it, and wakes no
+coordinator. With none left the dispatch stays `held` for you. So a grant whose Worker or
 Reviewer is a Claude model needs `--unread-usage` at least the number of
 Claude tasks and reviews you want to start without being asked.
 

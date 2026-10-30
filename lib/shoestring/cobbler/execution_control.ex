@@ -30,10 +30,25 @@ defmodule Shoestring.Cobbler.ExecutionControl do
       {:ok,
        Map.merge(status, %{
          last_admission: if(decision, do: decision.payload),
+         hold_confirmed?: hold_confirmed?(goal_id, decision),
          active_continuation: active_continuation(goal_id, status[:active_run_id]),
          capacity_observation: capacity_observation(Map.get(status, :execution))
        })}
     end
+  end
+
+  # A confirmation recorded after the latest admission decision, for the task
+  # attempt or the review call that decision held: the next admission uses it.
+  defp hold_confirmed?(_goal_id, nil), do: false
+
+  defp hold_confirmed?(goal_id, decision) do
+    Repo.exists?(
+      from e in TrajectoryEvent,
+        where:
+          e.goal_id == ^goal_id and
+            e.type in ["cobbler.plan.capacity.confirmed", "cobbler.plan.review.confirmed"] and
+            e.sequence > ^decision.sequence
+    )
   end
 
   defp active_continuation(_goal_id, nil), do: nil

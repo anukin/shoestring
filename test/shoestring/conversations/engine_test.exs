@@ -415,10 +415,10 @@ defmodule Shoestring.Conversations.EngineTest do
   end
 
   describe "inbox and wake" do
-    defp dispatch!(binding, title) do
+    defp dispatch!(binding, title, worker \\ "codex:gpt-6-luna") do
       args = %{
         "purpose" => "implement",
-        "worker" => "codex:gpt-6-luna",
+        "worker" => worker,
         "title" => title,
         "brief" => @brief,
         "files" => ["calc.py"]
@@ -456,6 +456,62 @@ defmodule Shoestring.Conversations.EngineTest do
 
       assert {:ok, [%{"dispatch_id" => ^id, "state" => "cancelled", "delivered" => true}]} =
                Tools.call("read_inbox", %{}, ctx.binding)
+    end
+
+    @tag grant: false
+    test "a hold the grant pre-approved wakes nothing; one with none left wakes the coordinator",
+         ctx do
+      {:ok, _} = ModelCatalog.add("opencode", "opencode/fixture-free")
+      {root, 0} = System.cmd("git", ["-C", ctx.repo, "rev-parse", "--show-toplevel"])
+
+      {:ok, _} =
+        Shoestring.Grants.create(
+          %{
+            session_id: "s1",
+            repository_root: String.trim(root),
+            models: ["opencode:opencode/fixture-free"],
+            purposes: ["implement"],
+            max_dispatches: 2,
+            max_parallel: 2,
+            max_total_seconds: 7_200,
+            max_dispatch_seconds: 3_600,
+            unread_usage: 1,
+            max_turns: 20
+          },
+          "human:operator"
+        )
+
+      engine = start_engine(ctx.conversation)
+      first = dispatch!(ctx.binding, "First", "opencode:opencode/fixture-free")
+      second = dispatch!(ctx.binding, "Second", "opencode:opencode/fixture-free")
+
+      # opencode's remaining usage is never readable, so admission asks.
+      hold! = fn id ->
+        dispatch = Repo.get!(Shoestring.Dispatches.Dispatch, id)
+
+        {:ok, %{execution: execution}} =
+          Shoestring.Cobbler.ExecutionControl.status(dispatch.goal_id)
+
+        task = %{"id" => "dispatch", "execution" => %{"max_duration_seconds" => 1800}}
+
+        assert {:error, {:execution_admission_blocked, _}} =
+                 Shoestring.Cobbler.ExecutionAdmission.admit(dispatch.goal_id, execution, task, 1)
+      end
+
+      hold!.(first)
+      assert :ok = Engine.poll(engine)
+      assert grant().unread_usage_used == 1
+      assert of_type(ctx.conversation, "conversation.inbox.recorded") == []
+      assert of_type(ctx.conversation, "conversation.turn.requested") == []
+
+      hold!.(second)
+      assert :ok = Engine.poll(engine)
+
+      assert %{payload: %{"dispatch_id" => ^second, "state" => "held"}} =
+               await("conversation.inbox.recorded")
+
+      await("conversation.turn.requested")
+      assert [_] = of_type(ctx.conversation, "conversation.inbox.recorded")
     end
 
     test "a dispatch settling during a turn waits for it; two settling go in one turn", ctx do

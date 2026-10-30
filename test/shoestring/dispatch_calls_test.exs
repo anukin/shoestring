@@ -82,6 +82,8 @@ defmodule Shoestring.DispatchCallsTest do
     assert Dispatches.state(dispatch) == "held"
     assert Dispatches.advance(dispatch) == :confirmed
     assert Calls.get(dispatch.id).confirmed_by == "grant:#{dispatch.grant_id}"
+    # Confirmed, it waits for its job's next check, not for a person.
+    assert Dispatches.state(dispatch) == "queued"
   end
 
   test "an explore dispatch is one confirmed call on a private copy, with a checked report",
@@ -219,6 +221,38 @@ defmodule Shoestring.DispatchCallsTest do
     assert :done = step(lost)
     refute_received {:explore_input, _}
     assert %Call{state: "failed", error_code: "call_lost"} = Calls.get(lost.id)
+  end
+
+  test "a held call's advice names what confirms it: a pre-approval, a person, or nothing",
+       ctx do
+    detail = fn dispatch -> Shoestring.CLI.Commands.Runs.detail(dispatch) end
+
+    {:ok, first, :recorded} = Dispatches.create(explore(ctx))
+    assert {:snooze, 30} = step(first)
+    held = detail.(first)
+    assert held["state"] == "held"
+    assert held["next"] =~ "the grant's next unread-usage pre-approval confirms it"
+    refute held["next"] =~ "grants extend"
+
+    assert Dispatches.advance(first) == :confirmed
+    assert detail.(first)["state"] == "queued"
+    assert detail.(first)["next"] == nil
+
+    # The grant's second and last pre-approval, then none.
+    {:ok, second, :recorded} = Dispatches.create(explore(ctx, %{request_id: "e2"}))
+    assert {:snooze, 30} = step(second)
+    assert Dispatches.advance(second) == :confirmed
+
+    {:ok, third, :recorded} = Dispatches.create(explore(ctx, %{request_id: "e3"}))
+    assert {:snooze, 30} = step(third)
+    assert Dispatches.advance(third) == :none
+    assert detail.(third)["state"] == "held"
+    assert detail.(third)["next"] =~ "shoestring grants extend #{ctx.grant.id} --unread-usage 1"
+
+    {:ok, _} = Shoestring.Grants.revoke(ctx.grant, "human:operator")
+    assert detail.(third)["next"] =~ "its grant is revoked"
+    assert detail.(third)["next"] =~ "shoestring runs cancel #{third.id} --reason TEXT"
+    refute detail.(third)["next"] =~ "grants extend"
   end
 
   test "a call is cancelled under its grant until it finishes", ctx do

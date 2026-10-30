@@ -381,6 +381,7 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert {:snooze, 60} = PlanExecutionWorker.perform(job)
       assert Dispatches.state(dispatch) == "held"
       assert Dispatches.advance(dispatch) == :confirmed
+      assert Dispatches.state(dispatch) == "queued"
     end
 
     defp lease_events(dispatch) do

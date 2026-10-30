@@ -848,6 +848,8 @@ defmodule Shoestring.Cobbler.PlanReview do
       unavailable: record.configuration["unavailable"],
       reason: first_code(record),
       calls: record.calls,
+      # A held call already confirmed is admitted at the review's next check.
+      confirmed?: record.state == "held" and confirmation(record) != nil,
       # A recorded decision the service has not applied yet no longer waits
       # for the human.
       decision_pending?: pending_decision(record) != nil,

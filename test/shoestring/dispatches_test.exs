@@ -405,6 +405,8 @@ defmodule Shoestring.DispatchesTest do
 
     assert Dispatches.advance(first) == :confirmed
     assert Grants.get(grant.id).unread_usage_used == 1
+    # Confirmed, it waits for the next admission, not for a person.
+    assert Dispatches.state(first) == "queued"
 
     confirmation =
       Repo.one!(
