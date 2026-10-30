@@ -64,8 +64,12 @@ defmodule Shoestring.Harness.CodexAppServer.Conversation do
           %{}
       end
 
+    # The code-mode host stays enabled: from codex-cli 0.166.0 every tool,
+    # Shoestring's included, is reached only through code mode's `exec`, whose
+    # nested shell and patch tools still run under the read-only sandbox and
+    # never-approve policy given on thread/start and turn/start.
     disabled = ~w(apps plugins remote_plugin computer_use browser_use code_mode
-      code_mode_host multi_agent multi_agent_v2 memories hooks workspace_dependencies goals
+      multi_agent multi_agent_v2 memories hooks workspace_dependencies goals
       sleep_tool view_image image_generation tool_suggest request_permissions_tool
       unbounded_connection_retries)
 

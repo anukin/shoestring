@@ -3,9 +3,9 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
   A read-only Codex EXPLORE call: one `codex exec --json` in the private copy
   of the repository, with the `read-only` sandbox (no writes, no network),
   no approvals, no web search, no project documents, user configuration and
-  rules ignored, an ephemeral session, every feature but the shell disabled
-  and the report schema as `--output-schema`. The shell lets it read and
-  search files.
+  rules ignored, an ephemeral session, every feature but the shell (reached
+  through code mode's `exec` from codex-cli 0.166.0) disabled and the report
+  schema as `--output-schema`. The shell lets it read and search files.
 
   The JSONL stream is bounded like the reviewer's
   (`Shoestring.Cobbler.Review.CodexExec`): an oversized frame or answer, a
@@ -26,8 +26,10 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
   @deadline_margin_ms 5_000
   @minimum_deadline_ms 1_000
 
+  # The code-mode host stays enabled: from codex-cli 0.166.0 the shell is
+  # reached only through code mode's `exec`, still under `--sandbox read-only`.
   @disabled_features ~w(apps plugins remote_plugin computer_use browser_use code_mode
-    code_mode_host multi_agent multi_agent_v2 memories hooks workspace_dependencies goals
+    multi_agent multi_agent_v2 memories hooks workspace_dependencies goals
     sleep_tool view_image image_generation tool_suggest request_permissions_tool
     unbounded_connection_retries)
 

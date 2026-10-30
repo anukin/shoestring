@@ -324,6 +324,14 @@ Claude Code, Codex and opencode can coordinate the native screen with an
 explicit model.
 Codex uses app-server's initialize, model/list, thread/start or thread/resume,
 and turn/start; all repository access is read-only with approvals refused.
+From codex-cli 0.166.0 every tool, Shoestring's included, is offered only
+through code mode's `exec` (JavaScript with nested shell, patch and MCP
+tools, and no `fetch`), so the code-mode host stays enabled for the
+coordinator and the Codex explorer. Checked offline against 0.166.0 with a
+scripted model: under the read-only sandbox and never-approve policy, writes
+and patches inside and outside the repository were refused, a shell request
+to a reachable local listener never arrived, an escalated command was
+rejected, and the Shoestring dispatch tool was reached.
 The engine queues messages while a turn runs. MCP bearer tokens travel through
 the child environment, not argv. Model listing verifies catalog membership,
 not account entitlement. These paths are tested with scripted local transports;

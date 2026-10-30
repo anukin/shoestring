@@ -54,4 +54,12 @@ defmodule Shoestring.Harness.CodexAppServer.ConversationContractTest do
     assert Enum.any?(argv, &String.contains?(&1, "bearer_token_env_var"))
     assert {:error, %{code: "effort_not_offered"}} = open(spec, ctx)
   end
+
+  test "the code-mode host stays enabled: codex-cli 0.166.0 offers tools only through exec" do
+    argv = Conversation.argv(%{tools: %{url: "http://127.0.0.1:4000/mcp"}})
+
+    assert "features.code_mode=false" in argv
+    assert "features.apps=false" in argv
+    refute "features.code_mode_host=false" in argv
+  end
 end
