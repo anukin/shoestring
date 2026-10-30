@@ -223,6 +223,30 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
         }
         return false;
     }
+    // The `/` menu, while the input is one word starting with `/`: arrows
+    // choose, Tab completes, Enter runs the highlighted command.
+    let matches = model.editor.slash_matches();
+    if !model.agents_focus && !matches.is_empty() {
+        let selected = model.slash_selected.min(matches.len() - 1);
+        match key.code {
+            KeyCode::Up => {
+                model.slash_selected = (selected + matches.len() - 1) % matches.len();
+                return false;
+            }
+            KeyCode::Down => {
+                model.slash_selected = (selected + 1) % matches.len();
+                return false;
+            }
+            KeyCode::Tab => {
+                model.editor.set(matches[selected].0);
+                return false;
+            }
+            KeyCode::Enter if !alt && !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                model.editor.set(matches[selected].0)
+            }
+            _ => {}
+        }
+    }
     if key.code == KeyCode::Tab {
         model.agents_focus = !model.agents_focus;
         if model.selected.is_none() {
@@ -255,10 +279,41 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
         }
         return false;
     }
+    let before = model.editor.text().to_string();
+    let leaving = edit(model, key, outbox);
+    if model.editor.text() != before {
+        model.slash_selected = 0;
+    }
+    leaving
+}
+
+/// A key in the input line, with the editing keys of a shell: macOS
+/// terminals send Ctrl+A / Ctrl+E for Cmd+Left / Cmd+Right, and Alt+B /
+/// Alt+F for Option+Left / Option+Right.
+fn edit(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<Outgoing>) -> bool {
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
     match key.code {
         KeyCode::Char('c') if control => return true,
         KeyCode::Char('j') if control => model.editor.newline(),
-        KeyCode::Char('u') if control => model.editor.clear(),
+        KeyCode::Char('a') if control => model.editor.home(),
+        KeyCode::Char('e') if control => model.editor.end(),
+        KeyCode::Char('w') if control => model.editor.delete_word_back(),
+        KeyCode::Char('k') if control => model.editor.kill_to_end(),
+        KeyCode::Char('u') if control => model.editor.kill_to_start(),
+        KeyCode::Char('d') if control => model.editor.delete_forward(),
+        KeyCode::Char('b') if alt => model.editor.word_left(),
+        KeyCode::Char('f') if alt => model.editor.word_right(),
+        KeyCode::Left if alt || control => model.editor.word_left(),
+        KeyCode::Right if alt || control => model.editor.word_right(),
+        KeyCode::Backspace if alt || control => model.editor.delete_word_back(),
+        KeyCode::Delete => model.editor.delete_forward(),
+        KeyCode::Up => {
+            model.editor.up();
+        }
+        KeyCode::Down => {
+            model.editor.down();
+        }
         KeyCode::Enter if alt || key.modifiers.contains(KeyModifiers::SHIFT) => {
             model.editor.newline()
         }
@@ -354,6 +409,74 @@ mod tests {
         model.connection = Connection::Connecting;
         key(&mut model, KeyCode::Char('y'), &tx);
         assert!(rx.try_recv().is_err());
+    }
+
+    fn with(model: &mut Model, code: KeyCode, modifiers: KeyModifiers) {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        key_pressed(model, KeyEvent::new(code, modifiers), &tx);
+    }
+
+    fn at(model: &Model) -> &str {
+        &model.editor.text()[model.editor.cursor()..]
+    }
+
+    #[test]
+    fn the_cursor_keys_macos_terminals_send_move_and_delete_in_the_input() {
+        let mut model = Model::new("s1");
+        model.editor.set("fix the importer now");
+        // Cmd+Left / Cmd+Right arrive as Ctrl+A / Ctrl+E.
+        with(&mut model, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(model.editor.cursor(), 0);
+        with(&mut model, KeyCode::Char('e'), KeyModifiers::CONTROL);
+        assert_eq!(at(&model), "");
+        // Option+Left / Option+Right arrive as Alt+B / Alt+F.
+        with(&mut model, KeyCode::Char('b'), KeyModifiers::ALT);
+        assert_eq!(at(&model), "now");
+        with(&mut model, KeyCode::Left, KeyModifiers::ALT);
+        assert_eq!(at(&model), "importer now");
+        with(&mut model, KeyCode::Char('f'), KeyModifiers::ALT);
+        assert_eq!(at(&model), " now");
+        with(&mut model, KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(model.editor.text(), "fix the  now");
+        with(&mut model, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        assert_eq!(model.editor.text(), "fix the ");
+        with(&mut model, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert_eq!(model.editor.text(), "");
+
+        model.editor.set("one\ntwo");
+        with(&mut model, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(at(&model), "\ntwo");
+        with(&mut model, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(at(&model), "");
+    }
+
+    #[test]
+    fn slash_opens_a_menu_that_chooses_completes_and_runs_a_command() {
+        let mut model = Model::new("s1");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        key(&mut model, KeyCode::Char('/'), &tx);
+        key(&mut model, KeyCode::Down, &tx);
+        key(&mut model, KeyCode::Tab, &tx);
+        assert_eq!(model.editor.text(), "/status");
+        assert!(!model.agents_focus);
+
+        model.editor.clear();
+        key(&mut model, KeyCode::Char('/'), &tx);
+        key(&mut model, KeyCode::Char('c'), &tx);
+        key(&mut model, KeyCode::Enter, &tx);
+        assert_eq!(rx.try_recv().unwrap(), Outgoing::CancelTurn);
+        assert_eq!(model.editor.text(), "");
+
+        // Without a menu Tab still focuses the agents, and a message with
+        // a slash in it is sent as it is.
+        key(&mut model, KeyCode::Tab, &tx);
+        assert!(model.agents_focus);
+        key(&mut model, KeyCode::Tab, &tx);
+        model.editor.set("/etc/hosts is odd");
+        key(&mut model, KeyCode::Enter, &tx);
+        assert!(
+            matches!(rx.try_recv().unwrap(), Outgoing::Say { text, .. } if text == "/etc/hosts is odd")
+        );
     }
 
     #[test]

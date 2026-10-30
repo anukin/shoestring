@@ -77,6 +77,8 @@ pub struct Model {
     pub detail: Option<Detail>,
     pub confirm: Option<Dispatch>,
     pub help: bool,
+    /// The highlighted entry of the `/` menu.
+    pub slash_selected: usize,
     /// The conversation's first shown row while scrolled back; None follows
     /// the latest.
     pub scroll_top: Option<usize>,

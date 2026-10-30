@@ -3,9 +3,9 @@
 Iteration 14 lets a coding CLI you chat with — Claude Code, Codex or opencode
 — act as a coordinator: it plans with you and hands tasks to Shoestring,
 which runs each one as a sandboxed Elf on the harness and model it chose.
-This page covers what exists so far: `shoestring chat`, grants, IMPLEMENT
-dispatches with cross-vendor review, `wait`, `runs`, `advice` and
-`capacity`. EXPLORE dispatches are still to come ([the milestone](../plans/milestones/14-coordinator-orchestration.md)).
+This page covers `shoestring chat`, grants, EXPLORE, IMPLEMENT and REVIEW
+dispatches (an IMPLEMENT can also be cross-reviewed), `wait`, `runs`, `advice`
+and `capacity`.
 
 ## Start a coordinator
 
@@ -35,6 +35,13 @@ every change to Shoestring. It is never sent a message mid-turn; when a
 dispatch settles Shoestring wakes it with an inbox message.
 
 - Enter sends; Alt+Enter or Ctrl+J adds a line; pasting keeps line breaks.
+- The input edits like a shell: Ctrl+A / Ctrl+E (Cmd+Left / Cmd+Right) go to
+  the line's start and end, Option+Left / Option+Right (or Ctrl) move by word,
+  Up and Down move between lines, Ctrl+W deletes a word back and Ctrl+K /
+  Ctrl+U delete to the line's end / start.
+- Typing `/` lists the commands that match; Up and Down choose, Tab
+  completes and Enter runs the highlighted one. A message with a space in it
+  is sent as typed.
 - PgUp and PgDn scroll the conversation back and forward; new lines leave
   what you are reading in place, and sending a message returns to the latest.
 - `/cancel` interrupts the coordinator's turn, `/status` shows the session

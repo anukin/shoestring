@@ -20,6 +20,9 @@ Esc          close detail; Up/Down scroll detail
 PgUp/PgDn    scroll the conversation back and forward
 Enter        send the message (the coordinator gets it when it is idle)
 Alt+Enter    new line (Ctrl+J too); paste keeps line breaks
+Cmd/Ctrl+A,E line start/end; Option+←→ by word; ↑↓ between lines
+Ctrl+W/K/U   delete word back / to line end / to line start
+/            commands: ↑↓ choose, Tab completes, Enter runs
 /cancel      interrupt the coordinator's running turn
 /status      the coordinator, grant and dispatches, from Shoestring
 /help        this help (any key closes it)
@@ -45,6 +48,9 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
     draw_input(frame, model, input_area);
     frame.render_widget(Paragraph::new(status_line(model)), status);
 
+    if !model.agents_focus && model.detail.is_none() && model.confirm.is_none() && !model.help {
+        draw_slash_menu(frame, model, input_area);
+    }
     if model.help {
         draw_help(frame);
     }
@@ -284,6 +290,36 @@ fn status_line(model: &Model) -> Line<'static> {
     ])
 }
 
+/// The commands the input could be the start of, just above the input.
+fn draw_slash_menu(frame: &mut Frame, model: &Model, input: Rect) {
+    let matches = model.editor.slash_matches();
+    if matches.is_empty() {
+        return;
+    }
+    let selected = model.slash_selected.min(matches.len() - 1);
+    let height = (matches.len() as u16 + 2).min(input.y);
+    let width = 72.min(input.width);
+    let rect = Rect::new(input.x, input.y - height, width, height);
+    let lines: Vec<Line> = matches
+        .iter()
+        .enumerate()
+        .map(|(i, (name, what))| {
+            let style = if i == selected {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::new()
+            };
+            Line::styled(format!("{name:<9} {what}"), style)
+        })
+        .collect();
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::bordered().title(" ↑↓ choose · Tab complete · Enter run ")),
+        rect,
+    );
+}
+
 fn draw_help(frame: &mut Frame) {
     let area = frame.area();
     let width = 72.min(area.width);
@@ -481,6 +517,23 @@ mod tests {
         assert_eq!(model.scroll_top, None);
         model.apply_events(&said(46..=46));
         assert!(screen(&model, 60, 16).contains("line 46"));
+    }
+
+    #[test]
+    fn typing_a_slash_shows_the_matching_commands_above_the_input() {
+        let mut model = Model::new("s1");
+        model.editor.set("/");
+        let text = screen(&model, 90, 24);
+        for (name, _) in crate::editor::COMMANDS {
+            assert!(text.contains(name), "{name} missing:\n{text}");
+        }
+        model.editor.set("/st");
+        let text = screen(&model, 90, 24);
+        assert!(text.contains("/status   the coordinator, grant and dispatches"));
+        assert!(!text.contains("/exit"));
+        model.editor.set("/st please");
+        assert!(!screen(&model, 90, 24).contains("Tab complete"));
+        let _ = screen(&model, 20, 6);
     }
 
     #[test]
