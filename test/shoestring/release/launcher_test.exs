@@ -52,7 +52,7 @@ defmodule Shoestring.Release.LauncherTest do
     assert {:ok, %{exit_status: 0, output: output}} =
              Shoestring.Cobbler.GateProcess.run(argv, File.cwd!(), 20_000, 65_536)
 
-    assert output =~ "Ran 2 tests"
+    assert output =~ "Ran 3 tests"
     assert output =~ "OK"
   end
 

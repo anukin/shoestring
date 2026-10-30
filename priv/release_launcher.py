@@ -31,7 +31,9 @@ def main():
         sys.exit("State is owned by a running Shoestring process. Stop it explicitly before upgrading or starting another instance.")
     child = None
     signal.signal(signal.SIGTERM, lambda signum, _frame: forward(child, signum))
-    signal.signal(signal.SIGINT, lambda signum, _frame: forward(child, signum))
+    # Ctrl-C stops the runtime as SIGTERM does: a SIGINT would open the
+    # runtime's BREAK menu, which reads EOF from /dev/null and halts at once.
+    signal.signal(signal.SIGINT, lambda _signum, _frame: forward(child, signal.SIGTERM))
     child = subprocess.Popen([runtime, "eval", "Shoestring.Release.initialize()"], stdin=subprocess.DEVNULL, start_new_session=True, pass_fds=(descriptor,))
     status = child.wait()
     if status != 0 or action == "init":

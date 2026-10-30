@@ -7,6 +7,7 @@ import select
 import signal
 import subprocess
 import sys
+import tempfile
 import unittest
 
 LAUNCHER = Path(__file__).resolve().parents[3] / "priv" / "release_launcher.py"
@@ -33,6 +34,39 @@ class ForwardTest(unittest.TestCase):
         first_poll_misses_the_exit(process)
         launcher.forward(process, signal.SIGTERM)
         self.assertEqual(process.wait(timeout=5), 0)
+
+
+class InterruptTest(unittest.TestCase):
+    def test_ctrl_c_stops_the_runtime_with_sigterm(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime = Path(root) / "runtime"
+            runtime.write_text(f"""#!{sys.executable} -B
+import signal, sys
+if sys.argv[1] == "eval":
+    sys.exit(0)
+def stopped(signum, _frame):
+    print(signal.Signals(signum).name, flush=True)
+    sys.exit(0)
+signal.signal(signal.SIGTERM, stopped)
+signal.signal(signal.SIGINT, stopped)
+print("ready", flush=True)
+signal.pause()
+""")
+            runtime.chmod(0o755)
+            env = dict(os.environ, SHOESTRING_STATE_DIR=str(Path(root) / "state"))
+            process = subprocess.Popen([sys.executable, "-B", str(LAUNCHER), str(runtime), "start"],
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       env=env, text=True)
+            try:
+                self.assertEqual(process.stdout.readline(), "ready\n")
+                process.send_signal(signal.SIGINT)
+                self.assertEqual(process.stdout.readline(), "SIGTERM\n")
+                self.assertEqual(process.wait(timeout=10), 0)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                process.stdout.close()
 
 
 def exited_unreaped(process):
