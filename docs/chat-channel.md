@@ -104,7 +104,7 @@ snapshot. `unwatch_dispatch` stops those pushes. Rejoining must watch again.
 Inspection never advances, confirms or cancels execution.
 
 In the native client, Tab focuses agents; arrows select; Enter opens details;
-Escape closes them. Arrows scroll details. `c` asks for confirmation for the
+Escape closes them. Arrows scroll details; PgUp and PgDn scroll the conversation. `c` asks for confirmation for the
 selected dispatch using service state; only `y` sends `cancel_dispatch`. It
 names that exact dispatch and records the person's request. Cancels are never
 resent after a reconnect; only unanswered messages are. An open detail is

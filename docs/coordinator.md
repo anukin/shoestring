@@ -35,6 +35,8 @@ every change to Shoestring. It is never sent a message mid-turn; when a
 dispatch settles Shoestring wakes it with an inbox message.
 
 - Enter sends; Alt+Enter or Ctrl+J adds a line; pasting keeps line breaks.
+- PgUp and PgDn scroll the conversation back and forward; new lines leave
+  what you are reading in place, and sending a message returns to the latest.
 - `/cancel` interrupts the coordinator's turn, `/status` shows the session
   from Shoestring's own state, `/help` lists the keys, `/exit` or Ctrl+C
   leaves.
