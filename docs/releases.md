@@ -64,7 +64,9 @@ each installed agent CLI for its models (no prompt is sent) and saves a
 default agent after asking; see [the CLI work loop](cli-work-loop.md). It
 needs initialized state (`init`). `start` stays
 in the foreground. Stop it explicitly with Ctrl-C or SIGTERM (Ctrl-C is passed
-on as SIGTERM, so both shut it down the same way). There is no
+on as SIGTERM, so both shut it down the same way). A stop that arrives while
+state is still being initialized is kept: initialization ends and the service
+is not started. There is no
 automatic service installation, daemon/reaper, forced shutdown of another
 instance or file cleanup.
 
