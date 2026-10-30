@@ -372,8 +372,12 @@ defmodule Shoestring.Harness.ClaudeHeadless.Conversation do
   @impl GenServer
   def handle_info({:codex_transport_frame, transport, line}, %{transport: transport} = state) do
     case decode(line) do
-      {:ok, frame} -> {:noreply, frame(state, ConversationFrames.classify(frame))}
-      :error -> {:noreply, %{state | malformed: state.malformed + 1}}
+      {:ok, frame} ->
+        state = frame(state, ConversationFrames.classify(frame))
+        if state.state == :closed, do: {:stop, :normal, state}, else: {:noreply, state}
+
+      :error ->
+        {:noreply, %{state | malformed: state.malformed + 1}}
     end
   end
 
@@ -402,20 +406,24 @@ defmodule Shoestring.Harness.ClaudeHeadless.Conversation do
   defp frame(state, {:init, id}) when id == state.session, do: state
 
   defp frame(state, {:init, id}) do
-    %{state | session: id} |> emit(:session, provider_session_id: id)
+    if state.spec[:resume],
+      do: shutdown(state, :provider_session_changed),
+      else: %{state | session: id} |> emit(:session, provider_session_id: id)
   end
 
   defp frame(%{turn: nil} = state, {:items, _items}), do: state
 
   defp frame(state, {:items, items}) do
-    Enum.reduce(items, state, fn
-      {:text, text}, acc ->
-        emit(acc, :text, turn_id: acc.turn, text: text)
+    items
+    |> Enum.with_index()
+    |> Enum.reduce(state, fn
+      {{:text, text}, index}, acc ->
+        emit(acc, :text, turn_id: acc.turn, text: text, text_complete: index == length(items) - 1)
 
-      {:tool_call, tool, id}, acc ->
+      {{:tool_call, tool, id}, _index}, acc ->
         emit(acc, :tool_call, turn_id: acc.turn, tool: tool, tool_call_id: id)
 
-      {:tool_result, id, error?}, acc ->
+      {{:tool_result, id, error?}, _index}, acc ->
         emit(acc, :tool_result, turn_id: acc.turn, tool_call_id: id, is_error: error?)
     end)
   end

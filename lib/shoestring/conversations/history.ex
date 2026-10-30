@@ -15,6 +15,7 @@ defmodule Shoestring.Conversations.History do
   alias Shoestring.Trajectory.TrajectoryEvent
 
   defstruct messages: [],
+            visible_bytes: 0,
             turns: %{},
             turn_order: [],
             inbox: [],
@@ -58,7 +59,11 @@ defmodule Shoestring.Conversations.History do
       at: event.occurred_at
     }
 
-    %{history | messages: history.messages ++ [message]}
+    %{
+      history
+      | messages: history.messages ++ [message],
+        visible_bytes: history.visible_bytes + byte_size(message.text)
+    }
   end
 
   defp fold(history, "conversation.message.coordinator", payload, event) do
@@ -70,7 +75,11 @@ defmodule Shoestring.Conversations.History do
       at: event.occurred_at
     }
 
-    %{history | messages: history.messages ++ [message]}
+    %{
+      history
+      | messages: history.messages ++ [message],
+        visible_bytes: history.visible_bytes + byte_size(message.text)
+    }
   end
 
   defp fold(history, "conversation.turn.requested", payload, event) do
@@ -157,6 +166,7 @@ defmodule Shoestring.Conversations.History do
       purpose: payload["purpose"],
       title: payload["title"],
       worker: payload["worker"],
+      settlement_ref: payload["settlement_ref"],
       at: event.occurred_at
     }
 
@@ -186,8 +196,27 @@ defmodule Shoestring.Conversations.History do
   end
 
   @doc "Whether an inbox entry is recorded for `dispatch_id` in `state`."
-  def recorded?(history, dispatch_id, state),
-    do: Enum.any?(history.inbox, &(&1.dispatch_id == dispatch_id and &1.state == state))
+  def recorded?(history, dispatch_id, state, settlement_ref \\ nil),
+    do:
+      Enum.any?(
+        history.inbox,
+        &(&1.dispatch_id == dispatch_id and &1.state == state and
+            (is_nil(settlement_ref) or Map.get(&1, :settlement_ref) == settlement_ref or
+               (is_nil(Map.get(&1, :settlement_ref)) and observed_before?(settlement_ref, &1.at))))
+      )
+
+  defp observed_before?(reference, at) do
+    case String.split(reference, ":", parts: 2) do
+      [since, _digest] ->
+        case Integer.parse(since) do
+          {value, ""} -> value <= DateTime.to_unix(at, :microsecond)
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
 
   @doc "Whether `dispatch_id` has an inbox entry for a state it never leaves."
   def final?(history, dispatch_id),

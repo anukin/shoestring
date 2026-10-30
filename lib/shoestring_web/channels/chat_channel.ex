@@ -286,7 +286,7 @@ defmodule ShoestringWeb.ChatChannel do
   end
 
   # Reasons the client can act on; anything else is logged, not echoed.
-  @codes ~w(message_too_large empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity)a
+  @codes ~w(message_too_large pending_input_too_large context_limit_reached empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity)a
 
   defp code(reason) when reason in @codes, do: Atom.to_string(reason)
   defp code({:invalid_payload, _type, _version, _changeset}), do: "invalid_message"

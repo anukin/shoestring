@@ -4,13 +4,20 @@ defmodule Shoestring.Harness.CodexAppServer.ConversationContractTest do
   use Shoestring.Harness.ConversationContractSuite,
     module: Shoestring.Harness.CodexAppServer.Conversation
 
+  use Shoestring.Harness.ConversationMemorySuite
+
   alias Shoestring.Harness.CodexAppServer.Conversation
   @cli Path.expand("../../../support/fake_codex_converse.py", __DIR__)
 
-  def open(spec, _context) do
+  def open(spec, context) do
     case start_supervised(%{
            id: make_ref(),
-           start: {Conversation, :start_link, [spec, [executable: @cli]]}
+           start:
+             {Conversation, :start_link,
+              [
+                spec,
+                [executable: @cli, env: Shoestring.Harness.ConversationMemorySuite.env(context)]
+              ]}
          }) do
       {:error, {error, _child}} -> {:error, error}
       result -> result
@@ -27,7 +34,9 @@ defmodule Shoestring.Harness.CodexAppServer.ConversationContractTest do
     refute Enum.any?(events, &(&1.type == :text))
     :ok = Conversation.send_turn(pid, "two", "SAY readable")
     events = events_until(pid, :turn_completed)
-    assert Enum.filter(events, &(&1.type == :text)) |> Enum.map(& &1.text) == ["readable"]
+    text = Enum.filter(events, &(&1.type == :text))
+    assert Enum.map_join(text, & &1.text) == "readable"
+    assert List.last(text).text_complete
   end
 
   @tag :tmp_dir

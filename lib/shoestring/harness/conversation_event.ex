@@ -7,6 +7,9 @@ defmodule Shoestring.Harness.ConversationEvent do
     * `:session` — `provider_session_id`, the id that resumes this session.
     * `:turn_started` — `turn_id`.
     * `:text` — `turn_id`, `text`: visible assistant text, never reasoning.
+      `text_item` optionally identifies the message; `text_complete` ends it.
+      An empty completed fragment ends an already streamed message. Otherwise
+      adjacent fragments end at a tool call or the turn's end.
     * `:tool_call` — `turn_id`, `tool`, `tool_call_id`. The tool's input is
       not carried.
     * `:tool_result` — `turn_id`, `tool_call_id`, `is_error`. The result
@@ -29,11 +32,13 @@ defmodule Shoestring.Harness.ConversationEvent do
     :turn_id,
     :provider_session_id,
     :text,
+    :text_item,
     :tool,
     :tool_call_id,
     :is_error,
     :status,
     :reason,
+    text_complete: false,
     usage: %{}
   ]
 
@@ -47,6 +52,8 @@ defmodule Shoestring.Harness.ConversationEvent do
           turn_id: String.t() | nil,
           provider_session_id: String.t() | nil,
           text: String.t() | nil,
+          text_item: String.t() | nil,
+          text_complete: boolean(),
           tool: String.t() | nil,
           tool_call_id: String.t() | nil,
           is_error: boolean() | nil,

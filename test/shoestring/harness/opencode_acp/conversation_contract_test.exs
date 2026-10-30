@@ -4,9 +4,12 @@ defmodule Shoestring.Harness.OpencodeAcp.ConversationContractTest do
   use Shoestring.Harness.ConversationContractSuite,
     module: Shoestring.Harness.OpencodeAcp.Conversation
 
+  use Shoestring.Harness.ConversationMemorySuite
+
   alias Shoestring.Harness.OpencodeAcp.Conversation
   @cli Path.expand("../../../support/fake_opencode_converse.py", __DIR__)
-  def open(spec, _context), do: open_with(spec, [])
+  def open(spec, context),
+    do: open_with(spec, env: Shoestring.Harness.ConversationMemorySuite.env(context))
 
   defp open_with(spec, opts) do
     opts = Keyword.put(opts, :executable, @cli)

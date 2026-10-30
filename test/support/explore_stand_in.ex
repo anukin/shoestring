@@ -17,6 +17,10 @@ defmodule Shoestring.Test.ExploreStandIn do
       :report ->
         {:ok, %{json: Jason.encode!(report()), output_tokens: 120}}
 
+      :memory_requirement ->
+        report = Map.put(report(), "summary", "Preserve signed zero; keep the public API.")
+        {:ok, %{json: Jason.encode!(report), output_tokens: 120}}
+
       :write ->
         File.write!(Path.join(input["workdir"], "calc.py"), "changed\n")
         {:ok, %{json: Jason.encode!(report()), output_tokens: 120}}

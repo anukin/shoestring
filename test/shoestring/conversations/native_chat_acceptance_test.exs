@@ -38,6 +38,10 @@ defmodule Shoestring.Conversations.NativeChatAcceptanceTest do
       Application.put_env(:shoestring, :dispatch_effect, Shoestring.Harness.Dispatch.ElfEffect)
       Application.put_env(:shoestring, :conversation_engine_opts, @opts)
 
+      Application.put_env(:shoestring, :plan_review,
+        command: Path.expand("test/support/review_packet_cli.py")
+      )
+
       Application.put_env(:shoestring, :dispatch_calls,
         adapters: %{{"explore", "codex"} => ExploreStandIn, {"review", "codex"} => ReviewStandIn},
         adapter_opts: [test_pid: self(), blocking: false]
@@ -117,7 +121,11 @@ defmodule Shoestring.Conversations.NativeChatAcceptanceTest do
       assert turns() == 1
 
       # Scripted coordinator invokes the real tool boundary, with different worker harnesses.
-      implement = dispatch!(binding, "implement", "claude:opus", "Implement sum")
+      implement =
+        dispatch!(binding, "implement", "claude:opus", "Implement sum", %{
+          "reviewer" => "codex:gpt-6-luna"
+        })
+
       explore = dispatch!(binding, "explore", "codex:gpt-6-luna", "Explain missing sum")
       healthy_claude!()
       healthy_codex!()
@@ -145,8 +153,13 @@ defmodule Shoestring.Conversations.NativeChatAcceptanceTest do
       ref = Process.monitor(worker)
       send(worker, :release_stream)
       assert_receive {:DOWN, ^ref, :process, ^worker, :normal}, 15_000
+      assert {:snooze, 5} = PlanExecutionWorker.perform(job!(implement))
+      assert Dispatches.state(implement) == "held"
+      assert Dispatches.advance(implement) == :confirmed
       assert :ok = PlanExecutionWorker.perform(job!(implement))
       assert Dispatches.state(implement) == "completed"
+      built_in_review = Repo.get_by!(Shoestring.Cobbler.Review.Record, goal_id: implement.goal_id)
+      assert Jason.decode!(built_in_review.packet_json)["briefs"]["implementation"] == @brief
       :ok = Engine.poll(engine)
       ended!()
       assert turns() == 3

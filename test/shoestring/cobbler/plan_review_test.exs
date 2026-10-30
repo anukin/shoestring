@@ -125,6 +125,35 @@ defmodule Shoestring.Cobbler.PlanReviewTest do
     assert [%{"output_tail" => "OK\n" <> _}] = Jason.decode!(record.packet_json)["gates"]
   end
 
+  test "review packets preserve brief requirements and redact secrets", c do
+    {first, opts} = start!(c, "    return a + b\n")
+    brief = "Preserve signed zero; sk-synthetic123; keep the public API."
+    assert {:ok, %{reason: :review_held}} = complete(c, first, opts)
+    packet = Jason.decode!(record!(first).packet_json)
+
+    assert {:ok, built} =
+             Shoestring.Cobbler.Review.Packet.build(%{
+               goal: packet["goal"],
+               task: packet["task"],
+               revision_number: packet["plan"]["revision_number"],
+               plan_digest: packet["plan"]["plan_digest"],
+               base: packet["base_commit"],
+               commit: packet["commit"],
+               worktree: record_worktree(opts),
+               gates: [],
+               implementation_brief: brief,
+               review_brief: "Check signed zero; password=synthetic123; retain this."
+             })
+
+    assert %{"implementation" => retained, "review" => review} = built.packet["briefs"]
+    refute retained =~ "sk-synthetic123"
+    assert retained =~ "Preserve signed zero"
+    assert retained =~ "keep the public API"
+    refute review =~ "synthetic123"
+    assert review =~ "retain this"
+    assert built.digest == Shoestring.Cobbler.PlanContract.digest(built.packet)
+  end
+
   test "a failing gate never reaches review", c do
     {first, opts} = start!(c, "    return a + b\n")
 

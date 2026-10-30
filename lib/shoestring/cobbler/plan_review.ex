@@ -271,6 +271,7 @@ defmodule Shoestring.Cobbler.PlanReview do
                base: base,
                commit: first.commit,
                worktree: first.worktree,
+               implementation_brief: dispatch_brief(execution[:agent_profile]),
                gates: Enum.map(gates, &Map.put(&1, "argv", Enum.join(&1["gate_argv"], " ")))
              }) do
         {built, nil}
@@ -349,6 +350,9 @@ defmodule Shoestring.Cobbler.PlanReview do
         end
     end
   end
+
+  defp dispatch_brief(%{"dispatch_id" => _, "instructions" => brief}), do: brief
+  defp dispatch_brief(_profile), do: nil
 
   defp worktree_base(path, opts) do
     case Worktrees.get(path, Keyword.take(opts, [:worktrees_dir])) do

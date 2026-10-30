@@ -230,6 +230,16 @@ defmodule Shoestring.Harness.ClaudeHeadless.ConversationTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 10_000
   end
 
+  test "resuming a session refuses a silently substituted provider session", context do
+    session = "11111111-2222-4333-8444-555555555555"
+    pid = open!(context, %{resume: session})
+    :ok = Conversation.send_turn(pid, "t1", "REKEY 99999999-0000-4000-8000-000000000000")
+    events = events_until(pid, :closed)
+    assert %{type: :closed, turn_id: "t1", reason: :provider_session_changed} = List.last(events)
+    refute Enum.any?(events, &(&1.type == :session))
+    refute Enum.any?(events, &(&1.type == :turn_completed))
+  end
+
   test "a CLI that exits mid-turn closes the conversation and names the open turn", context do
     pid = open!(context)
     ref = Process.monitor(pid)

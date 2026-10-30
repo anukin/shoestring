@@ -20,9 +20,11 @@ defmodule Shoestring.Conversations.Engine do
     * Visible text is stored redacted (`Shoestring.Trajectory.Redaction`),
       and the coordinator is sent the redacted message, so the stored
       conversation is what the coordinator saw.
-    * An oversized message is refused before it is recorded. An oversized
-      coordinator reply interrupts the turn, which ends `failed` with reason
-      `reply_too_large`; nothing is truncated.
+    * An oversized message is refused before it is recorded. Replies are
+      assembled in memory until a message boundary, tool call or turn end,
+      then redacted and recorded, so chunk boundaries cannot expose secrets.
+      The cumulative turn output is bounded; an oversized reply interrupts
+      the turn and ends `failed` with `reply_too_large`.
 
   **Grant and admission** (package D). A turn needs the session's active
   grant, admission and one of the grant's turns, in that order, before its
@@ -44,7 +46,7 @@ defmodule Shoestring.Conversations.Engine do
   **Inbox.** Every `poll_ms` (default 2 s) the engine reads the session's
   dispatches as `shoestring wait` does: it confirms holds the grant
   pre-approved (`Shoestring.Dispatches.advance/1`) and records an inbox entry
-  the first time a dispatch is seen in each settled state. The poll never
+  once for each distinct decision or review in a settled state. The poll never
   interrupts a turn; entries wait for the coordinator to be idle.
 
   **Restart.** A new engine rebuilds its history from events without a
@@ -56,7 +58,11 @@ defmodule Shoestring.Conversations.Engine do
   module), `:conversation_opts`, `:instructions` (default: the file
   `Shoestring.Conversations.instructions_path/1` names), `:tools_url` (default the
   endpoint's `/mcp`; nil for no tools), `:poll_ms` (nil turns the timer off;
-  `poll/1` still works), `:max_reply_bytes` (default 256 KiB).
+  `poll/1` still works), `:max_reply_bytes` (256 KiB per turn),
+  `:max_input_bytes` (128 KiB of queued human input and per delivered turn),
+  `:max_context_bytes` (4 MiB of retained visible message text). Context
+  exhaustion refuses explicitly; provider tokens and tool-result context are
+  owned by the provider CLI and are not estimated from this byte bound.
   """
 
   use GenServer, restart: :transient
@@ -72,6 +78,8 @@ defmodule Shoestring.Conversations.Engine do
 
   @max_message_bytes 32_768
   @max_reply_bytes 262_144
+  @max_input_bytes 131_072
+  @max_context_bytes 4_194_304
   @poll_ms 2_000
   @scope "subscription"
 
@@ -120,7 +128,9 @@ defmodule Shoestring.Conversations.Engine do
         token: nil,
         turn: nil,
         poll_ms: Keyword.get(opts, :poll_ms, @poll_ms),
-        max_reply_bytes: Keyword.get(opts, :max_reply_bytes, @max_reply_bytes)
+        max_reply_bytes: Keyword.get(opts, :max_reply_bytes, @max_reply_bytes),
+        max_input_bytes: Keyword.get(opts, :max_input_bytes, @max_input_bytes),
+        max_context_bytes: Keyword.get(opts, :max_context_bytes, @max_context_bytes)
       }
 
       state =
@@ -149,15 +159,28 @@ defmodule Shoestring.Conversations.Engine do
 
   @impl GenServer
   def handle_call({:say, message_id, text}, _from, state) when is_binary(text) do
+    raw_bytes = byte_size(text)
+    known? = Enum.any?(state.history.messages, &(&1.kind == :human and &1.id == message_id))
+    text = Redaction.redact(text)
+    pending = History.pending(state.history)
+    pending_bytes = byte_size(turn_text(%{pending | inbox: []}))
+    separator_bytes = if pending.messages == [], do: 0, else: 2
+
     cond do
-      byte_size(text) > @max_message_bytes ->
+      max(raw_bytes, byte_size(text)) > min(@max_message_bytes, state.max_input_bytes) ->
         {:reply, {:error, :message_too_large}, state}
 
       String.trim(text) == "" ->
         {:reply, {:error, :empty_message}, state}
 
+      not known? and state.history.visible_bytes + byte_size(text) > state.max_context_bytes ->
+        {:reply, {:error, :context_limit_reached}, state}
+
+      not known? and pending_bytes + byte_size(text) + separator_bytes > state.max_input_bytes ->
+        {:reply, {:error, :pending_input_too_large}, state}
+
       true ->
-        payload = %{"message_id" => message_id, "text" => Redaction.redact(text)}
+        payload = %{"message_id" => message_id, "text" => text}
 
         case record(
                state,
@@ -254,6 +277,21 @@ defmodule Shoestring.Conversations.Engine do
   defp maybe_start_turn(state), do: state
 
   defp start_turn(state, pending) do
+    pending = pending_batch(pending, state.max_input_bytes)
+
+    cond do
+      state.history.visible_bytes >= state.max_context_bytes ->
+        hold(state, "context_limit_reached", %{})
+
+      pending == %{messages: [], inbox: []} ->
+        hold(state, "input_too_large", %{})
+
+      true ->
+        start_admitted_turn(state, pending)
+    end
+  end
+
+  defp start_admitted_turn(state, pending) do
     turn_id = Ecto.UUID.generate()
 
     with {:ok, grant} <- grant(state),
@@ -387,7 +425,18 @@ defmodule Shoestring.Conversations.Engine do
       {:ok, state} ->
         case state.module.send_turn(state.adapter, turn_id, text) do
           :ok ->
-            %{state | turn: %{id: turn_id, item: 0, failure: nil}}
+            %{
+              state
+              | turn: %{
+                  id: turn_id,
+                  item: 0,
+                  failure: nil,
+                  reply: [],
+                  reply_item: nil,
+                  buffer_bytes: 0,
+                  reply_bytes: 0
+                }
+            }
 
           # A closed session may have taken the turn before it went away, so
           # the turn stays charged.
@@ -460,6 +509,19 @@ defmodule Shoestring.Conversations.Engine do
     Enum.join(said ++ notices, "\n\n")
   end
 
+  defp pending_batch(pending, max_bytes) do
+    entries =
+      Enum.map(pending.messages, &{:messages, &1}) ++ Enum.map(pending.inbox, &{:inbox, &1})
+
+    Enum.reduce_while(entries, %{messages: [], inbox: []}, fn {kind, entry}, batch ->
+      candidate = Map.update!(batch, kind, &(&1 ++ [entry]))
+
+      if byte_size(turn_text(candidate)) <= max_bytes,
+        do: {:cont, candidate},
+        else: {:halt, batch}
+    end)
+  end
+
   defp coordinator_event(state, %ConversationEvent{type: :session, provider_session_id: id})
        when is_binary(id) do
     if id == state.history.provider_session_id,
@@ -478,12 +540,28 @@ defmodule Shoestring.Conversations.Engine do
          %ConversationEvent{turn_id: id} = event
        ) do
     case event.type do
-      :text -> reply(state, turn, event.text || "")
-      :tool_call -> tool_called(state, turn, event)
-      :tool_result -> tool_returned(state, turn, event)
-      :turn_completed -> completed(state, turn, event)
-      :closed -> end_turn(%{state | adapter: nil}, id, "uncertain", "coordinator_closed")
-      _ -> state
+      :text ->
+        reply(state, turn, event)
+
+      :tool_call ->
+        tool_called(state, turn, event)
+
+      :tool_result ->
+        tool_returned(state, turn, event)
+
+      :turn_completed ->
+        completed(state, turn, event)
+
+      :closed ->
+        reason =
+          if event.reason == :provider_session_changed,
+            do: "provider_session_changed",
+            else: "coordinator_closed"
+
+        end_turn(%{state | adapter: nil}, id, "uncertain", reason)
+
+      _ ->
+        state
     end
   end
 
@@ -491,29 +569,97 @@ defmodule Shoestring.Conversations.Engine do
   defp coordinator_event(state, %ConversationEvent{type: :closed}), do: %{state | adapter: nil}
   defp coordinator_event(state, _event), do: state
 
-  defp reply(state, %{failure: failure}, _text) when not is_nil(failure), do: state
+  defp reply(state, %{failure: failure}, _event) when not is_nil(failure), do: state
+  defp reply(state, _turn, %ConversationEvent{text: "", text_complete: false}), do: state
 
-  defp reply(%{max_reply_bytes: max} = state, turn, text) when byte_size(text) > max do
-    :ok = state.module.cancel_turn(state.adapter)
-    %{state | turn: %{turn | failure: "reply_too_large"}}
+  defp reply(state, turn, event) do
+    text = event.text || ""
+    bytes = turn.reply_bytes + byte_size(text)
+
+    failure =
+      cond do
+        bytes > state.max_reply_bytes ->
+          "reply_too_large"
+
+        state.history.visible_bytes + turn.buffer_bytes + byte_size(text) >
+            state.max_context_bytes ->
+          "context_limit_reached"
+
+        true ->
+          nil
+      end
+
+    if failure do
+      :ok = state.module.cancel_turn(state.adapter)
+      %{state | turn: %{turn | failure: failure, reply: [], buffer_bytes: 0}}
+    else
+      state =
+        if turn.reply != [] and event.text_item != nil and turn.reply_item != event.text_item,
+          do: flush_reply(state),
+          else: state
+
+      case state.turn do
+        %{failure: nil} = turn ->
+          turn = %{
+            turn
+            | reply: [text | turn.reply],
+              reply_item: event.text_item,
+              buffer_bytes: turn.buffer_bytes + byte_size(text),
+              reply_bytes: bytes
+          }
+
+          state = %{state | turn: turn}
+          if event.text_complete, do: flush_reply(state), else: state
+
+        _ ->
+          state
+      end
+    end
   end
 
-  defp reply(state, turn, text) do
-    payload = %{"turn_id" => turn.id, "item" => turn.item, "text" => Redaction.redact(text)}
+  # Persist only complete, assembled visible messages. Redacting individual
+  # transport deltas can expose a credential split at any chunk boundary.
+  defp flush_reply(%{turn: nil} = state), do: state
 
-    state =
-      record!(
-        state,
-        "conversation.message.coordinator",
-        payload,
-        "reply:#{turn.id}:#{turn.item}",
-        "coordinator"
-      )
+  defp flush_reply(%{turn: %{failure: failure} = turn} = state) when not is_nil(failure),
+    do: %{state | turn: %{turn | reply: [], buffer_bytes: 0}}
 
-    %{state | turn: %{turn | item: turn.item + 1}}
+  defp flush_reply(%{turn: %{reply: []}} = state), do: state
+
+  defp flush_reply(state) do
+    turn = state.turn
+    text = turn.reply |> Enum.reverse() |> IO.iodata_to_binary()
+
+    if text == "" do
+      %{state | turn: %{turn | reply: [], reply_item: nil, buffer_bytes: 0}}
+    else
+      text = Redaction.redact(text)
+
+      if state.history.visible_bytes + byte_size(text) > state.max_context_bytes do
+        if state.adapter, do: state.module.cancel_turn(state.adapter)
+        %{state | turn: %{turn | failure: "context_limit_reached", reply: [], buffer_bytes: 0}}
+      else
+        payload = %{"turn_id" => turn.id, "item" => turn.item, "text" => text}
+
+        state =
+          record!(
+            state,
+            "conversation.message.coordinator",
+            payload,
+            "reply:#{turn.id}:#{turn.item}",
+            "coordinator"
+          )
+
+        %{
+          state
+          | turn: %{turn | item: turn.item + 1, reply: [], reply_item: nil, buffer_bytes: 0}
+        }
+      end
+    end
   end
 
   defp tool_called(state, turn, event) do
+    state = flush_reply(state)
     payload = %{"turn_id" => turn.id, "call_id" => event.tool_call_id, "tool" => event.tool}
 
     record!(
@@ -541,7 +687,10 @@ defmodule Shoestring.Conversations.Engine do
     )
   end
 
-  defp completed(state, turn, event) do
+  defp completed(state, _turn, event) do
+    state = flush_reply(state)
+    turn = state.turn
+
     {status, reason} =
       case turn.failure do
         nil -> {Atom.to_string(event.status), event.reason && reason_code(event.reason)}
@@ -554,6 +703,8 @@ defmodule Shoestring.Conversations.Engine do
   end
 
   defp end_turn(state, turn_id, status, reason, usage \\ %{}) do
+    state = flush_reply(state)
+
     state =
       record!(
         state,
@@ -589,21 +740,22 @@ defmodule Shoestring.Conversations.Engine do
     |> Enum.reduce(state, fn dispatch, state ->
       # A hold the grant pre-approved is confirmed here, so it is not settled.
       _ = Dispatches.advance(dispatch)
-      settled = Dispatches.state(dispatch)
+      {settled, settlement_ref} = Dispatches.inbox_state(dispatch)
 
       if settled in Events.inbox_states() and
-           not History.recorded?(state.history, dispatch.id, settled),
-         do: inbox(state, dispatch, settled),
+           not History.recorded?(state.history, dispatch.id, settled, settlement_ref),
+         do: inbox(state, dispatch, settled, settlement_ref),
          else: state
     end)
     |> maybe_start_turn()
   end
 
-  defp inbox(state, dispatch, settled) do
+  defp inbox(state, dispatch, settled, settlement_ref) do
     payload = %{
       "entry_id" => Ecto.UUID.generate(),
       "dispatch_id" => dispatch.id,
       "state" => settled,
+      "settlement_ref" => settlement_ref,
       "purpose" => dispatch.purpose,
       "title" => Redaction.redact(dispatch.title),
       "worker" => "#{dispatch.provider}:#{dispatch.model}"
@@ -613,7 +765,7 @@ defmodule Shoestring.Conversations.Engine do
            state,
            "conversation.inbox.recorded",
            payload,
-           "inbox:#{dispatch.id}:#{settled}",
+           "inbox:#{dispatch.id}:#{settled}:#{settlement_ref}",
            "conversation"
          ) do
       {:ok, state} -> state

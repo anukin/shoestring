@@ -354,6 +354,8 @@ fn held(reason: &str, until: Option<&str>) -> String {
         "turns_exhausted" => {
             "the grant's turns are used up (shoestring grants extend --turns N)".to_string()
         }
+        "context_limit_reached" => "this conversation has reached its text limit; start a new session and carry over the needed requirements".to_string(),
+        "input_too_large" => "the pending input exceeds the turn limit".to_string(),
         other => clean_line(other),
     };
     match until {

@@ -7,6 +7,34 @@ This page covers `shoestring chat`, grants, EXPLORE, IMPLEMENT and REVIEW
 dispatches (an IMPLEMENT can also be cross-reviewed), `wait`, `runs`, `advice`
 and `capacity`.
 
+## Context between agents
+
+The native coordinator retains a provider session; Shoestring records visible
+conversation events and resumes that same session after a restart. Rebuilding
+the screen makes no model call. Missing provider history refuses a resume;
+Shoestring does not silently replace it with a fresh conversation. Provider
+history and compaction are managed by the coding CLI, separately from the
+visible history in Shoestring.
+
+Workers receive their own brief, task contract and repository snapshot, not
+the chat or other workers' transcripts. The coordinator must read an
+explorer's report with `runs_show` and put relevant findings and requirements
+in the next brief. Review packets carry the original implementation brief
+and, for an explicit REVIEW dispatch, its review brief as labelled data,
+alongside the contract, diff and checks. Secret-looking values are redacted.
+Changing a brief changes the immutable packet digest.
+
+Completing one IMPLEMENT does not automatically give the next dispatch its
+code: dispatches snapshot the repository's current HEAD. Integrate the
+accepted commit before dispatching dependent work. No shared cross-session
+lessons library is supplied by native chat.
+
+Hermetic tests cover report-to-worker-to-review delivery, scripted provider
+context across process and engine restarts, session isolation, missing
+history, and visible input/output limits. These prove protocol and context
+delivery, not real-model recall quality. No live semantic memory eval has
+been run for these changes.
+
 ## Start a coordinator
 
 ```sh

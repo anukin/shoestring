@@ -3,6 +3,9 @@
 import json
 import os
 import sys
+from conversation_memory import Memory
+
+memory = Memory()
 
 assert not os.environ.get("OPENAI_API_KEY")
 assert not os.environ.get("CODEX_API_KEY")
@@ -32,6 +35,12 @@ for line in sys.stdin:
         assert params["model"] == "opus"
         if method == "thread/resume":
             session = params["threadId"]
+        else:
+            session = memory.fresh(session)
+        session = memory.open(session, method == "thread/resume")
+        if session is None:
+            emit({"id": f["id"], "error": {"code": -32602, "message": "session unavailable"}})
+            continue
         reply(f, {"thread": {"id": session}})
     elif method == "turn/start":
         assert params["sandboxPolicy"] == {"type": "readOnly"}
@@ -41,6 +50,9 @@ for line in sys.stdin:
         reply(f, {"turn": {"id": turn}})
         event("turn/started", turn={"id": turn})
         text = params["input"][0]["text"]
+        answer = memory.answer(session, text)
+        if answer is not None:
+            text = "SAY " + answer
         event("item/reasoning/summaryTextDelta", turnId=turn, delta="hidden reasoning")
         if text.startswith("SLOW "):
             continue
@@ -48,6 +60,10 @@ for line in sys.stdin:
             item = {"type": "mcpToolCall", "id": "tool-1", "tool": text[5:], "arguments": {"secret": "hidden"}}
             event("item/started", turnId=turn, item=item)
             event("item/completed", turnId=turn, item=item)
+        elif text.startswith("SPLIT "):
+            for chunk in text[6:]:
+                event("item/agentMessage/delta", turnId=turn, itemId="message-1", delta=chunk)
+            event("item/completed", turnId=turn, item={"id": "message-1", "type": "agentMessage", "text": text[6:]})
         elif text.startswith("SAY "):
             event("item/agentMessage/delta", turnId=turn, itemId="message-1", delta=text[4:])
             event("item/completed", turnId=turn, item={"id": "message-1", "type": "agentMessage", "text": text[4:]})

@@ -28,8 +28,8 @@ defmodule Shoestring.Conversations.EngineTest do
     {:ok, conversation} =
       Conversations.open(%{
         session_id: "s1",
-        provider: "claude",
-        model: "claude-test-model",
+        provider: ctx[:provider] || "claude",
+        model: ctx[:model] || "claude-test-model",
         effort: nil,
         repository_root: repo
       })
@@ -194,6 +194,202 @@ defmodule Shoestring.Conversations.EngineTest do
       assert text =~ "[REDACTED]"
       assert text =~ "keep this"
     end
+  end
+
+  test "streamed text is one readable message and its secrets are redacted across chunks", ctx do
+    engine = start_engine(ctx.conversation)
+    assert :ok = say(engine, "SLOW 60000 never")
+    stream_text(engine, ["keep this s", "k-synthetic123", " and this"])
+    assert :ok = Engine.cancel_turn(engine)
+    await("conversation.turn.ended")
+
+    replies = of_type(ctx.conversation, "conversation.message.coordinator")
+    text = Enum.map_join(replies, & &1["text"])
+    refute text =~ "sk-synthetic123"
+    assert text == "keep this [REDACTED] and this"
+    assert length(replies) == 1
+  end
+
+  test "the reply cap is cumulative across chunks and tool-separated messages", ctx do
+    engine = start_engine(ctx.conversation, max_reply_bytes: 10)
+    assert :ok = say(engine, "SLOW 60000 never")
+    stream_text(engine, ["abcdef"])
+    %{adapter: adapter, turn: %{id: id}} = :sys.get_state(engine)
+
+    send(
+      engine,
+      {:conversation_event, adapter,
+       Shoestring.Harness.ConversationEvent.new(:tool_call, 101,
+         turn_id: id,
+         tool: "runs_list",
+         tool_call_id: "call-1"
+       )}
+    )
+
+    stream_text(engine, ["ghijkl"])
+    _ = Engine.cancel_turn(engine)
+
+    assert %{payload: %{"status" => "failed", "reason" => "reply_too_large"}} =
+             await("conversation.turn.ended")
+
+    assert [%{"text" => "abcdef"}] = of_type(ctx.conversation, "conversation.message.coordinator")
+  end
+
+  defp stream_text(engine, chunks) do
+    %{adapter: adapter, turn: %{id: id}} = :sys.get_state(engine)
+
+    for {text, ordinal} <- Enum.with_index(chunks, 100) do
+      send(
+        engine,
+        {:conversation_event, adapter,
+         Shoestring.Harness.ConversationEvent.new(:text, ordinal, turn_id: id, text: text)}
+      )
+    end
+
+    _ = Engine.status(engine)
+  end
+
+  for {provider, module, cli} <- [
+        {"codex", Shoestring.Harness.CodexAppServer.Conversation, "fake_codex_converse.py"},
+        {"opencode", Shoestring.Harness.OpencodeAcp.Conversation, "fake_opencode_converse.py"}
+      ] do
+    @tag provider: provider, model: "opus", converse_module: module, cli: cli
+    test "#{provider} transport chunks are redacted and displayed as one message", ctx do
+      engine =
+        start_engine(ctx.conversation,
+          conversation_module: ctx.converse_module,
+          conversation_opts: [executable: Path.expand("test/support/" <> ctx.cli)]
+        )
+
+      :ok = say(engine, "SPLIT keep sk-synthetic123 and readable text")
+      await("conversation.turn.ended")
+      replies = of_type(ctx.conversation, "conversation.message.coordinator")
+      text = Enum.map_join(replies, & &1["text"])
+      refute text =~ "sk-synthetic123"
+      assert text == "keep [REDACTED] and readable text"
+      assert length(replies) == 1
+    end
+  end
+
+  test "redaction expansion also respects the retained visible text limit", ctx do
+    engine = start_engine(ctx.conversation, max_context_bytes: 22)
+    :ok = say(engine, "SLOW 60000 never")
+    stream_text(engine, ["sk-a"])
+    _ = Engine.cancel_turn(engine)
+
+    assert %{payload: %{"status" => "failed", "reason" => "context_limit_reached"}} =
+             await("conversation.turn.ended")
+
+    assert of_type(ctx.conversation, "conversation.message.coordinator") == []
+  end
+
+  test "a new message cannot publish text after redaction exhausts context", ctx do
+    engine = start_engine(ctx.conversation, max_context_bytes: 22)
+    :ok = say(engine, "SLOW 60000 never")
+    stream_text(engine, ["sk-a"])
+    %{adapter: adapter, turn: %{id: id}} = :sys.get_state(engine)
+
+    event =
+      Shoestring.Harness.ConversationEvent.new(:text, 101, turn_id: id, text: "x")
+      |> Map.merge(%{text_item: "next", text_complete: true})
+
+    send(engine, {:conversation_event, adapter, event})
+    _ = Engine.status(engine)
+    _ = Engine.cancel_turn(engine)
+
+    assert %{payload: %{"status" => "failed", "reason" => "context_limit_reached"}} =
+             await("conversation.turn.ended")
+
+    assert of_type(ctx.conversation, "conversation.message.coordinator") == []
+  end
+
+  test "pending input has an explicit bound and can be resent after the queue drains", ctx do
+    engine = start_engine(ctx.conversation, max_input_bytes: 20)
+    :ok = say(engine, "SLOW 60000 never")
+    :ok = say(engine, "SAY 123456789")
+    assert {:error, :pending_input_too_large} = say(engine, "SAY abcdefghi")
+    assert %{pending_messages: 1} = Engine.status(engine)
+    :ok = Engine.cancel_turn(engine)
+    await("conversation.turn.ended")
+    await("conversation.turn.ended")
+    assert :ok = say(engine, "SAY abcdefghi")
+    await("conversation.turn.ended")
+
+    assert Enum.map(of_type(ctx.conversation, "conversation.message.coordinator"), & &1["text"]) ==
+             ["123456789", "abcdefghi"]
+  end
+
+  test "retained visible context refuses new input consistently after restart", ctx do
+    engine = start_engine(ctx.conversation, max_context_bytes: 20)
+    :ok = say(engine, "SAY first")
+    await("conversation.turn.ended")
+    assert {:error, :context_limit_reached} = say(engine, "SAY second")
+    :ok = stop_supervised({Engine, ctx.conversation.id})
+    engine = start_engine(ctx.conversation, max_context_bytes: 20)
+    assert {:error, :context_limit_reached} = say(engine, "SAY second")
+    assert length(of_type(ctx.conversation, "conversation.turn.requested")) == 1
+    assert Enum.map(history(ctx.conversation).messages, & &1.text) == ["SAY first", "first"]
+  end
+
+  test "a reply that exceeds retained context stops explicitly and leaves earlier text intact",
+       ctx do
+    engine = start_engine(ctx.conversation, max_context_bytes: 20)
+    :ok = say(engine, "SLOW 60000 never")
+    stream_text(engine, ["too large"])
+
+    assert %{payload: %{"status" => "failed", "reason" => "context_limit_reached"}} =
+             await("conversation.turn.ended")
+
+    assert of_type(ctx.conversation, "conversation.message.coordinator") == []
+
+    assert [%{"text" => "SLOW 60000 never"}] =
+             of_type(ctx.conversation, "conversation.message.human")
+  end
+
+  @tag provider: "codex", model: "opus"
+  test "scripted coordinator recalls context after restart and missing history makes no fresh call",
+       ctx do
+    store = ctx.repo <> "-provider-memory"
+
+    opts = [
+      conversation_module: Shoestring.Harness.CodexAppServer.Conversation,
+      conversation_opts: [
+        executable: Path.expand("test/support/fake_codex_converse.py"),
+        env: [{"FAKE_CONVERSATION_MEMORY", store}]
+      ]
+    ]
+
+    engine = start_engine(ctx.conversation, opts)
+    :ok = say(engine, "REMEMBER Preserve signed zero.")
+    await("conversation.turn.ended")
+    session = Engine.status(engine).provider_session_id
+    :ok = stop_supervised({Engine, ctx.conversation.id})
+    engine = start_engine(ctx.conversation, opts)
+    assert Engine.status(engine).provider_session_id == session
+    assert grant().turns_used == 1
+    :ok = say(engine, "RECALL")
+    await("conversation.turn.ended")
+    assert List.last(history(ctx.conversation).messages).text == "Preserve signed zero."
+    :ok = stop_supervised({Engine, ctx.conversation.id})
+
+    missing =
+      Keyword.put(opts, :conversation_opts,
+        executable: Path.expand("test/support/fake_codex_converse.py"),
+        env: [{"FAKE_CONVERSATION_MEMORY", store <> "-missing"}]
+      )
+
+    engine = start_engine(ctx.conversation, missing)
+    :ok = say(engine, "RECALL")
+    assert %{payload: %{"status" => "unsent"}} = await("conversation.turn.ended")
+    assert Engine.status(engine).provider_session_id == session
+    assert grant().turns_used == 2
+    assert length(of_type(ctx.conversation, "conversation.provider_session.bound")) == 1
+
+    assert File.read!(Path.join(store, "calls.jsonl"))
+           |> String.split("\n", trim: true)
+           |> length() == 2
+
+    refute File.exists?(Path.join(store <> "-missing", "calls.jsonl"))
   end
 
   test "a coordinator that cannot start leaves the turn unsent and sends nothing again", ctx do
@@ -542,6 +738,127 @@ defmodule Shoestring.Conversations.EngineTest do
 
     test "read_inbox is empty for a session without a conversation", ctx do
       assert {:ok, []} = Tools.call("read_inbox", %{}, %{ctx.binding | session_id: "other"})
+    end
+
+    test "an interrupted dispatch creation is starting, then reports a failed start", ctx do
+      engine = start_engine(ctx.conversation)
+      id = dispatch!(ctx.binding, "Interrupted creation")
+      dispatch = Repo.get!(Shoestring.Dispatches.Dispatch, id)
+
+      dispatch =
+        dispatch |> Ecto.Changeset.change(state: "creating", goal_id: nil) |> Repo.update!()
+
+      assert :ok = Engine.poll(engine)
+      assert of_type(ctx.conversation, "conversation.inbox.recorded") == []
+      dispatch |> Ecto.Changeset.change(state: "failed", error: "start_failed") |> Repo.update!()
+      assert :ok = Engine.poll(engine)
+
+      assert %{payload: %{"dispatch_id" => ^id, "state" => "failed_to_start"}} =
+               await("conversation.inbox.recorded")
+
+      await("conversation.turn.ended")
+      :ok = Engine.poll(engine)
+      assert length(of_type(ctx.conversation, "conversation.inbox.recorded")) == 1
+    end
+
+    @tag grant: false
+    test "a later hold on the same dispatch wakes once and remains deduplicated after restart",
+         ctx do
+      {:ok, _} = ModelCatalog.add("opencode", "opencode/fixture-free")
+      {:ok, facts} = Shoestring.Cobbler.Intake.repository(ctx.repo)
+
+      {:ok, _} =
+        Shoestring.Grants.create(
+          %{
+            session_id: "s1",
+            repository_root: facts.root,
+            models: ["opencode:opencode/fixture-free"],
+            purposes: ["implement"],
+            max_dispatches: 2,
+            max_parallel: 2,
+            max_total_seconds: 7200,
+            max_dispatch_seconds: 3600,
+            unread_usage: 0,
+            max_turns: 20
+          },
+          "human:operator"
+        )
+
+      id = dispatch!(ctx.binding, "Two holds", "opencode:opencode/fixture-free")
+      dispatch = Repo.get!(Shoestring.Dispatches.Dispatch, id)
+
+      {:ok, %{execution: execution}} =
+        Shoestring.Cobbler.ExecutionControl.status(dispatch.goal_id)
+
+      task = %{"id" => "dispatch", "execution" => %{"max_duration_seconds" => 1800}}
+
+      hold! = fn ->
+        assert {:error, {:execution_admission_blocked, _}} =
+                 Shoestring.Cobbler.ExecutionAdmission.admit(dispatch.goal_id, execution, task, 1)
+      end
+
+      hold!.()
+      # A prior release observed and delivered the first hold without a
+      # settlement reference. Upgrading must not wake or charge it again.
+      entry_id = Ecto.UUID.generate()
+      turn_id = Ecto.UUID.generate()
+
+      for {type, payload} <- [
+            {"conversation.inbox.recorded",
+             %{"entry_id" => entry_id, "dispatch_id" => id, "state" => "held"}},
+            {"conversation.turn.requested",
+             %{"turn_id" => turn_id, "message_ids" => [], "inbox_ids" => [entry_id]}},
+            {"conversation.turn.ended", %{"turn_id" => turn_id, "status" => "completed"}}
+          ] do
+        assert {:ok, _} =
+                 Trajectory.append(ctx.conversation.id, %{
+                   "type" => type,
+                   "schema_version" => 1,
+                   "actor" => "conversation",
+                   "idempotency_key" => "legacy:#{type}",
+                   "payload" => payload
+                 })
+      end
+
+      await("conversation.turn.ended")
+
+      assert {:ok, _} =
+               Shoestring.Grants.use_turn(grant(), %{
+                 "turn_id" => turn_id,
+                 "conversation_id" => ctx.conversation.id
+               })
+
+      engine = start_engine(ctx.conversation)
+      :ok = Engine.poll(engine)
+      assert :ok = Engine.poll(engine)
+      assert length(of_type(ctx.conversation, "conversation.inbox.recorded")) == 1
+      assert grant().turns_used == 1
+
+      assert {:ok, _} =
+               Shoestring.Cobbler.ExecutionControl.confirm_capacity(dispatch.goal_id, %{
+                 execution_id: execution.execution_id,
+                 task_id: "dispatch",
+                 attempt: 1,
+                 scope: "subscription",
+                 command_id: Ecto.UUID.generate(),
+                 requested_by: "human:operator"
+               })
+
+      assert {:ok, _} =
+               Shoestring.Cobbler.ExecutionAdmission.admit(dispatch.goal_id, execution, task, 1)
+
+      :ok = Engine.poll(engine)
+      hold!.()
+      :ok = Engine.poll(engine)
+      assert length(of_type(ctx.conversation, "conversation.inbox.recorded")) == 2
+      await("conversation.turn.ended")
+
+      :ok = stop_supervised({Engine, ctx.conversation.id})
+      engine = start_engine(ctx.conversation)
+      :ok = Engine.poll(engine)
+      assert length(of_type(ctx.conversation, "conversation.inbox.recorded")) == 2
+      assert length(of_type(ctx.conversation, "conversation.turn.requested")) == 2
+      assert grant().turns_used == 2
     end
   end
 

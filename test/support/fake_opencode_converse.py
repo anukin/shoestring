@@ -4,6 +4,9 @@ import json
 import os
 import sys
 from pathlib import Path
+from conversation_memory import Memory
+
+memory = Memory()
 
 config = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])
 assert os.environ["OPENCODE_CONFIG_PROJECT_DISABLE"] == "1"
@@ -50,6 +53,11 @@ for line in sys.stdin:
     elif method in ("session/new", "session/resume"):
         assert params["mcpServers"] == []
         if method == "session/resume": session = params["sessionId"]
+        else: session = memory.fresh(session)
+        session = memory.open(session, method == "session/resume")
+        if session is None:
+            emit({"id": f["id"], "error": {"code": -32602, "message": "session unavailable"}})
+            continue
         reply(f, {"sessionId": session, "configOptions": options()})
     elif method == "session/set_config_option":
         key, value = params["configId"], params["value"]
@@ -63,11 +71,17 @@ for line in sys.stdin:
         assert current["mode"] == agent
         turn_request = f["id"]
         text = params["prompt"][0]["text"]
+        answer = memory.answer(session, text)
+        if answer is not None:
+            text = "SAY " + answer
         update({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "hidden reasoning"}})
         if text.startswith("SLOW "): continue
         if text.startswith("CALL "):
             update({"sessionUpdate": "tool_call", "toolCallId": "tool-1", "title": text[5:], "rawInput": {"secret": "never forwarded"}})
             update({"sessionUpdate": "tool_call_update", "toolCallId": "tool-1", "status": "completed", "content": []})
+        elif text.startswith("SPLIT "):
+            for chunk in text[6:]:
+                update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": chunk}})
         elif text.startswith("SAY "):
             update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text[4:]}})
         elif text == "WRITE":

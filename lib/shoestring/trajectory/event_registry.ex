@@ -343,7 +343,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
     "conversation.inbox.recorded" => %{
       1 => %{
         required: [:entry_id, :dispatch_id, :state],
-        optional: [:purpose, :title, :worker],
+        optional: [:purpose, :title, :worker, :settlement_ref],
         uuid_fields: [:entry_id, :dispatch_id]
       }
     },

@@ -35,7 +35,7 @@ defmodule Shoestring.Dispatches do
   alias Shoestring.Cobbler.{ExecutionControl, ExecutionProfile, Intake, PlanContract, Plans}
   alias Shoestring.Dispatches.{Call, Calls, Dispatch}
   alias Shoestring.Grants.Grant
-  alias Shoestring.Harness.Security
+  alias Shoestring.Harness.{RunRecord, Security}
   alias Shoestring.Trajectory.Goal
 
   @task_id "dispatch"
@@ -214,7 +214,7 @@ defmodule Shoestring.Dispatches do
 
   defp prepare("review", %{request: request} = prepared, _facts) do
     with {:ok, target} <- review_target(request, prepared),
-         {:ok, input} <- Calls.review_input(request, target) do
+         {:ok, input} <- Calls.review_input(Map.put(request, :brief, prepared.brief), target) do
       {:ok, call(prepared, input)}
     end
   end
@@ -463,7 +463,12 @@ defmodule Shoestring.Dispatches do
   # digest recorded with it, so a dispatch interrupted part-way resumes with
   # exactly what was granted.
   defp start(%Dispatch{purpose: purpose} = dispatch, opts, outcome) when purpose in @calls do
-    request = %{provider: dispatch.provider, model: dispatch.model, effort: dispatch.effort}
+    request = %{
+      provider: dispatch.provider,
+      model: dispatch.model,
+      effort: dispatch.effort,
+      brief: dispatch.brief
+    }
 
     input =
       case purpose do
@@ -664,23 +669,36 @@ defmodule Shoestring.Dispatches do
       {:ok, %{needs_user?: true}} ->
         "needs_you"
 
-      {:ok, %{active_run_id: run_id}} when is_binary(run_id) ->
-        "running"
+      {:ok, %{active_run_id: run_id} = current} when is_binary(run_id) ->
+        # The execution retains its task's run while its completed change is
+        # reviewed. A terminal worker is no longer doing useful work: show
+        # the review's hold/wait instead of hiding it behind "running".
+        case Repo.get(RunRecord, run_id) do
+          %RunRecord{status: status} when status in ~w(completed failed cancelled interrupted) ->
+            execution_state(current)
 
-      # Confirmed: the next admission uses the confirmation.
-      {:ok, %{last_admission: %{"result" => "require_confirmation"}, hold_confirmed?: true}} ->
-        "queued"
-
-      {:ok, %{last_admission: %{"result" => "require_confirmation"}}} ->
-        "held"
+          _ ->
+            "running"
+        end
 
       {:ok, status} when is_map(status) ->
-        if waiting_until(status), do: "waiting", else: queued_or_held(status)
+        execution_state(status)
 
       _ ->
         "queued"
     end
   end
+
+  defp execution_state(%{
+         last_admission: %{"result" => "require_confirmation"},
+         hold_confirmed?: true
+       }),
+       do: "queued"
+
+  defp execution_state(%{last_admission: %{"result" => "require_confirmation"}}), do: "held"
+
+  defp execution_state(status),
+    do: if(waiting_until(status), do: "waiting", else: queued_or_held(status))
 
   defp queued_or_held(%{reviews: [_ | _] = reviews}),
     do:
@@ -690,6 +708,74 @@ defmodule Shoestring.Dispatches do
       )
 
   defp queued_or_held(_status), do: "queued"
+
+  @doc "A dispatch's state and stable identity of the decision or review it waits on."
+  def inbox_state(%Dispatch{state: state} = dispatch) when state != "started",
+    do: {state(dispatch), "0:#{state}"}
+
+  def inbox_state(%Dispatch{purpose: purpose} = dispatch) when purpose in @calls do
+    case Calls.get(dispatch.id) do
+      %Call{} = call ->
+        identity = %{"call" => call.id, "admission" => call.admission}
+        {Calls.state(call), settlement_ref(identity, call.updated_at)}
+
+      nil ->
+        {state(dispatch), "starting"}
+    end
+  end
+
+  def inbox_state(%Dispatch{} = dispatch) do
+    current = ExecutionControl.status(dispatch.goal_id)
+    settled = state(dispatch, fn _ -> current end)
+
+    identity =
+      case current do
+        {:ok, status} ->
+          %{
+            "decision" => get_in(status, [:last_admission, "decision_id"]),
+            "reviews" =>
+              Enum.map(status[:reviews] || [], fn review ->
+                Map.take(review, [:review_id, :calls, :state])
+                |> Map.new(fn {key, value} -> {to_string(key), value} end)
+              end)
+          }
+
+        _ ->
+          %{}
+      end
+
+    admission_at =
+      Repo.one(
+        from e in Shoestring.Trajectory.TrajectoryEvent,
+          where: e.goal_id == ^dispatch.goal_id and e.type == "admission.decided",
+          order_by: [desc: e.sequence],
+          limit: 1,
+          select: e.occurred_at
+      )
+
+    review_at =
+      Repo.aggregate(
+        from(r in Shoestring.Cobbler.Review.Record,
+          where: r.goal_id == ^dispatch.goal_id
+        ),
+        :max,
+        :updated_at
+      )
+
+    changed_at =
+      [admission_at, review_at]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.max_by(&DateTime.to_unix(&1, :microsecond), fn -> nil end)
+
+    {settled, settlement_ref(identity, changed_at)}
+  end
+
+  # The time lets an old inbox entry (which has no reference) identify an
+  # already-observed cause without inventing a new notification on upgrade.
+  defp settlement_ref(identity, changed_at) do
+    since = if changed_at, do: DateTime.to_unix(changed_at, :microsecond), else: 0
+    "#{since}:#{digest(PlanContract.canonical_json(identity))}"
+  end
 
   @doc """
   When an execution `status` (`ExecutionControl.status/1`) waits for its

@@ -67,6 +67,31 @@ defmodule Shoestring.DispatchIntegrationTest do
       # Claude reported its usage in an earlier run: plenty left.
       claude_reading!(0.2)
 
+      # Scripted coordinator carries a requirement found only in an explorer's
+      # report into the worker brief and the later immutable review packet.
+      Application.put_env(:shoestring, :dispatch_calls,
+        adapters: %{{"explore", "claude"} => Shoestring.Test.ExploreStandIn},
+        adapter_opts: [scenario: :memory_requirement]
+      )
+
+      {:ok, explore, :recorded} =
+        Dispatches.create(%{
+          session_id: "s1",
+          request_id: "e1",
+          purpose: "explore",
+          provider: "claude",
+          model: "opus",
+          title: "Find constraints",
+          brief: "Find the numerical constraints.",
+          repository: source
+        })
+
+      assert {:snooze, 30} = Shoestring.Dispatches.Calls.step(explore.id)
+      assert Dispatches.advance(explore) == :confirmed
+      assert :done = Shoestring.Dispatches.Calls.step(explore.id)
+      report = Shoestring.Dispatches.Calls.report(Shoestring.Dispatches.Calls.get(explore.id))
+      brief = @brief <> "\nExplorer requirement: " <> report["summary"]
+
       {:ok, dispatch, :recorded} =
         Dispatches.create(%{
           session_id: "s1",
@@ -76,7 +101,7 @@ defmodule Shoestring.DispatchIntegrationTest do
           model: "opus",
           effort: "high",
           title: "Make add return the sum of its arguments",
-          brief: @brief,
+          brief: brief,
           repository: source,
           files: ["calc.py"],
           stay_out: ["test/"]
@@ -130,7 +155,8 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert "--settings" in argv
       refute "--dangerously-skip-permissions" in argv
       prompt = List.last(argv)
-      assert prompt =~ "Coordinator brief:\n" <> @brief
+      assert prompt =~ "Coordinator brief:\n" <> brief
+      assert prompt =~ "Preserve signed zero"
       assert prompt =~ "calc.py"
 
       # Renewal judged the usage Claude reported during the run: fresh, both
@@ -190,7 +216,7 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert shown["result"]["commit"] == commit
       assert shown["result"]["base"] == base
       assert Enum.any?(shown["result"]["checks"], &(&1["exit_status"] == 0))
-      assert Grants.get(grant.id).unread_usage_used == 1
+      assert Grants.get(grant.id).unread_usage_used == 2
 
       # A Codex model reviews the completed change: its diff from the base,
       # its contract and its checks. Only the reviewer is a stand-in.
@@ -213,7 +239,12 @@ defmodule Shoestring.DispatchIntegrationTest do
         })
 
       call_job =
-        Repo.one!(from j in Oban.Job, where: j.worker == "Shoestring.Dispatches.CallWorker")
+        Repo.one!(
+          from j in Oban.Job,
+            where:
+              j.worker == "Shoestring.Dispatches.CallWorker" and
+                fragment("json_extract(?, '$.dispatch_id')", j.args) == ^review.id
+        )
 
       assert {:snooze, 30} = Shoestring.Dispatches.CallWorker.perform(call_job)
       assert Dispatches.advance(review) == :confirmed
@@ -221,6 +252,12 @@ defmodule Shoestring.DispatchIntegrationTest do
 
       assert_received {:review_input, input, packet}
       assert input["model"] == "gpt-6-luna"
+
+      assert packet["briefs"] == %{
+               "implementation" => brief,
+               "review" => "REVIEW - check add()\n"
+             }
+
       assert packet["base_commit"] == base
       assert packet["commit"] == commit
       assert packet["diff"] =~ "+    return a + b"
@@ -232,7 +269,7 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert reviewed["of"] == dispatch.id
       assert %{"outcome" => "changes_requested", "blocking_count" => 1} = reviewed["report"]
       assert reviewed["next"] =~ "Blocking findings"
-      assert Grants.get(grant.id).unread_usage_used == 2
+      assert Grants.get(grant.id).unread_usage_used == 3
 
       # The user's checkout is untouched until they take the commit.
       assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
@@ -355,12 +392,12 @@ defmodule Shoestring.DispatchIntegrationTest do
             session_id: session,
             repository_root: root,
             models: ["claude:opus", "codex:gpt-6-luna"],
-            purposes: ["implement", "review"],
+            purposes: ["explore", "implement", "review"],
             max_dispatches: 3,
             max_parallel: 1,
             max_total_seconds: 3_600,
             max_dispatch_seconds: 1_800,
-            unread_usage: 2
+            unread_usage: 3
           },
           "human:operator"
         )

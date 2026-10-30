@@ -83,6 +83,8 @@ defmodule Shoestring.Dispatches.Calls do
              base: base,
              commit: commit,
              worktree: worktree,
+             implementation_brief: target.brief,
+             review_brief: Map.get(request, :brief),
              gates: get_in(completed, ["evidence", "gates"]) || []
            }) do
       {:ok,

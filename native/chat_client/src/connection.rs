@@ -320,6 +320,8 @@ fn reply(
 fn describe(reason: &str) -> String {
     match reason {
         "message_too_large" => "the message is over 32 KiB".into(),
+        "pending_input_too_large" => "the queued messages are full; send this again after the coordinator catches up".into(),
+        "context_limit_reached" => "this conversation has reached its text limit; start a new session and carry over the needed requirements".into(),
         "empty_message" => "the message is empty".into(),
         "no_turn" => "the coordinator is not in a turn".into(),
         other => other.to_string(),

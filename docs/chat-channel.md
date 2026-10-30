@@ -17,6 +17,20 @@ nothing.
   another site cannot open it), and it presents the conversation's token.
 - Frames are at most 128 KiB. A message the person sends is at most 32 KiB
   (`Shoestring.Conversations.Engine`).
+- Queued human text and each delivered turn are bounded at 128 KiB. An
+  overflowing human message is refused with `pending_input_too_large` and
+  may be sent again once the queue drains. Inbox entries are delivered in
+  bounded batches, preserving every entry and charging each actual turn.
+- Coordinator output is bounded at 256 KiB across the entire turn, including
+  separate messages around tool calls. Text chunks are assembled until the
+  message ends (or a tool call or turn ends it), then redacted together before
+  persistence and display. Busy state and dispatch progress continue to update.
+- Retained visible human and coordinator text is bounded at 4 MiB. It is
+  counted from events again after restart. `context_limit_reached` refuses
+  new text or fails an overflowing reply explicitly; start a new session and
+  carry over the needed requirements. No history is deleted or compacted.
+  This is a byte bound on visible text, not a provider token estimate: the
+  provider CLI manages its own context, including tool results and compaction.
 
 ## Authentication: the token file
 
@@ -85,6 +99,11 @@ attached still wakes the coordinator. Starting an engine makes no model
 call.
 
 ## Dispatch inspection
+
+Inbox deduplication identifies the particular admission decision or review
+call, as well as its dispatch and state. A later hold or wait on the same
+dispatch creates another entry; polling and restarting do not repeat the
+same entry. Older entries without a settlement reference remain readable.
 
 `state.dispatches` contains the session's dispatch rows: `dispatch_id`, purpose,
 worker, reviewer, state, title, elapsed_seconds, waiting_until, latest_step, next,

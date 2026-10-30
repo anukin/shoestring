@@ -355,6 +355,7 @@ defmodule Shoestring.Harness.CodexAppServer.Conversation do
         if params["turnId"] == state.provider_turn do
           emit(%{state | seen_text: MapSet.put(state.seen_text, params["itemId"])}, :text,
             turn_id: state.turn,
+            text_item: params["itemId"],
             text: params["delta"] || ""
           )
         else
@@ -371,8 +372,16 @@ defmodule Shoestring.Harness.CodexAppServer.Conversation do
           params["turnId"] != state.provider_turn ->
             state
 
-          item["type"] == "agentMessage" and not MapSet.member?(state.seen_text, item["id"]) ->
-            emit(state, :text, turn_id: state.turn, text: item["text"] || "")
+          item["type"] == "agentMessage" ->
+            text =
+              if MapSet.member?(state.seen_text, item["id"]), do: "", else: item["text"] || ""
+
+            emit(state, :text,
+              turn_id: state.turn,
+              text: text,
+              text_item: item["id"],
+              text_complete: true
+            )
 
           true ->
             tool(state, params, :tool_result)

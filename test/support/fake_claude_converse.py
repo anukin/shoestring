@@ -35,6 +35,7 @@ import os
 import subprocess
 import sys
 import threading
+from conversation_memory import Memory
 
 LOG = os.environ.get("FAKE_CLAUDE_LOG")
 ARGV = sys.argv[1:]
@@ -52,6 +53,10 @@ def flag(name):
 
 
 SESSION = flag("--session-id") or flag("--resume") or "missing-session"
+memory = Memory()
+SESSION = memory.open(SESSION, flag("--resume") is not None)
+if SESSION is None:
+    sys.exit(1)
 
 
 def log(record):
@@ -108,6 +113,9 @@ def user(message):
     body = content if isinstance(content, str) else " ".join(
         b.get("text", "") for b in content if isinstance(b, dict))
     body = body.strip()
+    answer = memory.answer(SESSION, body)
+    if answer is not None:
+        body = "SAY " + answer
     if body.startswith("REKEY "):
         SESSION = body.split(" ", 1)[1]
     emit({"type": "system", "subtype": "init", "session_id": SESSION, "model": flag("--model")})
