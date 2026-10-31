@@ -8,7 +8,14 @@ defmodule ShoestringWeb.ChatChannel do
   in `events` batches; live events follow, each sequence at most once per
   join. A `state` snapshot (engine, grant, dispatches, capacity) is pushed
   when it changes, at most once a second. The client sends `say`,
-  `cancel_turn` and `cancel_dispatch`.
+  `cancel_turn`, `cancel_dispatch` and `handoff`.
+
+  **Handoff.** The channel follows the session's current conversation. When
+  the one it shows is handed off, it pushes that `conversation.handed_off`
+  event, then the successor's events from its first. A client that joins
+  naming another conversation than the current one (`conversation_id`) gets
+  the current one's events from its first, whatever its `after`; the join
+  reply names the current conversation.
 
   A client that stops reading never blocks the service: before each push the
   channel checks its connection's outgoing queue and, past 1,000 messages,
@@ -38,7 +45,11 @@ defmodule ShoestringWeb.ChatChannel do
       :ok = Phoenix.PubSub.subscribe(Shoestring.PubSub, Trajectory.topic(conversation.id))
       send(self(), :backlog)
 
-      {:ok, %{"session_id" => session},
+      # The client's sequences belong to the conversation it last showed.
+      after_sequence =
+        if params["conversation_id"] in [nil, conversation.id], do: after_sequence, else: 0
+
+      {:ok, %{"session_id" => session, "conversation_id" => conversation.id},
        assign(socket,
          conversation: conversation,
          last: after_sequence,
@@ -102,9 +113,16 @@ defmodule ShoestringWeb.ChatChannel do
     do: {:noreply, socket}
 
   def handle_info({:trajectory_event_committed, event}, socket) do
-    if event.sequence > socket.assigns.last,
-      do: deliver(socket, [event]),
-      else: {:noreply, socket}
+    cond do
+      event.goal_id != socket.assigns.conversation.id or event.sequence <= socket.assigns.last ->
+        {:noreply, socket}
+
+      event.type == "conversation.handed_off" ->
+        with {:noreply, socket} <- deliver(socket, [event]), do: follow(socket)
+
+      true ->
+        deliver(socket, [event])
+    end
   end
 
   def handle_info(:state, socket) do
@@ -126,6 +144,27 @@ defmodule ShoestringWeb.ChatChannel do
       with {:noreply, socket} <- push_bounded(socket, "state", snapshot) do
         watch_tick(assign(socket, :snapshot, snapshot))
       end
+    end
+  end
+
+  # The shown conversation was handed off: show its successor from the start.
+  defp follow(socket) do
+    case Conversations.get(socket.assigns.conversation.session_id) do
+      %Conversation{} = current ->
+        :ok =
+          Phoenix.PubSub.unsubscribe(
+            Shoestring.PubSub,
+            Trajectory.topic(socket.assigns.conversation.id)
+          )
+
+        :ok = Phoenix.PubSub.subscribe(Shoestring.PubSub, Trajectory.topic(current.id))
+        _ = engine(current)
+        send(self(), :backlog)
+
+        {:noreply, assign(socket, conversation: current, last: 0, ready: false, snapshot: nil)}
+
+      nil ->
+        {:noreply, socket}
     end
   end
 
@@ -179,7 +218,9 @@ defmodule ShoestringWeb.ChatChannel do
       "turn_id" => status.turn_id,
       "pending_messages" => status.pending_messages,
       "pending_inbox" => status.pending_inbox,
-      "hold" => status.hold
+      "hold" => status.hold,
+      "context" => %{"used" => status.context_bytes, "limit" => status.context_limit},
+      "handoff" => status.handoff && Atom.to_string(status.handoff)
     }
   catch
     :exit, _ -> %{"state" => "stopped"}
@@ -195,6 +236,13 @@ defmodule ShoestringWeb.ChatChannel do
 
   def handle_in("cancel_turn", _payload, socket),
     do: to_engine(socket, &Engine.cancel_turn/1)
+
+  def handle_in("handoff", payload, socket) do
+    case Map.get(payload, "note", true) do
+      note when is_boolean(note) -> to_engine(socket, &Engine.handoff(&1, note: note))
+      _ -> {:reply, {:error, %{"reason" => "invalid_request"}}, socket}
+    end
+  end
 
   def handle_in("cancel_dispatch", %{"dispatch_id" => id, "reason" => reason}, socket)
       when is_binary(id) and is_binary(reason) do
@@ -272,9 +320,14 @@ defmodule ShoestringWeb.ChatChannel do
     end
   end
 
+  # To the session's current conversation, which may have just been handed
+  # off to.
   defp to_engine(socket, fun) do
-    with {:ok, _pid} <- engine(socket.assigns.conversation) do
-      case fun.(Engine.via(socket.assigns.conversation.id)) do
+    conversation =
+      Conversations.get(socket.assigns.conversation.session_id) || socket.assigns.conversation
+
+    with {:ok, _pid} <- engine(conversation) do
+      case fun.(Engine.via(conversation.id)) do
         :ok -> {:reply, :ok, socket}
         {:error, reason} -> {:reply, {:error, %{"reason" => code(reason)}}, socket}
       end
@@ -286,7 +339,7 @@ defmodule ShoestringWeb.ChatChannel do
   end
 
   # Reasons the client can act on; anything else is logged, not echoed.
-  @codes ~w(message_too_large pending_input_too_large context_limit_reached empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity)a
+  @codes ~w(message_too_large pending_input_too_large context_limit_reached empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity turn_running handoff_in_progress)a
 
   defp code(reason) when reason in @codes, do: Atom.to_string(reason)
   defp code({:invalid_payload, _type, _version, _changeset}), do: "invalid_message"

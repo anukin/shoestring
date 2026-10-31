@@ -6,6 +6,8 @@ defmodule Shoestring.Conversations.Resume do
   """
   use Task, restart: :temporary
 
+  import Ecto.Query
+
   require Logger
 
   alias Shoestring.{Conversations, Grants, Repo}
@@ -15,7 +17,7 @@ defmodule Shoestring.Conversations.Resume do
 
   @doc "Starts the engines; returns the conversations started."
   def run(opts \\ Application.get_env(:shoestring, :conversation_engine_opts, [])) do
-    for conversation <- Repo.all(Conversation),
+    for conversation <- Repo.all(from c in Conversation, where: is_nil(c.handed_off_at)),
         Grants.active(conversation.session_id),
         started?(conversation, opts),
         do: conversation

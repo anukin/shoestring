@@ -14,9 +14,11 @@ defmodule Shoestring.Harness.Fake.Conversation do
     * anything else — replies `ACK`.
 
   Options: `:session_id` (the provider session id a fresh session reports;
-  default `"fake-conversation-session"`) and `:refuse_model` (a model name
+  default `"fake-conversation-session"`), `:refuse_model` (a model name
   whose selection is refused, as a harness refuses a model it does not
-  offer).
+  offer), `:script` (a function from a turn's whole text to the directive
+  it runs, for turns whose text a test does not write) and `:observer` (a
+  pid sent `{:fake_conversation_turn, text}` for every turn).
   """
 
   @behaviour Shoestring.Harness.Conversation
@@ -81,6 +83,8 @@ defmodule Shoestring.Harness.Fake.Conversation do
 
     state = %{
       owner: spec.owner,
+      script: Keyword.get(opts, :script, & &1),
+      observer: Keyword.get(opts, :observer),
       ordinal: 0,
       turn: nil,
       timer: nil,
@@ -97,8 +101,9 @@ defmodule Shoestring.Harness.Fake.Conversation do
       do: {:reply, {:error, Conversation.turn_in_progress(running)}, state}
 
   def handle_call({:turn, turn_id, text}, _from, state) do
+    if state.observer, do: send(state.observer, {:fake_conversation_turn, text})
     state = emit(%{state | turn: turn_id, state: :in_turn}, :turn_started, turn_id: turn_id)
-    {:reply, :ok, run(state, String.trim(text))}
+    {:reply, :ok, run(state, String.trim(state.script.(text)))}
   end
 
   def handle_call(:cancel_turn, _from, %{turn: nil} = state), do: {:reply, :ok, state}

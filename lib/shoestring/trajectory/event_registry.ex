@@ -347,6 +347,33 @@ defmodule Shoestring.Trajectory.EventRegistry do
         uuid_fields: [:entry_id, :dispatch_id]
       }
     },
+    "conversation.handoff.requested" => %{
+      1 => %{
+        required: [:handoff_id, :note],
+        optional: [:instruction],
+        uuid_fields: [:handoff_id],
+        types: %{note: :boolean}
+      }
+    },
+    "conversation.handoff.prepared" => %{
+      1 => %{
+        required: [:successor_id, :facts, :note_status, :carried, :known],
+        optional: [:note],
+        uuid_fields: [:successor_id],
+        types: %{carried: {:array, :map}, known: {:array, :map}}
+      }
+    },
+    "conversation.handed_off" => %{
+      1 => %{required: [:successor_id], optional: [], uuid_fields: [:successor_id]}
+    },
+    "conversation.handoff.received" => %{
+      1 => %{
+        required: [:predecessor_id, :facts, :note_status, :carried, :known],
+        optional: [:note],
+        uuid_fields: [:predecessor_id],
+        types: %{carried: {:array, :map}, known: {:array, :map}}
+      }
+    },
     "run.starting" => %{1 => %{required: [:run_id], optional: [], uuid_fields: [:run_id]}},
     "run.running" => %{
       1 => %{

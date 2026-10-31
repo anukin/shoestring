@@ -30,6 +30,7 @@ pub enum Outgoing {
     Watch { id: String },
     Unwatch,
     CancelDispatch { id: String, reason: String },
+    Handoff { note: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -127,14 +128,19 @@ async fn session(
     let topic = protocol::topic(&config.session);
     let mut refs = Refs(0);
     let join_ref = refs.next();
-    let after = lock(model).last_sequence;
+    let (after, conversation) = {
+        let model = lock(model);
+        (model.last_sequence, model.conversation_id.clone())
+    };
 
+    // Sequences belong to the conversation they were seen in: naming it lets
+    // the service start again from the first event after a handoff.
     let join = Frame {
         join_ref: Some(join_ref.clone()),
         reference: Some(join_ref.clone()),
         topic: topic.clone(),
         event: "phx_join".into(),
-        payload: json!({ "after": after }),
+        payload: json!({ "after": after, "conversation_id": conversation }),
     };
     if sink.send(Message::text(join.encode())).await.is_err() {
         return lost("the connection closed while joining", false);
@@ -148,6 +154,9 @@ async fn session(
                         && frame.reference.as_deref() == Some(&join_ref) =>
                 {
                     if frame.payload["status"] == "ok" {
+                        if let Some(id) = frame.payload["response"]["conversation_id"].as_str() {
+                            lock(model).joined(id);
+                        }
                         break;
                     }
                     let reason = frame.payload["response"]["reason"]
@@ -275,6 +284,7 @@ where
             "cancel_dispatch",
             json!({"dispatch_id": id, "reason": reason}),
         ),
+        Outgoing::Handoff { note } => ("handoff", json!({ "note": note })),
     };
     let reference = refs.next();
     let frame = Frame {
@@ -312,6 +322,7 @@ fn reply(
             Outgoing::Say { .. } => "Not sent",
             Outgoing::CancelTurn | Outgoing::CancelDispatch { .. } => "Nothing to cancel",
             Outgoing::Watch { .. } | Outgoing::Unwatch => "Dispatch unavailable",
+            Outgoing::Handoff { .. } => "No handoff",
         };
         lock(model).note(format!("{what}: {}", describe(reason)));
     }
@@ -320,10 +331,17 @@ fn reply(
 fn describe(reason: &str) -> String {
     match reason {
         "message_too_large" => "the message is over 32 KiB".into(),
-        "pending_input_too_large" => "the queued messages are full; send this again after the coordinator catches up".into(),
-        "context_limit_reached" => "this conversation has reached its text limit; start a new session and carry over the needed requirements".into(),
+        "pending_input_too_large" => {
+            "the queued messages are full; send this again after the coordinator catches up".into()
+        }
+        "context_limit_reached" => {
+            "this conversation has reached its text limit; /handoff continues it in a fresh one"
+                .into()
+        }
         "empty_message" => "the message is empty".into(),
         "no_turn" => "the coordinator is not in a turn".into(),
+        "turn_running" => "the coordinator is in a turn; wait for it or /cancel it first".into(),
+        "handoff_in_progress" => "a handoff is under way; /handoff facts skips a held note".into(),
         other => other.to_string(),
     }
 }

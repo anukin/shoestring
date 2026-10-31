@@ -10,8 +10,16 @@ defmodule Shoestring.Conversations.History do
   `conversation.turn.ended`; at most one is open. `hold` is the latest
   `conversation.turn.held` (why pending input is not being delivered) until
   the next turn is requested.
+
+  A handoff (`Shoestring.Conversations.Handoff`) is `handoff` here: its id
+  (the successor conversation's), whether a note was asked for, and its
+  status (`:requested`, `:prepared`, `:done`). In the successor, the received
+  handoff is a pending message of kind `:handoff`, the person's carried
+  messages are pending `:human` ones, and `known` holds the inbox entries the
+  predecessor delivered, so they are not announced again.
   """
 
+  alias Shoestring.Conversations.Handoff
   alias Shoestring.Trajectory.TrajectoryEvent
 
   defstruct messages: [],
@@ -23,6 +31,9 @@ defmodule Shoestring.Conversations.History do
             open_turn: nil,
             hold: nil,
             provider_session_id: nil,
+            handoff: nil,
+            predecessor_id: nil,
+            known: [],
             last_sequence: 0
 
   @type t :: %__MODULE__{}
@@ -173,7 +184,62 @@ defmodule Shoestring.Conversations.History do
     %{history | inbox: history.inbox ++ [entry]}
   end
 
+  defp fold(history, "conversation.handoff.requested", payload, event) do
+    history = %{
+      history
+      | handoff: %{
+          id: payload["handoff_id"],
+          note: payload["note"],
+          status: :requested,
+          prepared: nil
+        }
+    }
+
+    case payload["instruction"] do
+      nil -> history
+      text -> add_message(history, :handoff_request, payload["handoff_id"], text, event)
+    end
+  end
+
+  defp fold(history, "conversation.handoff.prepared", payload, _event),
+    do: %{history | handoff: %{history.handoff | status: :prepared, prepared: payload}}
+
+  defp fold(history, "conversation.handed_off", _payload, _event),
+    do: %{history | handoff: %{history.handoff | status: :done}}
+
+  defp fold(history, "conversation.handoff.received", payload, event) do
+    known =
+      for entry <- payload["known"] || [] do
+        %{
+          id: nil,
+          dispatch_id: entry["dispatch_id"],
+          state: entry["state"],
+          settlement_ref: entry["settlement_ref"],
+          known: true,
+          at: event.occurred_at
+        }
+      end
+
+    history =
+      %{history | predecessor_id: payload["predecessor_id"], known: history.known ++ known}
+      |> add_message(:handoff, payload["predecessor_id"], Handoff.text(payload), event)
+
+    Enum.reduce(payload["carried"] || [], history, fn message, history ->
+      add_message(history, :human, message["message_id"], message["text"], event)
+    end)
+  end
+
   defp fold(history, _type, _payload, _event), do: history
+
+  defp add_message(history, kind, id, text, event) do
+    message = %{kind: kind, id: id, text: text, turn_id: nil, at: event.occurred_at}
+
+    %{
+      history
+      | messages: history.messages ++ [message],
+        visible_bytes: history.visible_bytes + byte_size(text)
+    }
+  end
 
   defp update_turn(history, turn_id, fun) do
     case history.turns do
@@ -182,14 +248,18 @@ defmodule Shoestring.Conversations.History do
     end
   end
 
-  @doc "The human messages and inbox entries no turn has delivered yet, oldest first."
+  @doc """
+  The human messages, handoff texts and inbox entries no turn has delivered
+  yet, oldest first.
+  """
   @spec pending(t()) :: %{messages: [map()], inbox: [map()]}
   def pending(history) do
     %{
       messages:
         Enum.filter(
           history.messages,
-          &(&1.kind == :human and not MapSet.member?(history.delivered, &1.id))
+          &(&1.kind in [:human, :handoff, :handoff_request] and
+              not MapSet.member?(history.delivered, &1.id))
         ),
       inbox: Enum.reject(history.inbox, &MapSet.member?(history.delivered, &1.id))
     }
@@ -199,7 +269,7 @@ defmodule Shoestring.Conversations.History do
   def recorded?(history, dispatch_id, state, settlement_ref \\ nil),
     do:
       Enum.any?(
-        history.inbox,
+        history.inbox ++ history.known,
         &(&1.dispatch_id == dispatch_id and &1.state == state and
             (is_nil(settlement_ref) or Map.get(&1, :settlement_ref) == settlement_ref or
                (is_nil(Map.get(&1, :settlement_ref)) and observed_before?(settlement_ref, &1.at))))
@@ -220,7 +290,11 @@ defmodule Shoestring.Conversations.History do
 
   @doc "Whether `dispatch_id` has an inbox entry for a state it never leaves."
   def final?(history, dispatch_id),
-    do: Enum.any?(history.inbox, &(&1.dispatch_id == dispatch_id and &1.state in @final))
+    do:
+      Enum.any?(
+        history.inbox ++ history.known,
+        &(&1.dispatch_id == dispatch_id and &1.state in @final)
+      )
 
   @doc "The turns in the order they were requested."
   def turns(history), do: Enum.map(history.turn_order, &Map.fetch!(history.turns, &1))

@@ -1,9 +1,12 @@
 defmodule Shoestring.Conversations do
   @moduledoc """
-  Coordinator conversations (iteration 15 package C): one per session, held
-  in its own goal's trajectory and driven by one
-  `Shoestring.Conversations.Engine`.
+  Coordinator conversations (iteration 15 package C): one current per
+  session, held in its own goal's trajectory and driven by one
+  `Shoestring.Conversations.Engine`. A handoff
+  (`Shoestring.Conversations.Handoff`) continues the session in a new one.
   """
+
+  import Ecto.Query
 
   alias Shoestring.{Harnesses, Repo, Trajectory}
   alias Shoestring.Conversations.{Conversation, Engine, History}
@@ -52,31 +55,31 @@ defmodule Shoestring.Conversations do
     end
   end
 
-  defp insert(attrs) do
-    id = Ecto.UUID.generate()
+  defp insert(attrs), do: Repo.transaction(fn -> insert!(attrs, Ecto.UUID.generate(), nil) end)
 
-    Repo.transaction(fn ->
-      with {:ok, _goal} <-
-             %Goal{id: id}
-             |> Goal.create_changeset(Ecto.UUID.generate(), %{
-               title: "Coordinator conversation #{attrs["session_id"]}",
-               description: "Conversation of coordinator session #{attrs["session_id"]}."
-             })
-             |> Repo.insert(),
-           {:ok, conversation} <-
-             Repo.insert(%Conversation{
-               id: id,
-               session_id: attrs["session_id"],
-               provider: attrs["provider"],
-               model: attrs["model"],
-               effort: attrs["effort"],
-               repository_root: attrs["repository_root"]
-             }) do
-        conversation
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+  # Inside a transaction.
+  defp insert!(attrs, id, predecessor_id) do
+    with {:ok, _goal} <-
+           %Goal{id: id}
+           |> Goal.create_changeset(Ecto.UUID.generate(), %{
+             title: "Coordinator conversation #{attrs["session_id"]}",
+             description: "Conversation of coordinator session #{attrs["session_id"]}."
+           })
+           |> Repo.insert(),
+         {:ok, conversation} <-
+           Repo.insert(%Conversation{
+             id: id,
+             session_id: attrs["session_id"],
+             provider: attrs["provider"],
+             model: attrs["model"],
+             effort: attrs["effort"],
+             repository_root: attrs["repository_root"],
+             predecessor_id: predecessor_id
+           }) do
+      conversation
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
   end
 
   defp same_coordinator(conversation, attrs) do
@@ -89,7 +92,7 @@ defmodule Shoestring.Conversations do
 
   # Idempotent, so a conversation whose first open stopped before this event
   # gets it on the next.
-  defp record_opened(conversation) do
+  defp record_opened(conversation, opts \\ []) do
     payload =
       %{
         "session_id" => conversation.session_id,
@@ -99,13 +102,94 @@ defmodule Shoestring.Conversations do
       }
       |> then(&if(conversation.effort, do: Map.put(&1, "effort", conversation.effort), else: &1))
 
-    Trajectory.append(conversation.id, %{
-      "type" => "conversation.opened",
-      "schema_version" => 1,
-      "actor" => "conversation",
-      "idempotency_key" => "opened",
-      "payload" => payload
-    })
+    Trajectory.append(
+      conversation.id,
+      %{
+        "type" => "conversation.opened",
+        "schema_version" => 1,
+        "actor" => "conversation",
+        "idempotency_key" => "opened",
+        "payload" => payload
+      },
+      opts
+    )
+  end
+
+  @doc """
+  Hands `conversation` off to the successor its
+  `conversation.handoff.prepared` payload names, in one transaction: the
+  old conversation is marked handed off and gets `conversation.handed_off`;
+  the successor is created in the same session and gets
+  `conversation.opened` and `conversation.handoff.received`. Asking again
+  after it happened returns the successor.
+  """
+  def hand_off(%Conversation{} = conversation, %{"successor_id" => successor_id} = prepared) do
+    in_transaction = [writer_opts: [transaction_repo: Repo]]
+
+    received =
+      prepared
+      |> Map.delete("successor_id")
+      |> Map.put("predecessor_id", conversation.id)
+
+    Repo.transaction(fn ->
+      old = Repo.get!(Conversation, conversation.id)
+      if old.handed_off_at, do: Repo.rollback(:already_handed_off)
+      Repo.update!(Ecto.Changeset.change(old, handed_off_at: DateTime.utc_now()))
+
+      attrs = Map.new(Map.from_struct(old), fn {key, value} -> {to_string(key), value} end)
+      successor = insert!(attrs, successor_id, old.id)
+
+      with {:ok, opened} <- record_opened(successor, in_transaction),
+           {:ok, received} <-
+             append(successor.id, "conversation.handoff.received", received, in_transaction),
+           {:ok, handed_off} <-
+             append(
+               old.id,
+               "conversation.handed_off",
+               %{"successor_id" => successor.id},
+               in_transaction
+             ) do
+        {successor, [opened, received, handed_off]}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, {successor, events}} ->
+        # The writer publishes only what it appends outside a transaction.
+        for event <- events,
+            do:
+              Phoenix.PubSub.broadcast(
+                Shoestring.PubSub,
+                Trajectory.topic(event.goal_id),
+                {:trajectory_event_committed, event}
+              )
+
+        {:ok, successor}
+
+      {:error, :already_handed_off} ->
+        case Repo.get_by(Conversation, predecessor_id: conversation.id) do
+          nil -> {:error, :already_handed_off}
+          successor -> {:ok, successor}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp append(goal_id, type, payload, opts) do
+    Trajectory.append(
+      goal_id,
+      %{
+        "type" => type,
+        "schema_version" => 1,
+        "actor" => "conversation",
+        "idempotency_key" => String.replace_prefix(type, "conversation.", ""),
+        "payload" => payload
+      },
+      opts
+    )
   end
 
   @doc """
@@ -115,9 +199,12 @@ defmodule Shoestring.Conversations do
   def instructions_path(session_id),
     do: Path.join([Shoestring.State.root(), "chat", session_id, "conversation-instructions.md"])
 
-  @doc "The session's conversation, or nil."
+  @doc "The session's current conversation (the one not handed off), or nil."
   def get(session_id) when is_binary(session_id),
-    do: Repo.get_by(Conversation, session_id: session_id)
+    do:
+      Repo.one(
+        from c in Conversation, where: c.session_id == ^session_id and is_nil(c.handed_off_at)
+      )
 
   def get(_session_id), do: nil
 
@@ -126,8 +213,18 @@ defmodule Shoestring.Conversations do
     with {:ok, events} <- Trajectory.replay(id), do: {:ok, History.from_events(events)}
   end
 
-  @doc "Starts the conversation's engine, or returns the running one."
+  @doc """
+  Starts the conversation's engine, or returns the running one. A
+  conversation handed off has none: `{:error, :handed_off}`.
+  """
   def start(%Conversation{} = conversation, opts \\ []) do
+    case Repo.get(Conversation, conversation.id) do
+      %Conversation{handed_off_at: nil} -> start_engine(conversation, opts)
+      _ -> {:error, :handed_off}
+    end
+  end
+
+  defp start_engine(conversation, opts) do
     case DynamicSupervisor.start_child(
            Shoestring.Conversations.Supervisor,
            {Engine, {conversation, opts}}

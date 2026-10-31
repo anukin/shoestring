@@ -26,7 +26,9 @@ defmodule Shoestring.CLI.Commands.Chat do
 
   --session ID reattaches an earlier session: its whole conversation is
   shown again and its coordinator resumes where it left off. Leaving the
-  screen (/exit) leaves the conversation and every dispatch running.
+  screen (/exit) leaves the conversation and every dispatch running. In the
+  screen, /handoff continues a long session in a fresh conversation with the
+  same grant and dispatches; --session then reattaches the fresh one.
 
   --external starts the coordinator's own CLI in this terminal instead
   (Claude Code, Codex or opencode), told how to hand tasks to Shoestring with

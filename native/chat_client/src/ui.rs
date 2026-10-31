@@ -24,6 +24,8 @@ Cmd/Ctrl+A,E line start/end; Option+←→ by word; ↑↓ between lines
 Ctrl+W/K/U   delete word back / to line end / to line start
 /            commands: ↑↓ choose, Tab completes, Enter runs
 /cancel      interrupt the coordinator's running turn
+/handoff     continue in a fresh conversation: same grant and agents; the
+             coordinator writes a note first (/handoff facts: without)
 /status      the coordinator, grant and dispatches, from Shoestring
 /help        this help (any key closes it)
 /exit        leave; the conversation and every agent keep running
@@ -145,6 +147,7 @@ fn draw_conversation(frame: &mut Frame, model: &Model, area: Rect) -> Conversati
             Kind::Tool => ("  ", Style::new().fg(Color::DarkGray)),
             Kind::Inbox => ("  ", Style::new().fg(Color::Yellow)),
             Kind::Notice => ("! ", Style::new().fg(Color::Magenta)),
+            Kind::Handoff => ("↪ ", Style::new().fg(Color::Green)),
         };
         for (i, row) in wrap(&format!("{prefix}{}", entry.text), width)
             .into_iter()
@@ -270,6 +273,12 @@ fn status_line(model: &Model) -> Line<'static> {
     } else {
         String::new()
     };
+    // Shown from half full; near the limit it says what to do.
+    let context = match model.context_percent() {
+        Some(percent) if percent >= 90 => format!(" · context {percent}%: /handoff"),
+        Some(percent) if percent >= 50 => format!(" · context {percent}%"),
+        _ => String::new(),
+    };
     let capacity = if model.capacity.is_empty() {
         String::new()
     } else {
@@ -283,7 +292,7 @@ fn status_line(model: &Model) -> Line<'static> {
 
     Line::from(vec![
         Span::styled(
-            format!(" {connection} · {coordinator}{waiting}{capacity}{notice}"),
+            format!(" {connection} · {coordinator}{waiting}{context}{capacity}{notice}"),
             Style::new().fg(Color::Gray),
         ),
         Span::styled(" │ /help", Style::new().fg(Color::DarkGray)),
@@ -534,6 +543,21 @@ mod tests {
         model.editor.set("/st please");
         assert!(!screen(&model, 90, 24).contains("Tab complete"));
         let _ = screen(&model, 20, 6);
+    }
+
+    #[test]
+    fn the_status_line_shows_context_from_half_full_and_offers_a_handoff_near_the_limit() {
+        let mut model = Model::new("s1");
+        let at = |model: &mut Model, used: u64| {
+            model.apply_state(
+                &json!({"engine": {"state": "idle", "context": {"used": used, "limit": 100}}}),
+            );
+            screen(model, 100, 12)
+        };
+        assert!(!at(&mut model, 49).contains("context"));
+        assert!(at(&mut model, 50).contains("context 50%"));
+        assert!(!at(&mut model, 89).contains("/handoff"));
+        assert!(at(&mut model, 91).contains("context 91%: /handoff"));
     }
 
     #[test]

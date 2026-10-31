@@ -18,6 +18,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     ("/cancel", "interrupt the coordinator's running turn"),
     (
+        "/handoff",
+        "continue in a fresh conversation, with a note from the coordinator",
+    ),
+    (
         "/exit",
         "leave; the conversation and every agent keep running",
     ),
@@ -29,6 +33,11 @@ pub enum Command {
     Help,
     Status,
     Cancel,
+    /// Continue the session in a fresh conversation; `note` asks the
+    /// coordinator for its note first (`/handoff facts` does not).
+    Handoff {
+        note: bool,
+    },
     Exit,
     Unknown(String),
     Nothing,
@@ -201,6 +210,8 @@ impl Editor {
             "/help" => Command::Help,
             "/status" => Command::Status,
             "/cancel" => Command::Cancel,
+            "/handoff" => Command::Handoff { note: true },
+            "/handoff facts" => Command::Handoff { note: false },
             "/exit" | "/quit" => Command::Exit,
             command if command.starts_with('/') && !command.contains(char::is_whitespace) => {
                 Command::Unknown(command.to_string())
@@ -285,7 +296,8 @@ mod tests {
     fn slash_matches_list_the_commands_a_word_could_start() {
         assert_eq!(typed("/").slash_matches().len(), COMMANDS.len());
         assert_eq!(typed("/s").slash_matches(), vec![COMMANDS[1]]);
-        assert_eq!(typed("/exit").slash_matches(), vec![COMMANDS[3]]);
+        assert_eq!(typed("/exit").slash_matches(), vec![COMMANDS[4]]);
+        assert_eq!(typed("/h").slash_matches(), vec![COMMANDS[0], COMMANDS[3]]);
         assert!(typed("/x").slash_matches().is_empty());
         assert!(typed("/help me").slash_matches().is_empty());
         assert!(typed("hi /").slash_matches().is_empty());
@@ -305,6 +317,15 @@ mod tests {
         assert_eq!(typed("/exit").submit(), Command::Exit);
         assert_eq!(typed("/cancel").submit(), Command::Cancel);
         assert_eq!(typed("/status").submit(), Command::Status);
+        assert_eq!(typed("/handoff").submit(), Command::Handoff { note: true });
+        assert_eq!(
+            typed(" /handoff facts ").submit(),
+            Command::Handoff { note: false }
+        );
+        assert_eq!(
+            typed("/handoff now please").submit(),
+            Command::Say("/handoff now please".into())
+        );
         assert_eq!(typed("/nope").submit(), Command::Unknown("/nope".into()));
         assert_eq!(
             typed("/etc/hosts is odd").submit(),

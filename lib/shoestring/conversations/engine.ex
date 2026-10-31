@@ -49,8 +49,22 @@ defmodule Shoestring.Conversations.Engine do
   once for each distinct decision or review in a settled state. The poll never
   interrupts a turn; entries wait for the coordinator to be idle.
 
+  **Handoff** (iteration 16 package A, `Shoestring.Conversations.Handoff`).
+  Asked for only by the person (`handoff/2`), and refused while a turn is
+  open. With a note, one turn delivers only the handoff instruction, may use
+  `Handoff.headroom/0` past the text bound (so a conversation at its limit
+  can still hand off), and is charged and admitted like any turn; no other
+  turn starts in this conversation after the request. Then
+  `conversation.handoff.prepared` records what carries over and
+  `Shoestring.Conversations.hand_off/2` switches the session to the
+  successor in one transaction; this engine starts the successor's and
+  stops. A held note turn can be skipped by asking again without a note.
+  Messages the person sends meanwhile are carried over; after `prepared`
+  they are refused (`handoff_in_progress`).
+
   **Restart.** A new engine rebuilds its history from events without a
-  model call and starts no turn by itself. The coordinator process is
+  model call and starts no turn by itself; a handoff under way continues
+  where it stopped. The coordinator process is
   started at the first turn, resuming the provider session recorded in
   `conversation.provider_session.bound`.
 
@@ -60,7 +74,9 @@ defmodule Shoestring.Conversations.Engine do
   endpoint's `/mcp`; nil for no tools), `:poll_ms` (nil turns the timer off;
   `poll/1` still works), `:max_reply_bytes` (256 KiB per turn),
   `:max_input_bytes` (128 KiB of queued human input and per delivered turn),
-  `:max_context_bytes` (4 MiB of retained visible message text). Context
+  `:max_context_bytes` (4 MiB of retained visible message text),
+  `:start_successor` (default true: start the successor's engine after a
+  handoff). Context
   exhaustion refuses explicitly; provider tokens and tool-result context are
   owned by the provider CLI and are not estimated from this byte bound.
   """
@@ -71,7 +87,7 @@ defmodule Shoestring.Conversations.Engine do
 
   alias Shoestring.{Authority, Conversations, Dispatches, Grants, Harnesses, Trajectory}
   alias Shoestring.Cobbler.{AdmissionEvaluation, WakeupObserve}
-  alias Shoestring.Conversations.{Conversation, Events, History}
+  alias Shoestring.Conversations.{Conversation, Events, Handoff, History}
   alias Shoestring.Coordinator.ToolTokens
   alias Shoestring.Harness.{ConversationEvent, Error}
   alias Shoestring.Trajectory.Redaction
@@ -102,6 +118,15 @@ defmodule Shoestring.Conversations.Engine do
   """
   def say(engine, message_id, text), do: GenServer.call(engine, {:say, message_id, text})
 
+  @doc """
+  Hands the conversation off to a fresh one in the same session.
+  `note: true` asks the coordinator for its note first (one turn); `false`
+  carries the facts alone, and also skips a note turn that is held.
+  `{:error, :turn_running}` while a turn is open.
+  """
+  def handoff(engine, opts \\ []),
+    do: GenServer.call(engine, {:handoff, Keyword.get(opts, :note, true)}, 30_000)
+
   @doc "Interrupts the running turn; `{:error, :no_turn}` when none runs."
   def cancel_turn(engine), do: GenServer.call(engine, :cancel_turn)
 
@@ -118,10 +143,13 @@ defmodule Shoestring.Conversations.Engine do
     Process.flag(:trap_exit, true)
 
     with {:ok, module} <- conversation_module(conversation, opts),
-         {:ok, events} <- Trajectory.replay(conversation.id) do
+         {:ok, events} <- Trajectory.replay(conversation.id),
+         history = History.from_events(events),
+         :ok <-
+           if(match?(%{status: :done}, history.handoff), do: {:error, :handed_off}, else: :ok) do
       state = %{
         conversation: conversation,
-        history: History.from_events(events),
+        history: history,
         module: module,
         opts: opts,
         adapter: nil,
@@ -139,6 +167,7 @@ defmodule Shoestring.Conversations.Engine do
           turn_id -> end_turn(state, turn_id, "uncertain", "service_restarted")
         end
 
+      if state.history.handoff, do: send(self(), :advance_handoff)
       schedule_poll(state)
       {:ok, state}
     end
@@ -167,6 +196,9 @@ defmodule Shoestring.Conversations.Engine do
     separator_bytes = if pending.messages == [], do: 0, else: 2
 
     cond do
+      match?(%{status: status} when status != :requested, state.history.handoff) ->
+        {:reply, {:error, :handoff_in_progress}, state}
+
       max(raw_bytes, byte_size(text)) > min(@max_message_bytes, state.max_input_bytes) ->
         {:reply, {:error, :message_too_large}, state}
 
@@ -195,6 +227,38 @@ defmodule Shoestring.Conversations.Engine do
     end
   end
 
+  def handle_call({:handoff, note}, _from, state) do
+    cond do
+      state.turn != nil or state.history.open_turn != nil ->
+        {:reply, {:error, :turn_running}, state}
+
+      state.history.handoff == nil ->
+        id = Ecto.UUID.generate()
+
+        payload =
+          %{"handoff_id" => id, "note" => note}
+          |> then(&if(note, do: Map.put(&1, "instruction", Handoff.instruction()), else: &1))
+
+        case record(
+               state,
+               "conversation.handoff.requested",
+               payload,
+               "handoff-requested",
+               "human"
+             ) do
+          {:ok, state} -> {:reply, :ok, maybe_start_turn(state)}
+          {:error, reason} -> {:reply, {:error, reason}, state}
+        end
+
+      # The note turn is held (no turns left, a reserve): carry the facts alone.
+      state.history.handoff.status == :requested and not note ->
+        {:reply, :ok, prepare_handoff(state)}
+
+      true ->
+        {:reply, {:error, :handoff_in_progress}, state}
+    end
+  end
+
   def handle_call(:cancel_turn, _from, %{turn: nil} = state),
     do: {:reply, {:error, :no_turn}, state}
 
@@ -213,7 +277,10 @@ defmodule Shoestring.Conversations.Engine do
        pending_messages: length(pending.messages),
        pending_inbox: length(pending.inbox),
        provider_session_id: state.history.provider_session_id,
-       hold: state.history.hold && state.history.hold.reason
+       hold: state.history.hold && state.history.hold.reason,
+       context_bytes: state.history.visible_bytes,
+       context_limit: state.max_context_bytes,
+       handoff: state.history.handoff && state.history.handoff.status
      }, state}
   end
 
@@ -221,6 +288,22 @@ defmodule Shoestring.Conversations.Engine do
   def handle_call(:poll, _from, state), do: {:reply, :ok, check_dispatches(state)}
 
   @impl GenServer
+  def handle_info(:advance_handoff, state), do: {:noreply, maybe_start_turn(state)}
+
+  def handle_info({:handed_off, successor}, state) do
+    if Keyword.get(state.opts, :start_successor, true) do
+      case Conversations.start(successor, state.opts) do
+        {:ok, _pid} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error("conversation #{successor.id} not started: #{inspect(reason, limit: 8)}")
+      end
+    end
+
+    {:stop, :normal, state}
+  end
+
   def handle_info(:poll, state) do
     state = check_dispatches(state)
     schedule_poll(state)
@@ -267,20 +350,94 @@ defmodule Shoestring.Conversations.Engine do
 
   # -- Turns -----------------------------------------------------------------
 
+  defp maybe_start_turn(%{turn: nil, history: %{open_turn: nil, handoff: %{}}} = state),
+    do: advance_handoff(state)
+
   defp maybe_start_turn(%{turn: nil, history: %{open_turn: nil}} = state) do
-    case History.pending(state.history) do
-      %{messages: [], inbox: []} -> state
-      pending -> start_turn(state, pending)
+    pending = History.pending(state.history)
+
+    cond do
+      pending == %{messages: [], inbox: []} -> state
+      # A received handoff waits for the person's next message.
+      pending.inbox == [] and Enum.all?(pending.messages, &(&1.kind == :handoff)) -> state
+      true -> start_turn(state, pending)
     end
   end
 
   defp maybe_start_turn(state), do: state
 
+  # -- Handoff ---------------------------------------------------------------
+
+  defp advance_handoff(%{history: %{handoff: handoff}} = state) do
+    request = Enum.find(state.history.messages, &(&1.id == handoff.id))
+
+    cond do
+      handoff.status == :prepared ->
+        switch(state)
+
+      handoff.status == :done ->
+        state
+
+      # The instruction, after any handoff this conversation received and
+      # never delivered; what the person sends meanwhile is carried over.
+      request != nil and not History.delivered?(state.history, request.id) ->
+        received = Enum.filter(History.pending(state.history).messages, &(&1.kind == :handoff))
+        start_turn(state, %{messages: received ++ [request], inbox: []})
+
+      true ->
+        prepare_handoff(state)
+    end
+  end
+
+  defp prepare_handoff(state) do
+    payload =
+      Handoff.prepare(
+        state.conversation,
+        state.history,
+        state.history.handoff.id,
+        DateTime.utc_now()
+      )
+
+    case record(
+           state,
+           "conversation.handoff.prepared",
+           payload,
+           "handoff-prepared",
+           "conversation"
+         ) do
+      {:ok, state} -> switch(state)
+      # Prepared again on a later poll.
+      {:error, _reason} -> state
+    end
+  end
+
+  defp switch(state) do
+    case Conversations.hand_off(state.conversation, state.history.handoff.prepared) do
+      {:ok, successor} ->
+        send(self(), {:handed_off, successor})
+        %{state | history: %{state.history | handoff: %{state.history.handoff | status: :done}}}
+
+      # Tried again on a later poll.
+      {:error, reason} ->
+        Logger.error(
+          "conversation #{state.conversation.id} not handed off: #{inspect(reason, limit: 8)}"
+        )
+
+        state
+    end
+  end
+
+  # The text bound, with room for the handoff turn's instruction and note.
+  defp context_limit(%{history: %{handoff: %{}}} = state),
+    do: state.max_context_bytes + Handoff.headroom()
+
+  defp context_limit(state), do: state.max_context_bytes
+
   defp start_turn(state, pending) do
     pending = pending_batch(pending, state.max_input_bytes)
 
     cond do
-      state.history.visible_bytes >= state.max_context_bytes ->
+      state.history.visible_bytes >= context_limit(state) ->
         hold(state, "context_limit_reached", %{})
 
       pending == %{messages: [], inbox: []} ->
@@ -582,7 +739,7 @@ defmodule Shoestring.Conversations.Engine do
           "reply_too_large"
 
         state.history.visible_bytes + turn.buffer_bytes + byte_size(text) >
-            state.max_context_bytes ->
+            context_limit(state) ->
           "context_limit_reached"
 
         true ->
@@ -635,7 +792,7 @@ defmodule Shoestring.Conversations.Engine do
     else
       text = Redaction.redact(text)
 
-      if state.history.visible_bytes + byte_size(text) > state.max_context_bytes do
+      if state.history.visible_bytes + byte_size(text) > context_limit(state) do
         if state.adapter, do: state.module.cancel_turn(state.adapter)
         %{state | turn: %{turn | failure: "context_limit_reached", reply: [], buffer_bytes: 0}}
       else

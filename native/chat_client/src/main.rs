@@ -333,6 +333,9 @@ fn edit(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<Outgoin
             Command::Cancel => {
                 let _ = outbox.send(Outgoing::CancelTurn);
             }
+            Command::Handoff { note } => {
+                let _ = outbox.send(Outgoing::Handoff { note });
+            }
             Command::Exit => return true,
             Command::Unknown(name) => {
                 model.note(format!("Unknown command {name}; /help lists them"))

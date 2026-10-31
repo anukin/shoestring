@@ -410,13 +410,79 @@ defmodule ShoestringWeb.ChatChannelTest do
     assert_receive {:DOWN, ^ref, :process, _, :normal}, 5_000
   end
 
+  test "a handoff moves the joined client to the successor; a client naming the old one rejoins from the start",
+       ctx do
+    Application.put_env(:shoestring, :conversation_engine_opts, @engine_opts)
+    on_exit(fn -> Application.delete_env(:shoestring, :conversation_engine_opts) end)
+
+    socket = join!(ctx)
+    events_until("conversation.opened")
+    ref = say(socket, "SAY before")
+    assert_reply ref, :ok
+    last = List.last(events_until("conversation.turn.ended"))["sequence"]
+
+    ref = push(socket, "handoff", %{"note" => "yes"})
+    assert_reply ref, :error, %{"reason" => "invalid_request"}
+    ref = push(socket, "handoff", %{"note" => false})
+    assert_reply ref, :ok
+
+    # The old conversation's last events, then the successor's from its first.
+    seen = events_until("conversation.handoff.received")
+
+    assert Enum.map(seen, &{&1["type"], &1["sequence"]}) == [
+             {"conversation.handoff.requested", last + 1},
+             {"conversation.handoff.prepared", last + 2},
+             {"conversation.handed_off", last + 3},
+             {"conversation.opened", 1},
+             {"conversation.handoff.received", 2}
+           ]
+
+    successor = Conversations.get(ctx.session)
+    assert successor.predecessor_id == ctx.conversation.id
+    on_exit(fn -> if pid = Conversations.engine(successor), do: GenServer.stop(pid) end)
+
+    # The person's next message reaches the successor, with the handoff.
+    ref = say(socket, "SAY after")
+    assert_reply ref, :ok
+    seen = events_until("conversation.turn.ended")
+    predecessor_id = ctx.conversation.id
+
+    assert [%{"payload" => %{"message_ids" => [^predecessor_id, _after]}}] =
+             Enum.filter(seen, &(&1["type"] == "conversation.turn.requested"))
+
+    Process.unlink(socket.channel_pid)
+    :ok = close(socket)
+
+    {:ok, reply, _socket} =
+      subscribe_and_join(ctx.socket, ChatChannel, "conversation:#{ctx.session}", %{
+        "after" => last + 3,
+        "conversation_id" => ctx.conversation.id
+      })
+
+    assert reply["conversation_id"] == successor.id
+
+    assert [%{"type" => "conversation.opened", "sequence" => 1} | _] =
+             events_until("conversation.opened")
+
+    GenServer.stop(Conversations.engine(successor))
+  end
+
   test "at boot, engines start for conversations whose session has a grant", ctx do
     {:ok, _} = open("chat-ungranted", ctx.repo)
     {:ok, granted} = open("chat-granted", ctx.repo)
     {:ok, _} = grant("chat-granted", ctx.repo)
 
     started = Resume.run(@engine_opts)
-    on_exit(fn -> for c <- started, pid = Conversations.engine(c), do: GenServer.stop(pid) end)
+    # The setup's engine is among them, and ExUnit may have stopped it first.
+    on_exit(fn ->
+      for c <- started, pid = Conversations.engine(c) do
+        try do
+          GenServer.stop(pid)
+        catch
+          :exit, _gone -> :ok
+        end
+      end
+    end)
 
     sessions = Enum.map(started, & &1.session_id)
     assert "chat-granted" in sessions

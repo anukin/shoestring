@@ -5,6 +5,7 @@ defmodule Shoestring.Conversations.Events do
   raw provider frames.
   """
 
+  alias Shoestring.Conversations.Handoff
   alias Shoestring.Harness.Contract
 
   # `uncertain`: the turn may have reached the model but its end was never
@@ -60,6 +61,20 @@ defmodule Shoestring.Conversations.Events do
     if payload["state"] in @inbox_states,
       do: :ok,
       else: Contract.invalid(:state, "must be a settled dispatch state")
+  end
+
+  def validate(type, payload)
+      when type in ["conversation.handoff.prepared", "conversation.handoff.received"] do
+    cond do
+      not name?(payload["note_status"]) ->
+        Contract.invalid(:note_status, "must be a note status code")
+
+      is_binary(payload["note"]) and byte_size(payload["note"]) > Handoff.max_note_bytes() ->
+        Contract.invalid(:note, "must be at most #{Handoff.max_note_bytes()} bytes")
+
+      true ->
+        :ok
+    end
   end
 
   def validate(_type, _payload), do: :ok

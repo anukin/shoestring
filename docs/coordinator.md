@@ -29,6 +29,13 @@ code: dispatches snapshot the repository's current HEAD. Integrate the
 accepted commit before dispatching dependent work. No shared cross-session
 lessons library is supplied by native chat.
 
+A long conversation continues with `/handoff`: the session, grant and
+dispatches stay; a fresh coordinator conversation starts with Shoestring's
+facts (the grant's remaining room and every dispatch with its state and
+commit) and the old coordinator's note (intent, decisions, open questions),
+written in one charged turn. `/handoff facts` skips the note. Details are in
+`docs/chat-channel.md` (Handoff).
+
 Hermetic tests cover report-to-worker-to-review delivery, scripted provider
 context across process and engine restarts, session isolation, missing
 history, and visible input/output limits. These prove protocol and context

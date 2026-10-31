@@ -14,6 +14,8 @@ pub enum Kind {
     Tool,
     Inbox,
     Notice,
+    /// What a handoff carried over from the previous conversation.
+    Handoff,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +62,8 @@ pub enum Connection {
 #[derive(Debug, Clone, Default)]
 pub struct Model {
     pub session: String,
+    /// The conversation `last_sequence` counts in; a handoff starts another.
+    pub conversation_id: Option<String>,
     pub coordinator: Option<String>,
     pub entries: Vec<Entry>,
     pub last_sequence: u64,
@@ -67,6 +71,8 @@ pub struct Model {
     pub pending: u64,
     pub hold: Option<String>,
     pub turns: Option<(u64, u64)>,
+    /// Visible conversation text used and its limit, in bytes.
+    pub context: Option<(u64, u64)>,
     pub dispatches: Vec<Dispatch>,
     pub capacity: Vec<String>,
     pub connection: Connection,
@@ -119,6 +125,27 @@ impl Model {
         self.scroll_top = (top < view.last_top).then_some(top);
     }
 
+    /// The join reply named the session's current conversation. Another than
+    /// the one shown means it was handed off while away: the service sends
+    /// the new one from its first event.
+    pub fn joined(&mut self, conversation_id: &str) {
+        let id = clean_line(conversation_id);
+        if self
+            .conversation_id
+            .as_ref()
+            .is_some_and(|known| *known != id)
+        {
+            self.last_sequence = 0;
+            self.push(
+                Kind::Notice,
+                "This session continued in a fresh conversation (a handoff) while you were away."
+                    .into(),
+            );
+            self.dirty = true;
+        }
+        self.conversation_id = Some(id);
+    }
+
     /// An `events` push. A sequence already seen is dropped, so a resumed
     /// or repeated delivery shows nothing twice.
     pub fn apply_events(&mut self, payload: &Value) {
@@ -168,6 +195,41 @@ impl Model {
                 Kind::Notice,
                 held(text("reason"), payload["defer_until"].as_str()),
             ),
+            "conversation.handoff.requested" => self.push(
+                Kind::Notice,
+                if payload["note"] == true {
+                    "Handing off: the coordinator is writing its note for a fresh conversation."
+                } else {
+                    "Handing off: the fresh conversation gets Shoestring's facts only."
+                }
+                .into(),
+            ),
+            "conversation.handed_off" => {
+                // The successor's events follow, numbered from its first.
+                self.last_sequence = 0;
+                self.conversation_id = Some(clean_line(text("successor_id")));
+                self.push(
+                    Kind::Notice,
+                    "Handed off: this session continues in a fresh conversation, with the same grant and agents."
+                        .into(),
+                )
+            }
+            "conversation.handoff.received" => {
+                let note = match payload["note"].as_str() {
+                    Some(note) => format!("The previous coordinator's note:\n{}", clean(note)),
+                    None => format!(
+                        "The previous coordinator wrote no note ({}).",
+                        clean_line(text("note_status"))
+                    ),
+                };
+                self.push(
+                    Kind::Handoff,
+                    format!(
+                        "Carried over from the previous conversation (the coordinator reads this with your next message):\n{}\n\n{note}",
+                        clean(text("facts"))
+                    ),
+                )
+            }
             "conversation.inbox.recorded" => self.push(
                 Kind::Inbox,
                 clean_line(&format!(
@@ -195,6 +257,10 @@ impl Model {
         self.pending = engine["pending_messages"].as_u64().unwrap_or(0)
             + engine["pending_inbox"].as_u64().unwrap_or(0);
         self.hold = engine["hold"].as_str().map(clean_line);
+        self.context = engine["context"]["used"]
+            .as_u64()
+            .zip(engine["context"]["limit"].as_u64())
+            .filter(|(_, limit)| *limit > 0);
 
         self.turns = state["grant"]["turns"]["used"]
             .as_u64()
@@ -311,8 +377,12 @@ impl Model {
             Some((used, left)) => format!("{used} turns used, {left} left"),
             None => "no grant".into(),
         };
+        let context = match self.context_percent() {
+            Some(percent) => format!("context {percent}% used"),
+            None => "context unknown".into(),
+        };
         let line = format!(
-            "status: coordinator {}, {}; {} waiting; {}; {} dispatches",
+            "status: coordinator {}, {}; {} waiting; {}; {context}; {} dispatches",
             self.coordinator.as_deref().unwrap_or("?"),
             self.engine,
             self.pending,
@@ -321,6 +391,13 @@ impl Model {
         );
         self.push(Kind::Notice, line);
         self.dirty = true;
+    }
+}
+
+impl Model {
+    /// How much of the conversation's text limit is used, rounded down.
+    pub fn context_percent(&self) -> Option<u64> {
+        self.context.map(|(used, limit)| used * 100 / limit)
     }
 }
 
@@ -354,7 +431,10 @@ fn held(reason: &str, until: Option<&str>) -> String {
         "turns_exhausted" => {
             "the grant's turns are used up (shoestring grants extend --turns N)".to_string()
         }
-        "context_limit_reached" => "this conversation has reached its text limit; start a new session and carry over the needed requirements".to_string(),
+        "context_limit_reached" => {
+            "this conversation has reached its text limit; /handoff continues it in a fresh one"
+                .to_string()
+        }
         "input_too_large" => "the pending input exceeds the turn limit".to_string(),
         other => clean_line(other),
     };
@@ -464,6 +544,66 @@ mod tests {
         assert_eq!(model.dispatches[0].waiting_until, "tomorrow");
         assert_eq!(model.dispatches[0].next, "wait");
         assert_eq!(model.capacity, vec!["claude 5h 41%".to_string()]);
+    }
+
+    #[test]
+    fn a_handoff_shows_what_carries_over_and_counts_the_successor_from_its_first_event() {
+        let mut model = Model::new("s1");
+        model.joined("old");
+        model.apply_events(&json!({"events": [
+            event(1, "conversation.opened", json!({"provider": "claude", "model": "opus"})),
+            event(7, "conversation.handoff.requested", json!({"note": true})),
+            event(8, "conversation.handed_off", json!({"successor_id": "new"})),
+        ]}));
+        assert_eq!(model.last_sequence, 0);
+        assert_eq!(model.conversation_id.as_deref(), Some("new"));
+        model.apply_events(&json!({"events": [
+            event(1, "conversation.opened", json!({"provider": "claude", "model": "opus"})),
+            event(2, "conversation.handoff.received", json!({
+                "facts": "Facts from Shoestring's records\u{1b}[2J: 3 of 4 dispatch attempts left",
+                "note": "Keep ids at 8 digits.", "note_status": "written"})),
+        ]}));
+        assert_eq!(model.last_sequence, 2);
+        let carried = model.entries.last().unwrap();
+        assert_eq!(carried.kind, Kind::Handoff);
+        assert!(carried.text.contains("3 of 4 dispatch attempts left"));
+        assert!(carried.text.contains("note:\nKeep ids at 8 digits."));
+        assert!(!carried.text.contains('\u{1b}'));
+
+        model.apply_events(&json!({"events": [event(3, "conversation.handoff.received",
+            json!({"facts": "f", "note_status": "skipped:turns_exhausted"}))]}));
+        assert!(
+            model
+                .entries
+                .last()
+                .unwrap()
+                .text
+                .contains("wrote no note (skipped:turns_exhausted)")
+        );
+    }
+
+    #[test]
+    fn rejoining_after_a_handoff_elsewhere_starts_the_new_conversation_from_its_first_event() {
+        let mut model = Model::new("s1");
+        model.joined("old");
+        model.last_sequence = 40;
+        model.joined("old");
+        assert_eq!(model.last_sequence, 40);
+        model.joined("new");
+        assert_eq!(model.last_sequence, 0);
+        assert!(model.entries.last().unwrap().text.contains("handoff"));
+    }
+
+    #[test]
+    fn context_use_comes_from_the_engine_state() {
+        let mut model = Model::new("s1");
+        model.apply_state(
+            &json!({"engine": {"state": "idle", "context": {"used": 950, "limit": 1000}}}),
+        );
+        assert_eq!(model.context_percent(), Some(95));
+        model
+            .apply_state(&json!({"engine": {"state": "idle", "context": {"used": 1, "limit": 0}}}));
+        assert_eq!(model.context_percent(), None);
     }
 
     #[test]

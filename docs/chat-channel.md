@@ -27,8 +27,9 @@ nothing.
   persistence and display. Busy state and dispatch progress continue to update.
 - Retained visible human and coordinator text is bounded at 4 MiB. It is
   counted from events again after restart. `context_limit_reached` refuses
-  new text or fails an overflowing reply explicitly; start a new session and
-  carry over the needed requirements. No history is deleted or compacted.
+  new text or fails an overflowing reply explicitly; `/handoff` continues the
+  session in a fresh conversation (see Handoff). No history is deleted or
+  compacted.
   This is a byte bound on visible text, not a provider token estimate: the
   provider CLI manages its own context, including tool results and compaction.
 
@@ -54,7 +55,11 @@ Each conversation has one token, in a file only the person can read:
 ## Channel: `conversation:SESSION`
 
 Joining needs the socket's own session. Join parameters: `after`, the last
-event sequence the client has (0 for none).
+event sequence the client has (0 for none), and `conversation_id`, the
+conversation those sequences belong to (optional). The join reply names the
+session's current conversation (`conversation_id`); when the client named
+another, the service ignores `after` and sends the current one from its first
+event.
 
 On join the service starts the conversation's engine if it is not running,
 subscribes to the conversation's events, and only then reads the stored
@@ -69,7 +74,7 @@ Pushed to the client:
 | Event | Payload |
 | --- | --- |
 | `events` | Up to 100 conversation events in sequence order, each with `id`, `sequence`, `type`, `actor`, `occurred_at` and `payload` (already redacted; never reasoning, tool inputs or provider frames). The backlog comes in such batches; a live event comes alone. |
-| `state` | A snapshot, pushed when it changes and at most once a second: the engine (`idle` or `in_turn`, pending counts, hold), the grant (limits, room, turns) and each dispatch of the session as `shoestring runs list` prints it. |
+| `state` | A snapshot, pushed when it changes and at most once a second: the engine (`idle` or `in_turn`, pending counts, hold, `context` bytes used and limit, `handoff` status), the grant (limits, room, turns) and each dispatch of the session as `shoestring runs list` prints it. |
 | `detached` | `reason: "slow_consumer"`, then the channel closes. The client reconnects with `after`. |
 
 Sent by the client, each answered with `ok` or `error` and a `reason`:
@@ -79,6 +84,41 @@ Sent by the client, each answered with `ok` or `error` and a `reason`:
 | `say` | `message_id` (a UUID the client picks), `text` | Records the message; it is sent to the coordinator when it is idle. A resent `message_id` records nothing twice. |
 | `cancel_turn` | — | Interrupts the coordinator's running turn. |
 | `cancel_dispatch` | `dispatch_id`, `reason` | Cancels one dispatch of this session, recorded as the person's request. The client confirms with the person first. |
+| `handoff` | `note` (boolean, default true) | Continues the session in a fresh conversation (see Handoff). Refused with `turn_running` during a turn and `handoff_in_progress` while one is under way, except that `note: false` skips a note turn that is held. |
+
+## Handoff
+
+`/handoff` (or `/handoff facts`, without a note) continues the session in a
+fresh coordinator conversation: same session, grant, dispatches and
+instructions; the coordinator's context starts again. Nothing starts one
+automatically; the screen shows how much of the text bound is used from
+half full and suggests `/handoff` from 90%.
+
+1. `conversation.handoff.requested` names the successor. With a note, one
+   charged turn delivers only Shoestring's handoff instruction, after any
+   handoff this conversation received and never delivered. It may use 64 KiB
+   past the text bound, so a conversation at its limit can still hand off.
+   No other turn starts in this conversation afterwards; messages sent
+   meanwhile are carried over.
+2. `conversation.handoff.prepared` records what carries over: the facts
+   (from Shoestring's records only: the grant's remaining room and every
+   dispatch with its state, commit, take commands, review rounds and next
+   step; at most 24 KiB, older dispatches counted when they do not fit), the
+   note (at most 16 KiB; a longer one, an empty one, or a turn that did not
+   complete is not carried and the reason is recorded), the person's
+   undelivered messages, and the inbox entries already delivered.
+3. In one transaction the old conversation is marked handed off and gets
+   `conversation.handed_off`; the successor is created in the same session
+   and gets `conversation.opened` and `conversation.handoff.received`.
+   The old engine starts the successor's and stops; the old conversation
+   never runs again. A restart at any step continues it without repeating a
+   turn or creating a second successor.
+
+The successor delivers the received handoff with the person's next message
+(or at once, when messages were carried over); the handoff starts no turn
+by itself. Inbox entries the old coordinator was given are not announced
+again; any other is. A joined client gets the old conversation's
+`conversation.handed_off`, then the successor's events from its first.
 
 ## Backpressure
 
