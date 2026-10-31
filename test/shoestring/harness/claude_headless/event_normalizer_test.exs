@@ -246,16 +246,21 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizerTest do
     test "build_argv pins the evidence-backed shape" do
       alias Shoestring.Harness.ClaudeHeadless
 
+      # No permission bypass unless a caller asks for one (iteration 16):
+      # a run outside the sandbox gets Claude's own permission checks.
       assert ClaudeHeadless.build_argv("Do it.") == [
                "claude",
                "--print",
                "--verbose",
                "--output-format",
                "stream-json",
-               "--dangerously-skip-permissions",
                "--tools=Bash",
                "Do it."
              ]
+
+      assert "--dangerously-skip-permissions" in ClaudeHeadless.build_argv("Do it.", %{
+               permission_bypass: true
+             })
     end
   end
 

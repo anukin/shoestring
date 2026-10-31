@@ -132,6 +132,29 @@ defmodule Shoestring.Harness.ClaudeHeadless.SandboxTest do
     refute "--dangerously-skip-permissions" in args
   end
 
+  # Before iteration 16 a launch outside the sandbox (a manual run in shared
+  # Git storage) skipped every permission check by default.
+  test "a launch outside the sandbox never skips permission checks unless asked to" do
+    args_of = fn opts ->
+      session =
+        start_supervised!(
+          {Session,
+           [
+             run_request: request("workspace/fixture"),
+             owner: self(),
+             transport: Shoestring.Test.ArgvCaptureTransport,
+             model: "opus"
+           ] ++ opts},
+          id: make_ref()
+        )
+
+      :sys.get_state(:sys.get_state(session).transport_pid) |> Keyword.fetch!(:args)
+    end
+
+    refute "--dangerously-skip-permissions" in args_of.([])
+    assert "--dangerously-skip-permissions" in args_of.(permission_bypass: true)
+  end
+
   # Claude Code keeps the last `--effort` it is given (2.1.310, its requests
   # captured locally), so a launch carries at most one: the binding's, or the
   # sandbox's medium when the binding chose none.

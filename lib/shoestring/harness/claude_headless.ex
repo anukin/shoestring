@@ -206,7 +206,7 @@ defmodule Shoestring.Harness.ClaudeHeadless do
     argv = ["claude", "--print", "--verbose", "--output-format", "stream-json"]
 
     argv =
-      if Map.get(opts, :permission_bypass, true) do
+      if Map.get(opts, :permission_bypass, false) do
         argv ++ ["--dangerously-skip-permissions"]
       else
         argv
@@ -260,7 +260,7 @@ defmodule Shoestring.Harness.ClaudeHeadless do
         |> Keyword.put(:run_id, request.dispatch_id)
         |> Keyword.put(:workdir, valid_workdir)
         |> Keyword.put_new(:tools, "Bash")
-        |> Keyword.put_new(:permission_bypass, true)
+        |> Keyword.put_new(:permission_bypass, false)
         |> apply_sandbox(sandbox)
 
       case Session.start_link(session_opts) do

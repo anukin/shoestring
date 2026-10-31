@@ -718,7 +718,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     argv = ["claude", "--print", "--verbose", "--output-format", "stream-json"]
 
     argv =
-      if Keyword.get(state.opts, :permission_bypass, true) and
+      if Keyword.get(state.opts, :permission_bypass, false) and
            not Keyword.has_key?(state.opts, :sandbox_options) do
         argv ++ ["--dangerously-skip-permissions"]
       else

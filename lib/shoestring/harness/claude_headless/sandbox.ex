@@ -19,9 +19,12 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
   ran its tests otherwise left untracked `__pycache__/` directories, and the
   checks refuse a dirty worktree (iteration 8 live escalation run).
 
-  UNVERIFIED until a live run: that `allowRead` for the run's paths takes
-  precedence over `denyRead` for the home directory when the state directory
-  lives under it (the live evaluations used a temporary directory).
+  `allowRead` for the run's paths takes precedence over `denyRead` for the
+  home directory when the state directory lives under it, as an installed
+  service's does (VERIFIED offline with Claude Code 2.1.316 against a scripted
+  model, 2026-10-31: the worktree and its Git storage were readable, another
+  file in the home directory was not, and writes outside the worktree, to
+  `/tmp` and to the network were refused).
   """
 
   alias Shoestring.Harness.CodexAppServer.GitSandbox

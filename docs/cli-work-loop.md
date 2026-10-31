@@ -174,7 +174,10 @@ shoestring review retry GOAL TASK --reason "why"    # one more call
   Git storage, and manual Claude runs the same sandbox as plan runs. Their
   commits live in that copy: fetch them with the `git fetch` the goal page
   shows. Fake manual runs, and manual runs started before this change, still
-  share the source repository's Git storage and are not sandboxed.
+  share the source repository's Git storage and are not sandboxed; since
+  iteration 16 a Claude run outside the sandbox no longer skips Claude's
+  permission checks either, so in headless mode anything needing a
+  permission is denied.
 - A task that cannot be admitted because there is no capacity reading for
   its provider yet says so once in `follow` ("is waiting: no capacity
   reading for ...") and starts when a reading arrives.
