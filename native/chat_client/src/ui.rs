@@ -65,12 +65,7 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
             area.height.saturating_sub(2),
         );
         let width = rect.width.saturating_sub(2).max(1) as usize;
-        let terminal = detail
-            .terminal
-            .as_ref()
-            .map(|url| format!("Interactive terminal: {url}"))
-            .unwrap_or_else(|| "Headless Elf: cannot be steered".into());
-        let mut lines = vec![terminal];
+        let mut lines = vec![detail_status(model, detail)];
         lines.extend(detail.lines.clone());
         lines.extend(detail.steps.clone());
         let rows: Vec<Line> = lines
@@ -118,6 +113,31 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
         );
     }
     view
+}
+
+/// The detail's first line: how the dispatch can be reached, from its state
+/// and purpose, so a dispatch that has not started never reads as running.
+fn detail_status(model: &Model, detail: &crate::model::Detail) -> String {
+    if let Some(url) = &detail.terminal {
+        return format!("Interactive terminal: {url}");
+    }
+    let dispatch = model.dispatches.iter().find(|d| d.id == detail.id);
+    let state = dispatch.map(|d| d.state.as_str()).unwrap_or("");
+    let purpose = dispatch.map(|d| d.purpose.as_str()).unwrap_or("");
+    match state {
+        "held" => {
+            "Not started: held until you confirm it (next says how). Esc closes; c cancels.".into()
+        }
+        "queued" | "starting" | "waiting" => {
+            format!(
+                "Not started yet ({state}); next says what it waits for. Esc closes; c cancels."
+            )
+        }
+        _ if purpose == "explore" || purpose == "review" => format!(
+            "One read-only {purpose} call: it cannot be steered. To change it, cancel (c) and ask for a new one."
+        ),
+        _ => "Headless Elf: cannot be steered; c cancels it.".into(),
+    }
 }
 
 fn header_line(model: &Model) -> Line<'static> {
@@ -437,7 +457,7 @@ mod tests {
             ..Default::default()
         });
         let text = screen(&model, 70, 20);
-        assert!(text.contains("Headless Elf: cannot be steered"));
+        assert!(text.contains("Not started: held until you confirm it"));
         assert!(text.contains("checks: passed"));
         model.confirm = Some(model.dispatches[0].clone());
         let text = screen(&model, 70, 20);
@@ -558,6 +578,44 @@ mod tests {
         assert!(at(&mut model, 50).contains("context 50%"));
         assert!(!at(&mut model, 89).contains("/handoff"));
         assert!(at(&mut model, 91).contains("context 91%: /handoff"));
+    }
+
+    #[test]
+    fn the_detail_says_whether_a_dispatch_has_started_and_how_it_can_be_reached() {
+        let mut model = Model::new("s1");
+        let detail_of = |model: &mut Model, state: &str, purpose: &str, terminal: Option<&str>| {
+            model.apply_state(&json!({"dispatches": [
+                {"dispatch_id": "d1", "purpose": purpose, "state": state, "title": "t"}]}));
+            model.detail = Some(crate::model::Detail {
+                id: "d1".into(),
+                terminal: terminal.map(String::from),
+                ..Default::default()
+            });
+            screen(model, 140, 20)
+        };
+        let held = detail_of(&mut model, "held", "explore", None);
+        assert!(held.contains("Not started: held until you confirm it"));
+        assert!(!held.contains("cannot be steered"));
+        assert!(
+            detail_of(&mut model, "queued", "implement", None).contains("Not started yet (queued)")
+        );
+        assert!(
+            detail_of(&mut model, "running", "explore", None)
+                .contains("One read-only explore call: it cannot be steered")
+        );
+        assert!(
+            detail_of(&mut model, "running", "implement", None)
+                .contains("Headless Elf: cannot be steered; c cancels it.")
+        );
+        assert!(
+            detail_of(
+                &mut model,
+                "running",
+                "implement",
+                Some("/runs/r1/terminal")
+            )
+            .contains("Interactive terminal: /runs/r1/terminal")
+        );
     }
 
     #[test]
