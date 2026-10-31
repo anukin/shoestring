@@ -67,8 +67,10 @@ defmodule Shoestring.Application do
     opts = [strategy: :one_for_one, name: Shoestring.Supervisor]
 
     with {:ok, pid} <- Supervisor.start_link(children, opts) do
-      if Phoenix.Endpoint.server?(:shoestring, ShoestringWeb.Endpoint),
-        do: Shoestring.Banner.print(ShoestringWeb.Endpoint.url())
+      if Phoenix.Endpoint.server?(:shoestring, ShoestringWeb.Endpoint) do
+        Shoestring.Banner.print(ShoestringWeb.Endpoint.url())
+        Shoestring.Browser.open_on_start(ShoestringWeb.Endpoint.url())
+      end
 
       {:ok, pid}
     end

@@ -100,15 +100,25 @@ defmodule Shoestring.CLI.Commands.Runs do
       end
 
     call = Dispatches.Calls.get(dispatch.id)
+    _ = Shoestring.Lessons.Harvest.dispatch(dispatch)
 
     summary
     |> Map.merge(status)
+    |> Map.put("lessons_proposed", lessons_proposed(dispatch))
     |> Map.merge(call_detail(call))
     |> Map.put("result", result)
     |> Map.put(
       "next",
       next(summary["state"], dispatch, call, Map.merge(status, call_detail(call)))
     )
+  end
+
+  # What the dispatch's worker proposed: the coordinator decides those still
+  # proposed (`lessons_decide`).
+  defp lessons_proposed(dispatch) do
+    for lesson <- Shoestring.Lessons.Harvest.proposed_by_worker(dispatch) do
+      %{"code" => lesson.code, "state" => lesson.state, "text" => lesson.text}
+    end
   end
 
   # An EXPLORE or REVIEW dispatch's one call (`Shoestring.Dispatches.Calls`).

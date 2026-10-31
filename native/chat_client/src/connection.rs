@@ -31,6 +31,7 @@ pub enum Outgoing {
     Unwatch,
     CancelDispatch { id: String, reason: String },
     ConfirmDispatch { id: String },
+    RetireLesson { code: String },
     Handoff { note: bool },
 }
 
@@ -286,6 +287,7 @@ where
             json!({"dispatch_id": id, "reason": reason}),
         ),
         Outgoing::ConfirmDispatch { id } => ("confirm_dispatch", json!({"dispatch_id": id})),
+        Outgoing::RetireLesson { code } => ("retire_lesson", json!({ "code": code })),
         Outgoing::Handoff { note } => ("handoff", json!({ "note": note })),
     };
     let reference = refs.next();
@@ -327,6 +329,7 @@ fn reply(
             Outgoing::Say { .. } => "Not sent",
             Outgoing::CancelTurn | Outgoing::CancelDispatch { .. } => "Nothing to cancel",
             Outgoing::ConfirmDispatch { .. } => "Not started",
+            Outgoing::RetireLesson { .. } => "Not retired",
             Outgoing::Watch { .. } | Outgoing::Unwatch => "Dispatch unavailable",
             Outgoing::Handoff { .. } => "No handoff",
         };

@@ -25,6 +25,13 @@ PY
 launcher=$(find "$root/lib" -path '*/shoestring-*/priv/release_launcher.py' -type f)
 case "${1:-}" in
   start)
+    # The web UI opens in the browser when a person starts the service from a
+    # terminal and Settings allow it; `--no-open` never opens it.
+    case "${2:-}" in
+      --no-open) export SHOESTRING_OPEN_BROWSER=0 ;;
+      "") if test -t 1; then export SHOESTRING_OPEN_BROWSER=1; else export SHOESTRING_OPEN_BROWSER=0; fi ;;
+      *) echo "Usage: shoestring start [--no-open]" >&2; exit 2 ;;
+    esac
     exec python3 "$launcher" "$runtime" start
     ;;
   init) exec python3 "$launcher" "$runtime" init < /dev/null ;;

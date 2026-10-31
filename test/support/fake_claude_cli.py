@@ -91,6 +91,16 @@ with open("calc.py", "w") as handle:
     else:
         handle.write(source.replace("raise NotImplementedError", "return a + b"))
 
+# FAKE_CLAUDE_LESSON: propose a lesson the way an IMPLEMENT worker is told to,
+# in its worktree, and stage everything as a careless worker would; the
+# private storage's exclusion keeps it out of the commit.
+LESSON = os.environ.get("FAKE_CLAUDE_LESSON")
+if LESSON:
+    os.makedirs(".shoestring", exist_ok=True)
+    with open(".shoestring/lessons.md", "w") as handle:
+        handle.write("- " + LESSON + "\n")
+    subprocess.run(["git", "add", "-A"], check=True)
+
 subprocess.run(["git", "add", "calc.py"], check=True)
 subprocess.run(
     [

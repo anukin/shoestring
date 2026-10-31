@@ -9,7 +9,8 @@ defmodule Shoestring.Test.ExploreStandIn do
   `{:explore_group, pgid, self()}` and reports once sent `:release_explore`;
   sent `{:cancel_call, _}` instead, it ends the group and answers
   `{:error, :cancelled}`, as `Shoestring.Harness.FrameCollector` does.
-  `{:tokens, n}` reports with `n` output tokens.
+  `{:tokens, n}` reports with `n` output tokens; `{:lessons, list}` adds
+  `lessons` to the report.
   """
   @behaviour Shoestring.Dispatches.Explore.Adapter
 
@@ -63,6 +64,9 @@ defmodule Shoestring.Test.ExploreStandIn do
         _ = Shoestring.Elves.PortRunner.terminate(runner)
         Shoestring.Elves.PortRunner.close(runner)
         answer
+
+      {:lessons, lessons} ->
+        {:ok, %{json: Jason.encode!(Map.put(report(), "lessons", lessons)), output_tokens: 120}}
 
       {:tokens, tokens} ->
         {:ok, %{json: Jason.encode!(report()), output_tokens: tokens}}

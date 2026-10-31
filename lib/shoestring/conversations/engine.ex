@@ -641,11 +641,31 @@ defmodule Shoestring.Conversations.Engine do
   end
 
   # Written by `shoestring chat`; read again at each start, so a resumed
-  # coordinator gets the instructions its session was opened with.
+  # coordinator gets the instructions its session was opened with, and the
+  # repository's lessons as the person has decided them by then.
   defp instructions(conversation) do
     case File.read(Conversations.instructions_path(conversation.session_id)) do
-      {:ok, text} -> text
+      {:ok, text} -> text <> Shoestring.Lessons.instructions(conversation.repository_root)
       {:error, _} -> nil
+    end
+  end
+
+  defp proposed_note(dispatch_id) do
+    waiting =
+      with %{} = dispatch <- Dispatches.get(dispatch_id) do
+        for lesson <- Shoestring.Lessons.Harvest.proposed_by_worker(dispatch),
+            lesson.state == "proposed",
+            do: lesson.code
+      else
+        _ -> []
+      end
+
+    case waiting do
+      [] ->
+        ""
+
+      codes ->
+        " Its worker proposed lessons #{Enum.join(codes, ", ")}: decide each with lessons_decide."
     end
   end
 
@@ -660,7 +680,8 @@ defmodule Shoestring.Conversations.Engine do
     notices =
       Enum.map(inbox, fn entry ->
         "Shoestring inbox: dispatch #{entry.dispatch_id} (#{entry.purpose} \"#{entry.title}\" " <>
-          "on #{entry.worker}) is now #{entry.state}. runs_show gives its detail."
+          "on #{entry.worker}) is now #{entry.state}. runs_show gives its detail." <>
+          proposed_note(entry.dispatch_id)
       end)
 
     Enum.join(said ++ notices, "\n\n")
@@ -908,6 +929,9 @@ defmodule Shoestring.Conversations.Engine do
   end
 
   defp inbox(state, dispatch, settled, settlement_ref) do
+    # What its worker proposed is read as it settles, for the coordinator.
+    _ = Shoestring.Lessons.Harvest.dispatch(dispatch)
+
     payload = %{
       "entry_id" => Ecto.UUID.generate(),
       "dispatch_id" => dispatch.id,

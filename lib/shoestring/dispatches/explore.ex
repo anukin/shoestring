@@ -32,8 +32,46 @@ defmodule Shoestring.Dispatches.Explore do
   def system_prompt, do: @system_prompt
   def max_report_bytes, do: @max_report_bytes
 
-  @doc "The JSON Schema given to the explorer (strict: every property required)."
-  def schema do
+  @max_lessons 3
+  @max_lesson 1024
+
+  @doc """
+  The JSON Schema given to the explorer (strict: every property required).
+  With `lessons: true` (its agent may propose lessons) it also asks for
+  `lessons`, at most #{@max_lessons} rules; otherwise it is unchanged, so a
+  call recorded without them rebuilds to the same digest.
+  """
+  def schema(opts \\ []) do
+    if Keyword.get(opts, :lessons, false), do: with_lessons(base_schema()), else: base_schema()
+  end
+
+  @doc "`schema` with a required `lessons` list, for an agent that may propose them."
+  def with_lessons(schema) do
+    schema
+    |> Map.update!("required", &(&1 ++ ["lessons"]))
+    |> put_in(["properties", "lessons"], %{
+      "type" => "array",
+      "maxItems" => @max_lessons,
+      "items" => %{"type" => "string", "maxLength" => @max_lesson}
+    })
+  end
+
+  @doc """
+  Splits the proposed lessons off a decoded report: `{:ok, lessons, rest}`.
+  Bounded as the schema says; none when the report leaves them out; anything
+  else is `:invalid_report`.
+  """
+  def split_lessons(%{"lessons" => lessons} = report) when is_list(lessons) do
+    if length(lessons) <= @max_lessons and Enum.all?(lessons, &text?(&1, @max_lesson)),
+      do: {:ok, lessons, Map.delete(report, "lessons")},
+      else: :invalid_report
+  end
+
+  # A report that leaves `lessons` out proposes none.
+  def split_lessons(%{} = report) when not is_map_key(report, "lessons"), do: {:ok, [], report}
+  def split_lessons(_report), do: :invalid_report
+
+  defp base_schema do
     %{
       "type" => "object",
       "additionalProperties" => false,
@@ -85,10 +123,12 @@ defmodule Shoestring.Dispatches.Explore do
   "evidence" => [%{"path", "line", "supported"}], "supported"}],
   "open_questions", "supported_findings"}`.
   """
-  @spec validate(String.t(), Path.t()) :: {:ok, map()} | {:error, atom()}
-  def validate(json, workdir) when is_binary(json) do
+  @spec validate(String.t(), Path.t(), boolean()) :: {:ok, map()} | {:error, atom()}
+  def validate(json, workdir, lessons? \\ false) when is_binary(json) do
     with :ok <- size(json),
          {:ok, %{} = report} <- decode(json),
+         {:ok, lessons, report} <-
+           if(lessons?, do: split_lessons(report), else: {:ok, nil, report}),
          :ok <- exact_keys(report, ~w(summary findings open_questions)),
          true <- text?(report["summary"], @limits["summary"]) || :invalid_report,
          questions when is_list(questions) and length(questions) <= @max_questions <-
@@ -99,12 +139,14 @@ defmodule Shoestring.Dispatches.Explore do
          {:ok, tracked} <- tracked(workdir),
          {:ok, findings} <- findings(findings, workdir, tracked) do
       {:ok,
-       Redaction.redact(%{
+       %{
          "summary" => report["summary"],
          "findings" => findings,
          "open_questions" => questions,
          "supported_findings" => Enum.count(findings, & &1["supported"])
-       })}
+       }
+       |> then(&if(lessons, do: Map.put(&1, "lessons", lessons), else: &1))
+       |> Redaction.redact()}
     else
       error when error in [:report_too_large, :invalid_report] -> {:error, error}
       {:error, reason} -> {:error, reason}

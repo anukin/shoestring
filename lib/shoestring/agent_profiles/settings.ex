@@ -8,6 +8,10 @@ defmodule Shoestring.AgentProfiles.Settings do
     field :claude_models, :string, default: "default"
     field :codex_models, :string, default: "default"
     field :opencode_models, :string, default: ""
+    # The space lessons may take in one repository, and whether
+    # `shoestring start` opens the web UI in the default browser.
+    field :lessons_space_mb, :integer, default: 200
+    field :open_browser_on_start, :boolean, default: true
     field :lock_version, :integer, default: 1
     timestamps(type: :utc_datetime_usec)
   end
@@ -30,7 +34,16 @@ defmodule Shoestring.AgentProfiles.Settings do
 
   def changeset(settings, attrs) do
     settings
-    |> cast(attrs, [:default_agent_id, :refresh_seconds])
+    |> cast(attrs, [
+      :default_agent_id,
+      :refresh_seconds,
+      :lessons_space_mb,
+      :open_browser_on_start
+    ])
+    |> validate_number(:lessons_space_mb,
+      greater_than_or_equal_to: 1,
+      less_than_or_equal_to: 100_000
+    )
     |> cast(attrs, [:claude_models, :codex_models, :opencode_models], empty_values: [])
     |> validate_required([:refresh_seconds, :claude_models, :codex_models])
     |> validate_inclusion(:refresh_seconds, [0, 60, 300])

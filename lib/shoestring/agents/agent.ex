@@ -7,6 +7,10 @@ defmodule Shoestring.Agents.Agent do
   `max_minutes` is the most one dispatch of this agent may take; nil is no
   limit of its own (the session's grant still bounds every dispatch). A
   coordinator has none: its limit is the grant's turns.
+
+  `may_propose_lessons` says whether it may propose lessons for the
+  repositories it works in (`Shoestring.Lessons`); by default every job but
+  the explorer may.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -35,6 +39,7 @@ defmodule Shoestring.Agents.Agent do
     field :effort, :string
     field :notes, :string
     field :max_minutes, :integer
+    field :may_propose_lessons, :boolean
     field :lock_version, :integer, default: 1
     timestamps(type: :utc_datetime_usec)
   end
@@ -42,9 +47,27 @@ defmodule Shoestring.Agents.Agent do
   def changeset(agent, attrs, catalog) do
     changeset =
       agent
-      |> cast(attrs, [:name, :slug, :kind, :provider, :model, :effort, :notes, :max_minutes],
+      |> cast(
+        attrs,
+        [
+          :name,
+          :slug,
+          :kind,
+          :provider,
+          :model,
+          :effort,
+          :notes,
+          :max_minutes,
+          :may_propose_lessons
+        ],
         empty_values: [""]
       )
+      |> then(fn changeset ->
+        if is_nil(get_field(changeset, :may_propose_lessons)),
+          do:
+            put_change(changeset, :may_propose_lessons, get_field(changeset, :kind) != "explorer"),
+          else: changeset
+      end)
       |> validate_required([:name, :slug, :kind, :provider, :model])
       |> validate_length(:name, max: 60)
       |> validate_length(:slug, max: 60)

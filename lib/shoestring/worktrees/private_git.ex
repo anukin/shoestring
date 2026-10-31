@@ -20,12 +20,27 @@ defmodule Shoestring.Worktrees.PrivateGit do
              ["git", "-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", "--", source, base],
              destination
            ),
-         :ok <- copy_identity(source, destination) do
+         :ok <- copy_identity(source, destination),
+         :ok <- exclude_shoestring(destination) do
       {:ok, destination}
     else
       {:ok, _} -> {:error, :private_git_already_exists}
       false -> {:error, :unsafe_private_git_parent}
       error -> error
+    end
+  end
+
+  # What a worker leaves for Shoestring in its worktree (the lessons it
+  # proposes) is never committed: excluded in this storage only, which is
+  # Shoestring's own, never in the person's repository.
+  defp exclude_shoestring(destination) do
+    path = Path.join([destination, "info", "exclude"])
+
+    with :ok <- File.mkdir_p(Path.dirname(path)),
+         :ok <- File.write(path, "/.shoestring/\n", [:append]) do
+      :ok
+    else
+      _ -> {:error, :private_git_preparation_failed}
     end
   end
 

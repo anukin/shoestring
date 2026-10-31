@@ -42,6 +42,15 @@ pub struct Dispatch {
     pub terminal: String,
 }
 
+/// A lesson approved in the session's repository (`docs/chat-channel.md`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lesson {
+    pub code: String,
+    pub text: String,
+    pub proposed_by: String,
+    pub approved_by: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Detail {
     pub id: String,
@@ -89,6 +98,17 @@ pub struct Model {
     /// The session's team, as `/team` prints it: its name and one line per agent.
     pub team: Option<(String, Vec<String>)>,
     pub help: bool,
+    /// Lessons approved since this screen opened, shown one at a time; the
+    /// ones approved before it opened are on the Lessons page.
+    pub lessons: std::collections::VecDeque<Lesson>,
+    pub lessons_seen: std::collections::HashSet<String>,
+    pub lessons_loaded: bool,
+    /// A lesson the person is asked to confirm retiring.
+    pub retire: Option<Lesson>,
+    /// The web UI's address, from the service.
+    pub web_url: Option<String>,
+    /// A page to open in the default browser, taken by the input loop.
+    pub open: Option<String>,
     /// The highlighted entry of the `/` menu.
     pub slash_selected: usize,
     /// The conversation's first shown row while scrolled back; None follows
@@ -301,6 +321,8 @@ impl Model {
             self.selected = self.dispatches.first().map(|d| d.id.clone());
         }
         self.team = team(&state["grant"]["team"]);
+        self.web_url = state["web_url"].as_str().map(clean_line);
+        self.apply_lessons(&state["lessons"]);
         self.capacity = state["capacity"]["providers"]
             .as_array()
             .into_iter()
@@ -309,6 +331,35 @@ impl Model {
             .collect();
 
         self.dirty = true;
+    }
+
+    /// New approved lessons queue a popup each; those present when the
+    /// screen first loads are only marked seen.
+    fn apply_lessons(&mut self, lessons: &Value) {
+        for lesson in lessons.as_array().into_iter().flatten() {
+            let text = |key: &str| lesson[key].as_str().unwrap_or_default();
+            let code = clean_line(text("code"));
+            if code.is_empty() || !self.lessons_seen.insert(code.clone()) {
+                continue;
+            }
+            if self.lessons_loaded {
+                self.lessons.push_back(Lesson {
+                    code,
+                    text: clean(text("text")),
+                    proposed_by: clean_line(text("proposed_by")),
+                    approved_by: clean_line(text("approved_by")),
+                });
+            }
+        }
+        self.lessons_loaded = true;
+    }
+
+    /// Asks the browser to open the web UI at `path`, or says why it cannot.
+    pub fn open_web(&mut self, path: &str) {
+        match &self.web_url {
+            Some(url) => self.open = Some(format!("{}{path}", url.trim_end_matches('/'))),
+            None => self.note("The web UI's address is not known yet"),
+        }
     }
 
     pub fn select(&mut self, delta: isize) {

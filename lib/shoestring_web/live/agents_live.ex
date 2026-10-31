@@ -348,6 +348,11 @@ defmodule ShoestringWeb.AgentsLive do
               class="ss-input"
             />
             <.input
+              field={@form[:may_propose_lessons]}
+              type="checkbox"
+              label="May propose lessons for the repositories it works in"
+            />
+            <.input
               field={@form[:notes]}
               type="textarea"
               label="Notes (for you; the agent never sees them)"

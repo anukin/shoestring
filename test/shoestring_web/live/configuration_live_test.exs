@@ -3,13 +3,14 @@ defmodule ShoestringWeb.ConfigurationLiveTest do
   import Shoestring.ConfigurationFixtures
   alias Shoestring.{Agents, AgentProfiles}
 
-  test "product navigation has usage, teams, agents and settings", %{conn: conn} do
+  test "product navigation has usage, teams, agents, lessons and settings", %{conn: conn} do
     {:ok, view, _} = live(conn, "/")
     assert has_element?(view, "#nav-usage[aria-current=page]")
     assert has_element?(view, "#nav-teams[href='/teams']")
     assert has_element?(view, "#nav-agents[href='/agents']")
+    assert has_element?(view, "#nav-lessons[href='/lessons']")
     assert has_element?(view, "#nav-settings[href='/settings']")
-    refute has_element?(view, "#product-nav a:nth-child(5)")
+    refute has_element?(view, "#product-nav a:nth-child(6)")
   end
 
   # The agents a team is made of.
@@ -119,12 +120,17 @@ defmodule ShoestringWeb.ConfigurationLiveTest do
         default_agent_id: agent.id,
         codex_models: "default\nconfigured-model",
         opencode_models: "opencode/configured-free",
-        refresh_seconds: "0"
+        refresh_seconds: "0",
+        lessons_space_mb: "50",
+        open_browser_on_start: "false"
       }
     )
     |> render_submit()
 
     assert AgentProfiles.settings().default_agent_id == agent.id
+    assert AgentProfiles.settings().lessons_space_mb == 50
+    assert AgentProfiles.settings().open_browser_on_start == false
+    assert Shoestring.Lessons.limit_bytes() == 50 * 1024 * 1024
     assert AgentProfiles.catalog()["codex"] == ["default", "configured-model"]
     assert AgentProfiles.catalog()["opencode"] == ["opencode/configured-free"]
     {:ok, _} = AgentProfiles.save_settings(AgentProfiles.settings(), %{"refresh_seconds" => 300})

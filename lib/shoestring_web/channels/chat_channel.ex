@@ -206,8 +206,35 @@ defmodule ShoestringWeb.ChatChannel do
       "engine" => engine_status(conversation),
       "grant" => grant && Grant.show(grant),
       "dispatches" => rows,
-      "capacity" => Capacity.report()
+      "capacity" => Capacity.report(),
+      "lessons" => lessons(conversation, grant),
+      "web_url" => ShoestringWeb.Endpoint.url()
     }
+  end
+
+  # The lessons approved in this session's repository since its grant: the
+  # client shows each one it has not seen yet (iteration 16 B).
+  defp lessons(_conversation, nil), do: []
+
+  defp lessons(conversation, grant) do
+    Shoestring.Lessons.list(repository: conversation.repository_root, state: "approved")
+    |> Enum.filter(&(&1.decided_at && DateTime.compare(&1.decided_at, grant.inserted_at) != :lt))
+    |> Enum.take(20)
+    |> Enum.map(fn lesson ->
+      %{
+        "code" => lesson.code,
+        "text" => lesson.text,
+        "proposed_by" =>
+          "the #{lesson.proposer_role}" <>
+            if(lesson.proposer_agent, do: " (#{lesson.proposer_agent})", else: ""),
+        "approved_by" =>
+          cond do
+            Shoestring.Lessons.self_approved?(lesson) -> "the coordinator, its proposer"
+            String.starts_with?(lesson.decided_by, "grant:") -> "the coordinator"
+            true -> "you"
+          end
+      }
+    end)
   end
 
   defp engine_status(conversation) do
@@ -290,6 +317,29 @@ defmodule ShoestringWeb.ChatChannel do
     end
   end
 
+  # The person retires a lesson of this session's repository from its popup.
+  def handle_in("retire_lesson", %{"code" => lesson}, socket) when is_binary(lesson) do
+    root = socket.assigns.conversation.repository_root
+
+    result =
+      case Shoestring.Lessons.get(lesson) do
+        %{repository_root: ^root} ->
+          Shoestring.Lessons.retire(
+            lesson,
+            WorkLoop.default_human(),
+            "Retired from the chat screen."
+          )
+
+        _ ->
+          {:error, :lesson_not_found}
+      end
+
+    case result do
+      {:ok, _} -> {:reply, :ok, socket}
+      {:error, reason} -> {:reply, {:error, %{"reason" => code(reason)}}, socket}
+    end
+  end
+
   def handle_in("watch_dispatch", %{"dispatch_id" => id}, socket) when is_binary(id) do
     session = socket.assigns.conversation.session_id
 
@@ -360,10 +410,11 @@ defmodule ShoestringWeb.ChatChannel do
   end
 
   # Reasons the client can act on; anything else is logged, not echoed.
-  @codes ~w(message_too_large pending_input_too_large context_limit_reached empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity turn_running handoff_in_progress)a
+  @codes ~w(message_too_large pending_input_too_large context_limit_reached empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity turn_running handoff_in_progress lesson_not_found lesson_changed)a
 
   defp code(reason) when reason in @codes, do: Atom.to_string(reason)
   defp code({:invalid_payload, _type, _version, _changeset}), do: "invalid_message"
+  defp code({:lesson_not_approved, _state}), do: "lesson_not_approved"
 
   defp code(reason) do
     Logger.warning("chat request refused: #{inspect(reason, limit: 8)}")

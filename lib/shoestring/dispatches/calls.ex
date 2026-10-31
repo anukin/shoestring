@@ -76,9 +76,17 @@ defmodule Shoestring.Dispatches.Calls do
       "effort" => Map.get(request, :effort),
       "base" => base,
       "prompt" => Explore.prompt(%{title: title, brief: brief}),
-      "schema" => Explore.schema()
+      "schema" => Explore.schema(lessons: lessons?(request))
     })
+    |> with_lessons_flag(request)
   end
+
+  # A call whose agent may propose lessons is recorded with `"lessons" =>
+  # true` and asks for them; any other call's input is as before.
+  defp lessons?(request), do: Map.get(request, :lessons_allowed, false) == true
+
+  defp with_lessons_flag(input, request),
+    do: if(lessons?(request), do: Map.put(input, "lessons", true), else: input)
 
   @doc """
   The immutable input of a REVIEW call of `target`, a completed IMPLEMENT
@@ -115,7 +123,8 @@ defmodule Shoestring.Dispatches.Calls do
          "commit" => commit,
          "packet_digest" => built.digest,
          "packet_json" => built.json
-       })}
+       })
+       |> with_lessons_flag(request)}
     else
       {:error, reason} -> {:error, reason}
       _ -> {:error, :review_target_unavailable}
@@ -369,7 +378,7 @@ defmodule Shoestring.Dispatches.Calls do
 
       with {:ok, json, tokens} <- explored,
            :ok <- unchanged(workdir, input["base"]),
-           {:ok, report} <- Explore.validate(json, workdir) do
+           {:ok, report} <- Explore.validate(json, workdir, input["lessons"] == true) do
         {:ok, report, tokens}
       else
         {:error, :explorer_wrote} -> {:failed, "explorer_wrote", tokens(explored)}
@@ -386,7 +395,11 @@ defmodule Shoestring.Dispatches.Calls do
            adapter(input, opts).review(
              %{
                "packet_json" => input["packet_json"],
-               "schema" => Findings.schema(),
+               "schema" =>
+                 if(input["lessons"] == true,
+                   do: Explore.with_lessons(Findings.schema()),
+                   else: Findings.schema()
+                 ),
                "model" => input["model"],
                "max_output_tokens" => input["max_output_tokens"],
                "timeout_ms" => input["timeout_ms"]
@@ -395,13 +408,28 @@ defmodule Shoestring.Dispatches.Calls do
            )
          end) do
       {:ok, json, tokens} ->
-        case Findings.validate(json, Jason.decode!(input["packet_json"])) do
-          {:ok, findings} -> {:ok, findings, tokens}
+        with {:ok, json, lessons} <- review_lessons(json, input["lessons"] == true),
+             {:ok, findings} <- Findings.validate(json, Jason.decode!(input["packet_json"])) do
+          {:ok, if(lessons, do: Map.put(findings, "lessons", lessons), else: findings), tokens}
+        else
           {:error, {kind, _field}} -> {:failed, Atom.to_string(kind), tokens}
         end
 
       failed ->
         failed
+    end
+  end
+
+  # The reviewer's proposed lessons are taken off its report before the
+  # findings' own checks, which know nothing of them.
+  defp review_lessons(json, false), do: {:ok, json, nil}
+
+  defp review_lessons(json, true) do
+    with {:ok, %{} = report} <- Jason.decode(json),
+         {:ok, lessons, rest} <- Explore.split_lessons(report) do
+      {:ok, Jason.encode!(rest), Shoestring.Trajectory.Redaction.redact(lessons)}
+    else
+      _ -> {:error, {:invalid_report, :lessons}}
     end
   end
 

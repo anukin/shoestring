@@ -68,7 +68,7 @@ def smoke(release, state):
     # Iteration 14: the coordinator commands and their instructions ship in the
     # release, and what needs a person refuses without a terminal.
     for name in ("setup", "chat", "grant", "grants", "dispatch", "wait", "runs", "advice",
-                 "capacity"):
+                 "capacity", "lessons"):
         assert f"shoestring {name}" in run(name, "--help"), f"Release {name} --help"
     assert len(list(release.glob("lib/shoestring-*/priv/coordinator/instructions.md"))) == 1
     assert len(list(release.glob("lib/shoestring-*/priv/coordinator/conversation.md"))) == 1

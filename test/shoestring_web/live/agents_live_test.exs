@@ -36,6 +36,7 @@ defmodule ShoestringWeb.AgentsLiveTest do
     assert has_element?(view, "#agent-#{worker.slug}-limit", "No limit of its own")
     assert has_element?(view, "#agent-#{worker.slug}-can", "Write its own worktree")
     assert has_element?(view, "#agent-#{worker.slug}-cannot", "Use the network")
+    assert has_element?(view, "#agent-#{worker.slug}-can", "Propose lessons")
     assert has_element?(view, "#agent-#{worker.slug}-teams a[href='/teams/builder/edit']")
     assert has_element?(view, "#agent-#{worker.slug}-total", "0")
 
@@ -101,5 +102,14 @@ defmodule ShoestringWeb.AgentsLiveTest do
     |> render_submit()
 
     assert Agents.get_by_slug("c2").max_minutes == nil
+
+    # An explorer may not propose lessons unless switched on.
+    explorer = Agents.get_by_slug("quick-explorer")
+    assert explorer.may_propose_lessons == false
+    {:ok, show, _} = live(conn, "/agents/quick-explorer")
+    assert has_element?(show, "#agent-quick-explorer-cannot", "Propose lessons")
+    {:ok, view, _} = live(conn, "/agents/quick-explorer/edit")
+    view |> form("#agent-form", agent: %{may_propose_lessons: "true"}) |> render_submit()
+    assert Agents.get_by_slug("quick-explorer").may_propose_lessons == true
   end
 end

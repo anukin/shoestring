@@ -47,6 +47,7 @@ defmodule ShoestringWeb.Layouts do
                   {"Usage", "/usage"},
                   {"Teams", "/teams"},
                   {"Agents", "/agents"},
+                  {"Lessons", "/lessons"},
                   {"Settings", "/settings"}
                 ]
               }

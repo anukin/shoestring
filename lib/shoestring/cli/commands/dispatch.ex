@@ -10,6 +10,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       [--file PATH]... [--stay-out PATH]...
       [--accept TEXT]... [--gate NAME]... [--test PATH]... [--attempts N]
       [--minutes M] [--batch LABEL --batch-size N] [--after DISPATCH]
+      [--lesson CODE]...
       [--session ID] [--request-id ID] [--repo PATH] [--dry-run] [--json]
   shoestring dispatch --purpose explore --worker PROVIDER:MODEL --title TEXT
       --brief FILE [--effort LEVEL] [common options]
@@ -41,6 +42,10 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   an EXPLORE or REVIEW runs until it answers, up to its minutes or else the
   grant's per-dispatch limit. A finished dispatch counts the time it took. `--batch` declares a strategy of
   `--batch-size` dispatches; one more is refused.
+
+  `--lesson CODE` cites an approved lesson of this repository (at most
+  #{Shoestring.Lessons.max_cited()}; `shoestring lessons list`): the worker gets its text after the brief,
+  and the dispatch records it. A lesson reaches a worker only this way.
 
   `--after DISPATCH` (IMPLEMENT only) follows another IMPLEMENT of this
   session: the new one is recorded `chained`, its room in the grant
@@ -78,6 +83,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     of: :string,
     file: :keep,
     stay_out: :keep,
+    lesson: :keep,
     accept: :keep,
     gate: :keep,
     test: :keep,
@@ -192,6 +198,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         repository: Command.expand(opts[:repo], context) || context.cwd,
         files: Keyword.get_values(opts, :file),
         stay_out: Keyword.get_values(opts, :stay_out),
+        lessons: Keyword.get_values(opts, :lesson),
         accept: Keyword.get_values(opts, :accept),
         gates: Keyword.get_values(opts, :gate),
         tests: Keyword.get_values(opts, :test)
@@ -244,7 +251,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         seconds: fields[:minutes] && fields[:minutes] * 60,
         batch_label: fields[:batch],
         batch_size: fields[:batch_size],
-        after_dispatch: fields[:after]
+        after_dispatch: fields[:after],
+        lessons: Map.get(fields, :lessons, [])
       }
 
       {:ok, Map.put(request, :request_id, fields[:request_id] || derived_request_id(request))}
@@ -342,7 +350,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
              request.brief
            ] ++
              if(request.target, do: [request.target], else: []) ++
-             if(request.after_dispatch, do: ["after", request.after_dispatch], else: []),
+             if(request.after_dispatch, do: ["after", request.after_dispatch], else: []) ++
+             if(request.lessons != [], do: ["lessons" | request.lessons], else: []),
            <<0>>
          )
        )
@@ -377,6 +386,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         ),
       "of" => if(dispatch.purpose == "review", do: dispatch.plan["target_dispatch_id"]),
       "after" => dispatch.after_dispatch_id,
+      "lessons" => dispatch.lesson_codes || [],
       "title" => dispatch.title,
       "state" => Dispatches.state(dispatch),
       "goal_id" => dispatch.goal_id,
@@ -421,6 +431,14 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     do:
       "The dispatch to follow is #{state}: it has no commit to start from. " <>
         "Dispatch without --after, or after another. Nothing was queued."
+
+  def message({:lesson_not_approved, code}, _request),
+    do:
+      "#{code} is not an approved lesson of this repository (shoestring lessons list). " <>
+        "Nothing was queued."
+
+  def message({:too_many_lessons, max}, _request),
+    do: "A dispatch cites at most #{max} lessons. Nothing was queued."
 
   def message(:after_implement_only, _request),
     do: "Only an IMPLEMENT can follow another dispatch. Nothing was queued."

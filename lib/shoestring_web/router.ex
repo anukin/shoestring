@@ -28,6 +28,7 @@ defmodule ShoestringWeb.Router do
     live "/agents/new", AgentsLive, :new
     live "/agents/:slug", AgentsLive, :show
     live "/agents/:slug/edit", AgentsLive, :edit
+    live "/lessons", LessonsLive, :index
     live "/settings", AgentSettingsLive, :index
     live "/status", HealthLive, :index
     live "/observatory", CapacityObservatoryLive, :index

@@ -125,6 +125,22 @@ async fn run(config: Config) -> io::Result<()> {
     }
 }
 
+/// Opens `url` in the default browser, detached from the screen.
+fn open_url(url: &str) -> io::Result<()> {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+}
+
 fn restore() {
     let _ = crossterm::execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
     let _ = terminal::disable_raw_mode();
@@ -177,6 +193,12 @@ async fn input(model: &Shared, outbox: &mpsc::UnboundedSender<Outgoing>) -> io::
                 if key_pressed(&mut model, key, outbox) {
                     return Ok(());
                 }
+                if let Some(url) = model.open.take() {
+                    match open_url(&url) {
+                        Ok(()) => model.note(format!("Opened {url}")),
+                        Err(error) => model.note(format!("Could not open {url}: {error}")),
+                    }
+                }
             }
             Event::Paste(text) => model.editor.paste(&text),
             _ => {}
@@ -193,6 +215,27 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
 
     if control && key.code == KeyCode::Char('c') {
         return true;
+    }
+    if let Some(lesson) = model.retire.take() {
+        if key.code == KeyCode::Char('y') {
+            if model.connection == Connection::Live {
+                let _ = outbox.send(Outgoing::RetireLesson { code: lesson.code });
+                model.note("Retire requested");
+            } else {
+                model.note("Disconnected; the retire was not sent");
+            }
+        }
+        return false;
+    }
+    if let Some(lesson) = model.lessons.front().cloned() {
+        match key.code {
+            KeyCode::Char('o') => model.open_web(&format!("/lessons?code={}", lesson.code)),
+            KeyCode::Char('r') => model.retire = Some(lesson),
+            KeyCode::Enter | KeyCode::Esc => {}
+            _ => return false,
+        }
+        model.lessons.pop_front();
+        return false;
     }
     if let Some(dispatch) = model.start.take() {
         if key.code == KeyCode::Char('y') {
@@ -348,6 +391,7 @@ fn edit(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<Outgoin
             Command::Help => model.help = true,
             Command::Status => model.status_entry(),
             Command::Team => model.team_entry(),
+            Command::Web => model.open_web("/"),
             Command::Cancel => {
                 let _ = outbox.send(Outgoing::CancelTurn);
             }
@@ -396,6 +440,69 @@ mod tests {
     fn key(model: &mut Model, code: KeyCode, tx: &mpsc::UnboundedSender<Outgoing>) {
         key_pressed(model, KeyEvent::new(code, KeyModifiers::NONE), tx);
     }
+    #[test]
+    fn a_lesson_approved_while_open_pops_up_once_and_can_be_opened_or_retired() {
+        let mut model = Model::new("s1");
+        model.connection = Connection::Live;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let lesson = |code: &str| {
+            json!({"code": code, "text": format!("rule {code}"),
+            "proposed_by": "the implementer", "approved_by": "the coordinator"})
+        };
+        // Approved before the screen opened: on the Lessons page, no popup.
+        model.apply_state(
+            &json!({"web_url": "http://localhost:4000", "lessons": [lesson("L-OLD")]}),
+        );
+        assert!(model.lessons.is_empty());
+
+        model.apply_state(&json!({"web_url": "http://localhost:4000",
+            "lessons": [lesson("L-NEW"), lesson("L-OLD"), lesson("L-TWO")]}));
+        assert_eq!(model.lessons.len(), 2);
+        assert_eq!(model.lessons[0].code, "L-NEW");
+        // Seen again in the next state: no second popup.
+        model.apply_state(&json!({"lessons": [lesson("L-NEW"), lesson("L-TWO")]}));
+        assert_eq!(model.lessons.len(), 2);
+
+        // Another key leaves it; o opens it in the browser.
+        key(&mut model, KeyCode::Char('x'), &tx);
+        assert_eq!(model.lessons.len(), 2);
+        model.web_url = Some("http://localhost:4000".into());
+        key(&mut model, KeyCode::Char('o'), &tx);
+        assert_eq!(
+            model.open.take().as_deref(),
+            Some("http://localhost:4000/lessons?code=L-NEW")
+        );
+
+        // r asks first; only y sends the retire.
+        key(&mut model, KeyCode::Char('r'), &tx);
+        assert_eq!(model.retire.as_ref().unwrap().code, "L-TWO");
+        assert!(model.lessons.is_empty());
+        key(&mut model, KeyCode::Char('y'), &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Outgoing::RetireLesson {
+                code: "L-TWO".into()
+            }
+        );
+        assert!(model.retire.is_none());
+    }
+
+    #[test]
+    fn slash_web_opens_the_web_ui() {
+        let mut model = Model::new("s1");
+        let (tx, _rx) = mpsc::unbounded_channel();
+        model.apply_state(&json!({"web_url": "http://localhost:4000/"}));
+        for c in "/web".chars() {
+            key(&mut model, KeyCode::Char(c), &tx);
+        }
+        key(&mut model, KeyCode::Enter, &tx);
+        // The / menu completes on the first Enter; the second runs it.
+        if model.open.is_none() {
+            key(&mut model, KeyCode::Enter, &tx);
+        }
+        assert_eq!(model.open.as_deref(), Some("http://localhost:4000/"));
+    }
+
     #[test]
     fn selection_watch_and_confirm_cancel_exactly_the_displayed_dispatch() {
         let mut model = Model::new("s1");

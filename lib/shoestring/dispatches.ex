@@ -31,7 +31,17 @@ defmodule Shoestring.Dispatches do
   """
   import Ecto.Query
 
-  alias Shoestring.{AgentProfiles, Agents, Authority, Grants, Harnesses, ModelCatalog, Repo}
+  alias Shoestring.{
+    AgentProfiles,
+    Agents,
+    Authority,
+    Grants,
+    Harnesses,
+    Lessons,
+    ModelCatalog,
+    Repo
+  }
+
   alias Shoestring.Cobbler.{ExecutionControl, ExecutionProfile, Intake, PlanContract, Plans}
   alias Shoestring.CLI.Result
   alias Shoestring.Dispatches.{Call, Calls, ChainWorker, Dispatch}
@@ -168,13 +178,36 @@ defmodule Shoestring.Dispatches do
         if dispatch.brief_digest == digest(redact(request.brief)) and
              dispatch.model == request.model and
              dispatch.provider == request.provider and dispatch.purpose == request.purpose and
-             dispatch.after_dispatch_id == cast_id(Map.get(request, :after_dispatch)),
+             dispatch.after_dispatch_id == cast_id(Map.get(request, :after_dispatch)) and
+             (dispatch.lesson_codes || []) == lesson_codes(request),
            do: {:ok, dispatch},
            else: {:error, :request_id_conflict}
     end
   end
 
   defp existing(_request), do: {:error, :invalid_request_id}
+
+  @worker_role %{"implement" => "implementer", "explore" => "explorer", "review" => "reviewer"}
+
+  defp proposes_lessons?(request) do
+    case Grants.active(request.session_id) do
+      %Grant{} = grant ->
+        Lessons.may_propose?(grant, @worker_role[request.purpose], Map.get(request, :agent))
+
+      nil ->
+        false
+    end
+  end
+
+  @doc "The job of the agent that does a dispatch of `purpose`."
+  def worker_role(purpose), do: Map.fetch!(@worker_role, purpose)
+
+  defp lesson_codes(request),
+    do:
+      request
+      |> Map.get(:lessons, [])
+      |> Enum.map(&(&1 |> String.trim() |> String.upcase()))
+      |> Enum.uniq()
 
   defp cast_id(nil), do: nil
 
@@ -196,11 +229,22 @@ defmodule Shoestring.Dispatches do
          {:ok, request} <- session_agent(request),
          :ok <- batch(request),
          {:ok, facts} <-
-           Intake.repository(request.repository, uncommitted: uncommitted(request.purpose)) do
+           Intake.repository(request.repository, uncommitted: uncommitted(request.purpose)),
+         {:ok, lessons} <- Lessons.for_brief(facts.root, lesson_codes(request)) do
+      # The worker gets the cited lessons with the coordinator's brief, and
+      # how to propose one when its agent may; the dispatch keeps the
+      # coordinator's own brief's digest for retries.
+      proposes? = proposes_lessons?(request)
+      request = Map.put(request, :lessons_allowed, proposes?)
+
       prepared = %{
         request: request,
         title: title,
-        brief: brief,
+        brief:
+          brief <>
+            Lessons.brief_block(lessons) <> Lessons.proposal_hint(proposes?, request.purpose),
+        own_brief: brief,
+        lesson_codes: Enum.map(lessons, & &1.code),
         root: facts.root,
         head: facts.head,
         left_out: facts.uncommitted
@@ -595,7 +639,8 @@ defmodule Shoestring.Dispatches do
               reviewer_model: Map.get(request, :reviewer_model),
               title: prepared.title,
               brief: prepared.brief,
-              brief_digest: digest(prepared.brief),
+              brief_digest: digest(prepared.own_brief),
+              lesson_codes: prepared.lesson_codes,
               repository_root: prepared.root,
               base_revision: prepared.head,
               max_attempts: prepared.attempts,
@@ -611,6 +656,8 @@ defmodule Shoestring.Dispatches do
               inserted_at: now,
               updated_at: now
             })
+
+          :ok = Lessons.cite(prepared.lesson_codes, now)
 
           # A dispatch that follows another has its job recorded with it, so
           # it is followed after a restart as well.
@@ -750,7 +797,8 @@ defmodule Shoestring.Dispatches do
       effort: dispatch.effort,
       brief: dispatch.brief,
       seconds: dispatch.max_duration_seconds,
-      version: dispatch.plan["version"]
+      version: dispatch.plan["version"],
+      lessons_allowed: dispatch.plan["lessons"] == true
     }
 
     input =

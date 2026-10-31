@@ -63,7 +63,9 @@ The Homebrew command is `shoestring doctor` / `shoestring setup` /
 each installed agent CLI for its models (no prompt is sent) and saves a
 default agent after asking; see [the CLI work loop](cli-work-loop.md). It
 needs initialized state (`init`). `start` stays
-in the foreground. Stop it explicitly with Ctrl-C or SIGTERM (Ctrl-C is passed
+in the foreground. Started from a terminal, it opens the web UI in the default
+browser once it is serving, unless `--no-open` is given or Settings turn it off;
+started without a terminal (a service manager) it never does. Stop it explicitly with Ctrl-C or SIGTERM (Ctrl-C is passed
 on as SIGTERM, so both shut it down the same way). A stop that arrives while
 state is still being initialized is kept: initialization ends and the service
 is not started. Stopping the service stops its running workers too: when it

@@ -85,6 +85,7 @@ Sent by the client, each answered with `ok` or `error` and a `reason`:
 | `cancel_turn` | — | Interrupts the coordinator's running turn. |
 | `cancel_dispatch` | `dispatch_id`, `reason` | Cancels one dispatch of this session, recorded as the person's request. The client confirms with the person first. |
 | `confirm_dispatch` | `dispatch_id` | Starts one held dispatch of this session: the person confirms its usage hold themselves, spending none of the grant's pre-approvals (`not_held` when it is not held). The client asks first. |
+| `retire_lesson` | `code` | The person retires an approved lesson of this session's repository (`lesson_not_found`, `lesson_not_approved`). The client asks first. |
 | `handoff` | `note` (boolean, default true) | Continues the session in a fresh conversation (see Handoff). Refused with `turn_running` during a turn and `handoff_in_progress` while one is under way, except that `note: false` skips a note turn that is held. |
 
 ## Handoff
@@ -175,9 +176,14 @@ selected dispatch using service state, only while it is not finished (a
 completed, failed or cancelled one gets "already STATE; nothing to cancel");
 only `y` sends `cancel_dispatch`. `s` on a held dispatch asks the same way
 (yellow) and only `y` sends `confirm_dispatch`. `/team` prints the session's
-agents with their models and limits, from the grant's `team`. Every popup that needs the person is drawn
+agents with their models and limits, from the grant's `team`. `state` also
+carries `lessons`, the lessons approved in the session's repository since its
+grant (code, text, `proposed_by`, `approved_by`), and `web_url`. Those already
+there when the screen opens are only marked seen; each later one is a green
+popup: Enter dismisses it, `o` opens it on the web Lessons page, `r` asks
+(red) and only `y` sends `retire_lesson`. `/web` opens the web UI. Every popup that needs the person is drawn
 the same way: a centred box with a thick border and title in its tone's
-colour (yellow for a question, red for an action that cannot be undone),
+colour (green for news, yellow for a question, red for an action that cannot be undone),
 what it is about, and the answering keys highlighted on their own line. It
 names that exact dispatch and records the person's request. Cancels are never
 resent after a reconnect; only unanswered messages are. An open detail is

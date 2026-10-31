@@ -159,7 +159,11 @@ defmodule Shoestring.Conversations.NativeChatAcceptanceTest do
       assert :ok = PlanExecutionWorker.perform(job!(implement))
       assert Dispatches.state(implement) == "completed"
       built_in_review = Repo.get_by!(Shoestring.Cobbler.Review.Record, goal_id: implement.goal_id)
-      assert Jason.decode!(built_in_review.packet_json)["briefs"]["implementation"] == @brief
+
+      assert Jason.decode!(built_in_review.packet_json)["briefs"]["implementation"] ==
+               Dispatches.get(implement.id).brief
+
+      assert String.starts_with?(Dispatches.get(implement.id).brief, @brief)
       :ok = Engine.poll(engine)
       ended!()
       assert turns() == 3

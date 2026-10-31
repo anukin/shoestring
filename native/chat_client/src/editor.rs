@@ -17,6 +17,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "the coordinator, grant and dispatches, from Shoestring",
     ),
     ("/team", "the session's agents, their models and limits"),
+    ("/web", "open Shoestring's web UI in the browser"),
     ("/cancel", "interrupt the coordinator's running turn"),
     (
         "/handoff",
@@ -34,6 +35,7 @@ pub enum Command {
     Help,
     Status,
     Team,
+    Web,
     Cancel,
     /// Continue the session in a fresh conversation; `note` asks the
     /// coordinator for its note first (`/handoff facts` does not).
@@ -212,6 +214,7 @@ impl Editor {
             "/help" => Command::Help,
             "/status" => Command::Status,
             "/team" => Command::Team,
+            "/web" => Command::Web,
             "/cancel" => Command::Cancel,
             "/handoff" => Command::Handoff { note: true },
             "/handoff facts" => Command::Handoff { note: false },
@@ -299,9 +302,10 @@ mod tests {
     fn slash_matches_list_the_commands_a_word_could_start() {
         assert_eq!(typed("/").slash_matches().len(), COMMANDS.len());
         assert_eq!(typed("/s").slash_matches(), vec![COMMANDS[1]]);
-        assert_eq!(typed("/exit").slash_matches(), vec![COMMANDS[5]]);
+        assert_eq!(typed("/exit").slash_matches(), vec![COMMANDS[6]]);
         assert_eq!(typed("/t").slash_matches(), vec![COMMANDS[2]]);
-        assert_eq!(typed("/h").slash_matches(), vec![COMMANDS[0], COMMANDS[4]]);
+        assert_eq!(typed("/w").slash_matches(), vec![COMMANDS[3]]);
+        assert_eq!(typed("/h").slash_matches(), vec![COMMANDS[0], COMMANDS[5]]);
         assert!(typed("/x").slash_matches().is_empty());
         assert!(typed("/help me").slash_matches().is_empty());
         assert!(typed("hi /").slash_matches().is_empty());

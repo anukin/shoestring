@@ -147,13 +147,50 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
             },
         );
     }
+    // Lessons answer keys first, so they are drawn on top.
+    if let Some(lesson) = model.lessons.front() {
+        draw_attention(
+            frame,
+            &Attention {
+                title: "New lesson approved",
+                tone: Tone::Information,
+                body: vec![
+                    format!("{} · {}", lesson.code, lesson.text),
+                    format!(
+                        "Proposed by {}; approved by {}. Any dispatch in this repository may now cite it.",
+                        lesson.proposed_by, lesson.approved_by
+                    ),
+                ],
+                keys: &[
+                    ("Enter", "got it"),
+                    ("o", "open in the browser"),
+                    ("r", "retire it"),
+                ],
+            },
+        );
+    }
+    if let Some(lesson) = &model.retire {
+        draw_attention(
+            frame,
+            &Attention {
+                title: "Retire this lesson?",
+                tone: Tone::Destructive,
+                body: vec![
+                    format!("{} · {}", lesson.code, lesson.text),
+                    "No dispatch can cite it once retired; it stays on the Lessons page.".into(),
+                ],
+                keys: &[("y", "retire it"), ("any other key", "keep it")],
+            },
+        );
+    }
     view
 }
 
-/// How an attention popup reads: a question to answer, or an action that
-/// cannot be undone.
+/// How an attention popup reads: news to acknowledge, a question to
+/// answer, or an action that cannot be undone.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Tone {
+    Information,
     Question,
     Destructive,
 }
@@ -170,6 +207,7 @@ pub struct Attention<'a> {
 impl Tone {
     fn color(self) -> Color {
         match self {
+            Tone::Information => Color::Green,
             Tone::Question => Color::Yellow,
             Tone::Destructive => Color::Red,
         }
@@ -829,6 +867,40 @@ mod tests {
         assert!(text.contains("d1 Explorer on codex:m · held"));
         assert!(text.contains(" y  start it"));
         assert!(text.contains("none of the grant's pre-approvals is spent"));
+    }
+
+    #[test]
+    fn a_new_lesson_is_a_green_attention_popup_on_top() {
+        let mut model = Model::new("s1");
+        model.apply_state(&json!({"lessons": []}));
+        model.apply_state(&json!({"dispatches": [{"dispatch_id": "d1", "purpose": "explore", "worker": "codex:m", "title": "Find it", "state": "held"}],
+            "lessons": [{"code": "L-ABC234", "text": "Run unittest with -B.",
+                "proposed_by": "the implementer (impl-1)", "approved_by": "the coordinator"}]}));
+        // A held dispatch's question is open too: the lesson is drawn over it,
+        // as it answers keys first.
+        model.start = Some(model.dispatches[0].clone());
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &model);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let (x, y) = (0..24u16)
+            .find_map(|y| {
+                let row: String = (0..100u16)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect();
+                row.find("New lesson approved")
+                    .map(|byte| (row[..byte].chars().count() as u16, y))
+            })
+            .expect("drawn");
+        assert_eq!(buffer[(x, y)].fg, Color::Green);
+        assert_eq!(buffer[(x - 2, y)].symbol(), "┏");
+        let text = screen(&model, 100, 24);
+        assert!(text.contains("L-ABC234 · Run unittest with -B."));
+        assert!(text.contains("approved by the coordinator"));
+        assert!(text.contains(" o  open in the browser"));
     }
 
     #[test]

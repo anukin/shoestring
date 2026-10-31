@@ -30,6 +30,9 @@ defmodule Shoestring.Dispatches.Dispatch do
     # The IMPLEMENT dispatch this one follows: it starts from that one's
     # verified commit once it completes (`Shoestring.Dispatches.follow/2`).
     field :after_dispatch_id, :binary_id
+    # Codes of the approved lessons the brief cites (`Shoestring.Lessons`),
+    # given to the worker with it.
+    field :lesson_codes, {:array, :string}, default: []
     field :batch_label, :string
     field :batch_size, :integer
     field :goal_id, :binary_id

@@ -247,6 +247,64 @@ A session id is not a secret: any program on your machine that knows it can
 dispatch under its grant. The grant's repository, models and limits are what
 bound that.
 
+### Lessons (iteration 16 B)
+
+A lesson is one rule for work in one repository, shared by every agent and
+vendor that works there: "run unittest with `-B`; the bare runner finds no
+tests", "never edit `priv/gen`, regenerate it". Lessons belong to the
+repository (its root path): none is ever shown or cited in another.
+
+**Who proposes.** Any agent whose "may propose lessons" is on (the Agents
+page; by default every job but the explorer):
+
+- the coordinator, with `lessons_propose`, naming a dispatch of its session
+  or quoting your words in its chat exactly;
+- an IMPLEMENT worker, by writing `.shoestring/lessons.md` in its worktree
+  (one `- ` line each, at most three). Shoestring's private storage excludes
+  that path, so it is never committed or taken; Shoestring reads it when the
+  dispatch settles;
+- an EXPLORE or REVIEW worker, in its report's `lessons`.
+
+A worker is told how only when its agent may propose; a call whose agent may
+not is recorded exactly as before.
+
+**Checks**, on every proposal: a source Shoestring can find, at most 1024
+bytes, secret-looking values removed, not a repeat of a lesson already
+proposed or approved, and room in the repository's space limit (Settings,
+default 200 MB). One with much the same words as another is marked similar.
+
+**Who approves.** The coordinator. Its own proposal is approved when it
+passes the checks, unless it is much like an approved lesson; that one, and
+every worker's, waits for `lessons_decide`: approve (optionally reworded),
+reject, or replace the older lesson. `runs_show` lists what a dispatch's worker
+proposed, and the inbox message says so.
+
+**You** see every lesson, and have the last word, on the Lessons page or in a
+terminal (agents cannot run these):
+
+```sh
+shoestring lessons list                  # this repository, proposals first
+shoestring lessons show L-7F3K9Q         # source, proposer, approver, similar lessons
+shoestring lessons approve|reject L-7F3K9Q [--text TEXT | --note TEXT]
+shoestring lessons replace L-7F3K9Q --replaces L-2B4C6D
+shoestring lessons edit L-7F3K9Q --text "reworded"
+shoestring lessons retire L-7F3K9Q [--note TEXT]
+shoestring lessons space                 # count and bytes, per repository and total
+```
+
+In the chat screen each lesson approved during the session is a green popup
+(`o` opens it on the Lessons page, `r` retires it).
+
+**Use.** A coordinator sees the repository's approved lessons in its
+instructions (the newest 20, within 8 KiB, each time it starts) and finds the
+rest with `lessons_search`. A worker sees a lesson only when its dispatch
+cites it (`lessons`, or `--lesson CODE`, at most 5): its text follows the
+brief, the dispatch records its code, and the lesson counts the citation.
+
+Storage and retrieval sit behind `Shoestring.Lessons.Store` (default: this
+database, matching by shared words), so a semantic or shared memory store can
+replace it by configuration without changing these rules.
+
 ## 3. Wait and inspect
 
 ```sh

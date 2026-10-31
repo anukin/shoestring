@@ -97,7 +97,10 @@ defmodule Shoestring.DispatchesTest do
     binding = execution.agent_profile
     assert binding["dispatch_id"] == dispatch.id
     assert binding["model"] == "gpt-6-luna"
-    assert binding["instructions"] == @brief
+    # The coordinator's brief, then (the implementer may propose lessons) how to.
+    assert binding["instructions"] == dispatch.brief
+    assert String.starts_with?(dispatch.brief, @brief)
+    assert dispatch.brief =~ Shoestring.Lessons.lessons_file()
     assert ExecutionProfile.validate(binding, Repo) == :ok
     assert ExecutionProfile.identity(binding).provider == "codex"
     assert [_job] = jobs()

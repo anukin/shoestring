@@ -105,6 +105,21 @@ defmodule ShoestringWeb.AgentSettingsLive do
             </p>
           </div>
         </div>
+        <h2 class="ss-section">Lessons and the web UI</h2>
+        <div class="ss-fields">
+          <.input
+            field={@form[:lessons_space_mb]}
+            type="number"
+            label="Most space lessons may take in one repository (MB)"
+            min="1"
+            max="100000"
+            class="ss-input"
+          /><.input
+            field={@form[:open_browser_on_start]}
+            type="checkbox"
+            label="Open this page in the default browser when shoestring start is ready"
+          />
+        </div>
         <h2 class="ss-section">Defaults</h2>
         <div class="ss-fields">
           <.input

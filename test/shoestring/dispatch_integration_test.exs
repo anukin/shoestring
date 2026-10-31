@@ -253,10 +253,15 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert_received {:review_input, input, packet}
       assert input["model"] == "gpt-6-luna"
 
+      # The implementer's brief as it was given: the coordinator's, then how to
+      # propose a lesson.
       assert packet["briefs"] == %{
-               "implementation" => brief,
-               "review" => "REVIEW - check add()\n"
+               "implementation" => Dispatches.get(dispatch.id).brief,
+               "review" => Dispatches.get(review.id).brief
              }
+
+      assert String.starts_with?(packet["briefs"]["implementation"], brief)
+      assert String.starts_with?(packet["briefs"]["review"], "REVIEW - check add()\n")
 
       assert packet["base_commit"] == base
       assert packet["commit"] == commit
@@ -398,12 +403,36 @@ defmodule Shoestring.DispatchIntegrationTest do
 
       job = job!(first)
       confirm!(first, job)
+      # The first worker proposes a lesson, as its brief says, in its worktree.
+      assert first.brief =~ ".shoestring/lessons.md"
+
+      System.put_env(
+        "FAKE_CLAUDE_LESSON",
+        "Run unittest with -B; the bare runner finds no tests."
+      )
+
       assert {:snooze, 5} = PlanExecutionWorker.perform(job)
       run = Repo.one!(from r in RunRecord, where: r.goal_id == ^first.goal_id)
       finish_worker!(run.id)
+      System.delete_env("FAKE_CLAUDE_LESSON")
       assert :ok = PlanExecutionWorker.perform(job)
       assert Dispatches.state(first) == "completed"
-      first_commit = runs_show!(first.id, "s3")["result"]["commit"]
+      shown_first = runs_show!(first.id, "s3")
+      first_commit = shown_first["result"]["commit"]
+
+      # Shoestring read it, under the implementer, for the coordinator to decide;
+      # it is in no commit.
+      assert [%{"code" => code, "state" => "proposed"}] = shown_first["lessons_proposed"]
+
+      assert %{proposer_role: "implementer", source_ref: source_ref} =
+               Shoestring.Lessons.get(code)
+
+      assert source_ref == first.id
+      {:ok, first_worktree} = Worktrees.get(run.id)
+      assert File.exists?(Path.join(first_worktree.path, ".shoestring/lessons.md"))
+
+      refute git!(first_worktree.path, ["ls-tree", "-r", "--name-only", first_commit]) =~
+               ".shoestring"
 
       # The first completed: the second starts from its commit, which only
       # Shoestring's worktree holds.
@@ -447,6 +476,7 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == commit
       assert git!(source, ["rev-parse", "HEAD^"]) |> String.trim() == first_commit
       assert git!(source, ["rev-parse", "HEAD^^"]) |> String.trim() == base
+      refute File.exists?(Path.join(source, ".shoestring/lessons.md"))
       assert Dispatches.usage(grant).running == 0
     end
 

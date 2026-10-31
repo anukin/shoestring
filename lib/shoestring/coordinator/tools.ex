@@ -81,6 +81,12 @@ defmodule Shoestring.Coordinator.Tools do
                 "lookup needs minutes, a broad audit more). A finished dispatch counts only " <>
                 "the time it took against the grant."
           },
+          "lessons" =>
+            Map.put(
+              @list,
+              "description",
+              "Codes of approved lessons to give the worker with the brief (at most 5)"
+            ),
           "after" => %{
             "type" => "string",
             "description" =>
@@ -158,11 +164,61 @@ defmodule Shoestring.Coordinator.Tools do
           "cancelled, waiting, held or needs you), oldest first, and whether a turn " <>
           "has delivered it. Shoestring starts a turn with new entries when you are idle.",
       "inputSchema" => %{"type" => "object", "properties" => %{}}
+    },
+    %{
+      "name" => "lessons_search",
+      "description" =>
+        "This repository's lessons the person approved, best match for `query` first (the " <>
+          "newest without one). Cite one in a dispatch's `lessons` for its worker to see it.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{"query" => %{"type" => "string", "description" => "Words to match"}}
+      }
+    },
+    %{
+      "name" => "lessons_propose",
+      "description" =>
+        "Propose a lesson for this repository: one rule a worker can follow, that cost time " <>
+          "and will be true again, not already in the repository's documents. Name its " <>
+          "source: `dispatch` (one of this session's) or `quote` (the person's own words in " <>
+          "this chat, exactly). Approved at once when Shoestring's checks pass (at most 1024 " <>
+          "bytes, secrets removed, not a repeat), unless it is much like an approved lesson: " <>
+          "then it waits for `lessons_decide`. The person sees it and may reword or retire it.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "text" => %{"type" => "string", "description" => "The rule, in a sentence or two"},
+          "why" => %{"type" => "string", "description" => "What it cost, briefly"},
+          "dispatch" => %{"type" => "string", "description" => "Source: a dispatch id"},
+          "quote" => %{"type" => "string", "description" => "Source: the person's words"}
+        },
+        "required" => ["text"]
+      }
+    },
+    %{
+      "name" => "lessons_decide",
+      "description" =>
+        "Decide a lesson a worker proposed (runs_show lists a dispatch's), or one of yours " <>
+          "that waits because it is much like an approved lesson: `approve` (with `text` to " <>
+          "reword it), `reject` (with a `note`), or `replace` (approve it and retire the " <>
+          "approved lesson `replaces`). Keep only what is durable, actionable, not already " <>
+          "documented, and earned.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "code" => %{"type" => "string"},
+          "decision" => %{"type" => "string", "enum" => ["approve", "reject", "replace"]},
+          "text" => %{"type" => "string", "description" => "approve or replace: rewording"},
+          "note" => %{"type" => "string", "description" => "reject: why"},
+          "replaces" => %{"type" => "string", "description" => "replace: the older code"}
+        },
+        "required" => ["code", "decision"]
+      }
     }
   ]
 
   @strings ~w(purpose agent worker title brief effort reviewer of after batch request_id)
-  @lists ~w(files stay_out accept gates tests)
+  @lists ~w(files stay_out accept gates tests lessons)
   @integers ~w(attempts minutes batch_size)
 
   @doc "The tool definitions, as MCP `tools/list` returns them."
@@ -217,6 +273,72 @@ defmodule Shoestring.Coordinator.Tools do
   def call("capacity", _args, _binding), do: {:ok, Capacity.report()}
   def call("advice", _args, _binding), do: {:ok, Shoestring.Advice.report(Shoestring.Repo)}
   def call("read_inbox", _args, binding), do: Shoestring.Conversations.inbox(binding.session_id)
+
+  def call("lessons_search", args, binding) do
+    with :ok <- typed(args, ~w(query), &is_binary/1, "a string") do
+      case Shoestring.Grants.active(binding.session_id) do
+        nil ->
+          {:error, "This session has no grant."}
+
+        grant ->
+          {:ok,
+           Enum.map(Shoestring.Lessons.search(grant.repository_root, args["query"]), fn lesson ->
+             %{"code" => lesson.code, "text" => lesson.text, "cited" => lesson.cite_count}
+           end)}
+      end
+    end
+  end
+
+  def call("lessons_propose", args, binding) do
+    with :ok <- typed(args, ~w(text why dispatch quote), &is_binary/1, "a string") do
+      proposer = %{session_id: binding.session_id, role: "coordinator"}
+
+      case Shoestring.Lessons.propose(args, proposer) do
+        {:ok, lesson} ->
+          {:ok,
+           %{
+             "code" => lesson.code,
+             "state" => lesson.state,
+             "text" => lesson.text,
+             "similar_to" => lesson.similar_to,
+             "next" =>
+               if(lesson.state == "approved",
+                 do: "Approved; cite it in a dispatch's `lessons`.",
+                 else:
+                   "Much like #{Enum.join(lesson.similar_to, ", ")}: decide it with " <>
+                     "lessons_decide (approve, reject, or replace the older one)."
+               )
+           }}
+
+        {:error, reason} ->
+          {:error, Shoestring.CLI.Commands.Lessons.message(reason)}
+      end
+    end
+  end
+
+  def call("lessons_decide", args, binding) do
+    with {:ok, code} <- required_string(args, "code"),
+         {:ok, decision} <- required_string(args, "decision"),
+         :ok <- typed(args, ~w(text note replaces), &is_binary/1, "a string"),
+         %Shoestring.Grants.Grant{} = grant <-
+           Shoestring.Grants.active(binding.session_id) || {:error, "This session has no grant."} do
+      case Shoestring.Lessons.decide(
+             code,
+             decision,
+             Shoestring.Authority.grant_identity(grant.id),
+             text: args["text"],
+             note: args["note"],
+             replaces: args["replaces"]
+           ) do
+        {:ok, lesson} ->
+          {:ok, %{"code" => lesson.code, "state" => lesson.state, "text" => lesson.text}}
+
+        {:error, reason} ->
+          {:error, Shoestring.CLI.Commands.Lessons.message(reason)}
+      end
+    end
+  end
+
   def call(name, _args, _binding), do: {:error, "Unknown tool: #{name}"}
 
   defp dry_run(request) do

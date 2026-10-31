@@ -340,6 +340,72 @@ defmodule ShoestringWeb.ChatChannelTest do
     assert_reply ref, :error, %{"reason" => "dispatch_not_found"}, 5_000
   end
 
+  test "the state lists lessons approved since the grant; the person retires one from chat",
+       ctx do
+    {:ok, _, socket} =
+      subscribe_and_join(ctx.socket, ChatChannel, "conversation:#{ctx.session}", %{})
+
+    assert_push "state", %{"lessons" => [], "web_url" => "http" <> _}, 5_000
+    binding = %{session_id: ctx.session, repository: ctx.repo}
+
+    {:ok, %{"dispatch_id" => dispatch}} =
+      Tools.call(
+        "dispatch",
+        %{
+          "purpose" => "implement",
+          "worker" => "codex:gpt-6-luna",
+          "title" => "Sum",
+          "brief" => @brief
+        },
+        binding
+      )
+
+    {:ok, %{"code" => old}} =
+      Tools.call(
+        "lessons_propose",
+        %{"text" => "An older rule.", "dispatch" => dispatch},
+        binding
+      )
+
+    # Approved before this session's grant: not news here.
+    earlier = DateTime.add(ctx.grant.inserted_at, -60)
+
+    Repo.update_all(from(l in Shoestring.Lessons.Lesson, where: l.code == ^old),
+      set: [decided_at: earlier]
+    )
+
+    {:ok, %{"code" => code}} =
+      Tools.call(
+        "lessons_propose",
+        %{"text" => "Run unittest with -B.", "dispatch" => dispatch},
+        binding
+      )
+
+    send(socket.channel_pid, :state)
+
+    assert_push "state",
+                %{
+                  "lessons" => [
+                    %{
+                      "code" => ^code,
+                      "text" => "Run unittest with -B.",
+                      "proposed_by" => "the coordinator",
+                      "approved_by" => "the coordinator, its proposer"
+                    }
+                  ]
+                },
+                5_000
+
+    ref = push(socket, "retire_lesson", %{"code" => code})
+    assert_reply ref, :ok, %{}, 5_000
+    assert %{state: "retired", retired_by: "human:" <> _} = Shoestring.Lessons.get(code)
+
+    ref = push(socket, "retire_lesson", %{"code" => code})
+    assert_reply ref, :error, %{"reason" => "lesson_not_approved"}, 5_000
+    ref = push(socket, "retire_lesson", %{"code" => "L-NONE22"})
+    assert_reply ref, :error, %{"reason" => "lesson_not_found"}, 5_000
+  end
+
   test "a finished report reads as text in the detail, not as one line of JSON", ctx do
     {:ok, %{"dispatch_id" => id}} =
       Tools.call(

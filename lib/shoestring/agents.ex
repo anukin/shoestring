@@ -166,7 +166,8 @@ defmodule Shoestring.Agents do
           "provider" => agent.provider,
           "model" => agent.model,
           "effort" => agent.effort,
-          "max_minutes" => agent.max_minutes
+          "max_minutes" => agent.max_minutes,
+          "may_propose_lessons" => agent.may_propose_lessons
         }
       end
 
@@ -217,8 +218,21 @@ defmodule Shoestring.Agents do
   The same rules apply to every agent of that job and provider; they are
   fixed in code and not yet widened per agent.
   """
-  def abilities(%{kind: kind, provider: provider}), do: abilities(kind, provider)
-  def abilities(%{"kind" => kind, "provider" => provider}), do: abilities(kind, provider)
+  def abilities(%{kind: kind, provider: provider} = agent),
+    do: kind |> abilities(provider) |> with_lessons(Map.get(agent, :may_propose_lessons), kind)
+
+  def abilities(%{"kind" => kind, "provider" => provider} = agent),
+    do: kind |> abilities(provider) |> with_lessons(agent["may_propose_lessons"], kind)
+
+  @lessons_line "Propose lessons for the repository"
+
+  defp with_lessons(abilities, allowed, kind) do
+    allowed = if is_boolean(allowed), do: allowed, else: kind != "explorer"
+
+    if allowed,
+      do: %{abilities | can: abilities.can ++ [@lessons_line]},
+      else: %{abilities | cannot: abilities.cannot ++ [@lessons_line]}
+  end
 
   def abilities("coordinator", "codex") do
     %{
