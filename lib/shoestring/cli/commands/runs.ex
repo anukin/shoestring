@@ -158,6 +158,27 @@ defmodule Shoestring.CLI.Commands.Runs do
 
   defp next("waiting", dispatch, _call, detail), do: waiting_next(dispatch, detail["waiting"])
 
+  defp next("chained", dispatch, _call, _detail) do
+    before = Dispatches.get(dispatch.after_dispatch_id)
+
+    "Follows #{dispatch.after_dispatch_id} (#{before && Dispatches.state(before)}): starts by " <>
+      "itself from its verified commit once it completes; nothing to do until then"
+  end
+
+  defp next("cancelled", %{error: "after_" <> state}, _call, _detail)
+       when state in ~w(cancelled failed_to_start),
+       do:
+         "Never started: the dispatch it followed is #{state}, so there was no commit to start " <>
+           "from. Its room in the grant was released"
+
+  defp next("cancelled", %{error: "after_" <> _}, _call, _detail),
+    do:
+      "Never started: the commit it followed could not be read from Shoestring's worktree. " <>
+        "Its room was released; dispatch it again"
+
+  defp next("cancelled", %{error: "grant_revoked"}, _call, _detail),
+    do: "Never started: its grant was revoked while it waited. Its room was released"
+
   defp next("completed", %{purpose: "implement"}, _call, _detail),
     do: "Take the commit with the commands in result.take"
 

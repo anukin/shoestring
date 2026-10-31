@@ -81,6 +81,14 @@ defmodule Shoestring.Coordinator.Tools do
                 "lookup needs minutes, a broad audit more). A finished dispatch counts only " <>
                 "the time it took against the grant."
           },
+          "after" => %{
+            "type" => "string",
+            "description" =>
+              "IMPLEMENT only: another IMPLEMENT dispatch of this session to follow. This one " <>
+                "waits (state `chained`, its room reserved) and starts from that one's " <>
+                "verified commit once it completes, instead of HEAD; taking its commit takes " <>
+                "both. Called off if that one is cancelled."
+          },
           "batch" => %{"type" => "string"},
           "batch_size" => %{"type" => "integer", "minimum" => 1},
           "request_id" => %{"type" => "string"},
@@ -153,7 +161,7 @@ defmodule Shoestring.Coordinator.Tools do
     }
   ]
 
-  @strings ~w(purpose agent worker title brief effort reviewer of batch request_id)
+  @strings ~w(purpose agent worker title brief effort reviewer of after batch request_id)
   @lists ~w(files stay_out accept gates tests)
   @integers ~w(attempts minutes batch_size)
 

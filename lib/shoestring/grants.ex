@@ -272,7 +272,9 @@ defmodule Shoestring.Grants do
       usage.attempts + request.attempts > grant.max_dispatches ->
         {:error, {:outside_grant, :dispatches}}
 
-      usage.running + 1 > grant.max_parallel ->
+      # A dispatch that follows another waits for it, so it does not run
+      # beside it; it takes its parallel room when it starts.
+      not request[:chained] and usage.running + 1 > grant.max_parallel ->
         {:error, {:outside_grant, :parallel}}
 
       request.seconds > grant.max_dispatch_seconds ->

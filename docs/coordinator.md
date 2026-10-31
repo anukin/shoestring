@@ -214,6 +214,29 @@ the session, purpose, worker, title and brief) returns the same dispatch.
 `--batch LABEL --batch-size N` declares a strategy of N dispatches; one more
 is refused. `--dry-run` checks the grant and the plan and records nothing.
 
+### One task after another (iteration 16 C1)
+
+```sh
+shoestring dispatch --purpose implement --agent implementer \
+  --title "Add sub()" --brief sub.md --after DISPATCH
+```
+
+`--after DISPATCH` (the tool's `after`) makes an IMPLEMENT follow another
+IMPLEMENT of the same session and repository. It is recorded `chained`: its
+attempts and minutes are reserved in the grant, it does not take a parallel
+place, and nothing runs. Once DISPATCH completes (its checks passed, and its
+review, if it had one), it starts by itself, within half a minute, from
+DISPATCH's verified commit instead of `HEAD`. That commit lives only in
+Shoestring's worktree; your checkout is still never changed. Its checks and
+review see only its own change, and its `take` commands bring both commits.
+
+It waits as long as DISPATCH does, a person deciding included; waiting is
+never a reason to give up. It is called off, its room released, if DISPATCH
+is cancelled or never started, or the grant is revoked (`runs show` says
+which). Cancelling it while it waits does the same. Only an IMPLEMENT can
+follow, and only an IMPLEMENT can be followed. A chain may be longer than
+two; parallel work on separate files is a later package (C2).
+
 A grant identity is accepted only through a dispatch: `shoestring plans
 approve --by grant:…` is refused, a grant can approve only the exact plan
 its dispatch recorded, never reject one, and cannot cancel another session's

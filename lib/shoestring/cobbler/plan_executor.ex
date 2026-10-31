@@ -259,6 +259,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         }
         |> maybe_put("agent_profile", profile)
         |> maybe_put("repository_path", Map.get(attrs, :repository_path))
+        |> maybe_put("base_source", Map.get(attrs, :base_source))
         |> maybe_put("requested_by", Map.get(attrs, :requested_by))
 
       Plans.record_execution_request(
@@ -930,6 +931,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
             }
             |> maybe_put(:agent_profile, payload["agent_profile"])
             |> maybe_put(:repository_path, payload["repository_path"])
+            |> maybe_put(:base_source, payload["base_source"])
             |> maybe_put(:requested_by, payload["requested_by"])
 
           %{acc | execution: execution, completed: nil, global_failed: nil}
@@ -1693,7 +1695,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
             {commit, {:path, path}}
 
           {nil, last, integration} ->
-            base_and_repository(contract, last, integration)
+            base_and_repository(contract, execution, last, integration)
         end
 
       workspace_result =
@@ -1723,8 +1725,14 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     end
   end
 
-  defp base_and_repository(contract, last, integration) do
+  defp base_and_repository(contract, execution, last, integration) do
     case {last, integration} do
+      # An execution that follows another's verified commit (a dependent
+      # dispatch) copies its base from the worktree that holds it.
+      {nil, _} when is_map_key(execution, :base_source) ->
+        {get_in(contract.content, ["goal", "repository", "base_revision"]),
+         {:path, execution.base_source}}
+
       {nil, _} ->
         {get_in(contract.content, ["goal", "repository", "base_revision"]), :accepted}
 
@@ -2595,10 +2603,19 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     case Shoestring.Cobbler.PlanWorkspace.global_gate_opts(repo, accepted, opts) do
       {:error, reason}
       when reason in [:accepted_commit_not_integrated, :global_plan_worktree_missing] ->
-        base =
+        # An execution that follows another's commit finds its base in the
+        # worktree that holds it, not in the source repository.
+        {base, execution} =
           case covering_integration(projection, execution) do
-            %{"commit" => commit} -> commit
-            nil -> get_in(contract.content, ["goal", "repository", "base_revision"])
+            %{"commit" => commit} ->
+              {commit, execution}
+
+            nil ->
+              {get_in(contract.content, ["goal", "repository", "base_revision"]),
+               case execution do
+                 %{base_source: source} -> Map.put(execution, :repository_path, source)
+                 execution -> execution
+               end}
           end
 
         Shoestring.Cobbler.PlanWorkspace.integration_gate_opts(

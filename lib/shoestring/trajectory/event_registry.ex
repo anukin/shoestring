@@ -1005,13 +1005,16 @@ defmodule Shoestring.Trajectory.EventRegistry do
     "cobbler.plan.execution.requested" => %{
       1 => %{
         required: [:execution_id, :revision_number, :plan_digest, :ordered_task_ids],
-        optional: [:note, :agent_profile, :repository_path, :requested_by],
+        # base_source: the Shoestring worktree holding the base commit of an
+        # execution that follows another's (a dependent dispatch, C1).
+        optional: [:note, :agent_profile, :repository_path, :base_source, :requested_by],
         uuid_fields: [:execution_id],
         types: %{
           revision_number: :integer,
           ordered_task_ids: {:array, :string},
           agent_profile: :map,
           repository_path: :string,
+          base_source: :string,
           requested_by: :string
         }
       }

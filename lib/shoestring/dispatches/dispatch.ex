@@ -27,6 +27,9 @@ defmodule Shoestring.Dispatches.Dispatch do
     field :max_duration_seconds, :integer
     # The session agent the dispatch is for (its slug), or nil.
     field :agent, :string
+    # The IMPLEMENT dispatch this one follows: it starts from that one's
+    # verified commit once it completes (`Shoestring.Dispatches.follow/2`).
+    field :after_dispatch_id, :binary_id
     field :batch_label, :string
     field :batch_size, :integer
     field :goal_id, :binary_id

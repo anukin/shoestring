@@ -33,7 +33,8 @@ defmodule Shoestring.Dispatches do
 
   alias Shoestring.{AgentProfiles, Agents, Authority, Grants, Harnesses, ModelCatalog, Repo}
   alias Shoestring.Cobbler.{ExecutionControl, ExecutionProfile, Intake, PlanContract, Plans}
-  alias Shoestring.Dispatches.{Call, Calls, Dispatch}
+  alias Shoestring.CLI.Result
+  alias Shoestring.Dispatches.{Call, Calls, ChainWorker, Dispatch}
   alias Shoestring.Grants.Grant
   alias Shoestring.Harness.{RunRecord, Security}
   alias Shoestring.Trajectory.Goal
@@ -140,11 +141,20 @@ defmodule Shoestring.Dispatches do
   """
   def create(request, opts \\ []) do
     case existing(request) do
-      {:ok, %Dispatch{state: "started"} = dispatch} -> {:ok, dispatch, :replayed}
-      {:ok, %Dispatch{state: "creating"} = dispatch} -> start(dispatch, opts, :replayed)
-      {:ok, %Dispatch{state: "failed"} = dispatch} -> {:error, {:dispatch_failed, dispatch.error}}
-      {:error, _} = error -> error
-      nil -> with {:ok, prepared} <- prepare(request), do: reserve(prepared, opts)
+      {:ok, %Dispatch{state: state} = dispatch} when state in ~w(started chained cancelled) ->
+        {:ok, dispatch, :replayed}
+
+      {:ok, %Dispatch{state: "creating"} = dispatch} ->
+        start(dispatch, opts, :replayed)
+
+      {:ok, %Dispatch{state: "failed"} = dispatch} ->
+        {:error, {:dispatch_failed, dispatch.error}}
+
+      {:error, _} = error ->
+        error
+
+      nil ->
+        with {:ok, prepared} <- prepare(request), do: reserve(prepared, opts)
     end
   end
 
@@ -157,13 +167,23 @@ defmodule Shoestring.Dispatches do
       dispatch ->
         if dispatch.brief_digest == digest(redact(request.brief)) and
              dispatch.model == request.model and
-             dispatch.provider == request.provider and dispatch.purpose == request.purpose,
+             dispatch.provider == request.provider and dispatch.purpose == request.purpose and
+             dispatch.after_dispatch_id == cast_id(Map.get(request, :after_dispatch)),
            do: {:ok, dispatch},
            else: {:error, :request_id_conflict}
     end
   end
 
   defp existing(_request), do: {:error, :invalid_request_id}
+
+  defp cast_id(nil), do: nil
+
+  defp cast_id(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, id} -> id
+      :error -> id
+    end
+  end
 
   # -- Validation --------------------------------------------------------
 
@@ -221,6 +241,7 @@ defmodule Shoestring.Dispatches do
 
   defp prepare("implement", %{request: request} = prepared, facts) do
     with :ok <- reviewer(request),
+         {:ok, after_id} <- after_dispatch(request, prepared),
          {:ok, attempts} <- int(Map.get(request, :attempts, 1), :attempts, 1..20),
          {:ok, seconds} <- implement_seconds(request),
          {:ok, gates} <-
@@ -234,7 +255,13 @@ defmodule Shoestring.Dispatches do
            ),
          {:ok, contract} <-
            PlanContract.new(plan(goal, prepared.title, request, gates, attempts, seconds)) do
-      {:ok, Map.merge(prepared, %{contract: contract, attempts: attempts, seconds: seconds})}
+      {:ok,
+       Map.merge(prepared, %{
+         contract: contract,
+         attempts: attempts,
+         seconds: seconds,
+         after: after_id
+       })}
     end
   end
 
@@ -243,7 +270,8 @@ defmodule Shoestring.Dispatches do
   # Its time is what the coordinator asked for, else the grant's per-dispatch
   # limit: no fixed time of its own.
   defp prepare("explore", %{request: request} = prepared, _facts) do
-    with {:ok, seconds} <- call_seconds(request) do
+    with :ok <- no_after(request),
+         {:ok, seconds} <- call_seconds(request) do
       input =
         Calls.explore_input(
           Map.put(request, :seconds, seconds),
@@ -257,7 +285,8 @@ defmodule Shoestring.Dispatches do
   end
 
   defp prepare("review", %{request: request} = prepared, _facts) do
-    with {:ok, seconds} <- call_seconds(request),
+    with :ok <- no_after(request),
+         {:ok, seconds} <- call_seconds(request),
          {:ok, target} <- review_target(request, prepared),
          {:ok, input} <-
            Calls.review_input(
@@ -267,6 +296,27 @@ defmodule Shoestring.Dispatches do
       {:ok, call(prepared, input, seconds)}
     end
   end
+
+  # An IMPLEMENT may follow another IMPLEMENT of its session and repository
+  # (C1): it starts from that one's verified commit once it completes. One
+  # already cancelled, or that never started, has no commit to follow.
+  defp after_dispatch(%{after_dispatch: id} = request, prepared) when is_binary(id) do
+    with %Dispatch{} = before <- get(id) || {:error, :after_not_found},
+         true <- before.session_id == request.session_id || {:error, :after_not_found},
+         true <- before.purpose == "implement" || {:error, :after_not_implement},
+         true <- before.repository_root == prepared.root || {:error, :after_other_repository},
+         state when state not in ~w(cancelled failed_to_start) <- state(before) do
+      {:ok, before.id}
+    else
+      state when is_binary(state) -> {:error, {:after_unusable, state}}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp after_dispatch(_request, _prepared), do: {:ok, nil}
+
+  defp no_after(%{after_dispatch: id}) when is_binary(id), do: {:error, :after_implement_only}
+  defp no_after(_request), do: :ok
 
   defp call_seconds(request) do
     default =
@@ -532,33 +582,49 @@ defmodule Shoestring.Dispatches do
         with %Grant{} = grant <- Grants.active(request.session_id) || {:error, :no_grant},
              :ok <- Grants.check(grant, check_request(prepared), usage(grant)),
              :ok <- batch_room(grant, request) do
-          Repo.insert!(%Dispatch{
-            grant_id: grant.id,
-            session_id: request.session_id,
-            request_id: request.request_id,
-            purpose: request.purpose,
-            provider: request.provider,
-            model: request.model,
-            effort: Map.get(request, :effort),
-            reviewer_provider: Map.get(request, :reviewer_provider),
-            reviewer_model: Map.get(request, :reviewer_model),
-            title: prepared.title,
-            brief: prepared.brief,
-            brief_digest: digest(prepared.brief),
-            repository_root: prepared.root,
-            base_revision: prepared.head,
-            max_attempts: prepared.attempts,
-            max_duration_seconds: prepared.seconds,
-            agent: Map.get(request, :agent),
-            batch_label: Map.get(request, :batch_label),
-            batch_size: Map.get(request, :batch_size),
-            goal_id: if(request.purpose == "implement", do: Ecto.UUID.generate()),
-            plan: prepared.contract.content,
-            plan_digest: prepared.contract.digest,
-            state: "creating",
-            inserted_at: now,
-            updated_at: now
-          })
+          dispatch =
+            Repo.insert!(%Dispatch{
+              grant_id: grant.id,
+              session_id: request.session_id,
+              request_id: request.request_id,
+              purpose: request.purpose,
+              provider: request.provider,
+              model: request.model,
+              effort: Map.get(request, :effort),
+              reviewer_provider: Map.get(request, :reviewer_provider),
+              reviewer_model: Map.get(request, :reviewer_model),
+              title: prepared.title,
+              brief: prepared.brief,
+              brief_digest: digest(prepared.brief),
+              repository_root: prepared.root,
+              base_revision: prepared.head,
+              max_attempts: prepared.attempts,
+              max_duration_seconds: prepared.seconds,
+              agent: Map.get(request, :agent),
+              batch_label: Map.get(request, :batch_label),
+              batch_size: Map.get(request, :batch_size),
+              goal_id: if(request.purpose == "implement", do: Ecto.UUID.generate()),
+              plan: prepared.contract.content,
+              plan_digest: prepared.contract.digest,
+              after_dispatch_id: prepared[:after],
+              state: if(prepared[:after], do: "chained", else: "creating"),
+              inserted_at: now,
+              updated_at: now
+            })
+
+          # A dispatch that follows another has its job recorded with it, so
+          # it is followed after a restart as well.
+          if dispatch.state == "chained" do
+            case Oban.insert(
+                   Keyword.get(opts, :oban, Oban),
+                   ChainWorker.new(%{"dispatch_id" => dispatch.id})
+                 ) do
+              {:ok, _job} -> dispatch
+              {:error, reason} -> Repo.rollback(reason)
+            end
+          else
+            dispatch
+          end
         else
           {:error, reason} -> Repo.rollback(reason)
         end
@@ -566,8 +632,111 @@ defmodule Shoestring.Dispatches do
       mode: :immediate
     )
     |> case do
-      {:ok, dispatch} -> start(dispatch, opts, :recorded)
-      error -> error
+      {:ok, %Dispatch{state: "chained"} = dispatch} ->
+        case follow(dispatch, opts) do
+          {:ok, _dispatch, _outcome} = started -> started
+          {:error, _} = error -> error
+          _waiting_or_called_off -> {:ok, Repo.get!(Dispatch, dispatch.id), :recorded}
+        end
+
+      {:ok, dispatch} ->
+        start(dispatch, opts, :recorded)
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  One step of a dispatch that follows another (C1), as its job
+  (`Shoestring.Dispatches.ChainWorker`) and its creation take it. Once the
+  dispatch it follows has completed, it starts from that one's verified
+  commit, copied from Shoestring's own worktree, never the person's
+  checkout: `{:ok, dispatch, :recorded}` or `{:error, reason}`. While that
+  one is unfinished, or the grant's parallel room is taken, `:waiting`. It
+  is called off, its reservation released, when the dispatch it follows
+  was cancelled or never started, or its grant is revoked:
+  `{:called_off, code}`. Anything else: `:none`. Options: `:oban`.
+  """
+  def follow(dispatch, opts \\ [])
+
+  def follow(%Dispatch{state: "chained"} = dispatch, opts) do
+    before = get(dispatch.after_dispatch_id)
+
+    case Grants.get(dispatch.grant_id) do
+      %Grant{revoked_at: nil} = grant ->
+        case before && state(before) do
+          nil ->
+            call_off(dispatch, "after_not_found")
+
+          "completed" ->
+            if usage(grant).running + 1 > grant.max_parallel,
+              do: :waiting,
+              else: start_after(dispatch, before, opts)
+
+          state when state in ~w(cancelled failed_to_start) ->
+            call_off(dispatch, "after_" <> state)
+
+          _unfinished ->
+            :waiting
+        end
+
+      _revoked ->
+        call_off(dispatch, "grant_revoked")
+    end
+  end
+
+  def follow(_dispatch, _opts), do: :none
+
+  # The plan granted with the dispatch, based on the commit it follows. A
+  # compare-and-set from `chained`, so two steps never both start it.
+  defp start_after(dispatch, before, opts) do
+    case Result.fetch(before.goal_id) do
+      {:ok, %{commit: commit}} ->
+        with {:ok, contract} <-
+               PlanContract.new(
+                 put_in(dispatch.plan, ["goal", "repository", "base_revision"], commit)
+               ) do
+          {count, _} =
+            from(d in Dispatch, where: d.id == ^dispatch.id and d.state == "chained")
+            |> Repo.update_all(
+              set: [
+                state: "creating",
+                plan: contract.content,
+                plan_digest: contract.digest,
+                base_revision: commit,
+                updated_at: DateTime.utc_now()
+              ]
+            )
+
+          if count == 1, do: start(Repo.get!(Dispatch, dispatch.id), opts, :recorded), else: :none
+        end
+
+      {:error, :not_completed} ->
+        :waiting
+
+      {:error, _} ->
+        call_off(dispatch, "after_result_unavailable")
+    end
+  end
+
+  defp call_off(dispatch, code) do
+    {count, _} =
+      from(d in Dispatch, where: d.id == ^dispatch.id and d.state == "chained")
+      |> Repo.update_all(set: [state: "cancelled", error: code, updated_at: DateTime.utc_now()])
+
+    if count == 1, do: {:called_off, code}, else: :none
+  end
+
+  # Where a dispatch that follows another gets its base commit: the worktree
+  # holding the verified commit it follows. Nil for every other dispatch.
+  defp base_source(%Dispatch{after_dispatch_id: nil}), do: {:ok, nil}
+
+  defp base_source(dispatch) do
+    with %Dispatch{} = before <- get(dispatch.after_dispatch_id) || {:error, :after_not_found},
+         {:ok, %{commit: commit, worktree: worktree}} <- Result.fetch(before.goal_id),
+         true <- commit == dispatch.base_revision || {:error, :after_commit_changed} do
+      {:ok, worktree}
     end
   end
 
@@ -618,6 +787,7 @@ defmodule Shoestring.Dispatches do
     authority = [dispatch: dispatch]
 
     with {:ok, contract} <- PlanContract.new(dispatch.plan),
+         {:ok, base_source} <- base_source(dispatch),
          :ok <- ensure_goal(dispatch),
          {:ok, %{revision: revision}} <-
            Plans.propose(
@@ -644,7 +814,8 @@ defmodule Shoestring.Dispatches do
                digest: revision.digest,
                repository_path: dispatch.repository_root,
                requested_by: identity,
-               agent_profile: %{"dispatch_id" => dispatch.id, "role" => "Worker"}
+               agent_profile: %{"dispatch_id" => dispatch.id, "role" => "Worker"},
+               base_source: base_source
              },
              Keyword.take(opts, [:oban]) ++ authority
            ) do
@@ -695,7 +866,8 @@ defmodule Shoestring.Dispatches do
           provider -> "#{provider}:#{prepared.request.reviewer_model}"
         end,
       attempts: prepared.attempts,
-      seconds: prepared.seconds
+      seconds: prepared.seconds,
+      chained: prepared[:after] != nil
     }
   end
 
@@ -707,7 +879,10 @@ defmodule Shoestring.Dispatches do
   """
   def usage(%Grant{} = grant) do
     dispatches =
-      Repo.all(from d in Dispatch, where: d.grant_id == ^grant.id and d.state != "failed")
+      Repo.all(
+        from d in Dispatch,
+          where: d.grant_id == ^grant.id and d.state not in ["failed", "cancelled"]
+      )
       |> Enum.map(&{&1, state(&1)})
 
     %{
@@ -797,11 +972,14 @@ defmodule Shoestring.Dispatches do
   `running`, `waiting` (deferred until its provider's usage resets; it
   starts by itself then), `held` (its provider's remaining usage could not
   be confirmed; a person confirms it), `needs_you` (waits for a person),
+  `chained` (follows another dispatch and starts once that one completes),
   `completed`, `cancelled` or `failed_to_start`.
   """
   def state(dispatch, status \\ &ExecutionControl.status/1)
   def state(%Dispatch{state: "creating"}, _status), do: "starting"
   def state(%Dispatch{state: "failed"}, _status), do: "failed_to_start"
+  def state(%Dispatch{state: "chained"}, _status), do: "chained"
+  def state(%Dispatch{state: "cancelled"}, _status), do: "cancelled"
 
   def state(%Dispatch{state: "started", purpose: purpose} = dispatch, _status)
       when purpose in @calls do
@@ -1207,6 +1385,16 @@ defmodule Shoestring.Dispatches do
       },
       Keyword.take(opts, [:oban]) ++ [dispatch: dispatch]
     )
+  end
+
+  # One that follows another and has not started is called off: nothing ran,
+  # and its reservation is released.
+  defp do_cancel(%Dispatch{state: "chained"} = dispatch, reason, opts) do
+    case call_off(dispatch, "cancelled") do
+      {:called_off, _} -> {:ok, Repo.get!(Dispatch, dispatch.id)}
+      # It started meanwhile: cancel it as any started dispatch.
+      :none -> do_cancel(Repo.get!(Dispatch, dispatch.id), reason, opts)
+    end
   end
 
   defp do_cancel(%Dispatch{}, _reason, _opts), do: {:error, :not_started}

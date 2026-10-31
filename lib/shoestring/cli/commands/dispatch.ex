@@ -9,8 +9,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       --brief FILE [--effort LEVEL] [--reviewer PROVIDER:MODEL]
       [--file PATH]... [--stay-out PATH]...
       [--accept TEXT]... [--gate NAME]... [--test PATH]... [--attempts N]
-      [--minutes M] [--batch LABEL --batch-size N] [--session ID]
-      [--request-id ID] [--repo PATH] [--dry-run] [--json]
+      [--minutes M] [--batch LABEL --batch-size N] [--after DISPATCH]
+      [--session ID] [--request-id ID] [--repo PATH] [--dry-run] [--json]
   shoestring dispatch --purpose explore --worker PROVIDER:MODEL --title TEXT
       --brief FILE [--effort LEVEL] [common options]
   shoestring dispatch --purpose review --of DISPATCH --worker PROVIDER:MODEL
@@ -41,6 +41,13 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   an EXPLORE or REVIEW runs until it answers, up to its minutes or else the
   grant's per-dispatch limit. A finished dispatch counts the time it took. `--batch` declares a strategy of
   `--batch-size` dispatches; one more is refused.
+
+  `--after DISPATCH` (IMPLEMENT only) follows another IMPLEMENT of this
+  session: the new one is recorded `chained`, its room in the grant
+  reserved, and starts by itself from DISPATCH's verified commit once
+  DISPATCH completes, instead of from `HEAD`. Taking its commit takes both.
+  It waits as long as DISPATCH does (a person deciding included), and is
+  called off, its room released, if DISPATCH is cancelled.
 
   The session is ID or SHOESTRING_SESSION. The request id (default: derived
   from the session, purpose, worker, title and brief) makes a retry return
@@ -78,6 +85,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     minutes: :integer,
     batch: :string,
     batch_size: :integer,
+    after: :string,
     session: :string,
     request_id: :string,
     repo: :string,
@@ -235,7 +243,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         attempts: fields[:attempts] || 1,
         seconds: fields[:minutes] && fields[:minutes] * 60,
         batch_label: fields[:batch],
-        batch_size: fields[:batch_size]
+        batch_size: fields[:batch_size],
+        after_dispatch: fields[:after]
       }
 
       {:ok, Map.put(request, :request_id, fields[:request_id] || derived_request_id(request))}
@@ -298,6 +307,9 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       fields[:purpose] in ["explore", "review"] and fields[:reviewer] ->
         {:error, "--reviewer is only for --purpose implement"}
 
+      fields[:purpose] != "implement" and fields[:after] ->
+        {:error, "--after is only for --purpose implement"}
+
       true ->
         :ok
     end
@@ -328,7 +340,9 @@ defmodule Shoestring.CLI.Commands.Dispatch do
              request.model,
              request.title,
              request.brief
-           ] ++ if(request.target, do: [request.target], else: []),
+           ] ++
+             if(request.target, do: [request.target], else: []) ++
+             if(request.after_dispatch, do: ["after", request.after_dispatch], else: []),
            <<0>>
          )
        )
@@ -362,6 +376,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
           do: "#{dispatch.reviewer_provider}:#{dispatch.reviewer_model}"
         ),
       "of" => if(dispatch.purpose == "review", do: dispatch.plan["target_dispatch_id"]),
+      "after" => dispatch.after_dispatch_id,
       "title" => dispatch.title,
       "state" => Dispatches.state(dispatch),
       "goal_id" => dispatch.goal_id,
@@ -392,6 +407,23 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       "The #{agent} agent may take at most #{minutes} minutes per dispatch. Ask for less, " <>
         "or ask the person to raise its limit (the Agents page, or shoestring agents). " <>
         "Nothing was queued."
+
+  def message(:after_not_found, request),
+    do: "No dispatch #{request.after_dispatch} in this session to follow. Nothing was queued."
+
+  def message(:after_not_implement, _request),
+    do: "Only an IMPLEMENT dispatch can be followed: it has a commit. Nothing was queued."
+
+  def message(:after_other_repository, _request),
+    do: "The dispatch to follow is in another repository. Nothing was queued."
+
+  def message({:after_unusable, state}, _request),
+    do:
+      "The dispatch to follow is #{state}: it has no commit to start from. " <>
+        "Dispatch without --after, or after another. Nothing was queued."
+
+  def message(:after_implement_only, _request),
+    do: "Only an IMPLEMENT can follow another dispatch. Nothing was queued."
 
   def message({:unknown_agent, name}, _request),
     do: "No agent #{inspect(name)} in this session's team. Nothing was queued."

@@ -352,6 +352,104 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert shown["next"] =~ "Starts by itself after claude's usage resets at"
     end
 
+    @tag :chain
+    test "a dispatch that follows another starts from its verified commit; taking it takes both",
+         _ctx do
+      source = source!("calc-chain")
+      base = git!(source, ["rev-parse", "HEAD"]) |> String.trim()
+      {:ok, facts} = Shoestring.Cobbler.Intake.repository(source)
+      grant = grant!("s3", facts.root, %{unread_usage: 4})
+      claude_reading!(0.2)
+
+      implement = fn request_id, title, overrides ->
+        Dispatches.create(
+          Map.merge(
+            %{
+              session_id: "s3",
+              request_id: request_id,
+              purpose: "implement",
+              provider: "claude",
+              model: "opus",
+              title: title,
+              brief: @brief,
+              repository: source
+            },
+            overrides
+          )
+        )
+      end
+
+      {:ok, first, :recorded} = implement.("r1", "Make add return the sum", %{})
+
+      # Asked for while the first is unfinished, under a grant that runs one
+      # at a time: recorded, waiting, nothing started.
+      {:ok, second, :recorded} = implement.("r2", "Add sub", %{after_dispatch: first.id})
+      assert Dispatches.state(second) == "chained"
+
+      chain =
+        Repo.one!(
+          from j in Oban.Job,
+            where:
+              j.worker == "Shoestring.Dispatches.ChainWorker" and
+                fragment("json_extract(?, '$.dispatch_id')", j.args) == ^second.id
+        )
+
+      assert {:snooze, 30} = Shoestring.Dispatches.ChainWorker.perform(chain)
+
+      job = job!(first)
+      confirm!(first, job)
+      assert {:snooze, 5} = PlanExecutionWorker.perform(job)
+      run = Repo.one!(from r in RunRecord, where: r.goal_id == ^first.goal_id)
+      finish_worker!(run.id)
+      assert :ok = PlanExecutionWorker.perform(job)
+      assert Dispatches.state(first) == "completed"
+      first_commit = runs_show!(first.id, "s3")["result"]["commit"]
+
+      # The first completed: the second starts from its commit, which only
+      # Shoestring's worktree holds.
+      assert :ok = Shoestring.Dispatches.ChainWorker.perform(chain)
+      second = Dispatches.get(second.id)
+      assert second.state == "started"
+      assert second.base_revision == first_commit
+      assert second.plan["goal"]["repository"]["base_revision"] == first_commit
+      assert {_, status} = System.cmd("git", ["-C", source, "cat-file", "-e", first_commit])
+      assert status != 0
+
+      job = job!(second)
+      confirm!(second, job)
+      assert {:snooze, 5} = PlanExecutionWorker.perform(job)
+      run = Repo.one!(from r in RunRecord, where: r.goal_id == ^second.goal_id)
+      finish_worker!(run.id)
+      assert :ok = PlanExecutionWorker.perform(job)
+      assert Dispatches.state(second) == "completed"
+
+      shown = runs_show!(second.id, "s3")
+      assert shown["after"] == first.id
+      assert shown["result"]["base"] == first_commit
+      commit = shown["result"]["commit"]
+      {:ok, worktree} = Worktrees.get(run.id)
+      assert git!(worktree.path, ["rev-parse", "#{commit}^"]) |> String.trim() == first_commit
+      assert git!(worktree.path, ["show", "#{commit}:calc.py"]) =~ "return a + b"
+      assert git!(worktree.path, ["show", "#{commit}:calc.py"]) =~ "def sub(a, b)"
+      # The review and the checks saw only the second's change.
+      assert Enum.join(shown["result"]["diff_stat"], "\n") =~ "1 file changed"
+
+      # The person's checkout is untouched until they take the last commit,
+      # which brings both.
+      assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
+      [_cd | take] = shown["result"]["take"]
+
+      for command <- take do
+        {output, status} = System.cmd("sh", ["-c", command], cd: source, stderr_to_stdout: true)
+        assert status == 0, "#{command}: #{output}"
+      end
+
+      assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == commit
+      assert git!(source, ["rev-parse", "HEAD^"]) |> String.trim() == first_commit
+      assert git!(source, ["rev-parse", "HEAD^^"]) |> String.trim() == base
+      assert Dispatches.usage(grant).running == 0
+    end
+
     defp source!(name) do
       source = Path.join(Shoestring.State.root(), name)
       File.mkdir_p!(Path.join(source, "test"))
@@ -385,20 +483,23 @@ defmodule Shoestring.DispatchIntegrationTest do
       source
     end
 
-    defp grant!(session, root) do
+    defp grant!(session, root, overrides \\ %{}) do
       {:ok, grant} =
         Grants.create(
-          %{
-            session_id: session,
-            repository_root: root,
-            models: ["claude:opus", "codex:gpt-6-luna"],
-            purposes: ["explore", "implement", "review"],
-            max_dispatches: 3,
-            max_parallel: 1,
-            max_total_seconds: 3_600,
-            max_dispatch_seconds: 1_800,
-            unread_usage: 3
-          },
+          Map.merge(
+            %{
+              session_id: session,
+              repository_root: root,
+              models: ["claude:opus", "codex:gpt-6-luna"],
+              purposes: ["explore", "implement", "review"],
+              max_dispatches: 3,
+              max_parallel: 1,
+              max_total_seconds: 3_600,
+              max_dispatch_seconds: 1_800,
+              unread_usage: 3
+            },
+            overrides
+          ),
           "human:operator"
         )
 
@@ -510,6 +611,19 @@ defmodule Shoestring.DispatchIntegrationTest do
   else
     @tag timeout: 120_000
     test "a dispatch end to end on an isolated local node" do
+      output = child!(["--exclude", "chain"])
+      assert output =~ "2 tests, 0 failures (1 excluded)"
+    end
+
+    # Its own node and state: the usage-limit test leaves Claude's five-hour
+    # window full, which rightly holds every later Claude run.
+    @tag timeout: 120_000
+    test "a dependent dispatch end to end on an isolated local node" do
+      output = child!(["--only", "chain"])
+      assert output =~ "1 test, 0 failures (2 excluded)"
+    end
+
+    defp child!(filter) do
       root = Path.join(File.cwd!(), ".shoestring/dispatch-e2e-#{Ecto.UUID.generate()}")
 
       {output, status} =
@@ -517,15 +631,15 @@ defmodule Shoestring.DispatchIntegrationTest do
           "python3",
           [
             "-c",
-            "import subprocess,sys; result=subprocess.run(['mix','test',sys.argv[1],'--seed','0'],stdin=subprocess.DEVNULL,timeout=90); sys.exit(result.returncode)",
-            "test/shoestring/dispatch_integration_test.exs"
+            "import subprocess,sys; result=subprocess.run(['mix','test',sys.argv[1],'--seed','0'] + sys.argv[2:],stdin=subprocess.DEVNULL,timeout=90); sys.exit(result.returncode)",
+            "test/shoestring/dispatch_integration_test.exs" | filter
           ],
           env: [{"SHOESTRING_DISPATCH_E2E_CHILD", "1"}, {"SHOESTRING_TEST_STATE_DIR", root}],
           stderr_to_stdout: true
         )
 
       assert status == 0, output
-      assert output =~ "2 tests, 0 failures"
+      output
     end
   end
 end

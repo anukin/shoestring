@@ -248,6 +248,9 @@ fn detail_status(model: &Model, detail: &crate::model::Detail) -> String {
                 "Not started yet ({state}); next says what it waits for. Esc closes; c cancels."
             )
         }
+        "chained" => {
+            "Not started: it follows another dispatch and starts from its commit once that one completes. Esc closes; c cancels.".into()
+        }
         _ if purpose == "explore" || purpose == "review" => format!(
             "One read-only {purpose} call: it cannot be steered. To change it, cancel (c) and ask for a new one."
         ),
@@ -502,6 +505,7 @@ fn glyph(state: &str) -> &'static str {
         "failed" | "failed_to_start" => "✗",
         "cancelled" => "⊘",
         "waiting" => "…",
+        "chained" => "↳",
         "held" => "‼",
         "needs_you" => "?",
         _ => "·",
@@ -728,6 +732,10 @@ mod tests {
         assert!(!held.contains("cannot be steered"));
         assert!(
             detail_of(&mut model, "queued", "implement", None).contains("Not started yet (queued)")
+        );
+        assert!(
+            detail_of(&mut model, "chained", "implement", None)
+                .contains("Not started: it follows another dispatch")
         );
         assert!(
             detail_of(&mut model, "running", "explore", None)

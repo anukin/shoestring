@@ -4,7 +4,8 @@
 Used only by hermetic tests: it starts no model, opens no network connection
 and reads no credentials. Like a worker that did its job, it makes `add()` in
 `calc.py` (in its working directory, the run's worktree) return the sum of
-its arguments, commits that change, and prints the stream-json frames a
+its arguments (or, when add() already does, adds sub()), commits that
+change, and prints the stream-json frames a
 headless Claude run prints, in the 2.1.310 order: `system`/`init`, one
 `assistant` text message, a `rate_limit_event` (Claude's own usage report)
 and a `result` with token usage. Its argv is appended as one JSON line to
@@ -81,8 +82,14 @@ if SCENARIO == "limit":
 with open("calc.py") as handle:
     source = handle.read()
 
+# A worker that starts where an earlier one finished (a dependent dispatch)
+# finds add() done and adds sub() instead.
+followed = "return a + b" in source
 with open("calc.py", "w") as handle:
-    handle.write(source.replace("raise NotImplementedError", "return a + b"))
+    if followed:
+        handle.write(source + "\n\ndef sub(a, b):\n    return a - b\n")
+    else:
+        handle.write(source.replace("raise NotImplementedError", "return a + b"))
 
 subprocess.run(["git", "add", "calc.py"], check=True)
 subprocess.run(
@@ -97,7 +104,7 @@ subprocess.run(
         "commit",
         "-q",
         "-m",
-        "Make add return the sum of its arguments",
+        "Add sub" if followed else "Make add return the sum of its arguments",
     ],
     check=True,
 )

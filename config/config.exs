@@ -66,7 +66,8 @@ config :shoestring, Oban,
     reservation_control: 1,
     plan_child_inbox: 2,
     plan_cancellation: 1,
-    coordinator_calls: 2
+    coordinator_calls: 2,
+    coordinator_chains: 1
   ],
   plugins: [
     # An abandoned executing job must become runnable again; DispatchRecord remains the effect claim.
