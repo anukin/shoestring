@@ -78,13 +78,14 @@ defmodule Shoestring.AgentProfilesTest do
     end
   end
 
-  test "a revision without effort keeps its pre-effort configuration shape" do
+  test "a revision without effort records none; each role names the agent that fills it" do
     {:ok, agent} = AgentProfiles.create(agent_attrs())
     {:ok, snapshot} = AgentProfiles.snapshot_by_id(agent.id)
 
+    # Effort and a time limit are recorded only when there are any.
     assert Enum.all?(
              snapshot["configuration"]["roles"],
-             &(Map.keys(&1) |> Enum.sort() == ["model", "name", "provider"])
+             &(Map.keys(&1) |> Enum.sort() == ["agent", "agent_id", "model", "name", "provider"])
            )
   end
 

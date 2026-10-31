@@ -30,7 +30,9 @@ defmodule Shoestring.Harnesses do
   @capabilities [:coordinate, :converse, :plan, :implement, :review, :explore]
   @role_capabilities %{
     "Coordinator" => :coordinate,
+    "Explorer" => :explore,
     "Worker" => :implement,
+    "Implementer" => :implement,
     "Reviewer" => :review
   }
 

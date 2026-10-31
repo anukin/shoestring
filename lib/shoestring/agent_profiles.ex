@@ -54,11 +54,99 @@ defmodule Shoestring.AgentProfiles do
     }
   end
 
-  def change(agent, attrs \\ %{}), do: Definition.changeset(agent, attrs, catalog())
-  def create(attrs), do: persist(change(%Definition{}, attrs), :insert)
+  @doc """
+  A team's changeset. A role naming an agent (`agent_id`,
+  `Shoestring.Agents`) takes that agent's provider, model and effort.
+  """
+  def change(agent, attrs \\ %{}),
+    do: Definition.changeset(agent, map_roles(attrs, &from_agent/1), catalog())
 
-  def update(agent, attrs),
-    do: persist(change(agent, attrs) |> Ecto.Changeset.optimistic_lock(:revision), :update)
+  @doc """
+  Saves a new team. Each role names an agent; a role given as a provider and
+  model instead is linked to the agent of its job with exactly those (made
+  when there is none).
+  """
+  def create(attrs) do
+    Repo.transaction(fn ->
+      case persist(change(%Definition{}, map_roles(attrs, &link/1)), :insert) do
+        {:ok, team} -> team
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  def update(agent, attrs) do
+    Repo.transaction(fn ->
+      changeset =
+        agent |> change(map_roles(attrs, &link/1)) |> Ecto.Changeset.optimistic_lock(:revision)
+
+      case persist(changeset, :update) do
+        {:ok, team} -> team
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  # `attrs`' roles, as a list or as a form's index map, each mapped by `fun`.
+  defp map_roles(attrs, fun) when is_map(attrs) do
+    {key, roles} =
+      cond do
+        Map.has_key?(attrs, "roles") -> {"roles", attrs["roles"]}
+        Map.has_key?(attrs, :roles) -> {:roles, attrs[:roles]}
+        true -> {nil, nil}
+      end
+
+    case roles do
+      list when is_list(list) ->
+        Map.put(attrs, key, Enum.map(list, &role_attrs(&1, fun)))
+
+      %{} = indexed ->
+        Map.put(attrs, key, Map.new(indexed, fn {i, role} -> {i, role_attrs(role, fun)} end))
+
+      _ ->
+        attrs
+    end
+  end
+
+  defp map_roles(attrs, _fun), do: attrs
+
+  defp role_attrs(%Role{} = role, fun), do: role |> Map.from_struct() |> role_attrs(fun)
+
+  defp role_attrs(role, fun) when is_map(role),
+    do: role |> Map.new(fn {k, v} -> {to_string(k), v} end) |> fun.()
+
+  defp role_attrs(role, _fun), do: role
+
+  defp from_agent(%{"agent_id" => id} = role) when is_binary(id) and id != "" do
+    case Shoestring.Agents.get(id) do
+      nil ->
+        role
+
+      agent ->
+        Map.merge(role, %{
+          "provider" => agent.provider,
+          "model" => agent.model,
+          "effort" => agent.effort,
+          "agent_kind" => agent.kind
+        })
+    end
+  end
+
+  defp from_agent(role), do: role
+
+  defp link(%{"agent_id" => id} = role) when is_binary(id) and id != "", do: role
+
+  defp link(%{"name" => name, "provider" => provider, "model" => model} = role)
+       when is_binary(name) and is_binary(provider) and is_binary(model) do
+    effort = if role["effort"] in [nil, ""], do: nil, else: role["effort"]
+
+    case Shoestring.Agents.ensure(Shoestring.Agents.kind_of(name), provider, model, effort) do
+      {:ok, agent} -> Map.put(role, "agent_id", agent.id)
+      {:error, _invalid} -> role
+    end
+  end
+
+  defp link(role), do: role
 
   def change_settings(settings, attrs \\ %{}) do
     settings
@@ -132,10 +220,12 @@ defmodule Shoestring.AgentProfiles do
             "instructions" => agent.instructions,
             "roles" =>
               Enum.map(agent.roles, fn role ->
-                # Effort is added only when chosen, so revisions without one
-                # keep the configuration shape (and digest) they always had.
+                # Effort, the agent and its limit are added only when there
+                # are any, so earlier revisions keep the configuration shape
+                # (and digest) they always had.
                 %{"name" => role.name, "provider" => role.provider, "model" => role.model}
                 |> then(&if(role.effort, do: Map.put(&1, "effort", role.effort), else: &1))
+                |> with_agent(role.agent_id)
               end)
           }
 
@@ -156,5 +246,21 @@ defmodule Shoestring.AgentProfiles do
           Repo.rollback(changeset)
       end
     end)
+  end
+
+  defp with_agent(entry, nil), do: entry
+
+  defp with_agent(entry, id) do
+    case Shoestring.Agents.get(id) do
+      nil ->
+        entry
+
+      agent ->
+        entry
+        |> Map.merge(%{"agent_id" => id, "agent" => agent.slug})
+        |> then(
+          &if(agent.max_minutes, do: Map.put(&1, "max_minutes", agent.max_minutes), else: &1)
+        )
+    end
   end
 end
