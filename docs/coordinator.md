@@ -222,7 +222,10 @@ started, checks, review, acceptance), never the worker's transcript or the
 brief, up to 500 events a time; pass its `last_sequence` back as `--after`
 for what happened since. An EXPLORE or REVIEW dispatch has no goal, so its
 log is its record and its call's times: dispatched, confirmed, admitted,
-started, finished.
+started, finished. An EXPLORE's log also shows what the explorer did while it
+ran, as it happens: each command Codex starts, each file Claude reads or
+search it makes (redacted, at most 200 characters each; the last 50 are
+kept and earlier ones counted).
 
 When a dispatch's task or review is held because its provider's remaining
 usage cannot be confirmed — always for opencode, which reports none; always

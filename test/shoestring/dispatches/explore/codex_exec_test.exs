@@ -16,6 +16,8 @@ defmodule Shoestring.Dispatches.Explore.CodexExecTest do
   emit({"type": "thread.started", "thread_id": "00000000-0000-4000-8000-000000000000"})
   emit({"type": "turn.started"})
   # What codex-cli 0.166.0 reports for a command its code-mode `exec` ran.
+  emit({"type": "item.started", "item": {"id": "item_0", "type": "command_execution",
+        "command": "/bin/zsh -c 'cat README.md'", "status": "in_progress"}})
   emit({"type": "item.completed", "item": {"id": "item_0", "type": "command_execution",
         "command": "/bin/zsh -c 'cat README.md'", "exit_code": 0, "status": "completed"}})
   emit({"type": "item.completed", "item": {"id": "item_1", "type": "agent_message",
@@ -49,7 +51,13 @@ defmodule Shoestring.Dispatches.Explore.CodexExecTest do
       "max_output_tokens" => 4096
     }
 
-    assert {:ok, _report} = CodexExec.explore(input, endpoint: Path.join(c.dir, "codex"))
+    test = self()
+    progress = &send(test, {:step, &1})
+
+    assert {:ok, _report} =
+             CodexExec.explore(input, endpoint: Path.join(c.dir, "codex"), progress: progress)
+
+    assert_received {:step, "Ran /bin/zsh -c 'cat README.md'"}
 
     argv =
       c.dir |> Path.join("call.json") |> File.read!() |> Jason.decode!() |> Map.fetch!("argv")

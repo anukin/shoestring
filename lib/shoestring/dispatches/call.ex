@@ -32,6 +32,8 @@ defmodule Shoestring.Dispatches.Call do
     field :output_tokens, :integer
     field :started_at, :utc_datetime_usec
     field :finished_at, :utc_datetime_usec
+    # An EXPLORE's last steps while it ran: %{"steps" => [%{"at", "line"}], "total" => n}.
+    field :progress, :map
     timestamps(type: :utc_datetime_usec)
   end
 end

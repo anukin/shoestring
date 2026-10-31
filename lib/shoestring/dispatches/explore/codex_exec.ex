@@ -19,6 +19,7 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
   @behaviour Shoestring.Dispatches.Explore.Adapter
 
   alias Shoestring.Dispatches.Explore
+  alias Shoestring.Dispatches.Explore.Progress
   alias Shoestring.Elves.PortRunner
 
   @max_stream_bytes 8_388_608
@@ -55,8 +56,13 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
     deadline = max(input["timeout_ms"] - @deadline_margin_ms, @minimum_deadline_ms)
 
     case PortRunner.spawn(argv, cd: workdir, max_output_bytes: @max_stream_bytes) do
-      {:ok, runner} -> runner |> collect(deadline) |> decode(input["max_output_tokens"])
-      {:error, _reason} -> {:error, :transport_error}
+      {:ok, runner} ->
+        runner
+        |> collect(deadline, Keyword.get(opts, :progress))
+        |> decode(input["max_output_tokens"])
+
+      {:error, _reason} ->
+        {:error, :transport_error}
     end
   end
 
@@ -75,12 +81,13 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
     |> Enum.flat_map(&["-c", &1])
   end
 
-  defp collect(runner, deadline_ms) do
+  # `progress` (or nil) gets each command as it starts (`Explore.Progress`).
+  defp collect(runner, deadline_ms, progress) do
     deadline = System.monotonic_time(:millisecond) + deadline_ms
-    collect(runner, deadline, [], 0)
+    collect(runner, deadline, [], 0, {"", progress})
   end
 
-  defp collect(%PortRunner{port: port} = runner, deadline, chunks, bytes) do
+  defp collect(%PortRunner{port: port} = runner, deadline, chunks, bytes, {pending, progress}) do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
@@ -91,7 +98,8 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
           _ = PortRunner.terminate(runner)
           {:error, :output_too_large}
         else
-          collect(runner, deadline, [chunks, data], bytes)
+          pending = Progress.feed(pending, data, &Progress.codex/1, progress)
+          collect(runner, deadline, [chunks, data], bytes, {pending, progress})
         end
 
       {^port, {:exit_status, 0}} ->

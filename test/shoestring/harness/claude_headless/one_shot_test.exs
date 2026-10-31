@@ -75,6 +75,38 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShotTest do
              Enum.find(snapshot.windows, &(&1.kind == "five_hour"))
   end
 
+  test "each tool the explorer uses is reported as it happens", %{dir: dir} do
+    test = self()
+
+    tool_use = %{
+      "type" => "assistant",
+      "message" => %{
+        "content" => [
+          %{"type" => "tool_use", "name" => "Read", "input" => %{"file_path" => "calc.py"}}
+        ]
+      }
+    }
+
+    endpoint = standin(dir, [tool_use, result()])
+
+    input = %{
+      endpoint: endpoint,
+      model: "opus",
+      schema: %{"type" => "object"},
+      system_prompt: "s",
+      prompt: "p",
+      max_output_tokens: 4096,
+      timeout_ms: 30_000,
+      scratch_prefix: "one-shot-test",
+      workdir: dir,
+      capacity_sink: nil,
+      progress: &send(test, {:step, &1})
+    }
+
+    assert {:ok, _} = OneShot.call(input)
+    assert_received {:step, "Read calc.py"}
+  end
+
   test "no report records nothing, and a failing sink never fails the call", %{dir: dir} do
     test = self()
     endpoint = standin(dir, [result()])

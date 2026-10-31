@@ -40,6 +40,7 @@ defmodule Shoestring.Dispatches.Explore.ClaudeHeadless do
       scratch_prefix: "shoestring-explorer",
       tools: "Read,Grep,Glob",
       workdir: input["workdir"],
+      progress: Keyword.get(opts, :progress),
       extra_args: @safety ++ if(input["effort"], do: ["--effort", input["effort"]], else: [])
     })
   end

@@ -234,8 +234,28 @@ defmodule Shoestring.CLI.Commands.Runs do
       {call.confirmed_at, "Usage confirmed by #{call.confirmed_by}."},
       {call.started_at, "The call started."},
       {call.finished_at, finished(call)}
-    ]
+    ] ++ progress_entries(call)
   end
+
+  # What the explorer did while the call ran; earlier steps past the kept
+  # ones are counted.
+  defp progress_entries(%{progress: %{"steps" => [first | _] = steps, "total" => total}}) do
+    kept =
+      for step <- steps,
+          {:ok, at, _} <- [DateTime.from_iso8601(step["at"] || "")],
+          do: {at, step["line"]}
+
+    case total - length(steps) do
+      0 ->
+        kept
+
+      omitted ->
+        {:ok, at, _} = DateTime.from_iso8601(first["at"])
+        [{at, "… #{omitted} earlier steps not kept."} | kept]
+    end
+  end
+
+  defp progress_entries(_call), do: []
 
   defp finished(%{state: "completed", output_tokens: tokens}),
     do: "The call completed (#{tokens} output tokens)."

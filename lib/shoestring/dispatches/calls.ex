@@ -26,6 +26,8 @@ defmodule Shoestring.Dispatches.Calls do
   Cancelling a running call discards its result; the call itself ends within
   its timeout.
   """
+  require Logger
+
   import Ecto.Query
 
   alias Shoestring.{Repo, Worktrees}
@@ -280,7 +282,10 @@ defmodule Shoestring.Dispatches.Calls do
       with {:ok, workdir} <- copy(dispatch, call, input) do
         explored =
           bounded(input, fn ->
-            adapter(input, opts).explore(Map.put(input, "workdir", workdir), adapter_opts(opts))
+            adapter(input, opts).explore(
+              Map.put(input, "workdir", workdir),
+              Keyword.put(adapter_opts(opts), :progress, &record_progress(call.id, &1))
+            )
           end)
 
         with {:ok, json, tokens} <- explored,
@@ -352,6 +357,35 @@ defmodule Shoestring.Dispatches.Calls do
       nil ->
         {:failed, "transport_timeout", nil}
     end
+  end
+
+  @max_progress 50
+
+  @doc """
+  Keeps one step an EXPLORE's explorer reported while its call runs: the
+  last #{@max_progress} steps and how many there were. Never fails the call.
+  """
+  def record_progress(call_id, line, now \\ DateTime.utc_now()) do
+    # Only while the call runs: the update checks its state, so a step that
+    # races its end is dropped.
+    with %Call{progress: progress} <- Repo.get(Call, call_id) do
+      progress = progress || %{"steps" => [], "total" => 0}
+      step = %{"at" => DateTime.to_iso8601(now), "line" => line}
+
+      progress = %{
+        "steps" => Enum.take(progress["steps"] ++ [step], -@max_progress),
+        "total" => progress["total"] + 1
+      }
+
+      from(c in Call, where: c.id == ^call_id and c.state == "running")
+      |> Repo.update_all(set: [progress: progress, updated_at: now])
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("explore progress not kept: #{inspect(error, limit: 8)}")
+      :ok
   end
 
   defp tokens({:ok, _json, tokens}), do: tokens

@@ -158,6 +158,29 @@ defmodule Shoestring.DispatchCallsTest do
            ]
   end
 
+  test "what the explorer does while it runs is kept with the call and shown in its log",
+       ctx do
+    assert {:ok, dispatch, :recorded} = Dispatches.create(explore(ctx))
+    admitted!(dispatch)
+    assert :done = step(dispatch, :progress)
+
+    assert %Call{progress: %{"total" => 55, "steps" => steps}} = Calls.get(dispatch.id)
+    assert length(steps) == 50
+
+    lines = Enum.map(Shoestring.CLI.Commands.Runs.log(dispatch, 0)["entries"], & &1["line"])
+    assert "… 5 earlier steps not kept." in lines
+    assert "Ran step 6" in lines and "Ran step 55" in lines
+    refute "Ran step 5" in lines
+    # The steps come after the call started and before it finished.
+    started = Enum.find_index(lines, &(&1 == "The call started."))
+    assert started < Enum.find_index(lines, &(&1 == "Ran step 6"))
+    assert List.last(lines) =~ "The call completed"
+
+    # A step reported after the call ended is not kept.
+    :ok = Calls.record_progress(Calls.get(dispatch.id).id, "late")
+    assert %Call{progress: %{"total" => 55}} = Calls.get(dispatch.id)
+  end
+
   test "an explorer that writes, an oversized report or a failed call keeps no report", ctx do
     for {scenario, code, n} <- [
           {:write, "explorer_wrote", 1},

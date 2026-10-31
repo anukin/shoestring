@@ -3,7 +3,8 @@ defmodule Shoestring.Test.ExploreStandIn do
   An explorer for hermetic tests; never a provider. It reports what it was
   given to `opts[:test_pid]` and answers per `opts[:scenario]`: `:report`
   (cites `calc.py:1`, `calc.py:999` and `missing.py:3`), `:write` (edits the
-  copy first), `:oversized` or `{:error, code}`. `:process_group` holds an
+  copy first), `:oversized`, `:progress` (reports 55 steps through
+  `opts[:progress]` first) or `{:error, code}`. `:process_group` holds an
   owned process group for the call, as the real explorers do, sends
   `{:explore_group, pgid, self()}` and reports once sent `:release_explore`.
   """
@@ -20,6 +21,10 @@ defmodule Shoestring.Test.ExploreStandIn do
       :memory_requirement ->
         report = Map.put(report(), "summary", "Preserve signed zero; keep the public API.")
         {:ok, %{json: Jason.encode!(report), output_tokens: 120}}
+
+      :progress ->
+        for n <- 1..55, do: opts[:progress].("Ran step #{n}")
+        {:ok, %{json: Jason.encode!(report()), output_tokens: 120}}
 
       :write ->
         File.write!(Path.join(input["workdir"], "calc.py"), "changed\n")
