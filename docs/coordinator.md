@@ -24,6 +24,14 @@ and, for an explicit REVIEW dispatch, its review brief as labelled data,
 alongside the contract, diff and checks. Secret-looking values are redacted.
 Changing a brief changes the immutable packet digest.
 
+Every dispatch works on a private copy of the repository at `HEAD`, so
+uncommitted paths of your checkout are never in it. EXPLORE and REVIEW go
+ahead anyway and name those paths in `left_out`, so the coordinator can tell
+you when one matters. IMPLEMENT refuses while tracked files are changed (its
+commit would not build on what you see) and goes ahead with untracked files,
+naming them the same way. Notes you never commit can go in
+`.git/info/exclude`.
+
 Completing one IMPLEMENT does not automatically give the next dispatch its
 code: dispatches snapshot the repository's current HEAD. Integrate the
 accepted commit before dispatching dependent work. No shared cross-session

@@ -4,8 +4,10 @@ defmodule Shoestring.Cobbler.Intake do
   the goal contract and a bounded repository map for the planner.
 
   Only read-only `git` commands run (`rev-parse`, `status`, `ls-files`). The
-  base revision is the repository's `HEAD`, and a dirty working tree is
-  refused: uncommitted changes would not be in the approved base. Gates come
+  base revision is the repository's `HEAD`, and by default a dirty working
+  tree is refused: uncommitted changes would not be in the approved base.
+  `repository/2` can instead let untracked files, or every uncommitted path,
+  through; they are then listed in the facts as left out of the base. Gates come
   from explicit flags or detection over tracked files; a model never chooses
   them. The repository map lists tracked paths only, never file contents.
   """
@@ -26,11 +28,21 @@ defmodule Shoestring.Cobbler.Intake do
   ]
   @default_non_goals ["Unrelated refactoring, dependency upgrades or formatting changes."]
 
-  @type facts :: %{root: Path.t(), head: String.t(), tracked: [String.t()]}
+  @type facts :: %{
+          root: Path.t(),
+          head: String.t(),
+          tracked: [String.t()],
+          uncommitted: [String.t()]
+        }
 
-  @doc "Reads a clean repository's root, `HEAD` commit and tracked paths."
-  @spec repository(Path.t()) :: {:ok, facts()} | {:error, term()}
-  def repository(path) do
+  @doc """
+  Reads a repository's root, `HEAD` commit and tracked paths, and the
+  uncommitted paths (`uncommitted`, `git status` order) that are not in
+  `HEAD`. `:uncommitted` decides which are allowed: `:refuse` (the default)
+  none, `:untracked` untracked files only, `:allow` any.
+  """
+  @spec repository(Path.t(), keyword()) :: {:ok, facts()} | {:error, term()}
+  def repository(path, opts \\ []) do
     with true <- File.dir?(path) || {:error, :not_a_directory},
          {:ok, root} <- git(path, ["rev-parse", "--show-toplevel"], :not_a_git_repository),
          root = String.trim(root),
@@ -38,10 +50,18 @@ defmodule Shoestring.Cobbler.Intake do
            git(root, ["rev-parse", "--quiet", "--verify", "HEAD^{commit}"], :no_commits),
          {:ok, status} <-
            git(root, ["status", "--porcelain=v1", "--untracked-files=normal"], :git_failed),
-         :ok <- clean(status),
+         uncommitted = uncommitted(status),
+         :ok <- allowed(uncommitted, Keyword.get(opts, :uncommitted, :refuse)),
          {:ok, listing} <- git(root, ["ls-files", "-z"], :git_failed) do
       tracked = listing |> String.split(<<0>>, trim: true) |> Enum.sort()
-      {:ok, %{root: root, head: String.trim(head), tracked: tracked}}
+
+      {:ok,
+       %{
+         root: root,
+         head: String.trim(head),
+         tracked: tracked,
+         uncommitted: Enum.map(uncommitted, &elem(&1, 1))
+       }}
     end
   end
 
@@ -115,16 +135,19 @@ defmodule Shoestring.Cobbler.Intake do
     }
   end
 
-  defp clean(""), do: :ok
+  # `{untracked?, path}` for each line of `git status --porcelain=v1`.
+  defp uncommitted(status) do
+    for line <- String.split(status, "\n", trim: true),
+        do: {String.starts_with?(line, "??"), String.slice(line, 3..-1//1)}
+  end
 
-  defp clean(status) do
-    paths =
-      status
-      |> String.split("\n", trim: true)
-      |> Enum.map(&String.slice(&1, 3..-1//1))
-      |> Enum.take(5)
+  defp allowed(_uncommitted, :allow), do: :ok
 
-    {:error, {:dirty_worktree, paths}}
+  defp allowed(uncommitted, mode) do
+    case Enum.reject(uncommitted, fn {untracked?, _path} -> untracked? and mode == :untracked end) do
+      [] -> :ok
+      refused -> {:error, {:dirty_worktree, refused |> Enum.map(&elem(&1, 1)) |> Enum.take(5)}}
+    end
   end
 
   defp detect(tracked) do

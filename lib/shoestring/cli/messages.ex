@@ -6,7 +6,8 @@ defmodule Shoestring.CLI.Messages do
 
   def message({:dirty_worktree, paths}, _),
     do:
-      "The repository has uncommitted changes (#{Enum.join(paths, ", ")}). Commit or stash them first."
+      "The repository has uncommitted changes (#{Enum.join(paths, ", ")}). Commit or stash them " <>
+        "first; files that should never be committed can go in .git/info/exclude."
 
   def message(:not_a_git_repository, _),
     do: "Not a Git repository. Run it inside one or pass --repo."

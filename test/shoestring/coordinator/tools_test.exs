@@ -146,6 +146,31 @@ defmodule Shoestring.Coordinator.ToolsTest do
     assert Map.delete(replayed, "outcome") == Map.delete(created, "outcome")
   end
 
+  test "an uncommitted checkout: EXPLORE goes ahead naming what its copy lacks; IMPLEMENT refuses only changed tracked files",
+       ctx do
+    grant!(ctx)
+    File.write!(Path.join(ctx.repo, "notes.md"), "untracked\n")
+    File.write!(Path.join(ctx.repo, "calc.py"), "changed\n")
+
+    assert {:error, message} = Tools.call("dispatch", tool_args(), ctx.binding)
+    assert message =~ "calc.py"
+    refute message =~ "notes.md"
+    assert message =~ ".git/info/exclude"
+
+    explore =
+      tool_args(%{"purpose" => "explore", "title" => "Look around"}) |> Map.delete("files")
+
+    assert {:ok, %{"purpose" => "explore", "left_out" => %{"paths" => paths, "more" => 0}}} =
+             Tools.call("dispatch", explore, ctx.binding)
+
+    assert Enum.sort(paths) == ["calc.py", "notes.md"]
+
+    git!(ctx.repo, ["checkout", "--", "calc.py"])
+
+    assert {:ok, %{"purpose" => "implement", "left_out" => %{"paths" => ["notes.md"]}}} =
+             Tools.call("dispatch", tool_args(), ctx.binding)
+  end
+
   test "runs tools return the command's JSON for this session's dispatches only", ctx do
     grant!(ctx)
     %{"dispatch_id" => id} = as_json(Tools.call("dispatch", tool_args(), ctx.binding))

@@ -95,6 +95,17 @@ defmodule Shoestring.Cobbler.IntakeTest do
     File.write!(Path.join(dirty, "notes.txt"), "new\n")
     assert {:error, {:dirty_worktree, paths}} = Intake.repository(dirty)
     assert Enum.sort(paths) == ["calc.py", "notes.txt"]
+    # Untracked files can be let through alone; every path can be allowed.
+    assert {:error, {:dirty_worktree, ["calc.py"]}} =
+             Intake.repository(dirty, uncommitted: :untracked)
+
+    assert {:ok, %{uncommitted: uncommitted}} = Intake.repository(dirty, uncommitted: :allow)
+    assert Enum.sort(uncommitted) == ["calc.py", "notes.txt"]
+    File.write!(Path.join(dirty, "calc.py"), File.read!(Path.join(dirty, "calc.py")))
+    git!(dirty, ["checkout", "--", "calc.py"])
+
+    assert {:ok, %{uncommitted: ["notes.txt"]}} =
+             Intake.repository(dirty, uncommitted: :untracked)
 
     {:ok, bare} = Intake.repository(repo!([{"README.md", "x\n"}]))
     assert {:error, :no_gate_detected} = Intake.gates(bare)

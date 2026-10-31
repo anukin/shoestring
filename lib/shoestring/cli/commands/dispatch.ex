@@ -135,7 +135,17 @@ defmodule Shoestring.CLI.Commands.Dispatch do
           )
         )
 
-        Command.json(context, Map.put(summary(dispatch), "outcome", Atom.to_string(outcome)))
+        created = created(dispatch, outcome)
+
+        if left_out = created["left_out"] do
+          context.shell.error(
+            "Not in its copy (the repository at HEAD): uncommitted " <>
+              Enum.join(left_out["paths"], ", ") <>
+              if(left_out["more"] > 0, do: " and #{left_out["more"]} more", else: "") <> "."
+          )
+        end
+
+        Command.json(context, created)
 
       {:error, reason} ->
         Refusal.refuse!(message(reason, request))
@@ -277,6 +287,17 @@ defmodule Shoestring.CLI.Commands.Dispatch do
        )
        |> Base.encode16(case: :lower)
        |> binary_part(0, 24))
+  end
+
+  @doc """
+  A new or replayed dispatch as its requester sees it: the summary, the
+  outcome, and the uncommitted paths its copy left out (`left_out`).
+  """
+  def created(dispatch, outcome) do
+    dispatch
+    |> summary()
+    |> Map.put("outcome", Atom.to_string(outcome))
+    |> Map.put("left_out", Dispatches.left_out(dispatch.repository_root))
   end
 
   @doc "A dispatch as data, with its state derived from its execution."

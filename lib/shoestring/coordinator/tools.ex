@@ -207,7 +207,7 @@ defmodule Shoestring.Coordinator.Tools do
   defp create(request) do
     case Dispatches.create(request) do
       {:ok, dispatch, outcome} ->
-        {:ok, Map.put(Dispatch.summary(dispatch), "outcome", Atom.to_string(outcome))}
+        {:ok, Dispatch.created(dispatch, outcome)}
 
       {:error, reason} ->
         {:error, Dispatch.message(reason, request)}

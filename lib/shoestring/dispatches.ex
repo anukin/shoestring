@@ -100,7 +100,8 @@ defmodule Shoestring.Dispatches do
          "grant_check" => check_result(Grants.check(grant, check_request(prepared), usage)),
          "grant" => room(grant, usage),
          "plan" => prepared.contract.content,
-         "plan_digest" => prepared.contract.digest
+         "plan_digest" => prepared.contract.digest,
+         "left_out" => left_out(prepared.root)
        }}
     end
   end
@@ -173,16 +174,47 @@ defmodule Shoestring.Dispatches do
          {:ok, brief} <- brief(redact(request.brief)),
          :ok <- worker(request),
          :ok <- batch(request),
-         {:ok, facts} <- Intake.repository(request.repository) do
+         {:ok, facts} <-
+           Intake.repository(request.repository, uncommitted: uncommitted(request.purpose)) do
       prepared = %{
         request: request,
         title: title,
         brief: brief,
         root: facts.root,
-        head: facts.head
+        head: facts.head,
+        left_out: facts.uncommitted
       }
 
       prepare(request.purpose, prepared, facts)
+    end
+  end
+
+  # Every dispatch works on a private copy at `HEAD`, so uncommitted paths
+  # are left out of it. An IMPLEMENT refuses changed tracked files, whose
+  # committed version would differ from the checkout the person sees;
+  # untracked files never reach a copy. EXPLORE and REVIEW only read, and
+  # name what they left out.
+  defp uncommitted("implement"), do: :untracked
+  defp uncommitted(_purpose), do: :allow
+
+  @doc """
+  What a dispatch's requester is told about `root`'s uncommitted paths,
+  which no dispatch's copy (the repository at `HEAD`) contains: at most 10,
+  with the count of the rest; nil when there are none.
+  """
+  def left_out(root) do
+    case Intake.repository(root, uncommitted: :allow) do
+      {:ok, %{uncommitted: [_ | _] = paths}} ->
+        %{
+          "paths" => Enum.take(paths, 10),
+          "more" => max(length(paths) - 10, 0),
+          "note" =>
+            "Not in the dispatch's copy, which is the repository at HEAD. Tell the person " <>
+              "if any of these uncommitted paths matter to the task."
+        }
+
+      _ ->
+        nil
     end
   end
 
