@@ -14,7 +14,9 @@ defmodule Shoestring.Harness.Capacity.Registry do
       provider: :codex,
       invocation_mode: :app_server_stdio,
       supported_tier: :proactive,
-      tested_versions: ["0.150.1", "0.162.0", "0.162.1", "0.163.0"],
+      # 0.166.0: readings recorded by the installed service on 2026-10-30
+      # had both windows with used percent, reset and window minutes.
+      tested_versions: ["0.150.1", "0.162.0", "0.162.1", "0.163.0", "0.166.0"],
       required_semantic_fields: ["rateLimits", "primary", "secondary", "usedPercent"],
       compatibility_outcome: :compatible,
       description:

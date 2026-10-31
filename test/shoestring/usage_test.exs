@@ -85,6 +85,46 @@ defmodule Shoestring.UsageTest do
     assert Enum.count(card.history, &is_nil(&1.value)) == 6
   end
 
+  test "Codex windows show as the allowance their reported length makes them" do
+    now = DateTime.utc_now()
+
+    capacity_fixture(%{
+      observed_at: now,
+      windows: [
+        %{kind: "primary", state: :observed, used_percent: 3.0, reset_at: DateTime.add(now, 60)},
+        %{
+          kind: "secondary",
+          state: :observed,
+          used_percent: 19.0,
+          reset_at: DateTime.add(now, 90)
+        }
+      ],
+      extensions: %{
+        "codex:primary_window_minutes" => 300,
+        "codex:secondary_window_minutes" => 10_080
+      }
+    })
+
+    card = Enum.find(Usage.cards(now), &(&1.provider == "codex"))
+
+    assert [%{kind: "five_hour", used_percent: 3.0}, %{kind: "seven_day", used_percent: 19.0}] =
+             card.windows
+
+    assert List.last(card.history).value == 3.0
+
+    # A length that is neither keeps its own name, beside the unknown slots.
+    capacity_fixture(%{
+      scope: "synthetic-other",
+      observed_at: now,
+      windows: [%{kind: "primary", state: :observed, used_percent: 5.0}],
+      extensions: %{"codex:primary_window_minutes" => 60}
+    })
+
+    other = Enum.find(Usage.cards(now), &(&1.scope == "synthetic-other"))
+    assert Enum.map(other.windows, & &1.kind) == ["five_hour", "seven_day", "primary"]
+    assert Enum.find(other.windows, &(&1.kind == "five_hour")).used_percent == nil
+  end
+
   test "legacy credential markers render redacted while keeping allowance and stored evidence" do
     capacity_fixture()
     record = Repo.one!(Shoestring.Harness.CapacitySnapshotRecord)

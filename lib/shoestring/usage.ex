@@ -70,10 +70,32 @@ defmodule Shoestring.Usage do
       warning?: warning?(record.extensions),
       reason: redact_nullable(summary.reason),
       observed_at: summary.observed_at,
-      windows: windows(summary.windows),
+      windows: windows(Enum.map(summary.windows, &labelled(&1, record))),
       history: history(record, now)
     }
   end
+
+  # Codex names its windows by position (`primary`, `secondary`) and reports
+  # each one's length; shown as the allowance its length makes it, as
+  # admission reads it. A length that is neither stays under its own name.
+  defp labelled(window, %{source_provider_id: "codex", extensions: extensions}) do
+    case {window.kind, (extensions || %{})["codex:#{window.kind}_window_minutes"]} do
+      {kind, 300} when kind in ["primary", "secondary"] -> %{window | kind: "five_hour"}
+      {kind, 10_080} when kind in ["primary", "secondary"] -> %{window | kind: "seven_day"}
+      _ -> window
+    end
+  end
+
+  defp labelled(window, _record), do: window
+
+  # The stored kind of the record's five-hour window.
+  defp five_hour_kind(%{source_provider_id: "codex", extensions: extensions}) do
+    Enum.find(["primary", "secondary"], "five_hour", fn kind ->
+      (extensions || %{})["codex:#{kind}_window_minutes"] == 300
+    end)
+  end
+
+  defp five_hour_kind(_record), do: "five_hour"
 
   # Claude reports `allowed_warning` when the account nears a limit. Shown as
   # reported; it does not change admission by itself.
@@ -118,6 +140,7 @@ defmodule Shoestring.Usage do
   end
 
   defp history(record, now) do
+    kind = five_hour_kind(record)
     start_date = Date.add(DateTime.to_date(now), -6)
     start_at = DateTime.new!(start_date, ~T[00:00:00], "Etc/UTC")
 
@@ -128,7 +151,7 @@ defmodule Shoestring.Usage do
           where:
             s.goal_id == ^record.goal_id and s.contract_version == 2 and
               s.source_provider_id == ^record.source_provider_id and s.scope == ^record.scope and
-              s.observed_at >= ^start_at and s.observed_at <= ^now and w.kind == "five_hour" and
+              s.observed_at >= ^start_at and s.observed_at <= ^now and w.kind == ^kind and
               w.state == "observed",
           group_by: fragment("date(?)", s.observed_at),
           select: {fragment("date(?)", s.observed_at), max(w.used_percent)}
