@@ -30,6 +30,7 @@ pub enum Outgoing {
     Watch { id: String },
     Unwatch,
     CancelDispatch { id: String, reason: String },
+    ConfirmDispatch { id: String },
     Handoff { note: bool },
 }
 
@@ -284,6 +285,7 @@ where
             "cancel_dispatch",
             json!({"dispatch_id": id, "reason": reason}),
         ),
+        Outgoing::ConfirmDispatch { id } => ("confirm_dispatch", json!({"dispatch_id": id})),
         Outgoing::Handoff { note } => ("handoff", json!({ "note": note })),
     };
     let reference = refs.next();
@@ -314,6 +316,9 @@ fn reply(
     if frame.payload["status"] == "ok" && matches!(outgoing, Outgoing::Watch { .. }) {
         lock(model).apply_dispatch(&frame.payload["response"], true);
     }
+    if frame.payload["status"] == "ok" && matches!(outgoing, Outgoing::ConfirmDispatch { .. }) {
+        lock(model).note("Started: Shoestring admits it at its next check, within half a minute");
+    }
     if frame.payload["status"] != "ok" {
         let reason = frame.payload["response"]["reason"]
             .as_str()
@@ -321,6 +326,7 @@ fn reply(
         let what = match outgoing {
             Outgoing::Say { .. } => "Not sent",
             Outgoing::CancelTurn | Outgoing::CancelDispatch { .. } => "Nothing to cancel",
+            Outgoing::ConfirmDispatch { .. } => "Not started",
             Outgoing::Watch { .. } | Outgoing::Unwatch => "Dispatch unavailable",
             Outgoing::Handoff { .. } => "No handoff",
         };

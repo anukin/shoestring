@@ -9,13 +9,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
-use crate::model::{Connection, ConversationView, Kind, Model, cancellable, short};
+use crate::model::{Connection, ConversationView, Kind, Model, cancellable, job, short};
 
 const MAX_AGENTS: usize = 6;
 const MAX_INPUT: usize = 6;
 
 pub const HELP: &str = "\
-Tab          focus agents; Up/Down select; Enter opens; c cancels (confirm)
+Tab          focus dispatches; Up/Down select; Enter opens; c cancels and
+             s starts a held one (each asks first)
 Esc          close detail; Up/Down scroll detail
 PgUp/PgDn    scroll the conversation back and forward
 Enter        send the message (the coordinator gets it when it is idle)
@@ -27,6 +28,7 @@ Ctrl+W/K/U   delete word back / to line end / to line start
 /handoff     continue in a fresh conversation: same grant and agents; the
              coordinator writes a note first (/handoff facts: without)
 /status      the coordinator, grant and dispatches, from Shoestring
+/team        the session's agents, their models and limits
 /help        this help (any key closes it)
 /exit        leave; the conversation and every agent keep running
 Ctrl+C       same as /exit";
@@ -50,7 +52,12 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
     draw_input(frame, model, input_area);
     frame.render_widget(Paragraph::new(status_line(model)), status);
 
-    if !model.agents_focus && model.detail.is_none() && model.confirm.is_none() && !model.help {
+    if !model.agents_focus
+        && model.detail.is_none()
+        && model.confirm.is_none()
+        && model.start.is_none()
+        && !model.help
+    {
         draw_slash_menu(frame, model, input_area);
     }
     if model.help {
@@ -95,6 +102,28 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
                     }
                 ))),
             rect,
+        );
+    }
+    if let Some(dispatch) = &model.start {
+        draw_attention(
+            frame,
+            &Attention {
+                title: "Start this held dispatch?",
+                tone: Tone::Question,
+                body: vec![
+                    format!(
+                        "{} {} on {} · held",
+                        short(&dispatch.id),
+                        job(&dispatch.purpose),
+                        dispatch.worker
+                    ),
+                    dispatch.title.clone(),
+                    "Its provider's remaining usage could not be confirmed. Starting it is your \
+                     confirmation; none of the grant's pre-approvals is spent."
+                        .into(),
+                ],
+                keys: &[("y", "start it"), ("any other key", "leave it held")],
+            },
         );
     }
     if let Some(dispatch) = &model.confirm {
@@ -212,7 +241,7 @@ fn detail_status(model: &Model, detail: &crate::model::Detail) -> String {
     let purpose = dispatch.map(|d| d.purpose.as_str()).unwrap_or("");
     match state {
         "held" => {
-            "Not started: held until you confirm it (next says how). Esc closes; c cancels.".into()
+            "Not started: held until you confirm it. s starts it; c cancels; Esc closes.".into()
         }
         "queued" | "starting" | "waiting" => {
             format!(
@@ -285,7 +314,7 @@ fn draw_conversation(frame: &mut Frame, model: &Model, area: Rect) -> Conversati
 fn draw_agents(frame: &mut Frame, model: &Model, area: Rect) {
     let block = Block::new()
         .borders(Borders::ALL)
-        .title(" Agents · Tab focus · ↑↓ select · Enter detail · c cancel ");
+        .title(" Dispatches · Tab focus · ↑↓ select · Enter detail · s start held · c cancel ");
     let lines: Vec<Line> = if model.dispatches.is_empty() {
         vec![Line::styled("none yet", Style::new().fg(Color::DarkGray))]
     } else {
@@ -308,15 +337,24 @@ fn draw_agents(frame: &mut Frame, model: &Model, area: Rect) {
                 };
                 [
                     format!(
-                        "{} {} {:<9} {} · {}s {}",
+                        "{} {} {:<11} {} · {}s {}",
                         glyph(&d.state),
                         short(&d.id),
-                        d.purpose,
+                        job(&d.purpose),
                         d.state,
                         d.elapsed,
                         d.waiting_until
                     ),
-                    format!("  {} · reviewer {} · {}", d.worker, d.reviewer, d.title),
+                    format!(
+                        "  {} · reviewer {} · {}",
+                        if d.agent.is_empty() {
+                            d.worker.clone()
+                        } else {
+                            format!("{} ({})", d.agent, d.worker)
+                        },
+                        d.reviewer,
+                        d.title
+                    ),
                     format!("  {} {}", d.latest_step, d.next),
                 ]
                 .into_iter()
@@ -357,7 +395,11 @@ fn draw_input(frame: &mut Frame, model: &Model, area: Rect) {
 
     let x = inner.x + (2 + cursor_col).min(inner.width.saturating_sub(1) as usize) as u16;
     let y = inner.y + cursor_row.saturating_sub(top) as u16;
-    if !model.agents_focus && model.detail.is_none() && model.confirm.is_none() {
+    if !model.agents_focus
+        && model.detail.is_none()
+        && model.confirm.is_none()
+        && model.start.is_none()
+    {
         frame.set_cursor_position(Position::new(x, y));
     }
 }
@@ -582,7 +624,7 @@ mod tests {
         assert!(text.contains("coordinator claude:opus · turns 3 used · 7 left"));
         assert!(text.contains("You: Fix the importer"));
         assert!(text.contains("Coordinator: Sending an EXPLORE"));
-        assert!(text.contains("● d41aaaaa explore"));
+        assert!(text.contains("● d41aaaaa Explorer"));
         assert!(text.contains("connected · working"));
         assert!(!text.contains('\u{1b}'));
     }
@@ -682,7 +724,7 @@ mod tests {
             screen(model, 140, 20)
         };
         let held = detail_of(&mut model, "held", "explore", None);
-        assert!(held.contains("Not started: held until you confirm it"));
+        assert!(held.contains("Not started: held until you confirm it. s starts it"));
         assert!(!held.contains("cannot be steered"));
         assert!(
             detail_of(&mut model, "queued", "implement", None).contains("Not started yet (queued)")
@@ -750,6 +792,62 @@ mod tests {
                 .collect::<String>()
                 .contains("Coordinator: line ")
         }));
+    }
+
+    #[test]
+    fn the_start_question_is_a_yellow_attention_popup() {
+        let mut model = Model::new("s1");
+        model.apply_state(&json!({"dispatches": [{"dispatch_id": "d1", "purpose": "explore", "worker": "codex:m", "title": "Find it", "state": "held"}]}));
+        model.start = Some(model.dispatches[0].clone());
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &model);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let (x, y) = (0..24u16)
+            .find_map(|y| {
+                let row: String = (0..100u16)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect();
+                row.find("Start this held dispatch?")
+                    .map(|byte| (row[..byte].chars().count() as u16, y))
+            })
+            .expect("drawn");
+        assert_eq!(buffer[(x, y)].fg, Color::Yellow);
+        assert_eq!(buffer[(x - 2, y)].symbol(), "┏");
+        let text = screen(&model, 100, 24);
+        assert!(text.contains("d1 Explorer on codex:m · held"));
+        assert!(text.contains(" y  start it"));
+        assert!(text.contains("none of the grant's pre-approvals is spent"));
+    }
+
+    #[test]
+    fn rows_name_the_agent_and_team_prints_the_sessions_agents() {
+        let mut model = Model::new("s1");
+        model.apply_state(&json!({
+            "grant": {"team": {"team": "builder", "agents": [
+                {"slug": "coordinator-claude-opus", "kind": "coordinator", "provider": "claude", "model": "opus", "max_minutes": null},
+                {"slug": "quick", "kind": "explorer", "provider": "codex", "model": "m", "max_minutes": 10}]}},
+            "dispatches": [{"dispatch_id": "d1", "purpose": "explore", "agent": "quick", "worker": "codex:m", "title": "Find it", "state": "running"}]
+        }));
+        let text = screen(&model, 120, 24);
+        assert!(text.contains("● d1 Explorer"));
+        assert!(text.contains("quick (codex:m) · reviewer none · Find it"));
+        assert!(text.contains(" Dispatches · Tab focus"));
+
+        model.team_entry();
+        let text = screen(&model, 120, 30);
+        assert!(text.contains("team builder:"));
+        assert!(text.contains("Explorer quick · codex:m · at most 10 min a dispatch"));
+        assert!(text.contains(
+            "Coordinator coordinator-claude-opus · claude:opus · limit: the grant's turns"
+        ));
+
+        model.apply_state(&json!({"grant": {}}));
+        model.team_entry();
+        assert!(screen(&model, 120, 30).contains("started without a team"));
     }
 
     #[test]

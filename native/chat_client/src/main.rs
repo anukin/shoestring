@@ -194,6 +194,17 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
     if control && key.code == KeyCode::Char('c') {
         return true;
     }
+    if let Some(dispatch) = model.start.take() {
+        if key.code == KeyCode::Char('y') {
+            if model.connection == Connection::Live {
+                let _ = outbox.send(Outgoing::ConfirmDispatch { id: dispatch.id });
+                model.note("Start requested");
+            } else {
+                model.note("Disconnected; the start was not sent");
+            }
+        }
+        return false;
+    }
     if let Some(dispatch) = model.confirm.take() {
         if key.code == KeyCode::Char('y') {
             if model.connection == Connection::Live {
@@ -219,6 +230,10 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
             KeyCode::Char('c') => {
                 let id = detail.id.clone();
                 model.ask_cancel(Some(&id));
+            }
+            KeyCode::Char('s') => {
+                let id = detail.id.clone();
+                model.ask_start(Some(&id));
             }
             _ => {}
         }
@@ -272,6 +287,10 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
             KeyCode::Char('c') => {
                 let id = model.selected.clone();
                 model.ask_cancel(id.as_ref());
+            }
+            KeyCode::Char('s') => {
+                let id = model.selected.clone();
+                model.ask_start(id.as_ref());
             }
             _ => {}
         }
@@ -328,6 +347,7 @@ fn edit(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<Outgoin
             },
             Command::Help => model.help = true,
             Command::Status => model.status_entry(),
+            Command::Team => model.team_entry(),
             Command::Cancel => {
                 let _ = outbox.send(Outgoing::CancelTurn);
             }
@@ -407,6 +427,46 @@ mod tests {
         key(&mut model, KeyCode::Char('n'), &tx);
         assert!(rx.try_recv().is_err());
         key(&mut model, KeyCode::Char('c'), &tx);
+        model.connection = Connection::Connecting;
+        key(&mut model, KeyCode::Char('y'), &tx);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_held_dispatch_is_started_only_after_the_person_says_yes() {
+        let mut model = Model::new("s1");
+        model.connection = Connection::Live;
+        model.apply_state(&json!({"dispatches": [
+            {"dispatch_id": "held-one", "title": "audit", "state": "held", "purpose": "explore"},
+            {"dispatch_id": "running-1", "title": "live", "state": "running"}]}));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        key(&mut model, KeyCode::Tab, &tx);
+        key(&mut model, KeyCode::Char('s'), &tx);
+        assert_eq!(model.start.as_ref().unwrap().id, "held-one");
+        assert!(rx.try_recv().is_err());
+        // Any other key leaves it held.
+        key(&mut model, KeyCode::Char('n'), &tx);
+        assert!(model.start.is_none());
+        assert!(rx.try_recv().is_err());
+        key(&mut model, KeyCode::Char('s'), &tx);
+        key(&mut model, KeyCode::Char('y'), &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Outgoing::ConfirmDispatch {
+                id: "held-one".into()
+            }
+        );
+        // Only a held dispatch waits to be started.
+        key(&mut model, KeyCode::Down, &tx);
+        key(&mut model, KeyCode::Char('s'), &tx);
+        assert!(model.start.is_none());
+        assert_eq!(
+            model.notice.as_deref(),
+            Some("running- is running; only a held dispatch waits for you to start it")
+        );
+        // Disconnected, nothing is sent.
+        key(&mut model, KeyCode::Up, &tx);
+        key(&mut model, KeyCode::Char('s'), &tx);
         model.connection = Connection::Connecting;
         key(&mut model, KeyCode::Char('y'), &tx);
         assert!(rx.try_recv().is_err());

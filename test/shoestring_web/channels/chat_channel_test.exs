@@ -305,6 +305,41 @@ defmodule ShoestringWeb.ChatChannelTest do
     assert_reply ref, :error, %{"reason" => "dispatch_not_found"}
   end
 
+  test "the person starts a held dispatch from chat; no pre-approval is spent", ctx do
+    {:ok, _, socket} =
+      subscribe_and_join(ctx.socket, ChatChannel, "conversation:#{ctx.session}", %{})
+
+    {:ok, %{"dispatch_id" => id}} =
+      Tools.call(
+        "dispatch",
+        %{
+          "purpose" => "explore",
+          "worker" => "codex:gpt-6-luna",
+          "title" => "Where is add",
+          "brief" => "EXPLORE - where is add?\nContract: a report.\n"
+        },
+        %{session_id: ctx.session, repository: ctx.repo}
+      )
+
+    # No usage reading: the call is held for a confirmation.
+    assert {:snooze, 30} = Shoestring.Dispatches.Calls.step(id)
+    assert Shoestring.Dispatches.state(Shoestring.Dispatches.get(id)) == "held"
+
+    ref = push(socket, "confirm_dispatch", %{"dispatch_id" => id})
+    assert_reply ref, :ok, %{}, 5_000
+
+    call = Shoestring.Dispatches.Calls.get(id)
+    assert call.confirmed_by == Shoestring.CLI.WorkLoop.default_human()
+    assert Shoestring.Dispatches.state(Shoestring.Dispatches.get(id)) == "queued"
+    assert Grants.get(ctx.grant.id).unread_usage_used == 0
+
+    ref = push(socket, "confirm_dispatch", %{"dispatch_id" => id})
+    assert_reply ref, :error, %{"reason" => "not_held"}, 5_000
+
+    ref = push(socket, "confirm_dispatch", %{"dispatch_id" => Ecto.UUID.generate()})
+    assert_reply ref, :error, %{"reason" => "dispatch_not_found"}, 5_000
+  end
+
   test "a finished report reads as text in the detail, not as one line of JSON", ctx do
     {:ok, %{"dispatch_id" => id}} =
       Tools.call(

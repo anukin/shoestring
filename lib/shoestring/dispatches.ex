@@ -984,6 +984,49 @@ defmodule Shoestring.Dispatches do
 
   def advance(%Dispatch{}, _status), do: :none
 
+  @doc """
+  A person confirms `dispatch`'s hold themselves (the chat screen's attention
+  popup): the same confirmation a grant's pre-approval makes, recorded under
+  `by` and spending none of the grant's. `:confirmed`, `:none` (nothing held)
+  or `{:error, reason}`.
+  """
+  def confirm_hold(dispatch, by, status \\ &ExecutionControl.status/1)
+
+  def confirm_hold(%Dispatch{state: "started", purpose: purpose} = dispatch, by, _status)
+      when purpose in @calls do
+    with true <- Authority.human?(by) || {:error, :non_human_identity},
+         %Call{state: "held", confirmed_by: nil} = call <- Calls.get(dispatch.id) do
+      confirmed(confirm(dispatch, %{kind: :call, call: call}, by))
+    else
+      {:error, _} = error -> error
+      _ -> :none
+    end
+  end
+
+  def confirm_hold(%Dispatch{state: "started"} = dispatch, by, status) do
+    with true <- Authority.human?(by) || {:error, :non_human_identity},
+         {:ok, current} <- status.(dispatch.goal_id),
+         {:ok, hold} <- hold(current) do
+      confirmed(confirm(dispatch, hold, by))
+    else
+      {:error, :non_human_identity} = error -> error
+      _ -> :none
+    end
+  end
+
+  def confirm_hold(%Dispatch{}, _by, _status), do: :none
+
+  # A grant's confirmation keeps the id it always had, so a retry repeats
+  # it; a person's is its own.
+  defp confirmation_id(dispatch, hold, by) do
+    if by == Authority.grant_identity(dispatch.grant_id),
+      do: uuid_for(hold.key),
+      else: uuid_for("#{hold.key}:#{by}")
+  end
+
+  defp confirmed({:ok, _}), do: :confirmed
+  defp confirmed({:error, _} = error), do: error
+
   defp hold(%{completed?: false, needs_user?: false, cancelled?: false} = status) do
     review = Enum.find(status[:reviews] || [], &(&1.state == "held"))
     decision = status[:last_admission]
@@ -1026,7 +1069,7 @@ defmodule Shoestring.Dispatches do
     if spent == :exhausted do
       :none
     else
-      case confirm(dispatch, hold) do
+      case confirm(dispatch, hold, Authority.grant_identity(dispatch.grant_id)) do
         {:ok, _} ->
           :confirmed
 
@@ -1037,7 +1080,7 @@ defmodule Shoestring.Dispatches do
     end
   end
 
-  defp confirm(dispatch, %{kind: :task} = hold) do
+  defp confirm(dispatch, %{kind: :task} = hold, by) do
     ExecutionControl.confirm_capacity(
       dispatch.goal_id,
       %{
@@ -1045,23 +1088,22 @@ defmodule Shoestring.Dispatches do
         task_id: @task_id,
         attempt: hold.attempt,
         scope: Application.get_env(:shoestring, :run_submission_scope, "subscription"),
-        command_id: uuid_for(hold.key),
-        requested_by: Authority.grant_identity(dispatch.grant_id)
+        command_id: confirmation_id(dispatch, hold, by),
+        requested_by: by
       },
       dispatch: dispatch
     )
   end
 
-  defp confirm(dispatch, %{kind: :call, call: call}),
-    do: Calls.confirm(call, Authority.grant_identity(dispatch.grant_id))
+  defp confirm(_dispatch, %{kind: :call, call: call}, by), do: Calls.confirm(call, by)
 
-  defp confirm(dispatch, %{kind: :review} = hold) do
+  defp confirm(dispatch, %{kind: :review} = hold, by) do
     Shoestring.Cobbler.PlanReview.confirm(
       dispatch.goal_id,
       %{
         review_id: hold.review_id,
-        confirmation_id: uuid_for(hold.key),
-        confirmed_by: Authority.grant_identity(dispatch.grant_id)
+        confirmation_id: confirmation_id(dispatch, hold, by),
+        confirmed_by: by
       },
       dispatch: dispatch
     )

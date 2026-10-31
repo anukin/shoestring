@@ -8,7 +8,7 @@ defmodule ShoestringWeb.ChatChannel do
   in `events` batches; live events follow, each sequence at most once per
   join. A `state` snapshot (engine, grant, dispatches, capacity) is pushed
   when it changes, at most once a second. The client sends `say`,
-  `cancel_turn`, `cancel_dispatch` and `handoff`.
+  `cancel_turn`, `cancel_dispatch`, `confirm_dispatch` and `handoff`.
 
   **Handoff.** The channel follows the session's current conversation. When
   the one it shows is handed off, it pushes that `conversation.handed_off`
@@ -265,6 +265,27 @@ defmodule ShoestringWeb.ChatChannel do
 
     case result do
       {:ok, _} -> {:reply, :ok, socket}
+      {:error, reason} -> {:reply, {:error, %{"reason" => code(reason)}}, socket}
+    end
+  end
+
+  # The person starts a held dispatch from the chat screen: the confirmation
+  # is theirs and spends none of the grant's pre-approvals.
+  def handle_in("confirm_dispatch", %{"dispatch_id" => id}, socket) when is_binary(id) do
+    session = socket.assigns.conversation.session_id
+
+    result =
+      case Dispatches.get(id) do
+        %{session_id: ^session} = dispatch ->
+          Dispatches.confirm_hold(dispatch, WorkLoop.default_human())
+
+        _ ->
+          {:error, :dispatch_not_found}
+      end
+
+    case result do
+      :confirmed -> {:reply, :ok, socket}
+      :none -> {:reply, {:error, %{"reason" => "not_held"}}, socket}
       {:error, reason} -> {:reply, {:error, %{"reason" => code(reason)}}, socket}
     end
   end

@@ -28,6 +28,8 @@ pub struct Entry {
 pub struct Dispatch {
     pub id: String,
     pub purpose: String,
+    /// The session agent it is for (its slug), or empty.
+    pub agent: String,
     pub worker: String,
     pub title: String,
     pub state: String,
@@ -82,6 +84,10 @@ pub struct Model {
     pub selected: Option<String>,
     pub detail: Option<Detail>,
     pub confirm: Option<Dispatch>,
+    /// A held dispatch the person is asked to start.
+    pub start: Option<Dispatch>,
+    /// The session's team, as `/team` prints it: its name and one line per agent.
+    pub team: Option<(String, Vec<String>)>,
     pub help: bool,
     /// The highlighted entry of the `/` menu.
     pub slash_selected: usize,
@@ -273,6 +279,7 @@ impl Model {
             .map(|d| Dispatch {
                 id: clean_line(d["dispatch_id"].as_str().unwrap_or("?")),
                 purpose: clean_line(d["purpose"].as_str().unwrap_or("?")),
+                agent: clean_line(d["agent"].as_str().unwrap_or_default()),
                 worker: clean_line(d["worker"].as_str().unwrap_or("?")),
                 title: clean_line(d["title"].as_str().unwrap_or_default()),
                 state: clean_line(d["state"].as_str().unwrap_or("?")),
@@ -293,6 +300,7 @@ impl Model {
         {
             self.selected = self.dispatches.first().map(|d| d.id.clone());
         }
+        self.team = team(&state["grant"]["team"]);
         self.capacity = state["capacity"]["providers"]
             .as_array()
             .into_iter()
@@ -383,6 +391,39 @@ impl Model {
         }
     }
 
+    /// Asks to start held dispatch `id`, or says why there is nothing to start.
+    pub fn ask_start(&mut self, id: Option<&String>) {
+        let Some(dispatch) = self.dispatches.iter().find(|d| Some(&d.id) == id).cloned() else {
+            return;
+        };
+        if dispatch.state == "held" {
+            self.start = Some(dispatch);
+        } else {
+            self.note(format!(
+                "{} is {}; only a held dispatch waits for you to start it",
+                short(&dispatch.id),
+                dispatch.state
+            ));
+        }
+    }
+
+    /// What `/team` prints into the conversation: the session's agents.
+    pub fn team_entry(&mut self) {
+        match self.team.clone() {
+            Some((name, lines)) => {
+                self.push(Kind::Notice, format!("team {name}:"));
+                for line in lines {
+                    self.push(Kind::Notice, format!("  {line}"));
+                }
+            }
+            None => self.push(
+                Kind::Notice,
+                "this session started without a team; its dispatches name a worker".into(),
+            ),
+        }
+        self.dirty = true;
+    }
+
     pub fn note(&mut self, text: impl Into<String>) {
         self.notice = Some(clean_line(&text.into()));
         self.dirty = true;
@@ -425,6 +466,49 @@ pub fn cancellable(state: &str) -> bool {
         state,
         "completed" | "failed" | "failed_to_start" | "cancelled"
     )
+}
+
+/// What a person calls the job a dispatch of `purpose` does.
+pub fn job(purpose: &str) -> &'static str {
+    match purpose {
+        "explore" => "Explorer",
+        "implement" => "Implementer",
+        "review" => "Reviewer",
+        _ => "Dispatch",
+    }
+}
+
+/// The session's team from the grant's `team`, cleaned: its name and a line
+/// per agent with its model and limit.
+fn team(value: &Value) -> Option<(String, Vec<String>)> {
+    let name = clean_line(value["team"].as_str()?);
+    let lines = value["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|agent| {
+            let kind = agent["kind"].as_str().unwrap_or("?");
+            let limit = match (kind, agent["max_minutes"].as_u64()) {
+                ("coordinator", _) => "limit: the grant's turns".to_string(),
+                (_, Some(minutes)) => format!("at most {minutes} min a dispatch"),
+                (_, None) => "no limit of its own".to_string(),
+            };
+            clean_line(&format!(
+                "{} {} · {}:{} · {limit}",
+                match kind {
+                    "coordinator" => "Coordinator",
+                    "explorer" => "Explorer",
+                    "implementer" => "Implementer",
+                    "reviewer" => "Reviewer",
+                    _ => "Agent",
+                },
+                agent["slug"].as_str().unwrap_or("?"),
+                agent["provider"].as_str().unwrap_or("?"),
+                agent["model"].as_str().unwrap_or("?"),
+            ))
+        })
+        .collect();
+    Some((name, lines))
 }
 
 pub fn short(id: &str) -> String {

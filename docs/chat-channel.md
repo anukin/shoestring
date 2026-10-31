@@ -84,6 +84,7 @@ Sent by the client, each answered with `ok` or `error` and a `reason`:
 | `say` | `message_id` (a UUID the client picks), `text` | Records the message; it is sent to the coordinator when it is idle. A resent `message_id` records nothing twice. |
 | `cancel_turn` | — | Interrupts the coordinator's running turn. |
 | `cancel_dispatch` | `dispatch_id`, `reason` | Cancels one dispatch of this session, recorded as the person's request. The client confirms with the person first. |
+| `confirm_dispatch` | `dispatch_id` | Starts one held dispatch of this session: the person confirms its usage hold themselves, spending none of the grant's pre-approvals (`not_held` when it is not held). The client asks first. |
 | `handoff` | `note` (boolean, default true) | Continues the session in a fresh conversation (see Handoff). Refused with `turn_running` during a turn and `handoff_in_progress` while one is under way, except that `note: false` skips a note turn that is held. |
 
 ## Handoff
@@ -167,11 +168,14 @@ Call histories without a goal have null sequences and replace the previous
 snapshot. `unwatch_dispatch` stops those pushes. Rejoining must watch again.
 Inspection never advances, confirms or cancels execution.
 
-In the native client, Tab focuses agents; arrows select; Enter opens details;
+In the native client, Tab focuses the Dispatches pane, whose rows name each
+dispatch's job (Explorer, Implementer, Reviewer) and its agent; arrows select; Enter opens details;
 Escape closes them. Arrows scroll details; PgUp and PgDn scroll the conversation. `c` asks for confirmation for the
 selected dispatch using service state, only while it is not finished (a
 completed, failed or cancelled one gets "already STATE; nothing to cancel");
-only `y` sends `cancel_dispatch`. Every popup that needs the person is drawn
+only `y` sends `cancel_dispatch`. `s` on a held dispatch asks the same way
+(yellow) and only `y` sends `confirm_dispatch`. `/team` prints the session's
+agents with their models and limits, from the grant's `team`. Every popup that needs the person is drawn
 the same way: a centred box with a thick border and title in its tone's
 colour (yellow for a question, red for an action that cannot be undone),
 what it is about, and the answering keys highlighted on their own line. It

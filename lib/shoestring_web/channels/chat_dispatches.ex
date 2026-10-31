@@ -34,7 +34,7 @@ defmodule ShoestringWeb.ChatDispatches do
           ended_at = if final?, do: latest_at || dispatch.updated_at, else: now
 
           row =
-            Map.take(detail, ~w(dispatch_id purpose worker reviewer state title next))
+            Map.take(detail, ~w(dispatch_id purpose agent worker reviewer state title next))
             |> Map.merge(%{
               "elapsed_seconds" => max(DateTime.diff(ended_at, dispatch.inserted_at), 0),
               "waiting_until" => get_in(detail, ["waiting", "until"]),
