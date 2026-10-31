@@ -154,7 +154,12 @@ cached for this channel connection.
 
 Send `watch_dispatch` with `dispatch_id`. A dispatch outside this session is
 indistinguishable from a missing dispatch (`dispatch_not_found`). The reply
-contains dispatch_id, lines, terminal and steps. Steps contains entries
+contains dispatch_id, lines, terminal and steps. Lines are text a person
+reads: an EXPLORE report as its summary, each finding with its `path:line`
+evidence (`✗` marks a citation the copy does not support) and open
+questions; a REVIEW report as its outcome and each finding with severity,
+location and fix; an IMPLEMENT result as its commit, checks and the commands
+to take it. A shape not known there is shown as indented JSON. Steps contains entries
 (sequence, at, line), last_sequence and omitted. It retains the latest 500
 rendered entries, reporting earlier omissions. Each state tick pushes `dispatch`
 when detail changes or entries arrive; sequence cursors suppress duplicates.
@@ -164,7 +169,12 @@ Inspection never advances, confirms or cancels execution.
 
 In the native client, Tab focuses agents; arrows select; Enter opens details;
 Escape closes them. Arrows scroll details; PgUp and PgDn scroll the conversation. `c` asks for confirmation for the
-selected dispatch using service state; only `y` sends `cancel_dispatch`. It
+selected dispatch using service state, only while it is not finished (a
+completed, failed or cancelled one gets "already STATE; nothing to cancel");
+only `y` sends `cancel_dispatch`. Every popup that needs the person is drawn
+the same way: a centred box with a thick border and title in its tone's
+colour (yellow for a question, red for an action that cannot be undone),
+what it is about, and the answering keys highlighted on their own line. It
 names that exact dispatch and records the person's request. Cancels are never
 resent after a reconnect; only unanswered messages are. An open detail is
 watched again after reconnecting. Service text is cleaned before display,

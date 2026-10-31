@@ -7,6 +7,7 @@ defmodule ShoestringWeb.ChatChannelTest do
   use Shoestring.DataCase, async: false
 
   import Phoenix.ChannelTest
+  import Ecto.Query
 
   alias Shoestring.{Conversations, Grants, ModelCatalog, Repo, Trajectory}
   alias Shoestring.Conversations.{ChatToken, Engine, Resume}
@@ -302,6 +303,79 @@ defmodule ShoestringWeb.ChatChannelTest do
 
     ref = push(other, "cancel_dispatch", %{"dispatch_id" => id, "reason" => "mine now"})
     assert_reply ref, :error, %{"reason" => "dispatch_not_found"}
+  end
+
+  test "a finished report reads as text in the detail, not as one line of JSON", ctx do
+    {:ok, %{"dispatch_id" => id}} =
+      Tools.call(
+        "dispatch",
+        %{
+          "purpose" => "explore",
+          "worker" => "codex:gpt-6-luna",
+          "title" => "Parity audit",
+          "brief" => "EXPLORE - compare the two apps\nContract: a report.\n"
+        },
+        %{session_id: ctx.session, repository: ctx.repo}
+      )
+
+    finish = fn report ->
+      {1, _} =
+        Repo.update_all(
+          from(c in Shoestring.Dispatches.Call, where: c.dispatch_id == ^id),
+          set: [state: "completed", report_json: Jason.encode!(report), output_tokens: 900]
+        )
+
+      ShoestringWeb.ChatDispatches.detail(Shoestring.Dispatches.get(id))["lines"]
+    end
+
+    lines =
+      finish.(%{
+        "summary" => "Settings differ.",
+        "findings" => [
+          %{
+            "claim" => "Nutrition targets exist only on iOS",
+            "supported" => true,
+            "evidence" => [
+              %{"path" => "ios/Cantino/SettingsView.swift", "line" => 151, "supported" => true},
+              %{"path" => "mobile/lib/gone.dart", "line" => 9, "supported" => false}
+            ]
+          }
+        ],
+        "open_questions" => ["Is the Android scan retry intended?"],
+        "supported_findings" => 1
+      })
+
+    assert "report:" in lines
+    assert "  Summary: Settings differ." in lines
+    assert "  Findings (1, 1 supported):" in lines
+    assert "    • Nutrition targets exist only on iOS" in lines
+    assert "      ios/Cantino/SettingsView.swift:151, mobile/lib/gone.dart:9 ✗" in lines
+    assert "    ? Is the Android scan retry intended?" in lines
+    refute Enum.any?(lines, &String.contains?(&1, ~s("evidence")))
+
+    lines =
+      finish.(%{
+        "verdict" => "request_changes",
+        "summary" => "One blocker.",
+        "outcome" => "changes_requested",
+        "blocking_count" => 1,
+        "findings" => [
+          %{
+            "id" => "F1",
+            "severity" => "blocking",
+            "path" => "calc.py",
+            "line" => 2,
+            "claim" => "add still raises",
+            "correction" => "return a + b",
+            "reference" => "supported"
+          }
+        ]
+      })
+
+    assert "report: changes_requested (1 blocking)" in lines
+    assert "    F1 [blocking] calc.py:2 add still raises" in lines
+    assert "      fix: return a + b" in lines
+    refute Enum.any?(lines, &String.contains?(&1, ~s("severity")))
   end
 
   test "dispatch logs keep the latest 500 lines, count omissions and freeze final rows", ctx do

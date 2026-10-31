@@ -217,7 +217,8 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
             KeyCode::Up => detail.scroll = detail.scroll.saturating_sub(1),
             KeyCode::Down => detail.scroll = detail.scroll.saturating_add(1),
             KeyCode::Char('c') => {
-                model.confirm = model.dispatches.iter().find(|d| d.id == detail.id).cloned();
+                let id = detail.id.clone();
+                model.ask_cancel(Some(&id));
             }
             _ => {}
         }
@@ -269,11 +270,8 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
                 }
             }
             KeyCode::Char('c') => {
-                model.confirm = model
-                    .dispatches
-                    .iter()
-                    .find(|d| Some(&d.id) == model.selected.as_ref())
-                    .cloned()
+                let id = model.selected.clone();
+                model.ask_cancel(id.as_ref());
             }
             _ => {}
         }
@@ -412,6 +410,36 @@ mod tests {
         model.connection = Connection::Connecting;
         key(&mut model, KeyCode::Char('y'), &tx);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_finished_dispatch_is_never_offered_for_cancelling() {
+        let mut model = Model::new("s1");
+        model.connection = Connection::Live;
+        model.apply_state(&json!({"dispatches": [
+            {"dispatch_id": "a89a0cce-done", "title": "audit", "state": "completed"},
+            {"dispatch_id": "b2", "title": "live", "state": "waiting"}]}));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        key(&mut model, KeyCode::Tab, &tx);
+        key(&mut model, KeyCode::Char('c'), &tx);
+        assert!(model.confirm.is_none());
+        assert_eq!(
+            model.notice.as_deref(),
+            Some("a89a0cce is already completed; nothing to cancel")
+        );
+        key(&mut model, KeyCode::Char('y'), &tx);
+        assert!(rx.try_recv().is_err());
+        // From the detail too.
+        key(&mut model, KeyCode::Enter, &tx);
+        let _ = rx.try_recv();
+        key(&mut model, KeyCode::Char('c'), &tx);
+        assert!(model.confirm.is_none());
+        key(&mut model, KeyCode::Esc, &tx);
+        let _ = rx.try_recv();
+        // A dispatch not yet finished still asks.
+        key(&mut model, KeyCode::Down, &tx);
+        key(&mut model, KeyCode::Char('c'), &tx);
+        assert_eq!(model.confirm.as_ref().unwrap().id, "b2");
     }
 
     fn with(model: &mut Model, code: KeyCode, modifiers: KeyModifiers) {

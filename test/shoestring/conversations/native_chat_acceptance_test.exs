@@ -182,7 +182,9 @@ defmodule Shoestring.Conversations.NativeChatAcceptanceTest do
       ref = push(socket, "watch_dispatch", %{"dispatch_id" => implement.id})
       assert_reply ref, :ok, %{"lines" => lines, "steps" => %{"entries" => entries}}, 5_000
       assert Enum.any?(lines, &String.contains?(&1, commit))
-      assert Enum.any?(lines, &String.contains?(&1, "checks"))
+      # The result reads as text: each check with how it ended, and the commands to take it.
+      assert Enum.any?(lines, &(&1 =~ ~r/^  check .*test_calc\.py: passed/))
+      assert "    git merge FETCH_HEAD" in lines
       assert Enum.any?(entries, &String.contains?(&1["line"], "All checks passed"))
       ref = push(socket, "watch_dispatch", %{"dispatch_id" => review.id})
       assert_reply ref, :ok, %{"lines" => review_lines}, 5_000

@@ -366,6 +366,23 @@ impl Model {
         self.dirty = true;
     }
 
+    /// Asks to confirm cancelling dispatch `id`, or says why there is
+    /// nothing to cancel.
+    pub fn ask_cancel(&mut self, id: Option<&String>) {
+        let Some(dispatch) = self.dispatches.iter().find(|d| Some(&d.id) == id).cloned() else {
+            return;
+        };
+        if cancellable(&dispatch.state) {
+            self.confirm = Some(dispatch);
+        } else {
+            self.note(format!(
+                "{} is already {}; nothing to cancel",
+                short(&dispatch.id),
+                dispatch.state
+            ));
+        }
+    }
+
     pub fn note(&mut self, text: impl Into<String>) {
         self.notice = Some(clean_line(&text.into()));
         self.dirty = true;
@@ -399,6 +416,15 @@ impl Model {
     pub fn context_percent(&self) -> Option<u64> {
         self.context.map(|(used, limit)| used * 100 / limit)
     }
+}
+
+/// Whether a dispatch in `state` can still be cancelled: anything not yet
+/// finished. A finished one is never offered for cancelling.
+pub fn cancellable(state: &str) -> bool {
+    !matches!(
+        state,
+        "completed" | "failed" | "failed_to_start" | "cancelled"
+    )
 }
 
 pub fn short(id: &str) -> String {

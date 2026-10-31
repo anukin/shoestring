@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
-use crate::model::{Connection, ConversationView, Kind, Model, short};
+use crate::model::{Connection, ConversationView, Kind, Model, cancellable, short};
 
 const MAX_AGENTS: usize = 6;
 const MAX_INPUT: usize = 6;
@@ -82,37 +82,123 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
             Paragraph::new(rows)
                 .scroll((scroll.min(u16::MAX as usize) as u16, 0))
                 .block(Block::bordered().title(format!(
-                    " Elf {} · Esc close · ↑↓ scroll · c cancel ",
-                    short(&detail.id)
+                    " Elf {} · Esc close · ↑↓ scroll{} ",
+                    short(&detail.id),
+                    if model
+                        .dispatches
+                        .iter()
+                        .any(|d| d.id == detail.id && cancellable(&d.state))
+                    {
+                        " · c cancel"
+                    } else {
+                        ""
+                    }
                 ))),
             rect,
         );
     }
     if let Some(dispatch) = &model.confirm {
-        let area = frame.area();
-        let rect = Rect::new(
-            area.x,
-            area.y + area.height.saturating_sub(7) / 2,
-            area.width,
-            7.min(area.height),
-        );
-        let text = format!(
-            "Cancel {} {} on {}?\n{} · {}\ny confirms · any other key keeps it running",
-            short(&dispatch.id),
-            dispatch.purpose,
-            dispatch.worker,
-            dispatch.title,
-            dispatch.state
-        );
-        frame.render_widget(Clear, rect);
-        frame.render_widget(
-            Paragraph::new(text)
-                .wrap(ratatui::widgets::Wrap { trim: false })
-                .block(Block::bordered().title(" Confirm cancellation · Shoestring ")),
-            rect,
+        draw_attention(
+            frame,
+            &Attention {
+                title: "Cancel this dispatch?",
+                tone: Tone::Destructive,
+                body: vec![
+                    format!(
+                        "{} {} on {} · {}",
+                        short(&dispatch.id),
+                        dispatch.purpose,
+                        dispatch.worker,
+                        dispatch.state
+                    ),
+                    dispatch.title.clone(),
+                    "Cancelling stops it and its whole process group; it cannot be resumed.".into(),
+                ],
+                keys: &[("y", "cancel it"), ("any other key", "keep it")],
+            },
         );
     }
     view
+}
+
+/// How an attention popup reads: a question to answer, or an action that
+/// cannot be undone.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Tone {
+    Question,
+    Destructive,
+}
+
+/// Anything that needs the person: what it is about and the keys that
+/// answer it.
+pub struct Attention<'a> {
+    pub title: &'a str,
+    pub tone: Tone,
+    pub body: Vec<String>,
+    pub keys: &'a [(&'a str, &'a str)],
+}
+
+impl Tone {
+    fn color(self) -> Color {
+        match self {
+            Tone::Question => Color::Yellow,
+            Tone::Destructive => Color::Red,
+        }
+    }
+}
+
+/// Every popup that needs the person looks and answers the same way: a
+/// cleared, centred box with a thick border and a title in the tone's
+/// colour, what it is about, then the keys on their own line, each key
+/// highlighted. The rest of the screen stays as it was, behind it.
+pub fn draw_attention(frame: &mut Frame, attention: &Attention) {
+    let area = frame.area();
+    let color = attention.tone.color();
+    let width = 76.min(area.width);
+    let inner = width.saturating_sub(4).max(1) as usize;
+    let mut lines: Vec<Line> = attention
+        .body
+        .iter()
+        .flat_map(|text| wrap(text, inner))
+        .map(Line::from)
+        .collect();
+    lines.push(Line::raw(""));
+    let mut keys = Vec::new();
+    for (i, (key, what)) in attention.keys.iter().enumerate() {
+        if i > 0 {
+            keys.push(Span::raw("   "));
+        }
+        keys.push(Span::styled(
+            format!(" {key} "),
+            Style::new()
+                .fg(Color::Black)
+                .bg(color)
+                .add_modifier(Modifier::BOLD),
+        ));
+        keys.push(Span::raw(format!(" {what}")));
+    }
+    lines.push(Line::from(keys));
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::bordered()
+                .border_type(ratatui::widgets::BorderType::Thick)
+                .border_style(Style::new().fg(color))
+                .title(Span::styled(
+                    format!(" {} ", attention.title),
+                    Style::new().fg(color).add_modifier(Modifier::BOLD),
+                ))
+                .padding(ratatui::widgets::Padding::horizontal(1)),
+        ),
+        rect,
+    );
 }
 
 /// The detail's first line: how the dispatch can be reached, from its state
@@ -461,8 +547,10 @@ mod tests {
         assert!(text.contains("checks: passed"));
         model.confirm = Some(model.dispatches[0].clone());
         let text = screen(&model, 70, 20);
-        assert!(text.contains("Cancel d1 explore on codex:m?"));
-        assert!(text.contains("y confirms"));
+        assert!(text.contains("Cancel this dispatch?"));
+        assert!(text.contains("d1 explore on codex:m · held"));
+        assert!(text.contains(" y  cancel it"));
+        assert!(text.contains(" any other key  keep it"));
         let _ = screen(&model, 20, 8);
     }
 
@@ -616,6 +704,52 @@ mod tests {
             )
             .contains("Interactive terminal: /runs/r1/terminal")
         );
+    }
+
+    #[test]
+    fn an_attention_popup_stands_out_from_the_screen_behind_it() {
+        let mut model = Model::new("s1");
+        let events: Vec<_> = (1..=30)
+            .map(|i| json!({"sequence": i, "type": "conversation.message.coordinator", "payload": {"text": format!("line {i}")}}))
+            .collect();
+        model.apply_events(&json!({ "events": events }));
+        model.apply_state(&json!({"dispatches": [{"dispatch_id": "d1", "purpose": "explore", "worker": "codex:m", "title": "Find it", "state": "running"}]}));
+        model.confirm = Some(model.dispatches[0].clone());
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &model);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let at = |needle: &str| {
+            (0..24u16)
+                .find_map(|y| {
+                    let row: String = (0..100u16)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect();
+                    row.find(needle)
+                        .map(|byte| (row[..byte].chars().count() as u16, y))
+                })
+                .unwrap_or_else(|| panic!("{needle} not drawn"))
+        };
+        // Thick red border and title; the key is drawn reversed in red.
+        let (x, y) = at("Cancel this dispatch?");
+        assert_eq!(buffer[(x, y)].fg, Color::Red);
+        assert!(buffer[(x, y)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(x - 2, y)].symbol(), "┏");
+        assert_eq!(buffer[(x - 2, y)].fg, Color::Red);
+        let (x, y) = at(" y ");
+        assert_eq!(buffer[(x + 1, y)].bg, Color::Red);
+        // Centred, not the full width, and the conversation is still around it.
+        assert!(x > 10);
+        assert!((0..24u16).any(|y| {
+            (0..100u16)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect::<String>()
+                .contains("Coordinator: line ")
+        }));
     }
 
     #[test]
