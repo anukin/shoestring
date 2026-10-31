@@ -63,9 +63,13 @@ Delegate every code change with `{{command}} dispatch`.
    it resets (`waiting.until`) and that it starts again by itself then, and
    offer to move it to another model now (`next` says how). Leave it out of
    later `wait` calls until then.
-7. Every change gets a reviewer from another vendor (`--reviewer`). Read
-   the review's findings in `{{command}} runs show` and tell the person what
-   was checked and what was found.
+7. By default, give every change a reviewer from another vendor
+   (`--reviewer`). Shoestring does not require one: the person decides. When
+   they ask for a change without review, dispatch it without `--reviewer`;
+   when the grant does not allow REVIEW or the reviewer's model, tell them
+   rather than adding one they did not ask for. Read the review's findings in
+   `{{command}} runs show` and tell the person what was checked and what was
+   found.
 
 ## Brief format
 

@@ -22,9 +22,10 @@ and nothing else. Delegate every code change with the `dispatch` tool.
    needed.
 2. Split the work into small tasks that each end in a passing check.
 3. For each task, call `dispatch` with `purpose: "implement"`, a `worker`
-   and a `reviewer` (`PROVIDER:MODEL`), a one-line `title`, the `brief`
-   text, and the `files`, `stay_out`, `tests` or `gates` it concerns. Set
-   `dry_run: true` first when you are unsure it fits the grant.
+   and, unless the person said otherwise, a `reviewer` (`PROVIDER:MODEL`), a
+   one-line `title`, the `brief` text, and the `files`, `stay_out`, `tests` or
+   `gates` it concerns. Set `dry_run: true` first when you are unsure it fits
+   the grant.
 
    The `reviewer` must be another vendor's model than the `worker` (Claude
    reviews OpenAI-family work and the reverse); Shoestring has it review the
@@ -54,9 +55,12 @@ and nothing else. Delegate every code change with the `dispatch` tool.
    provider's usage limit is reached: tell the person when it resets
    (`waiting.until`) and that it starts again by itself then, and offer to
    move it to another model now.
-7. Every change gets a reviewer from another vendor. Read the review's
-   findings in `runs_show` and tell the person what was checked and what was
-   found.
+7. By default, give every change a reviewer from another vendor. Shoestring
+   does not require one: the person decides. When they ask for a change
+   without review, dispatch it without `reviewer`; when the grant does not
+   allow REVIEW or the reviewer's model, tell them rather than adding one
+   they did not ask for. Read the review's findings in `runs_show` and tell
+   the person what was checked and what was found.
 
 ## Brief format
 

@@ -152,4 +152,33 @@ defmodule Shoestring.SessionTeamTest do
     assert text =~ "Implementer, codex:gpt-6-luna; no time limit of its own"
     refute text =~ "Coordinator, claude:opus"
   end
+
+  # Live 2026-10-31: told "every change gets a reviewer", a coordinator twice
+  # refused the person's "no reviewer". The wording is all this pins; whether a
+  # model follows it is not something a hermetic test can show.
+  test "review is the coordinator's default, and the person's choice", ctx do
+    conversation =
+      Coordinator.conversation_instructions(%{
+        session: "team-s1",
+        grant: ctx.grant,
+        roles: [],
+        agent_instructions: nil
+      })
+
+    external =
+      Coordinator.instructions(%{
+        session: "team-s1",
+        grant: ctx.grant,
+        roles: [],
+        agent_instructions: nil,
+        command: "shoestring"
+      })
+
+    for text <- [conversation, external] do
+      text = String.replace(text, ~r/\s+/, " ")
+      assert text =~ "Shoestring does not require one: the person decides"
+      assert text =~ "dispatch it without"
+      refute text =~ "Every change gets a reviewer"
+    end
+  end
 end
