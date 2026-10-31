@@ -44,6 +44,9 @@ defmodule Shoestring.AgentProfiles.Role do
     kind = get_field(changeset, :agent_kind)
 
     cond do
+      is_nil(get_field(changeset, :agent_id)) and is_nil(get_field(changeset, :provider)) ->
+        add_error(changeset, :agent_id, "choose an agent")
+
       not is_nil(get_field(changeset, :agent_id)) and is_nil(kind) ->
         add_error(changeset, :agent_id, "choose an existing agent")
 

@@ -65,9 +65,20 @@ body:has(.ss-product) #flash-error .alert { background:#f5f7f4; color:#943a29; b
 .ss-role-editor { display:grid; grid-template-columns:1fr 1fr 1.25fr auto; gap:14px; align-items:end; border-bottom:1px solid var(--ss-line); padding:16px 0; }
 .ss-role-editor .fieldset { margin:0; }
 .ss-product .ss-section { margin-top:32px; }
+.ss-team-role { display:grid; grid-template-columns:1fr 2fr auto; gap:14px; align-items:end; border-bottom:1px solid var(--ss-line); padding:16px 0; }
+.ss-team-role .fieldset { margin:0; }
+.ss-kind+.ss-kind { margin-top:12px; }
+.ss-kind>.ss-section { margin:0 0 14px; }
+.ss-abilities { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin-top:18px; font-size:13px; }
+.ss-abilities ul { margin:6px 0 0; padding-left:18px; color:var(--ss-muted); }
+.ss-abilities li+li { margin-top:4px; }
+.ss-team-link+.ss-team-link { margin-left:10px; }
+.ss-work { list-style:none; margin:14px 0 0; padding:0; font-size:13px; }
+.ss-work li { display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid var(--ss-line); }
+.ss-work-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ss-form-actions { display:flex; align-items:center; justify-content:flex-end; gap:20px; padding-top:20px; }
 .ss-error { padding:16px; border:1px solid var(--ss-error); border-radius:7px; }
 .ss-product .ss-error p { color:var(--ss-error); }
 .ss-error button { margin-top:12px; }
 @media(max-width:700px) { body:has(.ss-product) #flash-info, body:has(.ss-product) #flash-error { top:auto; bottom:20px; left:20px; right:20px; width:auto; } }
-@media(max-width:700px) { .ss-header { padding:20px; flex-wrap:wrap; gap:14px; } .ss-header nav { width:100%; } .ss-main { padding:28px 20px 40px; } .ss-grid,.ss-fields,.ss-role-editor { grid-template-columns:1fr; } .ss-heading { align-items:flex-start; flex-wrap:wrap; } .ss-panel { padding:20px; } .ss-role-editor button { justify-self:start; } .ss-product .ss-input { font-size:16px; } }
+@media(max-width:700px) { .ss-header { padding:20px; flex-wrap:wrap; gap:14px; } .ss-header nav { width:100%; } .ss-main { padding:28px 20px 40px; } .ss-grid,.ss-fields,.ss-role-editor,.ss-team-role,.ss-abilities { grid-template-columns:1fr; } .ss-heading { align-items:flex-start; flex-wrap:wrap; } .ss-panel { padding:20px; } .ss-role-editor button { justify-self:start; } .ss-product .ss-input { font-size:16px; } }

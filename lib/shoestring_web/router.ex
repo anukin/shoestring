@@ -20,10 +20,14 @@ defmodule ShoestringWeb.Router do
 
     live "/", UsageLive, :index
     live "/usage", UsageLive, :index
+    live "/teams", TeamsLive, :index
+    live "/teams/new", TeamsLive, :new
+    live "/teams/:slug/edit", TeamsLive, :edit
+    live "/teams/:slug/duplicate", TeamsLive, :duplicate
     live "/agents", AgentsLive, :index
     live "/agents/new", AgentsLive, :new
+    live "/agents/:slug", AgentsLive, :show
     live "/agents/:slug/edit", AgentsLive, :edit
-    live "/agents/:slug/duplicate", AgentsLive, :duplicate
     live "/settings", AgentSettingsLive, :index
     live "/status", HealthLive, :index
     live "/observatory", CapacityObservatoryLive, :index

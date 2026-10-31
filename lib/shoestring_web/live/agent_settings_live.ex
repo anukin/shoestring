@@ -47,7 +47,7 @@ defmodule ShoestringWeb.AgentSettingsLive do
       <div class="ss-heading">
         <div>
           <h1>Settings</h1>
-          <p>Providers and defaults for saved agents.</p>
+          <p>Providers and defaults for saved teams and agents.</p>
         </div>
       </div>
       <.form
@@ -110,7 +110,7 @@ defmodule ShoestringWeb.AgentSettingsLive do
           <.input
             field={@form[:default_agent_id]}
             type="select"
-            label="Default agent"
+            label="Default team"
             prompt="Choose when using the CLI"
             options={@agent_options}
             class="ss-input"

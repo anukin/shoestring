@@ -208,4 +208,114 @@ defmodule Shoestring.Agents do
   end
 
   def for_dispatch(_team, _purpose, _provider, _model), do: nil
+
+  # -- What an agent may do, and what it did ----------------------------------
+
+  @doc """
+  What an agent may and may not do, in plain words, from the sandbox
+  Shoestring runs its job in on its provider: `%{can: [...], cannot: [...]}`.
+  The same rules apply to every agent of that job and provider; they are
+  fixed in code and not yet widened per agent.
+  """
+  def abilities(%{kind: kind, provider: provider}), do: abilities(kind, provider)
+  def abilities(%{"kind" => kind, "provider" => provider}), do: abilities(kind, provider)
+
+  def abilities("coordinator", "codex") do
+    %{
+      can: [
+        "Read your repository and run read-only commands in Codex's read-only sandbox",
+        "Call Shoestring's own tools: dispatch, runs, inbox, capacity"
+      ],
+      cannot: ["Write files", "Use the network", "Run anything outside the sandbox"]
+    }
+  end
+
+  def abilities("coordinator", _provider) do
+    %{
+      can: [
+        "Read your repository (read, search and list files)",
+        "Call Shoestring's own tools: dispatch, runs, inbox, capacity"
+      ],
+      cannot: ["Write files", "Run shell commands", "Use the network"]
+    }
+  end
+
+  def abilities("explorer", "codex") do
+    %{
+      can: [
+        "Read a private copy of the repository at its last commit",
+        "Run read-only commands there, in Codex's read-only sandbox"
+      ],
+      cannot: ["Write anything (a write fails the call)", "Use the network", "See your checkout"]
+    }
+  end
+
+  def abilities("explorer", _provider) do
+    %{
+      can: ["Read and search a private copy of the repository at its last commit"],
+      cannot: [
+        "Run shell commands",
+        "Write anything (a write fails the call)",
+        "Use the network",
+        "See your checkout"
+      ]
+    }
+  end
+
+  def abilities("implementer", "opencode") do
+    %{
+      can: [
+        "Write its own worktree and private git storage, and commit there",
+        "Run commands inside Shoestring's macOS sandbox",
+        "Reach the network (opencode must reach its model; its commands can too)"
+      ],
+      cannot: ["Write your checkout or anywhere else", "Read your home folder"]
+    }
+  end
+
+  def abilities("implementer", provider) do
+    sandbox = if provider == "codex", do: "Codex's sandbox", else: "Claude Code's sandbox"
+
+    %{
+      can: [
+        "Write its own worktree and private git storage, and commit there",
+        "Run commands in #{sandbox}"
+      ],
+      cannot: [
+        "Write your checkout or anywhere else",
+        "Use the network from its commands (npm, pip, APIs)",
+        "Read your home folder",
+        "Use your CLI settings, MCP servers or hooks",
+        "Ask for more: anything outside this is denied, not asked"
+      ]
+    }
+  end
+
+  def abilities("reviewer", "codex") do
+    %{
+      can: ["Judge the change from the packet Shoestring prepares: diff, contract and checks"],
+      cannot: ["Use tools", "Write anything", "Use the network"]
+    }
+  end
+
+  def abilities("reviewer", _provider) do
+    %{
+      can: ["Judge the change from the packet Shoestring prepares: diff, contract and checks"],
+      cannot: ["Use any tool", "Write anything", "Use the network"]
+    }
+  end
+
+  @doc """
+  The most recent dispatches made for `agent` (its slug), newest first, with
+  how many there are in all.
+  """
+  def recent_work(%Agent{slug: slug}, limit \\ 5) do
+    query = from d in Shoestring.Dispatches.Dispatch, where: d.agent == ^slug
+
+    %{
+      total: Repo.aggregate(query, :count),
+      recent:
+        Repo.all(from d in query, order_by: [desc: d.inserted_at, desc: d.id], limit: ^limit)
+    }
+  end
 end

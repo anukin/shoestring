@@ -729,8 +729,8 @@ defmodule Shoestring.Dispatches do
 
   defp used_seconds(dispatch, _state), do: dispatch.max_duration_seconds
 
-  # Seconds a finished dispatch took, rounded up; nil when not known.
-  defp took(%Dispatch{purpose: purpose} = dispatch) when purpose in @calls do
+  @doc "Seconds a finished dispatch took, rounded up; nil when not known."
+  def took(%Dispatch{purpose: purpose} = dispatch) when purpose in @calls do
     case Calls.get(dispatch.id) do
       %Call{started_at: nil} ->
         0
@@ -743,14 +743,14 @@ defmodule Shoestring.Dispatches do
     end
   end
 
-  defp took(%Dispatch{goal_id: goal_id}) when is_binary(goal_id) do
+  def took(%Dispatch{goal_id: goal_id}) when is_binary(goal_id) do
     case ExecutionControl.status(goal_id) do
       {:ok, %{total_duration_ms: ms}} when is_integer(ms) and ms >= 0 -> div(ms + 999, 1000)
       _ -> nil
     end
   end
 
-  defp took(_dispatch), do: nil
+  def took(_dispatch), do: nil
 
   defp seconds(from, to), do: div(max(DateTime.diff(to, from, :millisecond), 0) + 999, 1000)
 

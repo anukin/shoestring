@@ -45,6 +45,7 @@ defmodule ShoestringWeb.Layouts do
               :for={
                 {label, path} <- [
                   {"Usage", "/usage"},
+                  {"Teams", "/teams"},
                   {"Agents", "/agents"},
                   {"Settings", "/settings"}
                 ]
