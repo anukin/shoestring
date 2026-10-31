@@ -230,7 +230,10 @@ kept and earlier ones counted).
 When a dispatch's task or review is held because its provider's remaining
 usage cannot be confirmed — always for opencode, which reports none; always
 for Claude, whose own usage reports can defer work but never admit it alone;
-for Codex when its last reading is stale; never when a reserve is breached,
+for Codex when its last reading is stale (a decision that finds it stale, or
+within a minute of going stale, asks the running Codex app server for a fresh
+reading, at most once a minute and without starting a turn, so the next
+check usually admits it); never when a reserve is breached,
 which defers it — `wait` and `runs show` spend one of the grant's
 `--unread-usage` pre-approvals on it. Each hold is paid for once, a failed
 confirmation is refunded, and the grant's history records every spend. A

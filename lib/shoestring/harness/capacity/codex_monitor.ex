@@ -17,6 +17,10 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
   - Classifies quota refusal, schema drift, process exits, and transport errors
     fail-closed while safely preserving last-known observations.
   - Never initiates coding or model inference turns merely to refresh capacity.
+  - Re-reads the account's rate limits when asked (`refresh/1`, for a
+    decision that found the last reading stale), at most once per
+    `:min_refresh_ms` (default 60 s). The read is an account request to the
+    already-running app server; it starts no turn and uses no model tokens.
   - Never logs or persists sensitive credentials, tokens, or raw account data.
   """
 
@@ -66,6 +70,8 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
     :sink,
     :clock,
     :pending_requests,
+    :min_refresh_ms,
+    :last_refresh_at,
     :next_id,
     :max_pending_requests,
     :request_timeout_ms,
@@ -139,6 +145,16 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
           {:ok, CapacitySnapshot.t()} | {:error, term()}
   def read_capacity(server \\ __MODULE__, timeout \\ 5_000) do
     GenServer.call(server, {:read_capacity, timeout}, timeout + 2_000)
+  end
+
+  @doc """
+  Asks for a fresh rate-limit reading without waiting for it: sent only while
+  connected, with no refresh already pending, and at most once per
+  `:min_refresh_ms`. The reading is ingested like any other.
+  """
+  @spec refresh(GenServer.server()) :: :ok
+  def refresh(server \\ __MODULE__) do
+    GenServer.cast(server, :refresh)
   end
 
   @doc "Explicitly disconnects the current transport session without exiting the monitor."
@@ -287,6 +303,8 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
       sink: sink,
       clock: clock,
       pending_requests: %{},
+      min_refresh_ms: Keyword.get(opts, :min_refresh_ms, 60_000),
+      last_refresh_at: nil,
       next_id: 1,
       max_pending_requests: max_pending,
       request_timeout_ms: req_timeout,
@@ -380,6 +398,29 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
   end
 
   # --- Transport & Message Handling ---
+
+  @impl GenServer
+  def handle_cast(:refresh, state) do
+    now = System.monotonic_time(:millisecond)
+
+    refresh? =
+      state.status in [:connected, :incompatible_schema, :sink_error] and
+        state.connection_phase == :connected and
+        map_size(state.pending_requests) < state.max_pending_requests and
+        not Enum.any?(state.pending_requests, fn {_id, entry} ->
+          entry.context == :refresh_read
+        end) and
+        (is_nil(state.last_refresh_at) or now - state.last_refresh_at >= state.min_refresh_ms)
+
+    if refresh?,
+      do:
+        {:noreply,
+         %{
+           send_request(state, "account/rateLimits/read", %{}, :refresh_read)
+           | last_refresh_at: now
+         }},
+      else: {:noreply, state}
+  end
 
   @impl GenServer
   def handle_info({:codex_transport_connected, transport_pid}, state) do
@@ -813,6 +854,15 @@ defmodule Shoestring.Harness.Capacity.CodexMonitor do
        ) do
     GenServer.reply(from, {:error, error})
     state
+  end
+
+  defp handle_request_response(%{context: :refresh_read}, %{"result" => result}, state) do
+    now = call_clock(state.clock)
+
+    case ingest_new_observation(result, state, :explicit_read, now) do
+      {:ok, snapshot, state} -> %{state | status: resolve_operational_status(snapshot, state)}
+      {:error, _reason, state} -> state
+    end
   end
 
   defp handle_request_response(_pending, _message, state), do: state

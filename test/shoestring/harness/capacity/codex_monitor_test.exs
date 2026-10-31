@@ -920,6 +920,66 @@ defmodule Shoestring.Harness.Capacity.CodexMonitorTest do
     end
   end
 
+  describe "refresh" do
+    test "re-reads the rate limits for no caller, at most once per min_refresh_ms",
+         %{normal_read: normal_read} do
+      test_pid = self()
+
+      sink = fn snapshot ->
+        send(test_pid, {:ingested, snapshot.source.event})
+        {:ok, :persisted, snapshot}
+      end
+
+      {:ok, fake_transport} =
+        start_supervised(
+          {FakeTransport,
+           owner: self(), emit_connected: false, auto_respond: default_auto_respond(normal_read)}
+        )
+
+      monitor =
+        start_supervised!(
+          {CodexMonitor,
+           name: false,
+           version: "0.166.0",
+           transport_pid: fake_transport,
+           sink: sink,
+           clock: fn -> @eval_time end,
+           min_refresh_ms: 60_000}
+        )
+
+      sync_handshake(monitor, fake_transport)
+      assert_receive {:ingested, :explicit_read}
+
+      reads = fn ->
+        fake_transport
+        |> FakeTransport.get_sent_frames()
+        |> Enum.count(&(&1["method"] == "account/rateLimits/read"))
+      end
+
+      handshake_reads = reads.()
+      :ok = CodexMonitor.refresh(monitor)
+      sync_handshake(monitor, fake_transport)
+      assert reads.() == handshake_reads + 1
+      assert_receive {:ingested, :explicit_read}
+
+      # Within the minute: nothing more is asked.
+      :ok = CodexMonitor.refresh(monitor)
+      sync_handshake(monitor, fake_transport)
+      assert reads.() == handshake_reads + 1
+
+      :sys.replace_state(monitor, &%{&1 | min_refresh_ms: 0})
+      :ok = CodexMonitor.refresh(monitor)
+      sync_handshake(monitor, fake_transport)
+      assert reads.() == handshake_reads + 2
+
+      # Not connected: nothing is sent.
+      :sys.replace_state(monitor, &%{&1 | status: :unavailable})
+      :ok = CodexMonitor.refresh(monitor)
+      sync_handshake(monitor, fake_transport)
+      assert reads.() == handshake_reads + 2
+    end
+  end
+
   describe "public API and Capacity.Source behaviour" do
     test "explicit read_capacity works when monitor is in non-optimal but connected states",
          %{normal_read: normal_read} do

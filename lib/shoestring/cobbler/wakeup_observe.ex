@@ -45,7 +45,10 @@ defmodule Shoestring.Cobbler.WakeupObserve do
   """
 
   alias Shoestring.Harness.CapacitySnapshot
+  alias Shoestring.Harness.Capacity.CodexMonitor
   alias Shoestring.Harness.Observatory
+
+  @refresh_margin_seconds 60
 
   @epoch ~U[1970-01-01 00:00:00Z]
 
@@ -60,7 +63,32 @@ defmodule Shoestring.Cobbler.WakeupObserve do
   def observe(%{} = scoping) do
     provider_id = scoping_string(scoping, :provider_id)
     scope = scoping_string(scoping, :scope)
+    observation = latest(provider_id, scope)
+    if provider_id == "codex", do: refresh_if_due(observation, DateTime.utc_now())
+    observation
+  end
 
+  # A Codex reading that is missing, stale or within a minute of going stale
+  # asks the monitor for a fresh one (`CodexMonitor.refresh/1`: an account
+  # read, never a turn, at most once a minute). This decision still uses the
+  # reading it found; the next one sees the fresh reading.
+  defp refresh_if_due(observation, now) do
+    due? =
+      case observation do
+        {:ok, %CapacitySnapshot{} = snapshot} ->
+          CapacitySnapshot.freshness(snapshot, now) != :fresh or
+            DateTime.diff(now, observed_at(snapshot)) >=
+              snapshot.freshness.max_age_seconds - @refresh_margin_seconds
+
+        _ ->
+          true
+      end
+
+    if due?, do: CodexMonitor.refresh()
+    :ok
+  end
+
+  defp latest(provider_id, scope) do
     case Observatory.latest_observations() do
       [] ->
         {:error, :no_observation}
