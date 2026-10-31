@@ -158,6 +158,62 @@ defmodule Shoestring.DispatchCallsTest do
            ]
   end
 
+  test "a call held on a stale Codex reading starts by itself once a fresh one arrives; held again, nothing changes",
+       ctx do
+    codex_reading = fn observed_at ->
+      Shoestring.ConfigurationFixtures.capacity_fixture(%{
+        observed_at: observed_at,
+        scope: "subscription",
+        windows: [
+          %{
+            kind: "primary",
+            state: :observed,
+            used_percent: 3.0,
+            reset_at: DateTime.add(observed_at, 3600)
+          },
+          %{
+            kind: "secondary",
+            state: :observed,
+            used_percent: 19.0,
+            reset_at: DateTime.add(observed_at, 86_400)
+          }
+        ],
+        extensions: %{
+          "codex:primary_window_minutes" => 300,
+          "codex:secondary_window_minutes" => 10_080
+        }
+      })
+    end
+
+    codex_reading.(DateTime.add(DateTime.utc_now(), -600))
+
+    assert {:ok, dispatch, :recorded} =
+             Dispatches.create(explore(ctx, %{provider: "codex", model: "gpt-6-luna"}))
+
+    codex_step = fn ->
+      Calls.step(dispatch.id,
+        adapters: %{{"explore", "codex"} => ExploreStandIn},
+        adapter_opts: [test_pid: self(), scenario: :report]
+      )
+    end
+
+    assert {:snooze, 30} = codex_step.()
+
+    assert %Call{state: "held", admission: %{"reason_code" => "stale_observation"}} =
+             held = Calls.get(dispatch.id)
+
+    # Checked again with nothing new: the hold is not rewritten, so its
+    # inbox entry stays the one the coordinator was given.
+    assert {:snooze, 30} = codex_step.()
+    assert Calls.get(dispatch.id) == held
+    assert Dispatches.inbox_state(dispatch) == Dispatches.inbox_state(dispatch)
+
+    codex_reading.(DateTime.utc_now())
+    assert :done = codex_step.()
+    assert %Call{state: "completed", confirmed_by: nil} = Calls.get(dispatch.id)
+    assert_received {:explore_input, _input}
+  end
+
   test "what the explorer does while it runs is kept with the call and shown in its log",
        ctx do
     assert {:ok, dispatch, :recorded} = Dispatches.create(explore(ctx))

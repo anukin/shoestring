@@ -47,7 +47,9 @@ defmodule Shoestring.Harness.Capacity.Registry do
       provider: :claude,
       invocation_mode: :headless_stream_json,
       supported_tier: :conservative_partial,
-      tested_versions: ["2.1.261", "2.1.263", "2.1.310"],
+      # 2.1.316: a live coordinator turn on 2026-10-31 reported both windows
+      # with utilization and reset times in this shape.
+      tested_versions: ["2.1.261", "2.1.263", "2.1.310", "2.1.316"],
       required_semantic_fields: ["rate_limit_info", "unifiedWindows", "utilization"],
       compatibility_outcome: :compatible,
       description:

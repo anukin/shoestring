@@ -178,10 +178,13 @@ defmodule Shoestring.Dispatches.Calls do
 
   defp step(dispatch, %Call{state: "pending"} = call, opts), do: admit(dispatch, call, opts)
 
+  # An unconfirmed hold is evaluated again at each check, so a fresh usage
+  # reading (a stale one asks for one) can admit it with no person. Held
+  # again, nothing is written: the hold, and the inbox entry it made, stay.
   defp step(dispatch, %Call{state: "held"} = call, opts) do
     if call.confirmed_by,
       do: admit(dispatch, call, opts),
-      else: {:snooze, @held_recheck_seconds}
+      else: admit(dispatch, call, opts, :recheck)
   end
 
   defp step(dispatch, %Call{state: "waiting"} = call, opts) do
@@ -198,15 +201,17 @@ defmodule Shoestring.Dispatches.Calls do
 
   defp step(_dispatch, _call, _opts), do: :done
 
-  defp admit(dispatch, call, opts) do
+  defp admit(dispatch, call, opts, mode \\ :decide) do
     input = Jason.decode!(call.input_json)
     now = now(opts)
+
+    observation = observation(input["provider"])
 
     {:ok, decision} =
       AdmissionEvaluation.evaluate(
         %{requested_capability: "read_only", scope: @scope, override: override(call)},
-        candidate(input),
-        observation(input["provider"]),
+        candidate(input, observation),
+        observation,
         nil,
         now: now
       )
@@ -214,6 +219,9 @@ defmodule Shoestring.Dispatches.Calls do
     admission = AdmissionDecision.to_payload(decision)
 
     case decision.result do
+      :require_confirmation when mode == :recheck ->
+        {:snooze, @held_recheck_seconds}
+
       :admit ->
         case transition(call, "held_or_pending", %{
                state: "running",
@@ -249,13 +257,24 @@ defmodule Shoestring.Dispatches.Calls do
     end
   end
 
-  defp candidate(input) do
+  # As an IMPLEMENT's admission does, the candidate has the support tier and
+  # compatibility its provider's reading was taken with: a fresh, compatible
+  # Codex reading (`:proactive`) can admit a call, Claude's
+  # (`:conservative_partial`) never does alone. With no reading it is
+  # conservative.
+  defp candidate(input, observation) do
+    {tier, compatibility} =
+      case observation do
+        %{support_tier: tier, compatibility_state: compatibility} -> {tier, compatibility}
+        _ -> {:conservative_partial, :compatible}
+      end
+
     %{
       provider_id: input["provider"],
       adapter_id: "#{input["purpose"]}.#{input["provider"]}",
       scope: @scope,
-      support_tier: :conservative_partial,
-      compatibility_state: :compatible,
+      support_tier: tier,
+      compatibility_state: compatibility,
       capabilities: ["read_only"]
     }
   end
