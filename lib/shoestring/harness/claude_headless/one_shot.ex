@@ -1,9 +1,16 @@
 defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
   @moduledoc """
-  One tool-free structured `claude --print --output-format json` call, shared
-  by the planner and the reviewer: every tool disabled (`--tools=`), no MCP
-  servers, no saved session, the schema passed as `--json-schema` and the
+  One tool-free structured `claude --print --output-format stream-json` call,
+  shared by the planner and the reviewer: every tool disabled (`--tools=`), no
+  MCP servers, no saved session, the schema passed as `--json-schema` and the
   prompt as the last argument.
+
+  stream-json, unlike json, carries Claude's own usage reports
+  (`rate_limit_event`); each becomes a capacity reading
+  (`Shoestring.Harness.ClaudeHeadless.CapacityReading`, sink `:capacity_sink`).
+  The final `result` frame has the same members as json's single result,
+  `structured_output` included (VERIFIED offline with Claude Code 2.1.316
+  against a scripted model).
 
   The child runs in its own process group (`Shoestring.Elves.PortRunner`)
   from an empty working directory, so it sees no repository and no project
@@ -15,7 +22,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
   quota. `CLAUDE_CODE_MAX_OUTPUT_TOKENS` carries the charged output allowance,
   and the reported `usage.output_tokens` is returned for the caller to check.
 
-  Output over the byte cap fails as `:output_too_large`, never truncated. Only
+  Output over the byte cap (#{div(8_388_608, 1_048_576)} MiB of frames, room
+  for an EXPLORE's tool results) fails as `:output_too_large`, never
+  truncated. Only
   the result JSON leaves this module; the rest of the result, including any
   provider identifiers, is discarded in memory. The result is accepted as
   `structured_output` or as JSON text in `result` (VERIFIED for planning in
@@ -24,8 +33,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
   transport error.
   """
   alias Shoestring.Elves.PortRunner
+  alias Shoestring.Harness.ClaudeHeadless.CapacityReading
 
-  @max_output_bytes 262_144
+  @max_output_bytes 8_388_608
   @deadline_margin_ms 5_000
   @minimum_deadline_ms 1_000
 
@@ -40,7 +50,8 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
           required(:scratch_prefix) => String.t(),
           optional(:tools) => String.t(),
           optional(:workdir) => Path.t(),
-          optional(:extra_args) => [String.t()]
+          optional(:extra_args) => [String.t()],
+          optional(:capacity_sink) => module() | (term() -> term()) | nil
         }
 
   @spec call(input()) ::
@@ -57,7 +68,8 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
       input.endpoint,
       "--print",
       "--output-format",
-      "json",
+      "stream-json",
+      "--verbose",
       "--model",
       input.model,
       "--tools=" <> Map.get(input, :tools, ""),
@@ -84,8 +96,12 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
     deadline = max(input.timeout_ms - @deadline_margin_ms, @minimum_deadline_ms)
 
     case PortRunner.spawn(argv, cd: workdir, env: env, max_output_bytes: @max_output_bytes) do
-      {:ok, runner} -> runner |> collect(deadline) |> decode(input.max_output_tokens)
-      {:error, _reason} -> {:error, :transport_error}
+      {:ok, runner} ->
+        sink = Map.get_lazy(input, :capacity_sink, &CapacityReading.default_sink/0)
+        runner |> collect(deadline) |> decode(input.max_output_tokens, sink)
+
+      {:error, _reason} ->
+        {:error, :transport_error}
     end
   end
 
@@ -122,21 +138,24 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
     end
   end
 
-  defp decode({:error, _} = error, _limit), do: error
+  defp decode({:error, _} = error, _limit, _sink), do: error
 
-  defp decode({:ok, output}, limit) do
-    output
-    |> String.split("\n", trim: true)
+  defp decode({:ok, output}, limit, sink) do
+    frames =
+      for line <- String.split(output, "\n", trim: true),
+          {:ok, %{} = frame} <- [Jason.decode(line)],
+          do: frame
+
+    version = Enum.find_value(frames, &CapacityReading.version/1)
+    Enum.each(frames, &CapacityReading.record(&1, version, sink))
+
+    frames
     |> Enum.reverse()
     |> Enum.find_value({:error, :invalid_transport_response}, &result(&1, limit))
   end
 
-  defp result(line, limit) do
-    case Jason.decode(line) do
-      {:ok, %{"type" => "result"} = result} -> structured(result, limit)
-      _ -> nil
-    end
-  end
+  defp result(%{"type" => "result"} = result, limit), do: structured(result, limit)
+  defp result(_frame, _limit), do: nil
 
   defp structured(
          %{"is_error" => false, "subtype" => "success", "usage" => usage} = result,

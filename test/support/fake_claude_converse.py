@@ -23,6 +23,7 @@ shapes Claude Code 2.1.312 printed against a scripted model
       EXIT n        exits with status n at once
       SPAWN         starts `sleep 300` (pid logged), then replies "spawned"
       REKEY id      reports session `id` from now on (system/init), "ACK"
+      USAGE         a rate_limit_event (five-hour 83%, seven-day 40%), "ACK"
       anything else assistant text "ACK";
   - EOF on stdin -> exit 0.
 
@@ -118,7 +119,8 @@ def user(message):
         body = "SAY " + answer
     if body.startswith("REKEY "):
         SESSION = body.split(" ", 1)[1]
-    emit({"type": "system", "subtype": "init", "session_id": SESSION, "model": flag("--model")})
+    emit({"type": "system", "subtype": "init", "session_id": SESSION, "model": flag("--model"),
+          "claude_code_version": "2.1.312"})
     verb, _, rest = body.partition(" ")
     if verb == "SAY":
         text(rest)
@@ -144,6 +146,14 @@ def user(message):
         emit({"type": "assistant", "session_id": SESSION, "message": {"role": "assistant", "content": [
             {"type": "thinking", "thinking": "hidden reasoning never forwarded", "signature": "sig"},
             {"type": "text", "text": "visible"}]}})
+        result()
+    elif verb == "USAGE":
+        emit({"type": "rate_limit_event", "session_id": SESSION, "rate_limit_info": {
+            "status": "allowed", "rateLimitType": "five_hour", "resetsAt": 1792821000,
+            "unifiedWindows": {
+                "five_hour": {"utilization": 0.83, "resetsAt": 1792821000, "status": "allowed"},
+                "seven_day": {"utilization": 0.4, "resetsAt": 1792872000, "status": "allowed"}}}})
+        text("ACK")
         result()
     elif verb == "BIG":
         text("x" * int(rest))

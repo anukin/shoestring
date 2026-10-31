@@ -38,7 +38,7 @@ defmodule Shoestring.Cobbler.PlannerClaudeHeadlessTest do
   elif mode == "no_usage":
       result(result=json.dumps(plan), usage={})
   elif mode == "flood":
-      sys.stdout.write("x" * 300000); sys.stdout.flush()
+      sys.stdout.write("x" * 9000000); sys.stdout.flush()
   elif mode == "hang":
       with open(os.path.join(out, "pid"), "w") as f: f.write(str(os.getpid()))
       time.sleep(60)
@@ -89,7 +89,7 @@ defmodule Shoestring.Cobbler.PlannerClaudeHeadlessTest do
     for flag <- ["--print", "--tools=", "--strict-mcp-config", "--no-session-persistence"],
         do: assert(flag in argv)
 
-    assert ["--output-format", "json"] == Enum.slice(argv, 1, 2)
+    assert ["--output-format", "stream-json", "--verbose"] == Enum.slice(argv, 1, 3)
     assert Enum.at(argv, Enum.find_index(argv, &(&1 == "--model")) + 1) == "opus"
 
     assert Enum.at(argv, Enum.find_index(argv, &(&1 == "--json-schema")) + 1) ==

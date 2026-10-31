@@ -93,6 +93,10 @@ with degraded state and bounded reason without crashing.
 4. **Claude headless `stream-json`** `rate_limit_event` frames during a run:
    * `:conservative_partial` tier, `:compatible` for tested versions
      (see [Claude capacity monitor](claude-capacity-monitor.md)).
+   * Read wherever Shoestring runs Claude in stream-json: worker runs, the
+     chat coordinator's conversation, and the planner, EXPLORE and REVIEW
+     calls (which use `--output-format stream-json` for this). Each report
+     with an observed window is recorded; nothing is requested for it.
 
 ### Phase 3: Observation Normalization
 

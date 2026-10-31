@@ -56,6 +56,34 @@ defmodule Shoestring.Harness.ClaudeHeadless.ConversationTest do
   defp alive?(os_pid),
     do: match?({_, 0}, System.cmd("kill", ["-0", "#{os_pid}"], stderr_to_stdout: true))
 
+  test "Claude's usage reports become capacity readings and nothing else", context do
+    test = self()
+
+    sink = fn snapshot ->
+      send(test, {:reading, snapshot})
+      {:ok, :recorded, snapshot}
+    end
+
+    pid = open!(context, %{}, capacity_sink: sink)
+    :ok = Conversation.send_turn(pid, "t1", "USAGE")
+    events = events_until(pid, :turn_completed)
+
+    assert_receive {:reading, snapshot}
+    assert %{"capacity:cli_version" => "2.1.312"} = snapshot.extensions
+
+    assert [%{kind: "five_hour", used_percent: 83.0}, %{kind: "seven_day", used_percent: 40.0}] =
+             snapshot.windows
+             |> Enum.sort_by(& &1.kind)
+             |> Enum.map(&Map.take(&1, [:kind, :used_percent]))
+
+    assert Enum.map(events, & &1.type) -- [:turn_started] == [:text, :turn_completed]
+
+    # A turn with no report records nothing.
+    :ok = Conversation.send_turn(pid, "t2", "SAY hi")
+    events_until(pid, :turn_completed)
+    refute_received {:reading, _}
+  end
+
   describe "argv/3" do
     test "is read-only, keeps MCP reachable and never carries the token" do
       paths = %{mcp_config: "/private/mcp.json", instructions: "/private/instructions.md"}

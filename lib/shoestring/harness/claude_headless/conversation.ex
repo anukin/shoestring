@@ -44,7 +44,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Conversation do
   use GenServer
 
   alias Shoestring.Harness.Capacity.Codex.StdioTransport
-  alias Shoestring.Harness.ClaudeHeadless.ConversationFrames
+  alias Shoestring.Harness.ClaudeHeadless.{CapacityReading, ConversationFrames}
   alias Shoestring.Harness.{Conversation, ConversationEvent, Error}
   alias Shoestring.Harness.OpencodeAcp.ProcessTree
   alias Shoestring.SandboxTemp
@@ -175,7 +175,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.Conversation do
       state: :starting,
       malformed: 0,
       allow_unlisted_model: Keyword.get(opts, :allow_unlisted_model, false),
-      exit_wait_ms: Keyword.get(opts, :exit_wait_ms, @exit_wait_ms)
+      exit_wait_ms: Keyword.get(opts, :exit_wait_ms, @exit_wait_ms),
+      cli_version: nil,
+      capacity_sink: Keyword.get_lazy(opts, :capacity_sink, &CapacityReading.default_sink/0)
     }
 
     case private_dir() do
@@ -373,7 +375,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Conversation do
   def handle_info({:codex_transport_frame, transport, line}, %{transport: transport} = state) do
     case decode(line) do
       {:ok, frame} ->
-        state = frame(state, ConversationFrames.classify(frame))
+        state = state |> usage_report(frame) |> frame(ConversationFrames.classify(frame))
         if state.state == :closed, do: {:stop, :normal, state}, else: {:noreply, state}
 
       :error ->
@@ -402,6 +404,14 @@ defmodule Shoestring.Harness.ClaudeHeadless.Conversation do
   end
 
   # --- Frames ---
+
+  # Claude's usage reports in the stream become capacity readings, as in a
+  # worker run (`CapacityReading`); nothing else of them is kept.
+  defp usage_report(state, frame) do
+    state = %{state | cli_version: CapacityReading.version(frame) || state.cli_version}
+    :ok = CapacityReading.record(frame, state.cli_version, state.capacity_sink)
+    state
+  end
 
   defp frame(state, {:init, id}) when id == state.session, do: state
 
