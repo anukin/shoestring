@@ -66,7 +66,15 @@ defmodule Shoestring.Coordinator.Tools do
           "gates" => Map.put(@list, "description", "Named gates to run"),
           "tests" => Map.put(@list, "description", "Test files to run"),
           "attempts" => %{"type" => "integer", "minimum" => 1, "description" => "Default 1"},
-          "minutes" => %{"type" => "integer", "minimum" => 1, "description" => "Default 30"},
+          "minutes" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" =>
+              "Time the dispatch may take. IMPLEMENT default 30. EXPLORE and REVIEW default " <>
+                "to the grant's per-dispatch limit; size them to the question (a narrow " <>
+                "lookup needs minutes, a broad audit more). A finished dispatch counts only " <>
+                "the time it took against the grant."
+          },
           "batch" => %{"type" => "string"},
           "batch_size" => %{"type" => "integer", "minimum" => 1},
           "request_id" => %{"type" => "string"},

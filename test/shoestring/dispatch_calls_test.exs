@@ -302,11 +302,122 @@ defmodule Shoestring.DispatchCallsTest do
     assert %Call{state: "failed", error_code: "call_lost"} = Calls.get(lost.id)
   end
 
+  defp running_step(dispatch) do
+    Calls.step(dispatch.id,
+      adapters: %{{"explore", "claude"} => ExploreStandIn},
+      adapter_opts: [test_pid: self(), scenario: :process_group],
+      await_runner: false
+    )
+  end
+
+  defp group_alive?(pgid),
+    do: match?({_, 0}, System.cmd("kill", ["-0", "-#{pgid}"], stderr_to_stdout: true))
+
+  # Admitted and running in its own process, holding an owned process group.
+  defp running!(ctx, overrides \\ %{}) do
+    {:ok, dispatch, :recorded} = Dispatches.create(explore(ctx, overrides))
+    admitted!(dispatch)
+    assert {:snooze, 30} = running_step(dispatch)
+    assert_receive {:explore_group, pgid, explorer}, 10_000
+    assert_received {:explore_input, _}
+    runner = Calls.runner(Calls.get(dispatch.id).id)
+    assert is_pid(runner)
+    {dispatch, runner, explorer, pgid}
+  end
+
+  test "a call runs in its own process for as long as its time allows; its job checks in until it ends",
+       ctx do
+    {dispatch, runner, explorer, pgid} = running!(ctx, %{seconds: 900})
+    assert dispatch.max_duration_seconds == 900
+    assert dispatch.plan["timeout_ms"] == 900_000
+    refute Map.has_key?(dispatch.plan, "max_output_tokens")
+
+    # Still running: the job checks again; it never resends or fails it.
+    assert {:snooze, 30} = running_step(dispatch)
+    assert %Call{state: "running"} = Calls.get(dispatch.id)
+    assert Dispatches.state(dispatch) == "running"
+
+    ref = Process.monitor(runner)
+    send(explorer, :release_explore)
+    assert_receive {:DOWN, ^ref, :process, ^runner, _}, 10_000
+    assert %Call{state: "completed"} = Calls.get(dispatch.id)
+    assert :done = running_step(dispatch)
+    refute group_alive?(pgid)
+  end
+
+  test "cancelling a running call ends its explorer and the explorer's whole process group",
+       ctx do
+    {dispatch, runner, _explorer, pgid} = running!(ctx)
+    assert group_alive?(pgid)
+    ref = Process.monitor(runner)
+    assert {:ok, _} = Dispatches.cancel(dispatch, "Not needed.")
+    assert_receive {:DOWN, ^ref, :process, ^runner, _}, 15_000
+    refute group_alive?(pgid)
+    assert %Call{state: "cancelled", report_json: nil} = Calls.get(dispatch.id)
+    assert :done = running_step(dispatch)
+  end
+
+  test "a call whose process is gone was lost; it is never sent again", ctx do
+    {dispatch, runner, explorer, _pgid} = running!(ctx)
+    ref = Process.monitor(runner)
+    Process.exit(runner, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^runner, :killed}
+    assert :done = running_step(dispatch)
+    assert %Call{state: "failed", error_code: "call_lost"} = Calls.get(dispatch.id)
+    refute_received {:explore_input, _}
+    send(explorer, :release_explore)
+  end
+
+  test "output tokens are recorded, never a reason to fail a call", ctx do
+    {:ok, dispatch, :recorded} = Dispatches.create(explore(ctx))
+    admitted!(dispatch)
+    assert :done = step(dispatch, {:tokens, 250_000})
+    assert %Call{state: "completed", output_tokens: 250_000} = Calls.get(dispatch.id)
+  end
+
+  test "a call's time defaults to the grant's per-dispatch limit; finished, it counts what it took",
+       ctx do
+    {:ok, dispatch, :recorded} = Dispatches.create(explore(ctx))
+    assert dispatch.max_duration_seconds == ctx.grant.max_dispatch_seconds
+    # Not finished, it counts all the time it may take.
+    assert Dispatches.usage(ctx.grant).seconds == 3_600
+    admitted!(dispatch)
+    assert :done = step(dispatch)
+    assert Dispatches.usage(ctx.grant).seconds < 60
+
+    assert {:error, {:invalid_dispatch, :seconds}} =
+             Dispatches.create(explore(ctx, %{request_id: "e9", seconds: 20}))
+  end
+
+  test "a call recorded before iteration 16 is rebuilt exactly as it was made" do
+    request = %{provider: "claude", model: "opus", effort: nil}
+
+    # What iteration 14's `explore_input/4` built, so its recorded digest holds.
+    assert Calls.explore_input(Map.put(request, :version, 1), "T", "B", "abc") == %{
+             "max_output_tokens" => 8192,
+             "timeout_ms" => 240_000,
+             "version" => 1,
+             "purpose" => "explore",
+             "provider" => "claude",
+             "model" => "opus",
+             "effort" => nil,
+             "base" => "abc",
+             "prompt" => Explore.prompt(%{title: "T", brief: "B"}),
+             "schema" => Explore.schema()
+           }
+
+    v2 = Calls.explore_input(Map.put(request, :seconds, 900), "T", "B", "abc")
+    assert %{"version" => 2, "timeout_ms" => 900_000} = v2
+    refute Map.has_key?(v2, "max_output_tokens")
+  end
+
   test "a held call's advice names what confirms it: a pre-approval, a person, or nothing",
        ctx do
     detail = fn dispatch -> Shoestring.CLI.Commands.Runs.detail(dispatch) end
 
-    {:ok, first, :recorded} = Dispatches.create(explore(ctx))
+    # Each asks for ten minutes: unfinished, a call counts all of its time.
+    ten = %{seconds: 600}
+    {:ok, first, :recorded} = Dispatches.create(explore(ctx, ten))
     assert {:snooze, 30} = step(first)
     held = detail.(first)
     assert held["state"] == "held"
@@ -318,11 +429,11 @@ defmodule Shoestring.DispatchCallsTest do
     assert detail.(first)["next"] == nil
 
     # The grant's second and last pre-approval, then none.
-    {:ok, second, :recorded} = Dispatches.create(explore(ctx, %{request_id: "e2"}))
+    {:ok, second, :recorded} = Dispatches.create(explore(ctx, %{request_id: "e2", seconds: 600}))
     assert {:snooze, 30} = step(second)
     assert Dispatches.advance(second) == :confirmed
 
-    {:ok, third, :recorded} = Dispatches.create(explore(ctx, %{request_id: "e3"}))
+    {:ok, third, :recorded} = Dispatches.create(explore(ctx, %{request_id: "e3", seconds: 600}))
     assert {:snooze, 30} = step(third)
     assert Dispatches.advance(third) == :none
     assert detail.(third)["state"] == "held"

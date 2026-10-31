@@ -17,14 +17,19 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
   instructions. An EXPLORE call (`Shoestring.Dispatches.Explore.ClaudeHeadless`)
   instead names read-only `:tools`, its `:workdir` (a private copy of the
   repository) and `:extra_args`. This module enforces its own deadline (the caller's timeout
-  minus a margin, at least one second) and kills the whole group on overrun;
-  killing the calling task alone could leave a `claude` process spending
-  quota. `CLAUDE_CODE_MAX_OUTPUT_TOKENS` carries the charged output allowance,
-  and the reported `usage.output_tokens` is returned for the caller to check.
+  minus a margin, at least one second; none when `:timeout_ms` is nil) and
+  kills the whole group on overrun or when the collecting process is sent
+  `{:cancel_call, reason}` (`Shoestring.Harness.FrameCollector`); killing the
+  calling task alone could leave a `claude` process spending quota. When
+  `:max_output_tokens` is given, `CLAUDE_CODE_MAX_OUTPUT_TOKENS` carries it
+  and the reported `usage.output_tokens` is checked against it; otherwise the
+  count is only returned.
 
-  Output over the byte cap (#{div(8_388_608, 1_048_576)} MiB of frames, room
-  for an EXPLORE's tool results) fails as `:output_too_large`, never
-  truncated. Only
+  A tool-free call keeps every frame; a call with tools keeps only the frames
+  the result is read from (the model's messages and tool results, an
+  EXPLORE's file contents among them, are progress only). A line over
+  #{div(8_388_608, 1_048_576)} MiB, or kept frames over #{div(8_388_608, 1_048_576)} MiB fail as
+  `:output_too_large`, never truncated. Only
   the result JSON leaves this module; the rest of the result, including any
   provider identifiers, is discarded in memory. The result is accepted as
   `structured_output` or as JSON text in `result` (VERIFIED for planning in
@@ -35,6 +40,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
   alias Shoestring.Elves.PortRunner
   alias Shoestring.Dispatches.Explore.Progress
   alias Shoestring.Harness.ClaudeHeadless.CapacityReading
+  alias Shoestring.Harness.FrameCollector
 
   @max_output_bytes 8_388_608
   @deadline_margin_ms 5_000
@@ -46,8 +52,8 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
           required(:schema) => map(),
           required(:system_prompt) => String.t(),
           required(:prompt) => String.t(),
-          required(:max_output_tokens) => pos_integer(),
-          required(:timeout_ms) => pos_integer(),
+          required(:max_output_tokens) => pos_integer() | nil,
+          required(:timeout_ms) => pos_integer() | nil,
           required(:scratch_prefix) => String.t(),
           optional(:tools) => String.t(),
           optional(:workdir) => Path.t(),
@@ -90,19 +96,24 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
           input.prompt
         ]
 
-    env = [
-      {"CLAUDE_CODE_MAX_OUTPUT_TOKENS", Integer.to_string(input.max_output_tokens)},
-      {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"}
-    ]
-
-    deadline = max(input.timeout_ms - @deadline_margin_ms, @minimum_deadline_ms)
+    env =
+      [{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"}] ++
+        if input.max_output_tokens,
+          do: [{"CLAUDE_CODE_MAX_OUTPUT_TOKENS", Integer.to_string(input.max_output_tokens)}],
+          else: []
 
     case PortRunner.spawn(argv, cd: workdir, env: env, max_output_bytes: @max_output_bytes) do
       {:ok, runner} ->
         sink = Map.get_lazy(input, :capacity_sink, &CapacityReading.default_sink/0)
 
         runner
-        |> collect(deadline, Map.get(input, :progress))
+        |> FrameCollector.collect(
+          deadline_ms: deadline(input.timeout_ms),
+          keep: if(Map.get(input, :tools, "") == "", do: fn _frame -> true end, else: &kept?/1),
+          each: Progress.each(&Progress.claude/1, Map.get(input, :progress)),
+          max_kept_bytes: @max_output_bytes,
+          max_line_bytes: @max_output_bytes
+        )
         |> decode(input.max_output_tokens, sink)
 
       {:error, _reason} ->
@@ -110,49 +121,18 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
     end
   end
 
-  # `progress` (or nil) gets each tool use as it happens (`Explore.Progress`).
-  defp collect(runner, deadline_ms, progress) do
-    deadline = System.monotonic_time(:millisecond) + deadline_ms
-    collect(runner, deadline, [], 0, {"", progress})
-  end
+  defp deadline(nil), do: nil
+  defp deadline(ms), do: max(ms - @deadline_margin_ms, @minimum_deadline_ms)
 
-  defp collect(%PortRunner{port: port} = runner, deadline, chunks, bytes, {pending, progress}) do
-    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
-
-    receive do
-      {^port, {:data, data}} ->
-        bytes = bytes + byte_size(data)
-
-        if bytes > @max_output_bytes do
-          _ = PortRunner.terminate(runner)
-          {:error, :output_too_large}
-        else
-          pending = Progress.feed(pending, data, &Progress.claude/1, progress)
-          collect(runner, deadline, [chunks, data], bytes, {pending, progress})
-        end
-
-      {^port, {:exit_status, 0}} ->
-        _ = PortRunner.close(runner)
-        {:ok, IO.iodata_to_binary(chunks)}
-
-      {^port, {:exit_status, _status}} ->
-        _ = PortRunner.close(runner)
-        {:error, :transport_error}
-    after
-      remaining ->
-        _ = PortRunner.terminate(runner)
-        {:error, :transport_timeout}
-    end
-  end
+  # With tools (an EXPLORE), the model's messages and the tools' results are
+  # progress only. A tool-free call keeps every frame, so its whole output
+  # counts against the bound.
+  defp kept?(%{"type" => type}) when type in ["assistant", "user", "stream_event"], do: false
+  defp kept?(_frame), do: true
 
   defp decode({:error, _} = error, _limit, _sink), do: error
 
-  defp decode({:ok, output}, limit, sink) do
-    frames =
-      for line <- String.split(output, "\n", trim: true),
-          {:ok, %{} = frame} <- [Jason.decode(line)],
-          do: frame
-
+  defp decode({:ok, frames}, limit, sink) do
     version = Enum.find_value(frames, &CapacityReading.version/1)
     Enum.each(frames, &CapacityReading.record(&1, version, sink))
 
@@ -169,7 +149,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.OneShot do
          limit
        ) do
     with tokens when is_integer(tokens) and tokens >= 0 <- usage["output_tokens"],
-         true <- tokens <= limit || :output_limit,
+         true <- (is_nil(limit) or tokens <= limit) || :output_limit,
          {:ok, json} <- json(result) do
       {:ok, %{json: json, output_tokens: tokens}}
     else

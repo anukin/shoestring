@@ -72,4 +72,27 @@ defmodule Shoestring.Dispatches.Explore.CodexExecTest do
 
   defp disabled(["--disable", feature]), do: [feature]
   defp disabled(_pair), do: []
+
+  test "tokens fail a call only against an allowance it was made with", c do
+    input = %{
+      "workdir" => Path.join(c.dir, "repo"),
+      "model" => "gpt-explore",
+      "prompt" => "Explore.",
+      "schema" => %{"type" => "object"},
+      "effort" => nil,
+      "timeout_ms" => nil
+    }
+
+    endpoint = [endpoint: Path.join(c.dir, "codex")]
+
+    # A coordinator's call (version 2): no allowance and no deadline.
+    assert {:ok, %{output_tokens: 5}} = CodexExec.explore(input, endpoint)
+
+    # A call recorded before iteration 16 keeps its allowance.
+    assert {:error, :output_limit} =
+             CodexExec.explore(
+               Map.merge(input, %{"max_output_tokens" => 4, "timeout_ms" => 60_000}),
+               endpoint
+             )
+  end
 end

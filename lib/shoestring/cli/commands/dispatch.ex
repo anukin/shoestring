@@ -30,8 +30,10 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   `--reviewer` names a model from another vendor that reviews the change
   before it is accepted (the grant must allow REVIEW and that model):
   blocking findings send the task back to the worker once, then it waits
-  for a person. `--attempts` (default 1) and `--minutes` (default 30) are what the
-  dispatch reserves from the grant. `--batch` declares a strategy of
+  for a person. `--attempts` (default 1) and `--minutes` are what the
+  dispatch reserves from the grant: an IMPLEMENT's minutes default to 30;
+  an EXPLORE or REVIEW runs until it answers, up to its minutes or else the
+  grant's per-dispatch limit. A finished dispatch counts the time it took. `--batch` declares a strategy of
   `--batch-size` dispatches; one more is refused.
 
   The session is ID or SHOESTRING_SESSION. The request id (default: derived
@@ -219,7 +221,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         gates: Map.get(fields, :gates, []),
         tests: Map.get(fields, :tests, []),
         attempts: fields[:attempts] || 1,
-        seconds: (fields[:minutes] || 30) * 60,
+        seconds: fields[:minutes] && fields[:minutes] * 60,
         batch_label: fields[:batch],
         batch_size: fields[:batch_size]
       }

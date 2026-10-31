@@ -11,9 +11,12 @@ defmodule Shoestring.Dispatches.Calls do
      reserve defers it (`waiting`). A held call is confirmed by one of the
      grant's unread-usage pre-approvals (`Shoestring.Dispatches.advance/2`),
      never by the coordinator itself.
-  2. Admitted, it runs once, within its timeout. A call found `running` when
-     its job starts again was lost in a crash and fails as `call_lost`; it is
-     never sent twice.
+  2. Admitted, it runs once, in its own process (`Shoestring.Dispatches.CallTasks`,
+     registered in `Shoestring.Dispatches.CallRegistry` by call id), never
+     inside its job: the job checks every half minute that the process is
+     still there, so a call may run as long as its time allows. A call found
+     `running` with no process was lost in a crash and fails as `call_lost`;
+     it is never sent twice.
   3. Code checks the output. An EXPLORE report is checked by
      `Shoestring.Dispatches.Explore.validate/2` against the private copy it
      read, which must be unchanged afterwards (`explorer_wrote` otherwise). A
@@ -21,10 +24,11 @@ defmodule Shoestring.Dispatches.Calls do
      `Shoestring.Cobbler.Review.Findings`, whose rules, not the reviewer,
      decide the outcome (`approved` or `changes_requested`).
 
-  Explore calls end within four minutes and review calls within three, so a
-  call never outlives `Oban.Lifeline`'s five-minute rescue of its job.
-  Cancelling a running call discards its result; the call itself ends within
-  its timeout.
+  A call's time is the dispatch's `seconds`: what the coordinator asked for,
+  else the grant's per-dispatch limit. Its output tokens are recorded, never
+  a reason to fail it (calls recorded before iteration 16 keep the output
+  allowance they were made with). Cancelling a running call ends it: its
+  CLI's whole process group is terminated and the result is discarded.
   """
   require Logger
 
@@ -35,25 +39,37 @@ defmodule Shoestring.Dispatches.Calls do
   alias Shoestring.Cobbler.{WakeupObserve}
   alias Shoestring.Cobbler.Review.{Findings, Packet}
   alias Shoestring.Dispatches.{Call, CallWorker, Dispatch, Explore}
+  alias Shoestring.Harness.FrameCollector
   alias Shoestring.Trajectory.TrajectoryEvent
 
   @scope "subscription"
   @held_recheck_seconds 30
-  @explore %{"max_output_tokens" => 8192, "timeout_ms" => 240_000}
-  @review %{"max_output_tokens" => 4096, "timeout_ms" => 180_000}
+  @running_check_seconds 30
+  # How long an adapter may take past its own deadline, and to end once
+  # cancelled, before its task is killed.
+  @adapter_grace_ms 30_000
+  @cancel_grace_ms 10_000
+  # Calls recorded before iteration 16 (input version 1) had a fixed time and
+  # output allowance; they are rebuilt with them.
+  @legacy %{
+    "explore" => %{"max_output_tokens" => 8192, "timeout_ms" => 240_000},
+    "review" => %{"max_output_tokens" => 4096, "timeout_ms" => 180_000}
+  }
 
   def get(dispatch_id), do: Repo.get_by(Call, dispatch_id: dispatch_id)
 
-  @doc "How long a call of `purpose` may take, in seconds (the grant reserves it)."
-  def seconds("explore"), do: div(@explore["timeout_ms"], 1000)
-  def seconds("review"), do: div(@review["timeout_ms"], 1000)
+  # Version 2: the call's time is the dispatch's seconds, with no output
+  # allowance. `request.version` 1 rebuilds a call recorded before.
+  defp limits(purpose, %{version: 1}), do: Map.put(@legacy[purpose], "version", 1)
+
+  defp limits(_purpose, request),
+    do: %{"version" => 2, "timeout_ms" => Map.fetch!(request, :seconds) * 1000}
 
   # -- Inputs --------------------------------------------------------------
 
   @doc "The immutable input of an EXPLORE call at `base`."
   def explore_input(request, title, brief, base) do
-    Map.merge(@explore, %{
-      "version" => 1,
+    Map.merge(limits("explore", request), %{
       "purpose" => "explore",
       "provider" => request.provider,
       "model" => request.model,
@@ -90,8 +106,7 @@ defmodule Shoestring.Dispatches.Calls do
              gates: get_in(completed, ["evidence", "gates"]) || []
            }) do
       {:ok,
-       Map.merge(@review, %{
-         "version" => 1,
+       Map.merge(limits("review", request), %{
          "purpose" => "review",
          "provider" => request.provider,
          "model" => request.model,
@@ -194,9 +209,16 @@ defmodule Shoestring.Dispatches.Calls do
     end
   end
 
+  # Running in its own process: checked again until it ends. With no
+  # process it was lost (the service stopped while it ran) and is never sent
+  # again.
   defp step(_dispatch, %Call{state: "running"} = call, opts) do
-    finish(call, {:failed, "call_lost", nil}, opts)
-    :done
+    if runner(call.id) do
+      {:snooze, @running_check_seconds}
+    else
+      finish(call, {:failed, "call_lost", nil}, opts)
+      :done
+    end
   end
 
   defp step(_dispatch, _call, _opts), do: :done
@@ -228,7 +250,7 @@ defmodule Shoestring.Dispatches.Calls do
                admission: admission,
                started_at: now
              }) do
-          {:ok, call} -> run(dispatch, call, input, opts)
+          {:ok, call} -> launch(dispatch, call, input, opts)
           :stale -> :done
         end
 
@@ -296,71 +318,112 @@ defmodule Shoestring.Dispatches.Calls do
     }
   end
 
+  @doc "The process running call `call_id`, or nil."
+  def runner(call_id) do
+    case Registry.lookup(Shoestring.Dispatches.CallRegistry, call_id) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  end
+
+  # The admitted call runs in its own process, so its job is never held for
+  # the call's length. `:await_runner` (tests) waits for it to end instead.
+  defp launch(dispatch, call, input, opts) do
+    {:ok, pid} =
+      Task.Supervisor.start_child(Shoestring.Dispatches.CallTasks, fn ->
+        execute(dispatch, call, input, opts)
+      end)
+
+    if Keyword.get_lazy(opts, :await_runner, fn ->
+         Application.get_env(:shoestring, :dispatch_calls_await_runner, false)
+       end) do
+      ref = Process.monitor(pid)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :done
+      end
+    else
+      {:snooze, @running_check_seconds}
+    end
+  end
+
+  defp execute(dispatch, call, input, opts) do
+    {:ok, _} = Registry.register(Shoestring.Dispatches.CallRegistry, call.id, nil)
+
+    # Cancelled before it registered: nothing is sent.
+    case Repo.get(Call, call.id) do
+      %Call{state: "running"} -> finish(call, run(dispatch, call, input, opts), opts)
+      _ -> :ok
+    end
+  end
+
   defp run(dispatch, call, %{"purpose" => "explore"} = input, opts) do
-    result =
-      with {:ok, workdir} <- copy(dispatch, call, input) do
-        explored =
-          bounded(input, fn ->
-            adapter(input, opts).explore(
-              Map.put(input, "workdir", workdir),
-              Keyword.put(adapter_opts(opts), :progress, &record_progress(call.id, &1))
-            )
-          end)
+    with {:ok, workdir} <- copy(dispatch, call, input) do
+      explored =
+        adapt(input, fn ->
+          adapter(input, opts).explore(
+            Map.put(input, "workdir", workdir),
+            Keyword.put(adapter_opts(opts), :progress, &record_progress(call.id, &1))
+          )
+        end)
 
-        with {:ok, json, tokens} <- explored,
-             :ok <- unchanged(workdir, input["base"]),
-             {:ok, report} <- Explore.validate(json, workdir) do
-          {:ok, report, tokens}
-        else
-          {:error, :explorer_wrote} -> {:failed, "explorer_wrote", tokens(explored)}
-          {:error, code} -> {:failed, Atom.to_string(code), tokens(explored)}
-          {:failed, _, _} = failed -> failed
-        end
+      with {:ok, json, tokens} <- explored,
+           :ok <- unchanged(workdir, input["base"]),
+           {:ok, report} <- Explore.validate(json, workdir) do
+        {:ok, report, tokens}
       else
-        {:error, code} -> {:failed, Atom.to_string(code), nil}
+        {:error, :explorer_wrote} -> {:failed, "explorer_wrote", tokens(explored)}
+        {:error, code} -> {:failed, Atom.to_string(code), tokens(explored)}
+        {:failed, _, _} = failed -> failed
       end
-
-    finish(call, result, opts)
-    :done
+    else
+      {:error, code} -> {:failed, Atom.to_string(code), nil}
+    end
   end
 
-  defp run(_dispatch, call, %{"purpose" => "review"} = input, opts) do
-    result =
-      case bounded(input, fn ->
-             adapter(input, opts).review(
-               %{
-                 "packet_json" => input["packet_json"],
-                 "schema" => Findings.schema(),
-                 "model" => input["model"],
-                 "max_output_tokens" => input["max_output_tokens"],
-                 "timeout_ms" => input["timeout_ms"]
-               },
-               adapter_opts(opts)
-             )
-           end) do
-        {:ok, json, tokens} ->
-          case Findings.validate(json, Jason.decode!(input["packet_json"])) do
-            {:ok, findings} -> {:ok, findings, tokens}
-            {:error, {kind, _field}} -> {:failed, Atom.to_string(kind), tokens}
-          end
+  defp run(_dispatch, _call, %{"purpose" => "review"} = input, opts) do
+    case adapt(input, fn ->
+           adapter(input, opts).review(
+             %{
+               "packet_json" => input["packet_json"],
+               "schema" => Findings.schema(),
+               "model" => input["model"],
+               "max_output_tokens" => input["max_output_tokens"],
+               "timeout_ms" => input["timeout_ms"]
+             },
+             adapter_opts(opts)
+           )
+         end) do
+      {:ok, json, tokens} ->
+        case Findings.validate(json, Jason.decode!(input["packet_json"])) do
+          {:ok, findings} -> {:ok, findings, tokens}
+          {:error, {kind, _field}} -> {:failed, Atom.to_string(kind), tokens}
+        end
 
-        failed ->
-          failed
-      end
-
-    finish(call, result, opts)
-    :done
+      failed ->
+        failed
+    end
   end
 
-  # The adapter runs in a task bounded by the call's timeout; its output
-  # allowance is checked here too.
-  defp bounded(input, fun) do
-    task = Task.Supervisor.async_nolink(Shoestring.Cobbler.PlannerTasks, fun)
+  # The adapter runs in a task of its own; it keeps its own deadline and
+  # ends its CLI's process group on overrun or cancellation. A cancellation
+  # sent to the call's process is passed on to it. Tokens fail a call only
+  # against an allowance it was recorded with (version 1).
+  defp adapt(input, fun) do
+    task = Task.Supervisor.async_nolink(Shoestring.Dispatches.CallTasks, fun)
 
-    case Task.yield(task, input["timeout_ms"]) || Task.shutdown(task, :brutal_kill) do
+    timeout =
+      case input["timeout_ms"] do
+        nil -> :infinity
+        ms -> ms + @adapter_grace_ms
+      end
+
+    case await(task, timeout) do
       {:ok, {:ok, %{json: json, output_tokens: tokens}}}
       when is_binary(json) and is_integer(tokens) and tokens >= 0 ->
-        if tokens <= input["max_output_tokens"],
+        limit = input["max_output_tokens"]
+
+        if is_nil(limit) or tokens <= limit,
           do: {:ok, json, tokens},
           else: {:failed, "output_limit", tokens}
 
@@ -373,8 +436,27 @@ defmodule Shoestring.Dispatches.Calls do
       {:exit, _} ->
         {:failed, "adapter_exit", nil}
 
-      nil ->
+      :timeout ->
         {:failed, "transport_timeout", nil}
+    end
+  end
+
+  defp await(%Task{ref: ref, pid: pid} = task, timeout) do
+    receive do
+      {^ref, result} ->
+        Process.demonitor(ref, [:flush])
+        {:ok, result}
+
+      {:DOWN, ^ref, :process, _pid, reason} ->
+        {:exit, reason}
+
+      {:cancel_call, reason} ->
+        FrameCollector.cancel(pid, reason)
+        await(task, @cancel_grace_ms)
+    after
+      timeout ->
+        _ = Task.shutdown(task, :brutal_kill)
+        :timeout
     end
   end
 
@@ -485,7 +567,10 @@ defmodule Shoestring.Dispatches.Calls do
 
   def confirm(_call, _identity), do: {:error, :not_held}
 
-  @doc "Cancels a call that has not finished."
+  @doc """
+  Cancels a call that has not finished. A running one is ended: its process
+  is told, and its CLI's whole process group is terminated.
+  """
   def cancel(%Call{} = call) do
     case transition(call, "held_or_pending", %{
            state: "cancelled",
@@ -496,8 +581,12 @@ defmodule Shoestring.Dispatches.Calls do
 
       :stale ->
         case transition(call, "running", %{state: "cancelled", finished_at: DateTime.utc_now()}) do
-          {:ok, call} -> {:ok, call}
-          :stale -> {:error, :already_finished}
+          {:ok, call} ->
+            if pid = runner(call.id), do: send(pid, {:cancel_call, :cancelled})
+            {:ok, call}
+
+          :stale ->
+            {:error, :already_finished}
         end
     end
   end

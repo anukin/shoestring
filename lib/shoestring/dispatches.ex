@@ -221,7 +221,7 @@ defmodule Shoestring.Dispatches do
   defp prepare("implement", %{request: request} = prepared, facts) do
     with :ok <- reviewer(request),
          {:ok, attempts} <- int(Map.get(request, :attempts, 1), :attempts, 1..20),
-         {:ok, seconds} <- int(Map.get(request, :seconds, 1800), :seconds, 60..14_400),
+         {:ok, seconds} <- int(Map.get(request, :seconds) || 1800, :seconds, 60..14_400),
          {:ok, gates} <-
            Intake.gates(facts,
              gates: Map.get(request, :gates, []),
@@ -239,23 +239,52 @@ defmodule Shoestring.Dispatches do
 
   # EXPLORE and REVIEW are one model call each (`Shoestring.Dispatches.Calls`):
   # the dispatch records the call's contract instead of a plan.
+  # Its time is what the coordinator asked for, else the grant's per-dispatch
+  # limit: no fixed time of its own.
   defp prepare("explore", %{request: request} = prepared, _facts) do
-    input = Calls.explore_input(request, prepared.title, prepared.brief, prepared.head)
-    {:ok, call(prepared, input)}
-  end
+    with {:ok, seconds} <- call_seconds(request) do
+      input =
+        Calls.explore_input(
+          Map.put(request, :seconds, seconds),
+          prepared.title,
+          prepared.brief,
+          prepared.head
+        )
 
-  defp prepare("review", %{request: request} = prepared, _facts) do
-    with {:ok, target} <- review_target(request, prepared),
-         {:ok, input} <- Calls.review_input(Map.put(request, :brief, prepared.brief), target) do
-      {:ok, call(prepared, input)}
+      {:ok, call(prepared, input, seconds)}
     end
   end
 
-  defp call(prepared, input) do
+  defp prepare("review", %{request: request} = prepared, _facts) do
+    with {:ok, seconds} <- call_seconds(request),
+         {:ok, target} <- review_target(request, prepared),
+         {:ok, input} <-
+           Calls.review_input(
+             Map.merge(request, %{brief: prepared.brief, seconds: seconds}),
+             target
+           ) do
+      {:ok, call(prepared, input, seconds)}
+    end
+  end
+
+  defp call_seconds(request) do
+    case Map.get(request, :seconds) do
+      nil ->
+        case Grants.active(request.session_id) do
+          %Grant{max_dispatch_seconds: seconds} -> {:ok, seconds}
+          nil -> {:ok, 1800}
+        end
+
+      seconds ->
+        int(seconds, :seconds, 60..14_400)
+    end
+  end
+
+  defp call(prepared, input, seconds) do
     Map.merge(prepared, %{
       contract: %{content: Calls.contract(input), digest: PlanContract.digest(input)},
       attempts: 1,
-      seconds: Calls.seconds(input["purpose"])
+      seconds: seconds
     })
   end
 
@@ -499,7 +528,9 @@ defmodule Shoestring.Dispatches do
       provider: dispatch.provider,
       model: dispatch.model,
       effort: dispatch.effort,
-      brief: dispatch.brief
+      brief: dispatch.brief,
+      seconds: dispatch.max_duration_seconds,
+      version: dispatch.plan["version"]
     }
 
     input =
@@ -618,20 +649,59 @@ defmodule Shoestring.Dispatches do
   end
 
   @doc """
-  What `grant`'s dispatches already reserve: attempts and seconds (every
-  dispatch not failed to start) and how many are starting, queued, running,
-  waiting or held.
+  What `grant`'s dispatches use: attempts (every dispatch not failed to
+  start), seconds and how many are starting, queued, running, waiting or
+  held. A finished dispatch counts the seconds it took (at most what it
+  reserved); one not finished counts every second it may still take.
   """
   def usage(%Grant{} = grant) do
     dispatches =
       Repo.all(from d in Dispatch, where: d.grant_id == ^grant.id and d.state != "failed")
+      |> Enum.map(&{&1, state(&1)})
 
     %{
-      attempts: Enum.sum_by(dispatches, & &1.max_attempts),
-      seconds: Enum.sum_by(dispatches, & &1.max_duration_seconds),
-      running: Enum.count(dispatches, &(state(&1) in ~w(starting queued running waiting held)))
+      attempts: Enum.sum_by(dispatches, fn {dispatch, _} -> dispatch.max_attempts end),
+      seconds: Enum.sum_by(dispatches, fn {dispatch, state} -> used_seconds(dispatch, state) end),
+      running:
+        Enum.count(dispatches, fn {_, state} ->
+          state in ~w(starting queued running waiting held)
+        end)
     }
   end
+
+  defp used_seconds(dispatch, state) when state in ~w(completed cancelled failed) do
+    case took(dispatch) do
+      seconds when is_integer(seconds) -> min(seconds, dispatch.max_duration_seconds)
+      nil -> dispatch.max_duration_seconds
+    end
+  end
+
+  defp used_seconds(dispatch, _state), do: dispatch.max_duration_seconds
+
+  # Seconds a finished dispatch took, rounded up; nil when not known.
+  defp took(%Dispatch{purpose: purpose} = dispatch) when purpose in @calls do
+    case Calls.get(dispatch.id) do
+      %Call{started_at: nil} ->
+        0
+
+      %Call{started_at: started, finished_at: %DateTime{} = finished} ->
+        seconds(started, finished)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp took(%Dispatch{goal_id: goal_id}) when is_binary(goal_id) do
+    case ExecutionControl.status(goal_id) do
+      {:ok, %{total_duration_ms: ms}} when is_integer(ms) and ms >= 0 -> div(ms + 999, 1000)
+      _ -> nil
+    end
+  end
+
+  defp took(_dispatch), do: nil
+
+  defp seconds(from, to), do: div(max(DateTime.diff(to, from, :millisecond), 0) + 999, 1000)
 
   @doc "A grant's limits next to what its dispatches use."
   def room(%Grant{} = grant, usage \\ nil) do

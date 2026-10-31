@@ -7,11 +7,15 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
   through code mode's `exec` from codex-cli 0.166.0) disabled and the report
   schema as `--output-schema`. The shell lets it read and search files.
 
-  The JSONL stream is bounded like the reviewer's
-  (`Shoestring.Cobbler.Review.CodexExec`): an oversized frame or answer, a
-  provider error, a non-zero exit or a missing result fails closed. A file
-  change or any tool other than a command fails as `explorer_wrote` or
-  `explorer_used_tools`; the report is the last agent message.
+  The JSONL stream is read by `Shoestring.Harness.FrameCollector`, which
+  keeps only the frames the result is read from (commands and their output
+  are progress, never kept): a provider error, a non-zero exit or a missing
+  result fails closed, as does a kept stream over its bound. A file change or
+  any tool other than a command fails as `explorer_wrote` or
+  `explorer_used_tools`; the report is the last agent message. The call runs
+  until its `timeout_ms` (none when nil) or until it is cancelled; its
+  output tokens are recorded, and fail it only when `max_output_tokens` is
+  given.
 
   UNVERIFIED in a live call; the request it sends was checked offline
   (`plans/evidence/14-coordinator-orchestration/`).
@@ -21,9 +25,9 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
   alias Shoestring.Dispatches.Explore
   alias Shoestring.Dispatches.Explore.Progress
   alias Shoestring.Elves.PortRunner
+  alias Shoestring.Harness.FrameCollector
 
   @max_stream_bytes 8_388_608
-  @max_frame_bytes 1_048_576
   @deadline_margin_ms 5_000
   @minimum_deadline_ms 1_000
 
@@ -53,18 +57,30 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
         Enum.flat_map(@disabled_features, &["--disable", &1]) ++
         [input["prompt"]]
 
-    deadline = max(input["timeout_ms"] - @deadline_margin_ms, @minimum_deadline_ms)
-
     case PortRunner.spawn(argv, cd: workdir, max_output_bytes: @max_stream_bytes) do
       {:ok, runner} ->
         runner
-        |> collect(deadline, Keyword.get(opts, :progress))
+        |> FrameCollector.collect(
+          deadline_ms: deadline(input["timeout_ms"]),
+          keep: &kept?/1,
+          each: Progress.each(&Progress.codex/1, Keyword.get(opts, :progress))
+        )
         |> decode(input["max_output_tokens"])
 
       {:error, _reason} ->
         {:error, :transport_error}
     end
   end
+
+  defp deadline(nil), do: nil
+  defp deadline(ms), do: max(ms - @deadline_margin_ms, @minimum_deadline_ms)
+
+  # Commands, their output and reasoning are progress only.
+  defp kept?(%{"item" => %{"type" => kind}})
+       when kind in ["error", "reasoning", "command_execution", "todo_list"],
+       do: false
+
+  defp kept?(_frame), do: true
 
   defp config_flags(instructions, effort) do
     [
@@ -81,66 +97,22 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
     |> Enum.flat_map(&["-c", &1])
   end
 
-  # `progress` (or nil) gets each command as it starts (`Explore.Progress`).
-  defp collect(runner, deadline_ms, progress) do
-    deadline = System.monotonic_time(:millisecond) + deadline_ms
-    collect(runner, deadline, [], 0, {"", progress})
-  end
-
-  defp collect(%PortRunner{port: port} = runner, deadline, chunks, bytes, {pending, progress}) do
-    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
-
-    receive do
-      {^port, {:data, data}} ->
-        bytes = bytes + byte_size(data)
-
-        if bytes > @max_stream_bytes do
-          _ = PortRunner.terminate(runner)
-          {:error, :output_too_large}
-        else
-          pending = Progress.feed(pending, data, &Progress.codex/1, progress)
-          collect(runner, deadline, [chunks, data], bytes, {pending, progress})
-        end
-
-      {^port, {:exit_status, 0}} ->
-        _ = PortRunner.close(runner)
-        {:ok, IO.iodata_to_binary(chunks)}
-
-      {^port, {:exit_status, _status}} ->
-        _ = PortRunner.close(runner)
-        {:error, :transport_error}
-    after
-      remaining ->
-        _ = PortRunner.terminate(runner)
-        {:error, :transport_timeout}
-    end
-  end
-
   defp decode({:error, _} = error, _limit), do: error
 
-  defp decode({:ok, output}, limit) do
-    output
-    |> String.split("\n", trim: true)
-    |> Enum.reduce_while(%{answer: nil, tokens: nil}, &frame/2)
+  defp decode({:ok, frames}, limit) do
+    frames
+    |> Enum.reduce_while(%{answer: nil, tokens: nil}, &event({:ok, &1}, &2))
     |> case do
       {:error, _} = error ->
         error
 
       %{answer: answer, tokens: tokens} when is_binary(answer) and is_integer(tokens) ->
-        if tokens <= limit,
+        if is_nil(limit) or tokens <= limit,
           do: {:ok, %{json: answer, output_tokens: tokens}},
           else: {:error, :output_limit}
 
       _ ->
         {:error, :invalid_transport_response}
-    end
-  end
-
-  defp frame(line, acc) do
-    cond do
-      byte_size(line) > @max_frame_bytes -> {:halt, {:error, :output_too_large}}
-      not String.starts_with?(line, "{") -> {:cont, acc}
-      true -> line |> Jason.decode() |> event(acc)
     end
   end
 

@@ -18,6 +18,8 @@ config :shoestring, Oban,
   plugins: false
 
 config :shoestring, dispatch_reconciler: false
+# A dispatch call runs in its own process; tests wait for it to end.
+config :shoestring, dispatch_calls_await_runner: true
 config :shoestring, wakeup_reconciler: false
 config :shoestring, handoff_reconciler: false
 config :shoestring, elf_reconciler: false

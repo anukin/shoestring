@@ -30,6 +30,13 @@ defmodule Shoestring.Dispatches.Explore.Progress do
     rest
   end
 
+  @doc """
+  For `Shoestring.Harness.FrameCollector`'s `:each`: reports the steps of
+  each decoded frame through `report` (nil when there is no `report`).
+  """
+  def each(_steps, nil), do: nil
+  def each(steps, report), do: fn frame -> for step <- steps.(frame), do: report.(bound(step)) end
+
   @doc "The steps of a `codex exec --json` frame: a command it starts."
   def codex(%{
         "type" => "item.started",

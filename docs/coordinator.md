@@ -254,9 +254,20 @@ fails the call. `dispatch --purpose review --of DISPATCH` has a model of
 another vendor review a completed IMPLEMENT of the session with iteration
 8's packet (its diff from its base, its contract and its checks) and
 findings rules: `report.outcome` is `changes_requested` exactly when a
-supported blocking finding remains. Like every Claude or Codex call they
-are held until confirmed, which a grant's `--unread-usage` pre-approval can
-do; `runs show` has the report or the error. Neither changes anything.
+supported blocking finding remains. Claude calls are held until confirmed,
+which a grant's `--unread-usage` pre-approval can do; a Codex call starts by
+itself on a fresh reading within its reserves. `runs show` has the report
+or the error. Neither changes anything.
+
+A call takes as long as it needs, up to its time: the `--minutes` the
+coordinator asked for, else the grant's per-dispatch limit. There is no
+output-token allowance: the call's tokens are recorded (`runs show`) and
+never fail it. It runs in its own process, not inside its job, so a long
+call is not mistaken for a lost one; the service checks on it every half
+minute. Cancelling a running call ends it: the CLI's whole process group is
+terminated and the report is discarded. A finished dispatch counts the time
+it took against the grant's total, an unfinished one all the time it may
+still take.
 
 A dispatch deferred until a usage window resets (a reserve breached, or a
 worker that stopped at its limit) is `waiting`: `runs show` gives the reset

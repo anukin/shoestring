@@ -6,7 +6,10 @@ defmodule Shoestring.Test.ExploreStandIn do
   copy first), `:oversized`, `:progress` (reports 55 steps through
   `opts[:progress]` first) or `{:error, code}`. `:process_group` holds an
   owned process group for the call, as the real explorers do, sends
-  `{:explore_group, pgid, self()}` and reports once sent `:release_explore`.
+  `{:explore_group, pgid, self()}` and reports once sent `:release_explore`;
+  sent `{:cancel_call, _}` instead, it ends the group and answers
+  `{:error, :cancelled}`, as `Shoestring.Harness.FrameCollector` does.
+  `{:tokens, n}` reports with `n` output tokens.
   """
   @behaviour Shoestring.Dispatches.Explore.Adapter
 
@@ -49,15 +52,20 @@ defmodule Shoestring.Test.ExploreStandIn do
         {:ok, runner} = Shoestring.Elves.PortRunner.spawn(["sleep", "60"], cd: input["workdir"])
         send(opts[:test_pid], {:explore_group, runner.pgid, self()})
 
-        receive do
-          :release_explore -> :ok
-        after
-          30_000 -> :ok
-        end
+        answer =
+          receive do
+            :release_explore -> {:ok, %{json: Jason.encode!(report()), output_tokens: 120}}
+            {:cancel_call, _reason} -> {:error, :cancelled}
+          after
+            30_000 -> {:ok, %{json: Jason.encode!(report()), output_tokens: 120}}
+          end
 
         _ = Shoestring.Elves.PortRunner.terminate(runner)
         Shoestring.Elves.PortRunner.close(runner)
-        {:ok, %{json: Jason.encode!(report()), output_tokens: 120}}
+        answer
+
+      {:tokens, tokens} ->
+        {:ok, %{json: Jason.encode!(report()), output_tokens: tokens}}
 
       {:error, code} ->
         {:error, code}

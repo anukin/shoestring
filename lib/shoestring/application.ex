@@ -35,6 +35,8 @@ defmodule Shoestring.Application do
         Shoestring.Cobbler.ReservationWriter,
         {Task.Supervisor, name: Shoestring.Cobbler.PlannerTasks},
         {Task.Supervisor, name: Shoestring.Cobbler.GateOutputTasks},
+        {Registry, keys: :unique, name: Shoestring.Dispatches.CallRegistry},
+        {Task.Supervisor, name: Shoestring.Dispatches.CallTasks},
         {Registry, keys: :unique, name: Shoestring.Trajectory.WriterRegistry},
         Shoestring.Trajectory.WriterSupervisor,
         {Phoenix.PubSub, name: Shoestring.PubSub},
