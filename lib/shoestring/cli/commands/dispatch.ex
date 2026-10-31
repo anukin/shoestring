@@ -5,7 +5,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   alias Shoestring.CLI.{Command, Jobs, Messages, Refusal}
 
   @help """
-  shoestring dispatch --purpose implement --worker PROVIDER:MODEL --title TEXT
+  shoestring dispatch --purpose implement (--agent NAME | --worker PROVIDER:MODEL) --title TEXT
       --brief FILE [--effort LEVEL] [--reviewer PROVIDER:MODEL]
       [--file PATH]... [--stay-out PATH]...
       [--accept TEXT]... [--gate NAME]... [--test PATH]... [--attempts N]
@@ -22,6 +22,12 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   the checks (`--gate`, `--test`, or detected as for `shoestring do`) decide
   acceptance, and the result is a verified commit to fetch and merge. Your
   checkout is never changed.
+
+  `--agent` names an agent of the session's team (its slug, or its job:
+  explorer, implementer, reviewer) instead of a worker: its model and effort
+  are used. An agent's limit (its most minutes per dispatch) bounds every
+  dispatch of its job on its model, however it is named; asking for more is
+  refused.
 
   TITLE is one line; FILE is the brief the worker reads (up to 16000
   characters). Secret-looking values in either are recorded, and given to
@@ -60,6 +66,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     title: :string,
     brief: :string,
     effort: :string,
+    agent: :string,
     reviewer: :string,
     of: :string,
     file: :keep,
@@ -155,9 +162,12 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   end
 
   defp request!(opts, context) do
-    for key <- [:purpose, :worker, :title, :brief],
+    for key <- [:purpose, :title, :brief],
         is_nil(opts[key]),
         do: Refusal.refuse!("dispatch needs --#{key}")
+
+    if is_nil(opts[:worker]) and is_nil(opts[:agent]),
+      do: Refusal.refuse!("dispatch needs --agent NAME or --worker PROVIDER:MODEL")
 
     session =
       opts[:session] || Map.get(context, :env, &System.get_env/1).("SHOESTRING_SESSION") ||
@@ -195,7 +205,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   """
   @spec build_request(map()) :: {:ok, map()} | {:error, String.t()}
   def build_request(fields) do
-    with {:ok, {provider, model}} <-
+    with {:ok, fields} <- named_agent(fields),
+         {:ok, {provider, model}} <-
            model_pair(
              fields[:worker],
              "Use PROVIDER:MODEL for --worker, for example codex:gpt-6-luna"
@@ -209,6 +220,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         provider: provider,
         model: model,
         effort: fields[:effort],
+        agent: fields[:agent],
         reviewer_provider: reviewer_provider,
         reviewer_model: reviewer_model,
         title: fields[:title],
@@ -229,6 +241,39 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       {:ok, Map.put(request, :request_id, fields[:request_id] || derived_request_id(request))}
     end
   end
+
+  # `--agent` names an agent of the session's team (its slug, or its job:
+  # explorer, implementer, reviewer): its model and effort are the worker's.
+  defp named_agent(%{agent: name} = fields) when is_binary(name) do
+    team =
+      case Shoestring.Grants.active(fields.session_id) do
+        %{team: team} -> team
+        nil -> nil
+      end
+
+    cond do
+      fields[:worker] ->
+        {:error, "Name the agent or the worker, not both"}
+
+      agent = Shoestring.Agents.find(team, name) ->
+        {:ok,
+         Map.merge(fields, %{
+           worker: "#{agent["provider"]}:#{agent["model"]}",
+           effort: fields[:effort] || agent["effort"]
+         })}
+
+      team == nil ->
+        {:error,
+         "This session has no team, so it has no agents to name; use --worker PROVIDER:MODEL"}
+
+      true ->
+        {:error,
+         "No agent #{inspect(name)} in this session's team: " <>
+           Enum.map_join(team["agents"], ", ", &"#{&1["slug"]} (#{&1["kind"]})")}
+    end
+  end
+
+  defp named_agent(fields), do: {:ok, fields}
 
   defp model_pair(value, refusal) do
     case is_binary(value) && String.split(value, ":", parts: 2) do
@@ -309,6 +354,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       "session_id" => dispatch.session_id,
       "request_id" => dispatch.request_id,
       "purpose" => dispatch.purpose,
+      "agent" => dispatch.agent,
       "worker" => "#{dispatch.provider}:#{dispatch.model}",
       "effort" => dispatch.effort,
       "reviewer" =>
@@ -340,6 +386,20 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     do:
       "No grant for session #{request.session_id}. Ask the person to run, in a terminal: " <>
         "shoestring grant --models #{request.provider}:#{request.model} --session #{request.session_id}"
+
+  def message({:over_agent_limit, agent, minutes}, _request),
+    do:
+      "The #{agent} agent may take at most #{minutes} minutes per dispatch. Ask for less, " <>
+        "or ask the person to raise its limit (the Agents page, or shoestring agents). " <>
+        "Nothing was queued."
+
+  def message({:unknown_agent, name}, _request),
+    do: "No agent #{inspect(name)} in this session's team. Nothing was queued."
+
+  def message({:agent_purpose, agent, kind, purpose}, _request),
+    do:
+      "#{agent} is an #{kind} agent; it does not take #{String.upcase(purpose)} dispatches. " <>
+        "Nothing was queued."
 
   def message({:outside_grant, limit}, _request),
     do: "Outside the grant: #{limit(limit)}. Nothing was queued."

@@ -66,7 +66,9 @@ defmodule Shoestring.Grants do
   Creates a grant. `attrs`: `:session_id`, `:repository_root` (canonical),
   `:models` (`["provider:model"]`), `:purposes`, and each limit in
   `#{inspect(Keyword.keys(@limits))}`. A grant given no `:max_turns`
-  allows no coordinator turns.
+  allows no coordinator turns. `:team` (optional) is the session's team
+  (`Shoestring.Agents.snapshot/1`): its agents' limits bound their
+  dispatches.
   """
   def create(attrs, granted_by, opts \\ []) do
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
@@ -99,7 +101,8 @@ defmodule Shoestring.Grants do
       max_total_seconds: grant.max_total_seconds + Map.get(changes, :add_seconds, 0),
       max_dispatch_seconds: grant.max_dispatch_seconds,
       unread_usage: grant.unread_usage + Map.get(changes, :add_unread_usage, 0),
-      max_turns: grant.max_turns + Map.get(changes, :add_turns, 0)
+      max_turns: grant.max_turns + Map.get(changes, :add_turns, 0),
+      team: grant.team
     }
 
     with :ok <- human(by),
@@ -294,6 +297,7 @@ defmodule Shoestring.Grants do
           :session_id,
           :repository_root,
           :models,
+          :team,
           :purposes | Keyword.keys(@limits)
         ])
 
@@ -358,6 +362,7 @@ defmodule Shoestring.Grants do
       :repository_root,
       :models,
       :purposes,
+      :team,
       :limits_revision | Keyword.keys(@limits)
     ])
     |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)

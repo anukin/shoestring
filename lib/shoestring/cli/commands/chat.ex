@@ -98,7 +98,7 @@ defmodule Shoestring.CLI.Commands.Chat do
     converses!(coordinator)
     client = client!(context)
     session = opts[:session] || Grants.new_session_id()
-    grant = Grants.active(session) || grant!(session, roles, coordinator, context)
+    grant = Grants.active(session) || grant!(session, agent, roles, coordinator, context)
     conversation = conversation!(session, coordinator, grant)
 
     instructions =
@@ -210,7 +210,7 @@ defmodule Shoestring.CLI.Commands.Chat do
 
   defp external(opts, context, agent, roles, coordinator) do
     session = opts[:session] || Grants.new_session_id()
-    grant = Grants.active(session) || grant!(session, roles, coordinator, context)
+    grant = Grants.active(session) || grant!(session, agent, roles, coordinator, context)
 
     command = command(context)
     dir = Path.join([Shoestring.State.root(), "chat", session])
@@ -331,7 +331,7 @@ defmodule Shoestring.CLI.Commands.Chat do
   # The grant a new session proposes: every other role's model the grant can
   # use, all purposes, the default limits. A person confirms it here, at
   # this terminal.
-  defp grant!(session, roles, coordinator, context) do
+  defp grant!(session, team, roles, coordinator, context) do
     models =
       roles
       |> Enum.reject(&(&1["name"] == "Coordinator"))
@@ -353,7 +353,9 @@ defmodule Shoestring.CLI.Commands.Chat do
       max_total_seconds: 4 * 3600,
       max_dispatch_seconds: 3600,
       unread_usage: 0,
-      max_turns: 20
+      max_turns: 20,
+      # The agents the session starts with, and their limits.
+      team: team && Shoestring.Agents.snapshot(team)
     }
 
     Grant.describe(attrs, context)

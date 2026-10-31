@@ -16,6 +16,8 @@ defmodule Shoestring.Grants.Grant do
     field :unread_usage, :integer, default: 0
     field :unread_usage_used, :integer, default: 0
     field :max_turns, :integer, default: 0
+    # The team the session started with (`Shoestring.Agents.snapshot/1`), or nil.
+    field :team, :map
     field :turns_used, :integer, default: 0
     field :limits_revision, :integer, default: 1
     field :revoked_at, :utc_datetime_usec

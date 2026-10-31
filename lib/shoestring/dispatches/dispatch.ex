@@ -25,6 +25,8 @@ defmodule Shoestring.Dispatches.Dispatch do
     field :base_revision, :string
     field :max_attempts, :integer
     field :max_duration_seconds, :integer
+    # The session agent the dispatch is for (its slug), or nil.
+    field :agent, :string
     field :batch_label, :string
     field :batch_size, :integer
     field :goal_id, :binary_id

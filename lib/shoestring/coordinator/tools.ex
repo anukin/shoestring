@@ -41,9 +41,15 @@ defmodule Shoestring.Coordinator.Tools do
         "type" => "object",
         "properties" => %{
           "purpose" => %{"type" => "string", "enum" => ["implement", "explore", "review"]},
+          "agent" => %{
+            "type" => "string",
+            "description" =>
+              "An agent of the session's team, by slug or job (explorer, implementer, " <>
+                "reviewer): its model and effort are used. Give this or `worker`."
+          },
           "worker" => %{
             "type" => "string",
-            "description" => "PROVIDER:MODEL, e.g. codex:gpt-6-luna"
+            "description" => "PROVIDER:MODEL, e.g. codex:gpt-6-luna. Give this or `agent`."
           },
           "title" => %{"type" => "string", "description" => "One line"},
           "brief" => %{
@@ -80,7 +86,7 @@ defmodule Shoestring.Coordinator.Tools do
           "request_id" => %{"type" => "string"},
           "dry_run" => %{"type" => "boolean"}
         },
-        "required" => ["purpose", "worker", "title", "brief"]
+        "required" => ["purpose", "title", "brief"]
       }
     },
     %{
@@ -147,7 +153,7 @@ defmodule Shoestring.Coordinator.Tools do
     }
   ]
 
-  @strings ~w(purpose worker title brief effort reviewer of batch request_id)
+  @strings ~w(purpose agent worker title brief effort reviewer of batch request_id)
   @lists ~w(files stay_out accept gates tests)
   @integers ~w(attempts minutes batch_size)
 
@@ -223,7 +229,8 @@ defmodule Shoestring.Coordinator.Tools do
   end
 
   defp dispatch_fields(args, binding) do
-    with :ok <- required(args, ~w(purpose worker title brief)),
+    with :ok <- required(args, ~w(purpose title brief)),
+         :ok <- agent_or_worker(args),
          :ok <- typed(args, @strings, &is_binary/1, "a string"),
          :ok <- typed(args, @lists, &string_list?/1, "a list of strings"),
          :ok <- typed(args, @integers, &(is_integer(&1) and &1 > 0), "a positive integer") do
@@ -234,6 +241,12 @@ defmodule Shoestring.Coordinator.Tools do
 
       {:ok, Map.merge(fields, %{session_id: binding.session_id, repository: binding.repository})}
     end
+  end
+
+  defp agent_or_worker(args) do
+    if is_binary(args["agent"]) or is_binary(args["worker"]),
+      do: :ok,
+      else: {:error, "dispatch needs `agent` or `worker`"}
   end
 
   defp required(args, keys) do

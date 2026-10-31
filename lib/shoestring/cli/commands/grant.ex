@@ -119,6 +119,28 @@ defmodule Shoestring.CLI.Commands.Grant do
 
     shell.error("  Dispatches started with unreadable usage: #{attrs.unread_usage}")
     shell.error("  Coordinator turns: #{attrs.max_turns}")
+
+    case Map.get(attrs, :team) do
+      %{"agents" => [_ | _] = agents} = team ->
+        shell.error("  Team #{team["team"]}:")
+
+        for agent <- agents do
+          limit =
+            cond do
+              agent["kind"] == "coordinator" -> "the turns above"
+              agent["max_minutes"] -> "at most #{agent["max_minutes"]} minutes a dispatch"
+              true -> "no limit of its own"
+            end
+
+          shell.error(
+            "    #{Shoestring.Agents.label(agent["kind"])} #{agent["slug"]}: " <>
+              "#{agent["provider"]}:#{agent["model"]}, #{limit}"
+          )
+        end
+
+      _ ->
+        :ok
+    end
   end
 
   @doc false
@@ -131,6 +153,7 @@ defmodule Shoestring.CLI.Commands.Grant do
   def show(grant) do
     %{
       "grant_id" => grant.id,
+      "team" => grant.team,
       "session_id" => grant.session_id,
       "granted_by" => grant.granted_by,
       "repository_root" => grant.repository_root,

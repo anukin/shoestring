@@ -31,7 +31,7 @@ defmodule Shoestring.Dispatches do
   """
   import Ecto.Query
 
-  alias Shoestring.{AgentProfiles, Authority, Grants, Harnesses, ModelCatalog, Repo}
+  alias Shoestring.{AgentProfiles, Agents, Authority, Grants, Harnesses, ModelCatalog, Repo}
   alias Shoestring.Cobbler.{ExecutionControl, ExecutionProfile, Intake, PlanContract, Plans}
   alias Shoestring.Dispatches.{Call, Calls, Dispatch}
   alias Shoestring.Grants.Grant
@@ -173,6 +173,7 @@ defmodule Shoestring.Dispatches do
          {:ok, title} <- text(redact(request.title), :title, 200),
          {:ok, brief} <- brief(redact(request.brief)),
          :ok <- worker(request),
+         {:ok, request} <- session_agent(request),
          :ok <- batch(request),
          {:ok, facts} <-
            Intake.repository(request.repository, uncommitted: uncommitted(request.purpose)) do
@@ -221,7 +222,7 @@ defmodule Shoestring.Dispatches do
   defp prepare("implement", %{request: request} = prepared, facts) do
     with :ok <- reviewer(request),
          {:ok, attempts} <- int(Map.get(request, :attempts, 1), :attempts, 1..20),
-         {:ok, seconds} <- int(Map.get(request, :seconds) || 1800, :seconds, 60..14_400),
+         {:ok, seconds} <- implement_seconds(request),
          {:ok, gates} <-
            Intake.gates(facts,
              gates: Map.get(request, :gates, []),
@@ -268,15 +269,64 @@ defmodule Shoestring.Dispatches do
   end
 
   defp call_seconds(request) do
-    case Map.get(request, :seconds) do
-      nil ->
-        case Grants.active(request.session_id) do
-          %Grant{max_dispatch_seconds: seconds} -> {:ok, seconds}
-          nil -> {:ok, 1800}
-        end
+    default =
+      case Grants.active(request.session_id) do
+        %Grant{max_dispatch_seconds: seconds} -> seconds
+        nil -> 1800
+      end
 
-      seconds ->
-        int(seconds, :seconds, 60..14_400)
+    within_agent(request, default)
+  end
+
+  defp implement_seconds(request), do: within_agent(request, 1800)
+
+  # The seconds asked for, else `default`; an agent with a limit of its own
+  # bounds both. Asking for more than the agent's limit is refused: only the
+  # person raises it.
+  defp within_agent(request, default) do
+    limit =
+      case Map.get(request, :agent_entry) do
+        %{"max_minutes" => minutes} when is_integer(minutes) -> minutes * 60
+        _ -> nil
+      end
+
+    case {Map.get(request, :seconds), limit} do
+      {nil, nil} -> {:ok, default}
+      {nil, limit} -> {:ok, min(default, limit)}
+      {seconds, nil} -> int(seconds, :seconds, 60..14_400)
+      {seconds, limit} when is_integer(seconds) and seconds > limit -> over_limit(request)
+      {seconds, _limit} -> int(seconds, :seconds, 60..14_400)
+    end
+  end
+
+  defp over_limit(%{agent_entry: agent}),
+    do: {:error, {:over_agent_limit, agent["slug"], agent["max_minutes"]}}
+
+  # The session agent this dispatch is for: the one it names (`agent`), else
+  # the one of its job on its model. Its limit then bounds the dispatch,
+  # however it was named.
+  defp session_agent(request) do
+    team =
+      case Grants.active(request.session_id) do
+        %Grant{team: team} -> team
+        nil -> nil
+      end
+
+    case Map.get(request, :agent) do
+      nil ->
+        entry = Agents.for_dispatch(team, request.purpose, request.provider, request.model)
+        {:ok, Map.merge(request, %{agent: entry && entry["slug"], agent_entry: entry})}
+
+      name ->
+        case Agents.find(team, name) do
+          nil ->
+            {:error, {:unknown_agent, name}}
+
+          %{"kind" => kind} = entry ->
+            if kind == Agents.purpose_kind(request.purpose),
+              do: {:ok, Map.merge(request, %{agent: entry["slug"], agent_entry: entry})},
+              else: {:error, {:agent_purpose, entry["slug"], kind, request.purpose}}
+        end
     end
   end
 
@@ -499,6 +549,7 @@ defmodule Shoestring.Dispatches do
             base_revision: prepared.head,
             max_attempts: prepared.attempts,
             max_duration_seconds: prepared.seconds,
+            agent: Map.get(request, :agent),
             batch_label: Map.get(request, :batch_label),
             batch_size: Map.get(request, :batch_size),
             goal_id: if(request.purpose == "implement", do: Ecto.UUID.generate()),

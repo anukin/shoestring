@@ -165,6 +165,23 @@ its history; `grants extend` widens one (`--turns N` adds coordinator
 turns) and `grants revoke` stops new dispatches and turns (running work
 continues) — both ask you, in a terminal.
 
+### Teams and agents (iteration 16)
+
+An agent is one job done one way: a Coordinator, Explorer, Implementer or
+Reviewer, with its model, effort and the most minutes one of its dispatches
+may take (none of its own by default; the grant's per-dispatch limit still
+applies). A team, such as `builder`, names an agent for each role, and an
+agent may serve in several teams; editing it saves a new revision of each.
+The Implementer's role keeps its earlier name, Worker.
+
+`shoestring chat` records the team on the session's grant when it creates
+it, and shows its agents and their limits before you confirm. The
+coordinator then dispatches by agent (`agent: "explorer"`, or the agent's
+slug) and sizes `minutes` within the agent's limit. A limit bounds every
+dispatch of that job on that model, however it is named; asking for more is
+refused and the coordinator is told to ask you. A session started before
+keeps working without a team: its dispatches name a worker.
+
 ## 2. The coordinator dispatches
 
 ```sh

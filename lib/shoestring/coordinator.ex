@@ -36,7 +36,7 @@ defmodule Shoestring.Coordinator do
       |> String.replace("{{command}}", context.command)
       |> String.replace("{{session}}", context.session)
       |> String.replace("{{grant}}", grant_line(context.grant, context.command))
-      |> String.replace("{{routing}}", routing(context.roles))
+      |> String.replace("{{routing}}", routing(context.grant, context.roles))
 
     case context[:agent_instructions] do
       instructions when is_binary(instructions) and instructions != "" ->
@@ -64,7 +64,7 @@ defmodule Shoestring.Coordinator do
       template
       |> String.replace("{{session}}", context.session)
       |> String.replace("{{grant}}", conversation_grant_line(context.grant))
-      |> String.replace("{{routing}}", routing(context.roles))
+      |> String.replace("{{routing}}", routing(context.grant, context.roles))
 
     case context[:agent_instructions] do
       instructions when is_binary(instructions) and instructions != "" ->
@@ -90,6 +90,28 @@ defmodule Shoestring.Coordinator do
       "Grant `#{grant.id}`: models #{Enum.join(grant.models, ", ")}; purposes " <>
         "#{Enum.join(grant.purposes, ", ")}; up to #{grant.max_dispatches} attempts, " <>
         "#{grant.max_parallel} at once. `#{command} grants show #{grant.id}` says what is left."
+
+  # A session started with a team names its agents: dispatch by `agent`,
+  # within each one's limit.
+  defp routing(%{team: %{"agents" => [_ | _] = agents} = team}, _roles) do
+    lines =
+      for agent <- agents, agent["kind"] != "coordinator" do
+        limit =
+          if agent["max_minutes"],
+            do: "at most #{agent["max_minutes"]} minutes a dispatch",
+            else: "no time limit of its own (the grant's per-dispatch limit applies)"
+
+        "- `#{agent["slug"]}`: #{Shoestring.Agents.label(agent["kind"])}, " <>
+          "#{agent["provider"]}:#{agent["model"]}" <>
+          if(agent["effort"], do: " (#{agent["effort"]})", else: "") <> "; #{limit}."
+      end
+
+    "The person's team `#{team["team"]}` has these agents. Dispatch with `agent` (its slug " <>
+      "or its job) rather than `worker`, and size `minutes` to the question within the " <>
+      "agent's limit; only the person raises a limit.\n" <> Enum.join(lines, "\n")
+  end
+
+  defp routing(_grant, roles), do: routing(roles)
 
   defp routing(roles) do
     case Enum.reject(roles, &(&1["name"] == "Coordinator")) do

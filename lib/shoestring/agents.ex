@@ -142,4 +142,70 @@ defmodule Shoestring.Agents do
 
     Enum.find([base | Enum.map(2..999, &"#{base}-#{&1}")], &is_nil(get_by_slug(&1)))
   end
+
+  # -- A session's team ----------------------------------------------------
+
+  @purpose_kind %{"explore" => "explorer", "implement" => "implementer", "review" => "reviewer"}
+
+  @doc "The kind of agent that does dispatches of `purpose`."
+  def purpose_kind(purpose), do: Map.get(@purpose_kind, purpose)
+
+  @doc """
+  What a session records of `team` when it starts (on its grant): each role's
+  agent, its model and its limit. Later edits of the agents do not change a
+  session already started.
+  """
+  def snapshot(%Definition{} = team) do
+    agents =
+      for role <- team.roles, agent = get(role.agent_id), agent != nil do
+        %{
+          "role" => role.name,
+          "slug" => agent.slug,
+          "name" => agent.name,
+          "kind" => agent.kind,
+          "provider" => agent.provider,
+          "model" => agent.model,
+          "effort" => agent.effort,
+          "max_minutes" => agent.max_minutes
+        }
+      end
+
+    %{
+      "team" => team.slug,
+      "profile_id" => team.id,
+      "revision" => team.revision,
+      "agents" => agents
+    }
+  end
+
+  @doc """
+  The agent of a session's `team` (a `snapshot/1`) a dispatch names: by slug,
+  or by its job (`explorer`, `implementer` or `worker`, `reviewer`). nil when
+  there is none.
+  """
+  def find(team, name) when is_map(team) and is_binary(name) do
+    wanted = String.downcase(String.trim(name))
+    wanted = if wanted == "worker", do: "implementer", else: wanted
+
+    Enum.find(team["agents"] || [], &(&1["slug"] == wanted)) ||
+      Enum.find(team["agents"] || [], &(&1["kind"] == wanted and &1["kind"] != "coordinator"))
+  end
+
+  def find(_team, _name), do: nil
+
+  @doc """
+  The agent of a session's `team` a dispatch of `purpose` on
+  `provider:model` is for, so its limit applies however it was named; nil
+  when the team has none.
+  """
+  def for_dispatch(team, purpose, provider, model) when is_map(team) do
+    kind = purpose_kind(purpose)
+
+    Enum.find(
+      team["agents"] || [],
+      &(&1["kind"] == kind and &1["provider"] == provider and &1["model"] == model)
+    )
+  end
+
+  def for_dispatch(_team, _purpose, _provider, _model), do: nil
 end
