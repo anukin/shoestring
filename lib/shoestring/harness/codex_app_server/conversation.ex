@@ -120,6 +120,8 @@ defmodule Shoestring.Harness.CodexAppServer.Conversation do
       {"OPENAI_API_KEY", false},
       {"CODEX_API_KEY", false},
       {"SHOESTRING_CHAT_TOOL_TOKEN", get_in(spec, [:tools, :token]) || false}
+      # Git reads no configuration from the home directory the profile denies.
+      | Shoestring.Harness.ClaudeHeadless.Sandbox.git_env()
     ]
 
     env =
@@ -173,7 +175,9 @@ defmodule Shoestring.Harness.CodexAppServer.Conversation do
         cwd: spec.workdir,
         model: spec.model,
         approvalPolicy: "never",
-        sandbox: "read-only",
+        # Read-only, with the home directory denied except the repository.
+        config:
+          Shoestring.Harness.CodexAppServer.GitSandbox.read_only_permissions([spec.workdir]),
         developerInstructions: spec[:instructions]
       }
 
@@ -271,8 +275,7 @@ defmodule Shoestring.Harness.CodexAppServer.Conversation do
       input: [%{type: "text", text: text}],
       model: state.spec.model,
       effort: state.spec[:effort],
-      approvalPolicy: "never",
-      sandboxPolicy: %{type: "readOnly"}
+      approvalPolicy: "never"
     }
 
     case StdioTransport.send_frame(state.transport, %{

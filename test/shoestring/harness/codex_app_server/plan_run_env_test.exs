@@ -1,8 +1,8 @@
 defmodule Shoestring.Harness.CodexAppServer.PlanRunEnvTest do
   @moduledoc """
   A Codex run in private per-run Git storage (a plan run) is launched with
-  PYTHONDONTWRITEBYTECODE=1, like a sandboxed Claude Elf; other runs keep the
-  inherited environment. Local git and python3 only; no Codex CLI.
+  PYTHONDONTWRITEBYTECODE=1 and a home-free Git configuration, like a
+  sandboxed Claude Elf; other runs keep the inherited environment. Local git and python3 only; no Codex CLI.
   """
   use ExUnit.Case, async: false
 
@@ -62,7 +62,15 @@ defmodule Shoestring.Harness.CodexAppServer.PlanRunEnvTest do
     {:ok, private} = Worktrees.create(source, Ecto.UUID.generate(), "HEAD", private_git: true)
     {:ok, shared} = Worktrees.create(source, Ecto.UUID.generate(), "HEAD")
 
-    for {wt, expected} <- [{private, [{"PYTHONDONTWRITEBYTECODE", "1"}]}, {shared, nil}] do
+    # A plan run's Git also reads no configuration from the home directory
+    # its permission profile denies (GIT_CONFIG_GLOBAL=/dev/null and others).
+    plan_env = [
+      {"PYTHONDONTWRITEBYTECODE", "1"} | Shoestring.Harness.ClaudeHeadless.Sandbox.git_env()
+    ]
+
+    assert {"GIT_CONFIG_GLOBAL", "/dev/null"} in plan_env
+
+    for {wt, expected} <- [{private, plan_env}, {shared, nil}] do
       {:ok, session} =
         Session.start_link(
           run_request: request(wt.workspace_ref),

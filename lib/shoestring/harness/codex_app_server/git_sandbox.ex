@@ -57,6 +57,131 @@ defmodule Shoestring.Harness.CodexAppServer.GitSandbox do
 
   # Platform aliases such as /var -> /private/var must compare by their actual
   # location. Links below the configured root are still refused above.
+  @profile "shoestring_run"
+
+  @doc """
+  The Codex permission profile a run with `policy` (from `policy/3`) works
+  under, passed per thread as a `config` override so nothing is written to
+  the person's Codex home: the system readable, the person's `home` denied
+  (Shoestring's own state, keys and every other checkout live there), the
+  run's own roots writable, and no network (a profile's default).
+
+  The legacy `sandboxPolicy` (`workspaceWrite`) Shoestring sent before let a
+  worker's commands read the whole home directory, `~/.ssh` and Shoestring's
+  database included (VERIFIED offline with Codex 0.166.0, 2026-11-01); what a
+  command reads reaches the model provider as its output.
+  """
+  def permissions(
+        %{"writableRoots" => [_worktree, _gitdir, objects | _] = roots},
+        home \\ System.user_home!()
+      ) do
+    # Git reads the private store's own files (config, HEAD) beside its
+    # writable objects and refs.
+    entries = roots |> Map.new(&{&1, "write"}) |> Map.put_new(Path.dirname(objects), "read")
+    profile(entries, home)
+  end
+
+  @doc """
+  The read-only twin of `permissions/2`, for a Codex explorer or coordinator:
+  the system and `paths` (its repository) readable, the rest of `home`
+  denied, nothing writable, no network. The legacy read-only sandbox let
+  their commands read the whole home directory too (VERIFIED offline, same
+  date).
+  """
+  def read_only_permissions(paths, home \\ System.user_home!()) do
+    paths
+    |> Enum.flat_map(&with_git_dirs/1)
+    |> Map.new(&{&1, "read"})
+    |> profile(home)
+  end
+
+  # A checkout's Git directories, when its `.git` is a file pointing
+  # elsewhere (a private run worktree, or a linked worktree of the person's):
+  # Git reads them for `git log` and `git status`.
+  defp with_git_dirs(path) do
+    path = physical_path(path)
+
+    case File.read(Path.join(path, ".git")) do
+      {:ok, "gitdir: " <> link} ->
+        gitdir = Path.expand(String.trim(link), path)
+
+        common =
+          case File.read(Path.join(gitdir, "commondir")) do
+            {:ok, common} -> [physical_path(Path.expand(String.trim(common), gitdir))]
+            {:error, _} -> []
+          end
+
+        Enum.uniq([path, physical_path(gitdir) | common])
+
+      _ ->
+        [path]
+    end
+  end
+
+  # The home directory is denied entry by entry, never as a whole: a denied
+  # ancestor makes Git's realpath of a private worktree's `.git` file fail
+  # ("fatal: Invalid path '<home>'", VERIFIED offline with Codex 0.166.0),
+  # so the directories leading to the run's own paths stay traversable and
+  # everything beside them at each level is denied. An entry created in home
+  # after the launch is not covered.
+  defp profile(entries, home) do
+    filesystem =
+      home
+      |> physical_path()
+      |> denied_beside(Map.keys(entries))
+      |> Map.new(&{&1, "deny"})
+      |> Map.merge(entries)
+      |> Map.put(":root", "read")
+
+    %{
+      "default_permissions" => @profile,
+      "permissions" => %{@profile => %{"filesystem" => filesystem}}
+    }
+  end
+
+  # Everything under `dir` except the branches leading to `keep`; a kept path
+  # is left to its own entry. A directory on a branch that cannot be listed
+  # raises, failing the launch, rather than leaving its entries readable.
+  defp denied_beside(dir, keep) do
+    keep = Enum.filter(keep, &String.starts_with?(&1, dir <> "/"))
+    if keep == [], do: [dir], else: denied_beside(dir, keep, [])
+  end
+
+  defp denied_beside(dir, keep, acc) do
+    dir
+    |> File.ls!()
+    |> Enum.sort()
+    |> Enum.reduce(acc, fn name, acc ->
+      path = Path.join(dir, name)
+
+      cond do
+        path in keep -> acc
+        Enum.any?(keep, &String.starts_with?(&1, path <> "/")) -> denied_beside(path, keep, acc)
+        true -> [path | acc]
+      end
+    end)
+  end
+
+  @doc """
+  A profile from `permissions/2` or `read_only_permissions/2` as `codex exec`
+  `-c` overrides (TOML values; a JSON string is a valid TOML basic string).
+  """
+  def config_flags(%{"default_permissions" => name, "permissions" => profiles}) do
+    table =
+      profiles[name]["filesystem"]
+      |> Enum.sort()
+      |> Enum.map_join(",", fn {path, access} ->
+        Jason.encode!(path) <> "=" <> Jason.encode!(access)
+      end)
+
+    [
+      "-c",
+      "default_permissions=" <> Jason.encode!(name),
+      "-c",
+      "permissions.#{name}.filesystem={#{table}}"
+    ]
+  end
+
   @doc false
   def physical_path(path) do
     path |> Path.expand() |> Path.split() |> resolve_parts("/", 40)

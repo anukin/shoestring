@@ -26,13 +26,16 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
   alias Shoestring.Dispatches.Explore.Progress
   alias Shoestring.Elves.PortRunner
   alias Shoestring.Harness.FrameCollector
+  alias Shoestring.Harness.CodexAppServer.GitSandbox
 
   @max_stream_bytes 8_388_608
   @deadline_margin_ms 5_000
   @minimum_deadline_ms 1_000
 
   # The code-mode host stays enabled: from codex-cli 0.166.0 the shell is
-  # reached only through code mode's `exec`, still under `--sandbox read-only`.
+  # reached only through code mode's `exec`. Commands run under Shoestring's
+  # read-only permission profile (`GitSandbox.read_only_permissions/2`): the
+  # repository copy readable, the home directory denied, nothing writable.
   @disabled_features ~w(apps plugins remote_plugin computer_use browser_use code_mode
     multi_agent multi_agent_v2 memories hooks workspace_dependencies goals
     sleep_tool view_image image_generation tool_suggest request_permissions_tool
@@ -51,13 +54,19 @@ defmodule Shoestring.Dispatches.Explore.CodexExec do
     argv =
       [Keyword.get(opts, :endpoint, "codex"), "--no-daemon", "exec"] ++
         ["--model", input["model"], "--ephemeral", "--ignore-user-config", "--ignore-rules"] ++
-        ["--skip-git-repo-check", "--sandbox", "read-only", "--cd", workdir] ++
+        ["--skip-git-repo-check", "--cd", workdir] ++
+        GitSandbox.config_flags(GitSandbox.read_only_permissions([workdir])) ++
         ["--json", "--color", "never", "--output-schema", schema] ++
         config_flags(instructions, input["effort"]) ++
         Enum.flat_map(@disabled_features, &["--disable", &1]) ++
         [input["prompt"]]
 
-    case PortRunner.spawn(argv, cd: workdir, max_output_bytes: @max_stream_bytes) do
+    # Git reads no configuration from the home directory the profile denies.
+    case PortRunner.spawn(argv,
+           cd: workdir,
+           max_output_bytes: @max_stream_bytes,
+           env: Shoestring.Harness.ClaudeHeadless.Sandbox.git_env()
+         ) do
       {:ok, runner} ->
         runner
         |> FrameCollector.collect(

@@ -240,7 +240,12 @@ defmodule Shoestring.Agents do
         "Read your repository and run read-only commands in Codex's read-only sandbox",
         "Call Shoestring's own tools: dispatch, runs, inbox, capacity"
       ],
-      cannot: ["Write files", "Use the network", "Run anything outside the sandbox"]
+      cannot: [
+        "Write files",
+        "Use the network",
+        "Read your home folder outside the repository",
+        "Run anything outside the sandbox"
+      ]
     }
   end
 
@@ -260,7 +265,11 @@ defmodule Shoestring.Agents do
         "Read a private copy of the repository at its last commit",
         "Run read-only commands there, in Codex's read-only sandbox"
       ],
-      cannot: ["Write anything (a write fails the call)", "Use the network", "See your checkout"]
+      cannot: [
+        "Write anything (a write fails the call)",
+        "Use the network",
+        "See your checkout or the rest of your home folder"
+      ]
     }
   end
 

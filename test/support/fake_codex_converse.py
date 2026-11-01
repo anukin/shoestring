@@ -30,7 +30,12 @@ for line in sys.stdin:
     elif method == "model/list":
         reply(f, {"data": [{"id": "opus", "model": "opus", "supportedReasoningEfforts": [{"reasoningEffort": "high"}]}]})
     elif method in ("thread/start", "thread/resume"):
-        assert params["sandbox"] == "read-only"
+        # Read-only under Shoestring's profile: home denied, the repository
+        # readable, nothing writable (the legacy read-only mode read all of home).
+        assert "sandbox" not in params
+        profile = params["config"]["permissions"][params["config"]["default_permissions"]]["filesystem"]
+        assert profile[":root"] == "read" and "deny" in profile.values()
+        assert "write" not in profile.values()
         assert params["approvalPolicy"] == "never"
         assert params["model"] == "opus"
         if method == "thread/resume":
@@ -43,7 +48,7 @@ for line in sys.stdin:
             continue
         reply(f, {"thread": {"id": session}})
     elif method == "turn/start":
-        assert params["sandboxPolicy"] == {"type": "readOnly"}
+        assert "sandboxPolicy" not in params
         assert params["approvalPolicy"] == "never"
         assert params["model"] == "opus"
         turn = "turn-" + str(f["id"])

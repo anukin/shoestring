@@ -36,7 +36,11 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
   @default_max_frame_size 10_485_760
   @default_request_timeout 15_000
-  @plan_run_env [{"PYTHONDONTWRITEBYTECODE", "1"}]
+  # Git reads no configuration from the (denied) home directory: without
+  # this a sandboxed commit fails on ~/.gitconfig.
+  @plan_run_env [
+    {"PYTHONDONTWRITEBYTECODE", "1"} | Shoestring.Harness.ClaudeHeadless.Sandbox.git_env()
+  ]
   @default_handshake_timeout_ms 15_000
 
   defstruct [
@@ -600,7 +604,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
           send_rpc(
             state,
             "thread/resume",
-            model_params(state, %{"threadId" => state.thread_id}),
+            thread_params(state, model_params(state, %{"threadId" => state.thread_id})),
             :thread_resume
           )
         else
@@ -621,12 +625,15 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
           send_rpc(
             state,
             "thread/start",
-            model_params(state, %{
-              "cwd" => cwd,
-              "ephemeral" => Keyword.get(state.opts, :ephemeral, false),
-              "approvalPolicy" => "never",
-              "sandbox" => "workspace-write"
-            }),
+            thread_params(
+              state,
+              model_params(state, %{
+                "cwd" => cwd,
+                "ephemeral" => Keyword.get(state.opts, :ephemeral, false),
+                "approvalPolicy" => "never",
+                "sandbox" => "workspace-write"
+              })
+            ),
             :thread_start
           )
         end
@@ -1008,12 +1015,23 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       nil ->
         params
 
+      _policy ->
+        Map.merge(params, %{"cwd" => state.opts[:workdir], "approvalPolicy" => "never"})
+    end
+  end
+
+  # A run in private Git storage works under Shoestring's permission profile
+  # (`GitSandbox.permissions/2`) instead of the legacy sandbox mode, on a
+  # fresh thread and a resumed one alike.
+  defp thread_params(state, params) do
+    case state.opts[:git_sandbox_policy] do
+      nil ->
+        params
+
       policy ->
-        Map.merge(params, %{
-          "cwd" => state.opts[:workdir],
-          "approvalPolicy" => "never",
-          "sandboxPolicy" => policy
-        })
+        params
+        |> Map.delete("sandbox")
+        |> Map.put("config", Shoestring.Harness.CodexAppServer.GitSandbox.permissions(policy))
     end
   end
 

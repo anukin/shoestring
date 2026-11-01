@@ -11,7 +11,7 @@ defmodule Shoestring.Dispatches.Explore.CodexExecTest do
   @codex """
   import json, os, sys
   with open(os.path.join(os.environ["STANDIN_DIR"], "call.json"), "w") as f:
-      json.dump({"argv": sys.argv[1:]}, f)
+      json.dump({"argv": sys.argv[1:], "git_config_global": os.environ.get("GIT_CONFIG_GLOBAL")}, f)
   def emit(event): print(json.dumps(event), flush=True)
   emit({"type": "thread.started", "thread_id": "00000000-0000-4000-8000-000000000000"})
   emit({"type": "turn.started"})
@@ -59,14 +59,29 @@ defmodule Shoestring.Dispatches.Explore.CodexExecTest do
 
     assert_received {:step, "Ran /bin/zsh -c 'cat README.md'"}
 
-    argv =
-      c.dir |> Path.join("call.json") |> File.read!() |> Jason.decode!() |> Map.fetch!("argv")
+    call = c.dir |> Path.join("call.json") |> File.read!() |> Jason.decode!()
+    argv = Map.fetch!(call, "argv")
+    # Git reads no configuration from the denied home directory.
+    assert call["git_config_global"] == "/dev/null"
 
     disabled = argv |> Enum.chunk_every(2, 1, :discard) |> Enum.flat_map(&disabled/1)
 
     assert "code_mode" in disabled and "apps" in disabled
     refute "code_mode_host" in disabled
-    assert ["--sandbox", "read-only"] in Enum.chunk_every(argv, 2, 1, :discard)
+    # Before 2026-11-01 `--sandbox read-only`, under which a command could
+    # read the whole home directory; now a read-only profile with home denied.
+    refute "--sandbox" in argv
+    workdir = Shoestring.Harness.CodexAppServer.GitSandbox.physical_path(input["workdir"])
+    home = Shoestring.Harness.CodexAppServer.GitSandbox.physical_path(System.user_home!())
+    assert ~s(default_permissions="shoestring_run") in argv
+
+    [table] =
+      Enum.filter(argv, &String.starts_with?(&1, "permissions.shoestring_run.filesystem="))
+
+    assert table =~ Jason.encode!(home) <> ~s(="deny")
+    assert table =~ Jason.encode!(workdir) <> ~s(="read")
+    assert table =~ ~s(":root"="read")
+    refute table =~ "write"
     assert ~s(approval_policy="never") in argv
   end
 

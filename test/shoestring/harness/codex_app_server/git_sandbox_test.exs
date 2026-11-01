@@ -82,12 +82,105 @@ defmodule Shoestring.Harness.CodexAppServer.GitSandboxTest do
       assert {:ok, _} = Session.await_run_identity(session, 5_000)
       frames = FakeTransport.get_sent_frames(transport)
       turn = Enum.find(frames, &(&1["method"] == "turn/start"))["params"]
-      assert turn["sandboxPolicy"] == policy
+
+      thread =
+        Enum.find(frames, &(&1["method"] in ["thread/start", "thread/resume"]))["params"]
+
+      # Before 2026-11-01 the turn carried the legacy workspaceWrite policy,
+      # under which a command could read the whole home directory. Now the
+      # thread carries Shoestring's permission profile: home denied, only
+      # the run's own roots writable, no network.
+      refute Map.has_key?(turn, "sandboxPolicy")
+      refute Map.has_key?(thread, "sandbox")
+      assert thread["config"] == GitSandbox.permissions(policy)
+      %{"default_permissions" => name, "permissions" => profiles} = thread["config"]
+      filesystem = profiles[name]["filesystem"]
+      assert filesystem[GitSandbox.physical_path(System.user_home!())] == "deny"
+      assert filesystem[":root"] == "read"
+
+      assert Enum.sort(for {path, "write"} <- filesystem, do: path) ==
+               Enum.sort(policy["writableRoots"])
+
+      refute Map.has_key?(profiles[name], "network")
       assert turn["cwd"] == wt.path
       assert turn["approvalPolicy"] == "never"
       assert turn["model"] == "fixture-model"
       assert snapshot(ctx.source) == ctx.baseline
     end
+  end
+
+  # Home is denied beside the run's own paths, never as a whole: a denied
+  # ancestor breaks Git's realpath of a private worktree's `.git` file
+  # (VERIFIED offline with Codex 0.166.0).
+  test "a home holding the worktrees is denied beside the run's paths, not above them", ctx do
+    home = Path.join(System.tmp_dir!(), "shoestring-home-#{Ecto.UUID.generate()}")
+    on_exit(fn -> File.rm_rf!(home) end)
+    File.mkdir_p!(Path.join(home, ".ssh"))
+    File.write!(Path.join(home, ".gitconfig"), "")
+    root = Path.join([home, "Library", "Shoestring", "worktrees"])
+    File.mkdir_p!(Path.join([home, "Library", "Keychains"]))
+    File.mkdir_p!(Path.join([home, "Library", "Shoestring", "backups"]))
+
+    {:ok, wt} =
+      Worktrees.create(ctx.source, Ecto.UUID.generate(), "HEAD",
+        private_git: true,
+        worktrees_dir: root
+      )
+
+    {:ok, other} =
+      Worktrees.create(ctx.source, Ecto.UUID.generate(), "HEAD",
+        private_git: true,
+        worktrees_dir: root
+      )
+
+    {:ok, policy} = GitSandbox.policy(wt.path, wt.workspace_ref, root)
+
+    %{"permissions" => %{"shoestring_run" => %{"filesystem" => fs}}} =
+      GitSandbox.permissions(policy, home)
+
+    home = GitSandbox.physical_path(home)
+    root = GitSandbox.physical_path(root)
+    [_worktree, _gitdir, objects | _] = policy["writableRoots"]
+
+    for path <- [".ssh", ".gitconfig", "Library/Keychains", "Library/Shoestring/backups"],
+        do: assert(fs[Path.join(home, path)] == "deny", path)
+
+    # Another run's worktree and private storage are denied too.
+    assert fs[GitSandbox.physical_path(other.path)] == "deny"
+    assert fs[Path.join([root, ".git-repositories", other.run_id])] == "deny"
+
+    # Nothing on the way to the run is denied; its own roots are writable and
+    # its store readable.
+    for dir <- [home, Path.join(home, "Library"), Path.join(home, "Library/Shoestring"), root],
+        do: refute(Map.has_key?(fs, dir), dir)
+
+    for path <- policy["writableRoots"], do: assert(fs[path] == "write")
+    assert fs[Path.dirname(objects)] == "read"
+    assert fs[":root"] == "read"
+
+    # A read-only profile follows a private worktree's `.git` file to its
+    # Git directories, which `git log` reads.
+    %{"permissions" => %{"shoestring_run" => %{"filesystem" => ro}}} =
+      GitSandbox.read_only_permissions([wt.path], home)
+
+    gitdir = git!(wt.path, ["rev-parse", "--absolute-git-dir"])
+    common = git!(wt.path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+    assert ro[GitSandbox.physical_path(wt.path)] == "read"
+    assert ro[GitSandbox.physical_path(gitdir)] == "read"
+    assert ro[GitSandbox.physical_path(common)] == "read"
+    refute "write" in Map.values(ro)
+    assert ro[Path.join(home, ".ssh")] == "deny"
+  end
+
+  test "codex exec flags carry the same profile as TOML values" do
+    profile = GitSandbox.read_only_permissions(["/nowhere/repo"], "/nowhere/home")
+
+    assert GitSandbox.config_flags(profile) == [
+             "-c",
+             ~s(default_permissions="shoestring_run"),
+             "-c",
+             ~s(permissions.shoestring_run.filesystem={"/nowhere/home"="deny","/nowhere/repo"="read",":root"="read"})
+           ]
   end
 
   test "shared source metadata never becomes a writable root", ctx do
