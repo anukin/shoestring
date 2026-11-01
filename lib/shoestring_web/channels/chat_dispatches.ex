@@ -93,12 +93,14 @@ defmodule ShoestringWeb.ChatDispatches do
   defp lines(_key, nil, _data), do: []
   defp lines(_key, [], _data), do: []
 
-  # A batch (C2): one line per task, then how to take them all.
+  # A batch (C2): one line per task, how their merge stands (C3), and how to
+  # take them all when Shoestring's merge stopped.
   defp lines("batch", %{"tasks" => tasks} = batch, _data) do
     Enum.map(tasks, fn task ->
       "task #{task["task"]} #{task["title"]} (#{Enum.join(task["files"] || [], ", ")}): " <>
         task["state"] <> if(task["commit"], do: " at #{short_sha(task["commit"])}", else: "")
     end) ++
+      integration(batch["integration"]) ++
       case batch["take"] do
         [_ | _] = take -> ["take them all:" | Enum.map(take, &("  " <> &1))]
         _ -> []
@@ -216,4 +218,22 @@ defmodule ShoestringWeb.ChatDispatches do
   defp terminal(run) do
     if TerminalAccess.interactive?(run), do: "/runs/#{run.id}/terminal", else: nil
   end
+
+  defp integration(%{"state" => "merging"}), do: ["merge: Shoestring is merging the commits"]
+
+  defp integration(%{"state" => "merged", "commit" => commit, "by" => by}),
+    do: [
+      "merge: #{short_sha(commit)}, merged by #{if(by == "shoestring", do: "Shoestring", else: "you")}"
+    ]
+
+  defp integration(%{"state" => "conflict"} = stopped),
+    do: [
+      "merge: stopped, #{stopped["task"]} conflicts in #{Enum.join(stopped["files"] || [], ", ")} " <>
+        "(never resolved by Shoestring)"
+    ]
+
+  defp integration(%{"state" => "failed"} = stopped),
+    do: ["merge: failed (#{stopped["detail"]})"]
+
+  defp integration(_), do: []
 end

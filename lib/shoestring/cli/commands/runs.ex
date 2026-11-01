@@ -121,9 +121,11 @@ defmodule Shoestring.CLI.Commands.Runs do
     )
   end
 
-  # A batch IMPLEMENT (C2): each task's state and accepted commit; once all
-  # are accepted, the commands that take them one after another, and how the
-  # person records the merge so the batch completes.
+  # A batch IMPLEMENT (C2): each task's state and accepted commit, and how
+  # their integration stands. Shoestring merges the accepted commits itself
+  # (C3); only when that merge stopped (a conflict, a failure) are the
+  # commands listed that take them one after another, and how the person
+  # records their merge so the batch completes.
   defp batch(%{task_count: n, goal_id: goal_id} = dispatch) when is_integer(n) and n > 1 do
     with {:ok, %{planned?: true} = status} <-
            Shoestring.Cobbler.ExecutionControl.status(goal_id),
@@ -153,9 +155,37 @@ defmodule Shoestring.CLI.Commands.Runs do
           }
         end
 
+      stopped = Shoestring.Cobbler.PlanMerge.blocked(goal_id, status)
+
+      integration =
+        cond do
+          status[:integration] ->
+            %{
+              "state" => "merged",
+              "commit" => status.integration.commit,
+              "by" => if(status.integration.by == "shoestring", do: "shoestring", else: "person")
+            }
+
+          stopped ->
+            %{
+              "state" => stopped["reason"],
+              "task" => stopped["plan_task_id"],
+              "files" => stopped["files"],
+              "merged" => stopped["merged_task_ids"],
+              "detail" => stopped["detail"]
+            }
+            |> Map.reject(fn {_, value} -> is_nil(value) end)
+
+          Enum.all?(tasks, &(&1["state"] == "accepted")) ->
+            %{"state" => "merging"}
+
+          true ->
+            nil
+        end
+
       take =
-        if Enum.all?(tasks, &(&1["state"] == "accepted" and &1["worktree"])) and
-             is_nil(status[:integration]) and not status.completed? do
+        if stopped != nil and not status.completed? and
+             Enum.all?(tasks, &(&1["state"] == "accepted" and &1["worktree"] != nil)) do
           ["cd #{Shoestring.Shell.argument(dispatch.repository_root)}"] ++
             Enum.flat_map(tasks, fn task ->
               [
@@ -173,7 +203,7 @@ defmodule Shoestring.CLI.Commands.Runs do
             ]
         end
 
-      %{"batch" => %{"tasks" => tasks, "take" => take}}
+      %{"batch" => %{"tasks" => tasks, "integration" => integration, "take" => take}}
     else
       _ -> %{}
     end
@@ -216,11 +246,26 @@ defmodule Shoestring.CLI.Commands.Runs do
     }
   end
 
+  defp next("needs_you", _dispatch, _call, %{
+         "batch" => %{"take" => [_ | _], "integration" => %{"state" => "conflict"} = stopped}
+       }),
+       do:
+         "Every task passed its checks, but merging #{stopped["task"]} onto " <>
+           "#{merged_text(stopped["merged"])} conflicts in #{Enum.join(stopped["files"], ", ")}. " <>
+           "Shoestring never resolves a conflict. The person merges the commits with batch.take, " <>
+           "resolving it, and its last commands record that merge so the final checks run"
+
   defp next("needs_you", _dispatch, _call, %{"batch" => %{"take" => [_ | _]}}),
     do:
-      "Every task of the batch passed its checks. The person takes the commits with " <>
-        "batch.take (each is merged in turn; a conflict is theirs to resolve), and its last " <>
-        "command records the merge so the batch completes"
+      "Every task passed its checks, but Shoestring could not merge their commits " <>
+        "(batch.integration.detail). The person merges them with batch.take, and its last " <>
+        "commands record that merge so the final checks run"
+
+  defp next("running", _dispatch, _call, %{"batch" => %{"integration" => %{"state" => state}}})
+       when state in ~w(merging merged),
+       do:
+         "Every task passed its checks; Shoestring merges their commits in its own worktree " <>
+           "and runs the final checks there. Nothing to do until it completes"
 
   defp next("needs_you", dispatch, _call, _detail),
     do: "A person decides: shoestring follow #{dispatch.goal_id}"
@@ -284,6 +329,9 @@ defmodule Shoestring.CLI.Commands.Runs do
     do: "The call failed (#{call.error_code}); dispatch it again with another --request-id"
 
   defp next(_state, _dispatch, _call, _detail), do: nil
+
+  defp merged_text([]), do: "the base"
+  defp merged_text(ids), do: "the base and " <> Enum.join(ids, ", ")
 
   defp waiting_next(dispatch, %{"until" => until}),
     do:

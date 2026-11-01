@@ -211,6 +211,64 @@ defmodule Shoestring.DispatchBatchTest do
     assert {:ok, %{tasks: [_, _]}} = Dispatch.build_request(%{fields | purpose: "implement"})
   end
 
+  test "an accepted batch is merged by Shoestring: it waits for the person only when that stopped",
+       ctx do
+    {:ok, dispatch, :recorded} = batch(ctx, @two)
+    execution_id = Ecto.UUID.generate()
+    commits = for n <- 1..2, do: String.duplicate(Integer.to_string(n), 40)
+
+    status = %{
+      execution: %{execution_id: execution_id},
+      dispatch_mode: :fanout_v1,
+      active_run_ids: [],
+      integration: nil,
+      accepted_count: 2,
+      total_tasks: 2,
+      accepted_evidence: Enum.map(commits, &%{commit: &1})
+    }
+
+    # Merging (or about to): Shoestring is at work, nothing waits for the person.
+    assert Dispatches.state(dispatch, fn _ -> {:ok, status} end) == "running"
+
+    # A stop recorded for other commits (a task accepted since) does not count.
+    block = fn accepted ->
+      {:ok, _} =
+        Shoestring.Trajectory.append(dispatch.goal_id, %{
+          "type" => "cobbler.plan.merge.blocked",
+          "schema_version" => 1,
+          "actor" => "cobbler",
+          "occurred_at" => DateTime.utc_now(),
+          "idempotency_key" =>
+            "plan-merge-blocked:#{execution_id}:" <>
+              Base.encode16(:crypto.hash(:sha256, Enum.join(accepted, ",")), case: :lower),
+          "payload" => %{
+            "execution_id" => execution_id,
+            "revision_number" => 1,
+            "plan_digest" => String.duplicate("a", 64),
+            "accepted_commits" => accepted,
+            "reason" => "conflict",
+            "plan_task_id" => "dispatch-2",
+            "files" => ["calc.py"],
+            "merged_task_ids" => ["dispatch-1"]
+          }
+        })
+    end
+
+    block.([hd(commits)])
+    assert Dispatches.state(dispatch, fn _ -> {:ok, status} end) == "running"
+
+    block.(commits)
+    assert Dispatches.state(dispatch, fn _ -> {:ok, status} end) == "needs_you"
+
+    assert %{"plan_task_id" => "dispatch-2"} =
+             Shoestring.Cobbler.PlanMerge.blocked(dispatch.goal_id, status)
+
+    # Once integrated (by Shoestring or by hand), the stop no longer applies.
+    integrated = %{status | integration: %{commit: hd(commits), covers?: true}}
+    assert Shoestring.Cobbler.PlanMerge.blocked(dispatch.goal_id, integrated) == nil
+    refute Dispatches.state(dispatch, fn _ -> {:ok, integrated} end) == "needs_you"
+  end
+
   test "the person's setting turns into iteration 7's policy; 1 keeps everything sequential" do
     assert Parallelism.tasks() == 1
     assert Parallelism.policy(1) == nil

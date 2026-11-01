@@ -30,9 +30,10 @@ defmodule Shoestring.CLI.Commands.Execution do
   Resolve-scope decides one fan-out scope blocker: accept keeps the tested
   commit and acknowledges exactly its recorded blockers; reject resolves the
   attempt as failed within the plan's attempt limits. Neither merges branches.
-  Integrate records a commit you made by merging accepted branches yourself;
-  it must contain the approved base and every accepted commit. Shoestring only
-  reads your repository and never merges. Remaining dependents continue from it.
+  Integrate records a commit you made by merging accepted branches yourself,
+  for instance after Shoestring's own merge stopped on a conflict; it must
+  contain the approved base and every accepted commit. Shoestring only reads
+  your repository and never merges into it. Remaining dependents continue from it.
   Cancel queues explicit service-owned cancellation: with --run-id it stops one
   unresolved child; without it, every unresolved child of the execution, and no
   further work is dispatched or continued for that execution.

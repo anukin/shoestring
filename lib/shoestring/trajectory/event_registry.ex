@@ -953,9 +953,37 @@ defmodule Shoestring.Trajectory.EventRegistry do
           :recorded_by,
           :reason
         ],
-        optional: [],
+        # source: Shoestring's merge worktree holding the commit, when
+        # Shoestring merged the accepted commits itself (C3).
+        optional: [:source, :merged_task_ids],
         uuid_fields: [:integration_id, :execution_id],
-        types: %{revision_number: :integer, accepted_commits: {:array, :string}}
+        types: %{
+          revision_number: :integer,
+          accepted_commits: {:array, :string},
+          source: :string,
+          merged_task_ids: {:array, :string}
+        }
+      }
+    },
+    # Shoestring's merge of accepted fan-out commits stopped (C3): a conflict
+    # (never resolved by Shoestring) or a failure. The person integrates.
+    "cobbler.plan.merge.blocked" => %{
+      1 => %{
+        required: [
+          :execution_id,
+          :revision_number,
+          :plan_digest,
+          :accepted_commits,
+          :reason
+        ],
+        optional: [:plan_task_id, :files, :merged_task_ids, :detail],
+        uuid_fields: [:execution_id],
+        types: %{
+          revision_number: :integer,
+          accepted_commits: {:array, :string},
+          files: {:array, :string},
+          merged_task_ids: {:array, :string}
+        }
       }
     },
     "cobbler.plan.cancellation.requested" => %{
@@ -1878,7 +1906,10 @@ defmodule Shoestring.Trajectory.EventRegistry do
 
     with :ok <- plan_execution_digest(payload),
          :ok <- plan_execution_revision(payload),
-         true <- human_identity?(payload["recorded_by"]) || {:field, :recorded_by},
+         true <-
+           human_identity?(payload["recorded_by"]) or
+             (payload["recorded_by"] == "shoestring" and is_binary(payload["source"])) or
+             {:field, :recorded_by},
          {:ok, _} <- Contract.text(payload["reason"], :reason, max: 2000),
          true <- full.(payload["commit"]) || {:field, :commit},
          true <-
@@ -1886,8 +1917,33 @@ defmodule Shoestring.Trajectory.EventRegistry do
               commits == Enum.sort(Enum.uniq(commits))) || {:field, :accepted_commits} do
       :ok
     else
-      {:field, :recorded_by} -> Contract.invalid(:recorded_by, "must be a human: identity")
-      {:field, field} -> Contract.invalid(field, "must name full commits")
+      {:field, :recorded_by} ->
+        Contract.invalid(:recorded_by, "must be a human: identity, or Shoestring with its source")
+
+      {:field, field} ->
+        Contract.invalid(field, "must name full commits")
+
+      error ->
+        error
+    end
+  end
+
+  defp validate_plan_execution("cobbler.plan.merge.blocked", 1, payload, _opts) do
+    full = &(is_binary(&1) and Regex.match?(~r/\A[0-9a-f]{40,64}\z/, &1))
+    files = payload["files"] || []
+
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         true <- payload["reason"] in ~w(conflict failed) || {:field, :reason},
+         true <-
+           (length(payload["accepted_commits"]) in 1..64 and
+              Enum.all?(payload["accepted_commits"], full)) || {:field, :accepted_commits},
+         true <-
+           (length(files) <= 50 and Enum.all?(files, &(byte_size(&1) <= 4096))) ||
+             {:field, :files} do
+      :ok
+    else
+      {:field, field} -> Contract.invalid(field, "is not valid")
       error -> error
     end
   end

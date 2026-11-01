@@ -106,6 +106,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     do: deterministic_uuid("plan-integration:#{execution_id}:#{base}")
 
   @doc false
+  # Shoestring's own merge of an execution's accepted fan-out commits (C3).
+  def merge_workspace_id(execution_id, base),
+    do: deterministic_uuid("plan-merge:#{execution_id}:#{base}")
+
+  @doc false
   def task_reservation_id(goal_id, task_id, attempt),
     do: deterministic_uuid("plan-reservation:#{goal_id}:#{task_id}:#{attempt}")
 
@@ -810,8 +815,16 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              acknowledged_scope_blockers: acknowledged_scope_blockers(projection, execution),
              integration:
                case covering_integration(projection, execution) do
-                 nil -> nil
-                 integration -> %{commit: integration["commit"], covers?: true}
+                 nil ->
+                   nil
+
+                 integration ->
+                   %{
+                     commit: integration["commit"],
+                     covers?: true,
+                     source: integration["source"],
+                     by: integration["recorded_by"]
+                   }
                end,
              child_inbox:
                Shoestring.Cobbler.PlanChildInbox.summary(repo, goal_id, execution.execution_id),
@@ -1736,12 +1749,15 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       {nil, _} ->
         {get_in(contract.content, ["goal", "repository", "base_revision"]), :accepted}
 
-      # The first successor after human integration starts from that commit
-      # in the source repository; later successors chain as usual.
+      # The first successor after an integration starts from that commit: in
+      # Shoestring's merge worktree when Shoestring merged (C3), else in the
+      # source repository; later successors chain as usual.
       {last, %{"commit" => commit} = recorded} ->
-        if last.commit in recorded["accepted_commits"],
-          do: {commit, :source},
-          else: {last.commit, :accepted}
+        cond do
+          last.commit not in recorded["accepted_commits"] -> {last.commit, :accepted}
+          is_binary(recorded["source"]) -> {commit, {:path, recorded["source"]}}
+          true -> {commit, :source}
+        end
 
       {last, nil} ->
         {last.commit, :accepted}
@@ -2607,6 +2623,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
         # worktree that holds it, not in the source repository.
         {base, execution} =
           case covering_integration(projection, execution) do
+            # Shoestring's own merge (C3) holds the commit in its worktree.
+            %{"commit" => commit, "source" => source} when is_binary(source) ->
+              {commit, Map.put(execution, :repository_path, source)}
+
             %{"commit" => commit} ->
               {commit, execution}
 

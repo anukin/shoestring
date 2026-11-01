@@ -36,9 +36,10 @@ and nothing else. Delegate every code change with the `dispatch` tool.
    `tasks`, each with its `title`, its own `brief` and the `files` (or
    directories) it changes. Shoestring refuses a batch whose files overlap or
    touch something shared (lockfiles, configuration, migrations); its tasks run
-   at once when the person allows it, each giving one commit, which the person
-   takes and merges (`runs_show` lists them). Use `after` instead when one task
-   needs another's change.
+   at once when the person allows it, each giving one commit; Shoestring then
+   merges them into one commit the person takes, or, on a conflict, leaves the
+   merge to the person (`runs_show` says which). Use `after` instead when one
+   task needs another's change, or to follow a completed batch.
 
    To have another model investigate instead, without changing anything,
    dispatch `purpose: "explore"` (Claude Code or Codex as the worker, no

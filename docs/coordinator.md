@@ -270,12 +270,21 @@ coordinator's brief, checks and reviewer are shared.
   verification time too; only the time actually taken counts afterwards.
 - **Enforced**: a task's change outside its own `files` blocks it for you
   (`shoestring execution resolve-scope`), with its checks kept.
-- **Result**: one commit per task. When all have passed, the dispatch is
-  `needs_you`, and `runs show` lists each task and `batch.take`: fetch and
-  merge each commit in your checkout (a conflict is yours to resolve), then
-  record the merge (`shoestring execution integrate`) and `continue`; the
-  global checks then run and the batch completes. A later package (C3) will
-  integrate onto a Shoestring branch for you.
+- **Result**: one commit per task, then one merged commit (C3). When all
+  have passed, Shoestring merges the task commits one after another, in task
+  order, onto the base in a worktree of its own (never your checkout), records
+  that merge, and runs the global checks there. The batch completes with one
+  commit, and `result.take` fetches and merges just that one. `runs show`
+  lists each task and `batch.integration` (`merging`, then `merged`). A batch
+  that completes can be followed with `after` like any IMPLEMENT.
+- **A conflict is never resolved for you.** If a task's commit conflicts
+  with those merged before it, the merge is aborted and recorded, and the
+  dispatch is `needs_you`: `batch.integration` names the task and the files,
+  and `batch.take` lists the commands to merge each commit in your checkout
+  (resolving the conflict yourself), record that merge (`shoestring execution
+  integrate`) and `continue`; the global checks then run there. A merge that
+  fails for another reason waits for you the same way. Failed global checks
+  also wait for you, as for any IMPLEMENT.
 
 ### Lessons (iteration 16 B)
 

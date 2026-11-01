@@ -149,13 +149,21 @@ defmodule Shoestring.CLI.Result do
     )
   end
 
-  # The accepted run whose private worktree contains the final commit.
+  # The private worktree that contains the final commit: Shoestring's merge
+  # of a batch's commits (C3), else the accepted run's.
   defp worktree_with(status, commit) do
+    merged =
+      case status[:integration] do
+        %{source: source} when is_binary(source) -> [{:path, source}]
+        _ -> []
+      end
+
     status
     |> Map.get(:accepted_evidence, [])
     |> Enum.sort_by(&(&1.commit != commit))
-    |> Enum.find_value({:error, :result_worktree_not_found}, fn evidence ->
-      with {:ok, %{path: path}} <- Worktrees.get(evidence.run_id),
+    |> then(&(merged ++ &1))
+    |> Enum.find_value({:error, :result_worktree_not_found}, fn candidate ->
+      with {:ok, path} <- candidate_path(candidate),
            {_, 0} <-
              System.cmd("git", ["-C", path, "cat-file", "-e", commit <> "^{commit}"],
                stderr_to_stdout: true
@@ -165,5 +173,14 @@ defmodule Shoestring.CLI.Result do
         _ -> nil
       end
     end)
+  end
+
+  defp candidate_path({:path, path}), do: {:ok, path}
+
+  defp candidate_path(evidence) do
+    case Worktrees.get(evidence.run_id) do
+      {:ok, %{path: path}} -> {:ok, path}
+      _ -> :error
+    end
   end
 end

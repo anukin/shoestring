@@ -1197,11 +1197,14 @@ defmodule Shoestring.Dispatches do
       {:ok, %{needs_user?: true}} ->
         "needs_you"
 
-      # A batch whose tasks are all accepted waits for the person to take and
-      # integrate their commits (C2; `Shoestring.Cobbler.PlanIntegration`).
-      {:ok, %{dispatch_mode: :fanout_v1, active_run_ids: []} = current}
+      # A batch whose tasks are all accepted is merged by Shoestring (C3,
+      # `Shoestring.Cobbler.PlanMerge`); it waits for the person only when
+      # that merge stopped on a conflict or failure.
+      {:ok, %{dispatch_mode: :fanout_v1, active_run_ids: [], integration: nil} = current}
       when current.accepted_count == current.total_tasks and current.total_tasks > 0 ->
-        "needs_you"
+        if Shoestring.Cobbler.PlanMerge.blocked(dispatch.goal_id, current),
+          do: "needs_you",
+          else: "running"
 
       {:ok, %{active_run_id: run_id} = current} when is_binary(run_id) ->
         # The execution retains its task's run while its completed change is

@@ -2,10 +2,12 @@ defmodule Shoestring.Cobbler.PlanIntegration do
   @moduledoc """
   Human-controlled integration of accepted plan work.
 
-  Shoestring never merges. A human combines the retained accepted branches in
+  Shoestring never merges into the person's repository. Either Shoestring
+  merges the accepted commits in its own worktree (`Shoestring.Cobbler.PlanMerge`,
+  `record_merge/3`), or a human combines the retained accepted branches in
   their own repository, for example by fetching each private branch and
-  merging it. They then record the resulting commit. Recording only reads the
-  source repository. The commit must exist there, descend from the approved
+  merging it, and records the resulting commit. Recording only reads the
+  repository that holds the commit. The commit must exist there, descend from the approved
   base, and contain every accepted commit as an ancestor; a cherry-pick does
   not qualify. While that commit covers every accepted result, remaining
   dependent work continues sequentially from it, and global verification runs
@@ -52,6 +54,52 @@ defmodule Shoestring.Cobbler.PlanIntegration do
     end
   end
 
+  @doc """
+  Records Shoestring's own merge (C3): `commit`, held in its merge worktree
+  `source`, contains the approved base and every accepted commit, merged in
+  plan order (`merged_task_ids`). Idempotent per execution and commit.
+  """
+  def record_merge(goal_id, attrs, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    command = %{
+      id: merge_id(attrs.execution_id, attrs.commit),
+      execution_id: attrs.execution_id,
+      commit: attrs.commit,
+      by: "shoestring",
+      reason: "Shoestring merged the accepted commits in plan order.",
+      source: attrs.source,
+      merged_task_ids: attrs.merged_task_ids
+    }
+
+    ReservationWriter.run(repo, fn ->
+      repo.transaction(
+        fn ->
+          case existing(repo, goal_id, command.id) do
+            nil ->
+              case append(repo, goal_id, command, Keyword.put(opts, :repository_path, nil)) do
+                {:ok, event} -> event
+                {:error, reason} -> repo.rollback(reason)
+              end
+
+            event ->
+              event
+          end
+        end,
+        mode: :immediate
+      )
+    end)
+  end
+
+  defp merge_id(execution_id, commit) do
+    <<a::binary-size(8), b::binary-size(4), _::binary-size(1), c::binary-size(3),
+      _::binary-size(1), d::binary-size(3), e::binary-size(12), _::binary>> =
+      :crypto.hash(:sha256, "plan-merge-integration:#{execution_id}:#{commit}")
+      |> Base.encode16(case: :lower)
+
+    "#{a}-#{b}-5#{c}-8#{d}-#{e}"
+  end
+
   defp command(attrs) do
     with {:ok, id} <- Ecto.UUID.cast(attrs[:command_id]),
          {:ok, execution_id} <- Ecto.UUID.cast(attrs[:execution_id]),
@@ -78,7 +126,8 @@ defmodule Shoestring.Cobbler.PlanIntegration do
            status.accepted_evidence |> Enum.map(& &1.commit) |> Enum.uniq() |> Enum.sort(),
          true <- accepted != [] and length(accepted) <= 64,
          source when is_binary(source) <-
-           execution[:repository_path] || Keyword.get(opts, :repository_path),
+           command[:source] || execution[:repository_path] ||
+             Keyword.get(opts, :repository_path),
          base = get_in(revision.content, ["goal", "repository", "base_revision"]),
          :ok <- verify(source, command.commit, [base | accepted]) do
       Trajectory.append(
@@ -86,19 +135,25 @@ defmodule Shoestring.Cobbler.PlanIntegration do
         %{
           "type" => @type_name,
           "schema_version" => 1,
-          "actor" => "human",
+          "actor" => if(command[:source], do: "cobbler", else: "human"),
           "occurred_at" => DateTime.utc_now(),
           "idempotency_key" => key(command.id),
-          "payload" => %{
-            "integration_id" => command.id,
-            "execution_id" => execution.execution_id,
-            "revision_number" => execution.revision_number,
-            "plan_digest" => execution.plan_digest,
-            "commit" => command.commit,
-            "accepted_commits" => accepted,
-            "recorded_by" => command.by,
-            "reason" => command.reason
-          }
+          "payload" =>
+            %{
+              "integration_id" => command.id,
+              "execution_id" => execution.execution_id,
+              "revision_number" => execution.revision_number,
+              "plan_digest" => execution.plan_digest,
+              "commit" => command.commit,
+              "accepted_commits" => accepted,
+              "recorded_by" => command.by,
+              "reason" => command.reason
+            }
+            |> Map.merge(
+              if command[:source],
+                do: %{"source" => command.source, "merged_task_ids" => command.merged_task_ids},
+                else: %{}
+            )
         },
         writer_opts: [transaction_repo: repo]
       )

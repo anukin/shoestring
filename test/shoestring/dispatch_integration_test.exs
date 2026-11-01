@@ -481,7 +481,8 @@ defmodule Shoestring.DispatchIntegrationTest do
     end
 
     @tag :batch
-    test "a batch's tasks run at once on their own files; taking them all completes it", _ctx do
+    test "a batch's tasks run at once on their own files; Shoestring merges them into one commit",
+         _ctx do
       System.put_env("FAKE_CLAUDE_SCENARIO", "batch")
       on_exit(fn -> System.delete_env("FAKE_CLAUDE_SCENARIO") end)
       source = source!("calc-batch")
@@ -572,16 +573,22 @@ defmodule Shoestring.DispatchIntegrationTest do
       for run <- runs, do: finish_worker!(run.id)
 
       # In the service the child inbox verifies each finished task by itself;
-      # here its jobs run between the execution's steps.
+      # here its jobs run between the execution's steps, until both are accepted.
+      accepted? = fn ->
+        {:ok, status} = Shoestring.Cobbler.ExecutionControl.status(dispatch.goal_id)
+        status.accepted_count == 2
+      end
+
       Stream.repeatedly(fn ->
         _ = Oban.drain_queue(queue: :plan_child_inbox)
         _ = Dispatches.advance(dispatch)
-        PlanExecutionWorker.perform(job)
+        if not accepted?.(), do: PlanExecutionWorker.perform(job)
       end)
       |> Stream.take(20)
-      |> Enum.find(fn _ -> Dispatches.state(dispatch) == "needs_you" end)
+      |> Enum.find(fn _ -> accepted?.() end)
 
-      assert Dispatches.state(dispatch) == "needs_you"
+      # Both accepted: Shoestring merges them itself; nothing waits for the person.
+      assert Dispatches.state(dispatch) == "running"
       shown = runs_show!(dispatch.id, "s4")
 
       assert [
@@ -599,7 +606,9 @@ defmodule Shoestring.DispatchIntegrationTest do
                }
              ] = shown["batch"]["tasks"]
 
-      assert shown["next"] =~ "Every task of the batch passed its checks"
+      assert shown["batch"]["integration"] == %{"state" => "merging"}
+      assert shown["batch"]["take"] == nil
+      assert shown["next"] =~ "Shoestring merges their commits in its own worktree"
 
       # Each commit is its own task's change, from the same base.
       for {task, commit, file} <- [
@@ -612,48 +621,43 @@ defmodule Shoestring.DispatchIntegrationTest do
         assert git!(worktree, ["diff", "--name-only", base, commit]) |> String.trim() == file
       end
 
-      # The person takes both, then records the merge: the batch completes.
-      assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
-      [cd | take] = shown["batch"]["take"]
-      assert cd == "cd #{Shoestring.Shell.argument(facts.root)}"
-      {merges, [integrate, continue]} = Enum.split(take, -2)
-
-      for command <- merges do
-        {output, status} = System.cmd("sh", ["-c", command], cd: source, stderr_to_stdout: true)
-        assert status == 0, "#{command}: #{output}"
-      end
-
-      assert File.read!(Path.join(source, "calc.py")) =~ "# changed by dispatch-1"
-      assert File.read!(Path.join(source, "strings.py")) =~ "# changed by dispatch-2"
-      assert integrate =~ "shoestring execution integrate #{dispatch.goal_id}"
-      assert continue =~ "shoestring execution continue #{dispatch.goal_id}"
-
-      # The last commands as the CLI runs them, with the merge as HEAD.
-      head = git!(source, ["rev-parse", "HEAD"]) |> String.trim()
-
-      for command <- [integrate, continue] do
-        argv =
-          command
-          |> String.replace("\"$(git rev-parse HEAD)\"", head)
-          |> OptionParser.split()
-          |> tl()
-
-        context = %{
-          shell: Mix.Shell.Process,
-          with_repo: fn fun -> fun.(Repo) end,
-          cwd: source,
-          service: fn -> :ok end
-        }
-
-        Shoestring.CLI.Commands.Execution.run(tl(argv), context)
-      end
-
+      # The next step merges both and runs the final checks at the merge.
       Stream.repeatedly(fn -> PlanExecutionWorker.perform(job) end)
       |> Stream.take(10)
       |> Enum.find(fn _ -> Dispatches.state(dispatch) == "completed" end)
 
       assert Dispatches.state(dispatch) == "completed"
       assert Dispatches.usage(grant).running == 0
+      shown = runs_show!(dispatch.id, "s4")
+      merged = shown["result"]["commit"]
+
+      assert %{"state" => "merged", "commit" => ^merged, "by" => "shoestring"} =
+               shown["batch"]["integration"]
+
+      assert shown["result"]["checks"] != []
+
+      assert Enum.sort(
+               shown["result"]["diff_stat"]
+               |> Enum.drop(-1)
+               |> Enum.map(&hd(String.split(&1)))
+             ) ==
+               ["calc.py", "strings.py"]
+
+      # The person takes one commit; their repository was untouched until then.
+      assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
+      [cd | take] = shown["result"]["take"]
+      assert cd == "cd #{Shoestring.Shell.argument(facts.root)}"
+      assert length(take) == 2
+
+      for command <- take do
+        {output, status} = System.cmd("sh", ["-c", command], cd: source, stderr_to_stdout: true)
+        assert status == 0, "#{command}: #{output}"
+      end
+
+      assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == merged
+      for commit <- [c1, c2], do: git!(source, ["merge-base", "--is-ancestor", commit, "HEAD"])
+      assert File.read!(Path.join(source, "calc.py")) =~ "# changed by dispatch-1"
+      assert File.read!(Path.join(source, "strings.py")) =~ "# changed by dispatch-2"
     end
 
     defp source!(name) do

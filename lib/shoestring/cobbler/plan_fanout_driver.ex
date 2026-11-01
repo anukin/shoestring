@@ -20,15 +20,19 @@ defmodule Shoestring.Cobbler.PlanFanoutDriver do
   In fan-out mode each step admits ready first attempts and bounded
   replacements, then completes the execution only when every required task
   is accepted, no child is unresolved, and the accepted commits are
-  integrated. Dependents whose inputs are not yet at the approved base wait
-  for a human-recorded integration (`Shoestring.Cobbler.PlanIntegration`);
-  after it, remaining work continues sequentially from that commit. Children awaiting a continuation keep the step waiting.
-  Cancelled, interrupted, conflicting or unintegrated work blocks for an
-  operator. This module never merges branches, extends a deadline into an
-  interruption, or replaces work that a quota stop or cancellation ended.
+  integrated. When nothing is running and the accepted commits need
+  integrating (to complete, or because dependents need them), Shoestring
+  merges them in its own worktree (`Shoestring.Cobbler.PlanMerge`, C3) and
+  records that integration; a conflict or failure blocks for the person, who
+  may integrate by hand (`Shoestring.Cobbler.PlanIntegration`). After an
+  integration, remaining work continues sequentially from that commit.
+  Children awaiting a continuation keep the step waiting. Cancelled,
+  interrupted, conflicting or unintegrated work blocks for an operator. This
+  module never merges into the person's repository, extends a deadline into
+  an interruption, or replaces work that a quota stop or cancellation ended.
   """
 
-  alias Shoestring.Cobbler.{PlanExecutor, PlanFanout, ReservationPolicy}
+  alias Shoestring.Cobbler.{PlanExecutor, PlanFanout, PlanMerge, ReservationPolicy}
 
   @policy_version 1
   @operator_classes [:cancelled, :interrupted]
@@ -134,12 +138,13 @@ defmodule Shoestring.Cobbler.PlanFanoutDriver do
         active == [] ->
           case PlanExecutor.complete_fanout(goal_id, opts) do
             {:ok, %{disposition: :blocked, reason: :fanout_work_outstanding}} ->
-              reason =
-                if Enum.any?(result.blocked, &(&1.reason == :fanout_inputs_require_integration)),
-                  do: :integration_required,
-                  else: :needs_user
+              if Enum.any?(result.blocked, &(&1.reason == :fanout_inputs_require_integration)),
+                do: integrate(goal_id, %{blocked: result.blocked}, opts),
+                else:
+                  {:ok, %{disposition: :blocked, reason: :needs_user, blocked: result.blocked}}
 
-              {:ok, %{disposition: :blocked, reason: reason, blocked: result.blocked}}
+            {:ok, %{disposition: :blocked, reason: :integration_required}} ->
+              integrate(goal_id, %{}, opts)
 
             other ->
               other
@@ -151,6 +156,19 @@ defmodule Shoestring.Cobbler.PlanFanoutDriver do
         true ->
           {:ok, %{disposition: :awaiting_task, blocked: result.blocked}}
       end
+    end
+  end
+
+  # Shoestring merges the accepted commits itself; once that integration is
+  # recorded the next step continues from it. A conflict or failure waits for
+  # the person, with what stopped it.
+  defp integrate(goal_id, detail, opts) do
+    blocked = Map.merge(%{disposition: :blocked, reason: :integration_required}, detail)
+
+    case PlanMerge.integrate(goal_id, opts) do
+      {:ok, :integrated} -> step(goal_id, opts)
+      {:blocked, payload} -> {:ok, Map.put(blocked, :merge, payload)}
+      {:error, reason} -> {:ok, Map.put(blocked, :merge_error, reason)}
     end
   end
 

@@ -97,8 +97,13 @@ config :shoestring, :plan_reservation_policy,
 
 The worker then fans out only when at least two independent first tasks are
 ready and their scopes are verified disjoint; otherwise it runs sequentially.
-Shoestring never merges. When siblings change files, merge their retained
-branches in your own repository and record the result:
+Shoestring never merges into your repository. When siblings change files and
+nothing is running, it merges their accepted commits in plan order onto the
+approved base in a private worktree of its own, records that integration, and
+continues from it (iteration 16 C3). A conflict is never resolved: the merge is
+aborted, recorded (`cobbler.plan.merge.blocked`, with the task and files), and
+the execution waits for you. You then merge the retained branches in your own
+repository and record the result:
 
 ```sh
 mix shoestring.execution integrate "$GOAL" --execution-id "$EXECUTION_ID" \

@@ -3,7 +3,8 @@ defmodule Shoestring.Cobbler.PlanFanoutDriverTest do
   use Shoestring.DataCase, async: false
   import Shoestring.Test.PlanFanoutHelpers
 
-  alias Shoestring.Cobbler.{ExecutionControl, PlanExecutor, PlanFanoutDriver}
+  import Ecto.Query
+  alias Shoestring.Cobbler.{ExecutionControl, PlanExecutor, PlanFanoutDriver, PlanMerge}
   alias Shoestring.Test.PlanExecutorHelpers
   alias Shoestring.Trajectory.{Goal, TrajectoryEvent}
   alias Shoestring.Worktrees
@@ -24,11 +25,11 @@ defmodule Shoestring.Cobbler.PlanFanoutDriverTest do
     PlanFanoutDriver.step(c.goal.id, opts)
   end
 
-  defp commit_change!(c, child) do
+  defp commit_change!(c, child, file \\ nil) do
     {:ok, tree} = Worktrees.get(child.run_id, c.opts)
 
     File.write!(
-      Path.join(tree.path, "lib/#{child.plan_task_id}.ex"),
+      Path.join(tree.path, file || "lib/#{child.plan_task_id}.ex"),
       "defmodule #{String.capitalize(child.plan_task_id)} do\n  def changed, do: true\nend\n"
     )
 
@@ -112,53 +113,67 @@ defmodule Shoestring.Cobbler.PlanFanoutDriverTest do
     assert {:ok, %{disposition: :completed}} = step(c)
   end
 
-  test "committed sibling outputs require recorded human integration before completion" do
+  test "Shoestring merges accepted sibling commits in its own worktree; global gates run there" do
     c = unit(independent_only: true)
     assert {:ok, %{dispatched: [north, south]}} = step(c)
     branches = Enum.map([north, south], &commit_and_accept!(c, &1))
 
-    assert {:ok, %{disposition: :blocked, reason: :integration_required}} = step(c)
-    assert {:ok, %{completed?: false, integration: nil}} = PlanExecutor.status(c.goal.id, c.opts)
-    # Nothing was merged into the user's repository on their behalf.
-    assert git!(c.source, ["rev-parse", "HEAD"]) |> String.trim() == c.base
+    assert {:ok, %{disposition: :completed, commit: integrated}} = step(c)
 
-    integrated = merge!(c, branches)
-    assert {:ok, event} = integrate(c, integrated)
+    assert {:ok, %{completed?: true, integration: integration}} =
+             PlanExecutor.status(c.goal.id, c.opts)
+
+    assert integration.commit == integrated and integration.by == "shoestring"
+
+    # Merged in plan order on the approved base, in Shoestring's worktree.
+    {:ok, merge} =
+      Worktrees.get(PlanExecutor.merge_workspace_id(c.execution.execution_id, c.base), c.opts)
+
+    assert integration.source == merge.path and merge.path != c.source
+    assert git!(merge.path, ["rev-parse", "HEAD"]) |> String.trim() == integrated
+
+    assert git!(merge.path, ["log", "--format=%s", "--first-parent", "#{c.base}..HEAD"])
+           |> String.split("\n", trim: true) == [
+             "Merge south: Implement south",
+             "Merge north: Implement north"
+           ]
+
+    for {_, _, commit} <- branches,
+        do: git!(merge.path, ["merge-base", "--is-ancestor", commit, "HEAD"])
+
+    event =
+      Repo.get_by!(TrajectoryEvent, goal_id: c.goal.id, type: "cobbler.plan.integration.recorded")
+
+    assert event.payload["merged_task_ids"] == ["north", "south"]
     assert event.payload["accepted_commits"] == Enum.sort(Enum.map(branches, &elem(&1, 2)))
-    assert {:ok, ^event} = integrate(c, integrated, event.payload["integration_id"])
 
-    assert {:ok, %{disposition: :completed}} = step(c)
-    assert {:ok, %{completed?: true}} = PlanExecutor.status(c.goal.id, c.opts)
-
+    # The global gates ran at that commit in a private store of their own.
     {:ok, verify} =
       Worktrees.get(
         PlanExecutor.integration_workspace_id(c.execution.execution_id, integrated),
         c.opts
       )
 
-    assert verify.base_commit == integrated and verify.path != c.source
+    assert verify.base_commit == integrated
+
+    # Nothing was merged into the person's repository.
+    assert git!(c.source, ["rev-parse", "HEAD"]) |> String.trim() == c.base
     assert git!(c.source, ["status", "--porcelain"]) == ""
+    assert {:ok, %{disposition: :completed}} = step(c)
   end
 
-  test "a dependent unlocks only after both acceptances and continues from the integration" do
+  test "a dependent unlocks only after both acceptances and continues from Shoestring's merge" do
     c = unit()
     assert {:ok, %{dispatched: [north, south]}} = step(c)
-    north_branch = commit_and_accept!(c, north)
+    commit_and_accept!(c, north)
     assert {:ok, %{disposition: :awaiting_task}} = step(c)
-    south_branch = commit_and_accept!(c, south)
-
-    assert {:ok, %{disposition: :blocked, reason: :integration_required, blocked: blocked}} =
-             step(c)
-
-    assert [%{plan_task_id: "join", reason: :fanout_inputs_require_integration}] = blocked
-    integrated = merge!(c, [north_branch, south_branch])
-
-    # A commit that omits an accepted result is refused.
-    assert {:error, :integration_commit_not_verified} = integrate(c, c.base)
-    assert {:ok, _} = integrate(c, integrated)
+    commit_and_accept!(c, south)
 
     assert {:ok, %{disposition: :dispatched, plan_task_id: "join"} = join} =
              step(c, admission_event_id: admission!(c.goal).id)
+
+    assert {:ok, %{integration: %{commit: integrated, by: "shoestring"}}} =
+             PlanExecutor.status(c.goal.id, c.opts)
 
     {:ok, tree} = Worktrees.get(join.run_id, c.opts)
     assert tree.base_commit == integrated
@@ -167,6 +182,115 @@ defmodule Shoestring.Cobbler.PlanFanoutDriverTest do
 
     assert {:ok, %{completed?: true, accepted: ["join", "north", "south"]}} =
              PlanExecutor.status(c.goal.id, c.opts)
+  end
+
+  test "a conflict is never resolved: recorded, aborted, and the person integrates by hand" do
+    c = unit(independent_only: true)
+    assert {:ok, %{dispatched: [north, south]}} = step(c)
+    north_branch = commit_and_accept!(c, north)
+
+    # South also changed north's file, and the person accepted that.
+    tree = commit_change!(c, south, "lib/north.ex")
+    complete_child!(c.goal, south.run_id)
+
+    assert {:ok, %{disposition: :scope_blocked}} =
+             PlanExecutor.complete_task_run(c.goal.id, south.run_id, c.opts)
+
+    assert {:ok, _} =
+             ExecutionControl.resolve_scope(c.goal.id, %{
+               execution_id: c.execution.execution_id,
+               task_id: "south",
+               attempt: 1,
+               decision: "accept",
+               reason: "South needs that change too.",
+               command_id: Ecto.UUID.generate(),
+               requested_by: "human:operator"
+             })
+
+    south_branch =
+      {tree.repo_path, tree.branch, git!(tree.path, ["rev-parse", "HEAD"]) |> String.trim()}
+
+    assert {:ok, %{disposition: :blocked, reason: :integration_required, merge: merge}} =
+             step(c)
+
+    assert merge["reason"] == "conflict"
+
+    assert {merge["plan_task_id"], merge["files"], merge["merged_task_ids"]} ==
+             {"south", ["lib/north.ex"], ["north"]}
+
+    # Aborted: Shoestring's worktree holds no half-done merge.
+    {:ok, tree} =
+      Worktrees.get(PlanExecutor.merge_workspace_id(c.execution.execution_id, c.base), c.opts)
+
+    assert git!(tree.path, ["status", "--porcelain"]) == ""
+    {_, 1} = System.cmd("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], cd: tree.path)
+
+    {:ok, status} = PlanExecutor.status(c.goal.id, c.opts)
+    assert %{"reason" => "conflict"} = PlanMerge.blocked(c.goal.id, status)
+    refute status.completed?
+
+    # Trying again records nothing new.
+    assert {:ok, %{disposition: :blocked, merge: ^merge}} = step(c)
+
+    assert Repo.aggregate(
+             from(e in TrajectoryEvent,
+               where: e.goal_id == ^c.goal.id and e.type == "cobbler.plan.merge.blocked"
+             ),
+             :count
+           ) == 1
+
+    # The person resolves it in their repository and records it, as before.
+    integrated = merge_resolving!(c, [north_branch, south_branch])
+    assert {:ok, _} = integrate(c, integrated)
+    assert {:ok, status} = PlanExecutor.status(c.goal.id, c.opts)
+    assert PlanMerge.blocked(c.goal.id, status) == nil
+    assert {:ok, %{disposition: :completed, commit: ^integrated}} = step(c)
+  end
+
+  test "a merge interrupted by a restart is aborted and redone; merged tasks are not merged twice" do
+    c = unit(independent_only: true)
+    assert {:ok, %{dispatched: [north, south]}} = step(c)
+    {_, _, north_commit} = commit_and_accept!(c, north)
+    {south_path, _, south_commit} = commit_and_accept!(c, south)
+
+    # As if stopped part-way: north merged, south's merge begun, not committed.
+    id = PlanExecutor.merge_workspace_id(c.execution.execution_id, c.base)
+
+    {:ok, tree} =
+      Worktrees.create(c.source, id, c.base,
+        worktrees_dir: c.opts[:worktrees_dir],
+        private_git: true,
+        metadata: %{
+          "shoestring.plan:merge" => %{
+            "execution_id" => c.execution.execution_id,
+            "plan_digest" => c.execution.plan_digest,
+            "base" => c.base
+          }
+        }
+      )
+
+    {:ok, %{path: north_path}} = Worktrees.get(north.run_id, c.opts)
+    git!(tree.path, ["fetch", north_path, north_commit])
+
+    git!(tree.path, [
+      "merge",
+      "--no-ff",
+      "--no-edit",
+      "-m",
+      "Merge north: Implement north",
+      north_commit
+    ])
+
+    git!(tree.path, ["fetch", south_path, south_commit])
+    git!(tree.path, ["merge", "--no-ff", "--no-commit", south_commit])
+
+    assert {:ok, %{disposition: :completed, commit: integrated}} = step(c)
+
+    assert git!(tree.path, ["log", "--format=%s", "--first-parent", "#{c.base}..#{integrated}"])
+           |> String.split("\n", trim: true) == [
+             "Merge south: Implement south",
+             "Merge north: Implement north"
+           ]
   end
 
   test "integration needs a human, a current execution and a full commit" do
@@ -202,11 +326,23 @@ defmodule Shoestring.Cobbler.PlanFanoutDriverTest do
     {tree.repo_path, tree.branch, commit}
   end
 
-  # A human merges each retained branch in their own repository.
-  defp merge!(c, branches) do
+  # A human merges each branch, taking the later side of any conflict.
+  defp merge_resolving!(c, branches) do
     for {path, branch, _commit} <- branches do
       git!(c.source, ["fetch", path, branch])
-      git!(c.source, ["merge", "--no-ff", "--no-edit", "FETCH_HEAD"])
+
+      case System.cmd("git", ["merge", "--no-ff", "--no-edit", "FETCH_HEAD"],
+             cd: c.source,
+             stderr_to_stdout: true
+           ) do
+        {_, 0} ->
+          :ok
+
+        _ ->
+          git!(c.source, ["checkout", "--theirs", "."])
+          git!(c.source, ["add", "."])
+          git!(c.source, ["commit", "--no-edit"])
+      end
     end
 
     git!(c.source, ["rev-parse", "HEAD"]) |> String.trim()
