@@ -269,7 +269,10 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
                 send_answer(model, outbox, &ask, "allow_agent", None)
             }
             KeyCode::Char('n') => send_answer(model, outbox, &ask, "deny", None),
-            KeyCode::Char('r') => model.deny_reason = Some((ask, String::new())),
+            // A network ask's reason never reaches the worker.
+            KeyCode::Char('r') if ask.kind != "network" => {
+                model.deny_reason = Some((ask, String::new()))
+            }
             KeyCode::Esc => {
                 model.asks_later.insert(ask.id.clone());
                 model.note("The worker keeps waiting; press A to answer it");
@@ -589,6 +592,22 @@ mod tests {
             }
         );
         assert!(model.current_ask().is_none());
+
+        // A network ask takes no typed reason: it would not reach the worker.
+        let mut network = ask("a7");
+        network["kind"] = json!("network");
+        model.apply_state(&json!({"asks": [network]}));
+        key(&mut model, KeyCode::Char('r'), &tx);
+        assert!(model.deny_reason.is_none());
+        key(&mut model, KeyCode::Char('n'), &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Outgoing::DecideAsk {
+                id: "a7".into(),
+                decision: "deny".into(),
+                note: None
+            }
+        );
 
         // Disconnected, nothing is sent and the ask stays.
         model.apply_state(&json!({"asks": [ask("a4")]}));

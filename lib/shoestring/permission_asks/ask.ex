@@ -13,6 +13,8 @@ defmodule Shoestring.PermissionAsks.Ask do
     field :command, :string
     field :reason, :string
     field :cwd, :string
+    # command | file_change | network: what allowing it does.
+    field :kind, :string, default: "command"
     # The command a rule for its agent would match; nil when none may.
     field :rule_key, :string
     # pending | allowed | denied | expired

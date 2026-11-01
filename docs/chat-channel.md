@@ -184,14 +184,17 @@ there when the screen opens are only marked seen; each later one is a green
 popup: Enter dismisses it, `o` opens it on the web Lessons page, `r` asks
 (red) and only `y` sends `retire_lesson`. `state` also carries `asks`, what
 the session's workers are waiting on the person for now (`ask_id`,
-`dispatch_id`, `agent`, `provider`, `command`, `reason`, `cwd`, `for_agent`,
-`asked_at`). The oldest is a yellow popup on top of everything, saying that
+`dispatch_id`, `agent`, `provider`, `kind` (`command`, `file_change` or
+`network`), `command`, `reason`, `cwd`, `for_agent`, `asked_at`). The oldest is a yellow popup on top of everything, saying that
 allowing runs that one command with full access to the person's files (a
 Codex command's network stays as the agent's settings allow; a Claude
 command has no sandbox, network included): `y` allows it once, `a` (only
 when `for_agent`) allows it and lets the agent run exactly that command
 again without asking, `n` denies it, `r` types a reason and Enter denies
-with it, and Esc puts it off until `A`. The
+with it, and Esc puts it off until `A`. A `network` ask (a Claude worker
+reaching a host not on its agent's list) says instead that allowing lets
+its commands reach that host for the rest of the run, and offers only `y`,
+`n` and Esc. The
 worker keeps waiting; nothing answers it on a timer. `/web` opens the web UI. Every popup that needs the person is drawn
 the same way: a centred box with a thick border and title in its tone's
 colour (green for news, yellow for a question, red for an action that cannot be undone),

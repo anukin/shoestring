@@ -13,7 +13,9 @@ defmodule Shoestring.CLI.Commands.Asks do
   shoestring asks deny ASK [--note TEXT] [--by human:NAME]
 
   A worker whose agent may ask (the Agents page) can ask you, while it works,
-  to run one command outside its sandbox. Allowing it runs that one command
+  to run one command outside its sandbox (or, a Claude worker, to reach a
+  host not on the agent's list: allowing that lets its commands reach the
+  host for the rest of the run). Allowing a command runs that one command
   with full access to your files, anywhere you can write; a Codex command's
   network stays as the agent's settings allow, a Claude command has no
   sandbox at all. --for-agent also lets that agent's workers run exactly
@@ -93,8 +95,7 @@ defmodule Shoestring.CLI.Commands.Asks do
 
       for ask <- asks do
         context.shell.info(
-          "#{String.slice(ask.id, 0, 8)}  #{ask.agent || "worker"} (#{ask.provider}) asks to run:\n" <>
-            "    $ #{ask.command}\n" <>
+          "#{String.slice(ask.id, 0, 8)}  #{ask.agent || "worker"} (#{ask.provider}) #{asks_to(ask)}" <>
             if(ask.reason, do: "    why: #{ask.reason}\n", else: "") <>
             "    shoestring asks allow #{String.slice(ask.id, 0, 8)}   |   shoestring asks deny #{String.slice(ask.id, 0, 8)} --note \"...\"" <>
             if(ask.rule_key,
@@ -107,6 +108,16 @@ defmodule Shoestring.CLI.Commands.Asks do
     end
   end
 
+  defp asks_to(%Ask{kind: "network"} = ask),
+    do:
+      "asks to reach a host not on its list:\n    #{ask.command}\n" <>
+        "    allowing lets its commands reach it for the rest of this run; a deny's note is not passed on\n"
+
+  defp asks_to(%Ask{kind: "file_change"} = ask),
+    do: "asks to change files its sandbox would refuse:\n    #{ask.command}\n"
+
+  defp asks_to(ask), do: "asks to run:\n    $ #{ask.command}\n"
+
   defp row(ask),
     do: %{
       "ask_id" => ask.id,
@@ -117,6 +128,7 @@ defmodule Shoestring.CLI.Commands.Asks do
       "command" => ask.command,
       "reason" => ask.reason,
       "cwd" => ask.cwd,
+      "kind" => ask.kind,
       "for_agent" => not is_nil(ask.rule_key),
       "asked_at" => ask.inserted_at
     }

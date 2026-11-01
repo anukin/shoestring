@@ -202,8 +202,8 @@ team when it starts, so later edits reach new sessions only.
 
 Codex cannot limit its network to some hosts (a host list let every host
 through, checked offline with Codex 0.166.0), so the page only takes `*`
-for it. Whether Claude lets a listed host through was not checked, only
-that it refuses one not listed.
+for it. Claude lets a listed host through and refuses one not listed
+(checked with a real HTTPS request through its sandbox, Claude Code 2.1.316).
 
 **Asks while it works.** An Implementer whose "may ask" is on (the default)
 can ask you, mid-run, to run one command outside its sandbox. Its worker
@@ -217,8 +217,13 @@ stays as the agent's settings allow; a Claude command runs with no sandbox
 at all, network included. A denial's reason is passed to the worker. Codex
 workers ask through `approvalPolicy: on-request`, Claude workers through
 Claude Code's permission requests (only a command it wants to run outside
-the sandbox asks; commands inside it run as before). opencode workers do not
-ask. An ask whose worker stops (a cancel, a restart) ends unanswered.
+the sandbox asks; commands inside it run as before). A Claude worker also
+asks when one of its commands tries to reach a host not on the agent's
+list: allowing it lets its commands reach that host for the rest of the run
+(Claude remembers it; it does not ask again), and to allow a host for every
+run you add it to the agent's hosts. A denial's reason is not passed on for
+a host; the worker sees the refused connection, so the popup offers no `r`
+there. opencode workers do not ask. An ask whose worker stops (a cancel, a restart) ends unanswered.
 
 **Allow for this agent.** For one plain command, `a` in the popup (or
 `shoestring asks allow ASK --for-agent`) allows it and lets that agent's

@@ -55,6 +55,8 @@ pub struct Ask {
     pub cwd: String,
     /// Whether "allow for this agent" is offered: one plain command.
     pub for_agent: bool,
+    /// `command`, `file_change` or `network`: what allowing it does.
+    pub kind: String,
 }
 
 /// A lesson approved in the session's repository (`docs/chat-channel.md`).
@@ -387,6 +389,7 @@ impl Model {
                     dispatch: clean_line(a["dispatch_id"].as_str().unwrap_or_default()),
                     provider: clean_line(a["provider"].as_str().unwrap_or_default()),
                     for_agent: a["for_agent"].as_bool() == Some(true),
+                    kind: clean_line(a["kind"].as_str().unwrap_or("command")),
                     id,
                 })
             })

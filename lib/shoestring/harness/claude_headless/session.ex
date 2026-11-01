@@ -549,6 +549,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
               goal_id: run_request && run_request.goal_id,
               run_id: state.run_id,
               provider: "claude",
+              kind: ask_kind(request["tool_name"]),
               command: ask_command(request["tool_name"], input),
               reason: input["description"] || request["description"],
               cwd: Keyword.get(state.opts, :workdir),
@@ -576,6 +577,17 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   end
 
   defp handle_control_request(_frame, state), do: state
+
+  # A command reaching a host not on the agent's list: Claude's sandbox
+  # proxy asks for that host (`SandboxNetworkAccess`), and an allow lets its
+  # commands reach it for the rest of the run. A denial's reason is not
+  # shown to the model; it sees the refused connection (all VERIFIED offline
+  # with 2.1.316, 2026-11-01).
+  defp ask_kind("SandboxNetworkAccess"), do: "network"
+  defp ask_kind(_tool), do: "command"
+
+  defp ask_command("SandboxNetworkAccess", %{"host" => host}) when is_binary(host),
+    do: "Reach #{host} from its commands"
 
   defp ask_command("Bash", %{"command" => command}) when is_binary(command), do: command
 

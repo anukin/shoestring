@@ -198,6 +198,7 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
             },
         );
     } else if let Some(ask) = model.current_ask() {
+        let network = ask.kind == "network";
         let mut body = vec![
             format!(
                 "{} {} on {}",
@@ -209,20 +210,33 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
                     &ask.provider
                 }
             ),
-            format!("$ {}", ask.command),
+            if ask.kind == "command" {
+                format!("$ {}", ask.command)
+            } else {
+                ask.command.clone()
+            },
         ];
         if !ask.reason.is_empty() {
             body.push(format!("Why: {}", ask.reason));
         }
-        body.push(format!(
-            "Allowing runs this one command with full access to your files, anywhere you \
-             can write; {} It waits for you: nothing decides this on a timer.",
-            if ask.provider == "codex" {
-                "its network stays as the agent's settings allow."
-            } else {
-                "it runs with no sandbox, network included."
-            }
-        ));
+        body.push(match ask.kind.as_str() {
+            "network" => "Allowing lets its commands reach this host for the rest of this run. \
+                 To allow it for every run, add it to the agent's hosts. It waits for you: \
+                 nothing decides this on a timer."
+                .to_string(),
+            "file_change" => "Allowing lets it make this change outside its sandbox. It waits \
+                 for you: nothing decides this on a timer."
+                .to_string(),
+            _ => format!(
+                "Allowing runs this one command with full access to your files, anywhere you \
+                 can write; {} It waits for you: nothing decides this on a timer.",
+                if ask.provider == "codex" {
+                    "its network stays as the agent's settings allow."
+                } else {
+                    "it runs with no sandbox, network included."
+                }
+            ),
+        });
         const ONCE: &[(&str, &str)] = &[
             ("y", "allow once"),
             ("n", "deny"),
@@ -236,13 +250,25 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
             ("r", "deny with a reason"),
             ("Esc", "later"),
         ];
+        const NETWORK: &[(&str, &str)] =
+            &[("y", "allow for this run"), ("n", "deny"), ("Esc", "later")];
         draw_attention(
             frame,
             &Attention {
-                title: "A worker asks to run a command outside its sandbox",
+                title: if network {
+                    "A worker asks to reach a host not on its list"
+                } else {
+                    "A worker asks to run a command outside its sandbox"
+                },
                 tone: Tone::Question,
                 body,
-                keys: if ask.for_agent { FOR_AGENT } else { ONCE },
+                keys: if network {
+                    NETWORK
+                } else if ask.for_agent {
+                    FOR_AGENT
+                } else {
+                    ONCE
+                },
             },
         );
     }
@@ -994,6 +1020,17 @@ mod tests {
         let text = screen(&model, 120, 30);
         assert!(text.contains("no sandbox, network included"));
         assert!(text.contains(" a  allow for this agent"));
+
+        // A host not on the list: what allowing does, and no reason to type.
+        model.apply_state(&json!({"asks": [{"ask_id": "a3", "dispatch_id": "d1", "agent": "builder",
+            "provider": "claude", "kind": "network", "command": "Reach example.org from its commands"}]}));
+        let text = screen(&model, 120, 30);
+        assert!(text.contains("A worker asks to reach a host not on its list"));
+        assert!(text.contains("for the rest of this run"));
+        assert!(!text.contains("$ Reach"));
+        assert!(!text.contains("full access to your files"));
+        assert!(!text.contains("deny with a reason"));
+        assert!(text.contains(" y  allow for this run"));
     }
 
     #[test]

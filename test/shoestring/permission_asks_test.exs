@@ -181,7 +181,7 @@ defmodule Shoestring.PermissionAsksTest do
       "params" => %{"threadId" => "thread-1", "turnId" => "turn-1", "grantRoot" => "/data"}
     })
 
-    assert [%Ask{command: "Change files under /data", rule_key: nil}] =
+    assert [%Ask{command: "Change files under /data", kind: "file_change", rule_key: nil}] =
              PermissionAsks.for_goal(ctx.goal_id)
   end
 

@@ -558,7 +558,7 @@ defmodule ShoestringWeb.ChatChannelTest do
       })
 
     plain = insert.("builder", "/bin/zsh -lc 'npm test'")
-    assert_push "state", %{"asks" => [%{"for_agent" => true}]}, 5_000
+    assert_push "state", %{"asks" => [%{"for_agent" => true, "kind" => "command"}]}, 5_000
     change = insert.("builder", nil)
     gone = insert.("no-such-agent", "/bin/zsh -lc 'npm test'")
 

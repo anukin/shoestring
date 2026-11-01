@@ -225,6 +225,7 @@ defmodule ShoestringWeb.ChatChannel do
         "command" => ask.command,
         "reason" => ask.reason,
         "cwd" => ask.cwd,
+        "kind" => ask.kind,
         # Whether "allow for this agent" is offered: one plain command.
         "for_agent" => not is_nil(ask.rule_key),
         "asked_at" => ask.inserted_at

@@ -124,4 +124,23 @@ defmodule Shoestring.CLI.AsksTest do
 
     assert PermissionAsks.waiting?(Repo.get(Ask, other.id))
   end
+
+  test "a network ask says what allowing it does" do
+    ask = waiting!("s1")
+
+    Repo.update!(
+      Ecto.Changeset.change(ask,
+        kind: "network",
+        provider: "claude",
+        command: "Reach example.org from its commands"
+      )
+    )
+
+    Asks.run([], context())
+    assert_receive {:mix_shell, :info, [text]}
+    assert text =~ "builder (claude) asks to reach a host not on its list:"
+    assert text =~ "Reach example.org from its commands"
+    assert text =~ "for the rest of this run"
+    refute text =~ "$ Reach"
+  end
 end

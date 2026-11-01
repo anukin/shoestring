@@ -160,6 +160,44 @@ defmodule Shoestring.Harness.ClaudeHeadless.PermissionAsksTest do
     refute Transport.input_closed?(transport)
   end
 
+  # Shape sent by Claude Code 2.1.316 offline (2026-11-01) for a sandboxed
+  # curl to a host not in allowedDomains.
+  test "a host not on the list is asked as a network ask, never offered a rule", ctx do
+    {session, transport} = session!(ctx, asks: true)
+
+    push(session, %{
+      "type" => "control_request",
+      "request_id" => "req-net",
+      "request" => %{
+        "subtype" => "can_use_tool",
+        "tool_name" => "SandboxNetworkAccess",
+        "display_name" => "SandboxNetworkAccess",
+        "input" => %{"host" => "example.org"},
+        "description" => "Allow network connection to example.org?",
+        "tool_use_id" => "b4023816-998d-4080-9471-96bc9ecb8bac"
+      }
+    })
+
+    assert [%Ask{kind: "network", rule_key: nil} = ask] = PermissionAsks.for_goal(ctx.goal_id)
+    assert ask.command == "Reach example.org from its commands"
+    assert ask.reason == "Allow network connection to example.org?"
+    assert {:error, :not_ruleable} = PermissionAsks.decide(ask.id, "allow_agent", "human:p")
+
+    {:ok, _} = PermissionAsks.decide(ask.id, "allow", "human:p")
+    _ = :sys.get_state(session)
+
+    assert [
+             %{
+               "request_id" => "req-net",
+               "response" => %{
+                 "behavior" => "allow",
+                 "updatedInput" => %{"host" => "example.org"}
+               }
+             }
+           ] =
+             responses(transport)
+  end
+
   test "any other control request is refused so the worker never waits on it", ctx do
     {session, transport} = session!(ctx, asks: true)
 

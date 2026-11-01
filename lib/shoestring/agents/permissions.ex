@@ -10,8 +10,10 @@ defmodule Shoestring.Agents.Permissions do
   0.166.0, `plans/evidence/16-long-work/permissions-probe.md`):
 
     * Claude: folders join the sandbox's `allowRead`/`allowWrite`; hosts are
-      its `allowedDomains`, enforced host by host by its network proxy (a host
-      not listed was refused; one listed getting through is UNVERIFIED).
+      its `allowedDomains`, enforced host by host by its network proxy (a
+      listed host got through and one not listed was refused, VERIFIED
+      offline with a real HTTPS request, 2026-11-01; a worker that may ask
+      asks for a host not listed instead).
     * Codex: folders join the run's permission profile; its network is all
       or nothing (a host list let every host through), so the only host it
       takes is `*`, every host.

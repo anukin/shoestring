@@ -37,7 +37,8 @@ defmodule Shoestring.PermissionAsks do
   Records an ask from the calling worker session, which waits for
   `{:permission_decision, ask_id, decision, note}` (decision `:allow` or
   `:deny`). `attrs`: `:goal_id`, `:run_id`, `:provider`, `:command`,
-  `:reason`, `:cwd`, and `:rule_key`, the exact command a rule may cover
+  `:reason`, `:cwd`, `:kind` (`"command"`, the default, `"file_change"` or
+  `"network"`), and `:rule_key`, the exact command a rule may cover
   (nil for anything else). An ask an agent's rule covers is allowed at once:
   the decision is sent straight back.
   """
@@ -54,6 +55,8 @@ defmodule Shoestring.PermissionAsks do
         command: clip(attrs.command) || "(no command given)",
         reason: clip(attrs[:reason]),
         cwd: clip(attrs[:cwd]),
+        kind:
+          if(attrs[:kind] in ~w(command file_change network), do: attrs[:kind], else: "command"),
         rule_key:
           if(Shoestring.Agents.Permissions.ruleable?(attrs[:rule_key]), do: attrs[:rule_key]),
         dispatch_id: dispatch && dispatch.id,

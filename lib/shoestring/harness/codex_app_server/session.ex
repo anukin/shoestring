@@ -607,6 +607,8 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
           command: ask_command(method, params),
           reason: params["reason"],
           cwd: params["cwd"],
+          kind:
+            if(method == "item/fileChange/requestApproval", do: "file_change", else: "command"),
           rule_key: rule_key(method, params)
         })
 
