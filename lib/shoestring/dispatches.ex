@@ -786,6 +786,10 @@ defmodule Shoestring.Dispatches do
               max_duration_seconds: Map.get(prepared, :total_seconds, prepared.seconds),
               task_count: Map.get(prepared, :task_count, 1),
               agent: Map.get(request, :agent),
+              permissions:
+                if(request.purpose == "implement",
+                  do: get_in(request, [:agent_entry, "permissions"])
+                ),
               batch_label: Map.get(request, :batch_label),
               batch_size: Map.get(request, :batch_size),
               goal_id: if(request.purpose == "implement", do: Ecto.UUID.generate()),
@@ -1562,7 +1566,15 @@ defmodule Shoestring.Dispatches do
         "instructions" => dispatch.brief
       }
 
-      {:ok, if(dispatch.effort, do: Map.put(binding, "effort", dispatch.effort), else: binding)}
+      # Bindings recorded before effort or permissions existed have no key;
+      # keep them equal.
+      binding = if dispatch.effort, do: Map.put(binding, "effort", dispatch.effort), else: binding
+
+      {:ok,
+       if(dispatch.permissions in [nil, %{}],
+         do: binding,
+         else: Map.put(binding, "permissions", dispatch.permissions)
+       )}
     else
       _ -> {:error, :invalid_execution_profile}
     end

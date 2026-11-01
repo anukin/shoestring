@@ -71,6 +71,47 @@ defmodule ShoestringWeb.AgentsLiveTest do
     assert Agents.get(worker.id).max_minutes == nil
   end
 
+  test "an implementer's sandbox is widened from its page; Codex is told it cannot limit hosts",
+       %{
+         conn: conn,
+         team: team,
+         worker: worker
+       } do
+    {:ok, view, _} = live(conn, "/agents/#{worker.slug}/edit")
+    assert has_element?(view, "#agent-permissions")
+
+    view
+    |> form("#agent-form", agent: %{network_hosts: "github.com"})
+    |> render_submit()
+
+    assert has_element?(view, "#agent-errors", "Codex cannot limit its network")
+    assert Agents.get(worker.id).network_hosts == []
+
+    view
+    |> form("#agent-form", agent: %{network_hosts: "*", write_paths: "/data/out\n/data/cache"})
+    |> render_submit()
+
+    assert {"/agents/" <> _, _} = assert_redirect(view)
+    saved = Agents.get(worker.id)
+    assert saved.write_paths == ["/data/out", "/data/cache"]
+    assert saved.network_hosts == ["*"]
+    assert AgentProfiles.get(team.id).revision == 2
+
+    {:ok, show, _} = live(conn, "/agents/#{worker.slug}")
+    assert has_element?(show, "#agent-#{worker.slug}-can", "Also read and write /data/out")
+    assert has_element?(show, "#agent-#{worker.slug}-can", "any host")
+    refute has_element?(show, "#agent-#{worker.slug}-cannot", "Use the network")
+
+    # The form shows what was saved, one per line.
+    {:ok, edit, _} = live(conn, "/agents/#{worker.slug}/edit")
+    assert edit |> element("#agent_write_paths") |> render() =~ "/data/out\n/data/cache"
+
+    # Jobs other than implementer have no such section.
+    coordinator = Enum.find(Agents.list(), &(&1.kind == "coordinator"))
+    {:ok, other, _} = live(conn, "/agents/#{coordinator.slug}/edit")
+    refute has_element?(other, "#agent-permissions")
+  end
+
   test "an explorer is created from the page; a coordinator takes no time limit", %{conn: conn} do
     {:ok, view, _} = live(conn, "/agents/new?kind=explorer")
 

@@ -75,6 +75,60 @@ defmodule Shoestring.DispatchesTest do
 
   defp jobs, do: Repo.all(Oban.Job)
 
+  # Iteration 16 permissions: what the person added to the team's agent
+  # travels with the dispatch into the worker's binding, and only there.
+  test "an implementer's added permissions are kept on its dispatch and given to its worker",
+       ctx do
+    added = %{"write_paths" => ["/data/out"], "network_hosts" => ["*"]}
+
+    team = %{
+      "team" => "builder",
+      "agents" => [
+        %{
+          "role" => "Worker",
+          "slug" => "net-worker",
+          "kind" => "implementer",
+          "provider" => "codex",
+          "model" => "gpt-6-luna",
+          "max_minutes" => nil,
+          "permissions" => added
+        }
+      ]
+    }
+
+    {:ok, grant} =
+      Grants.create(grant_attrs(ctx.root, %{session_id: "s-perm", team: team}), "human:operator")
+
+    assert {:ok, dispatch, :recorded} =
+             Dispatches.create(request(ctx, %{session_id: "s-perm", request_id: "perm"}))
+
+    assert dispatch.grant_id == grant.id
+    assert dispatch.agent == "net-worker"
+    assert Repo.get(Dispatch, dispatch.id).permissions == added
+
+    assert {:ok, %{execution: execution}} = ExecutionControl.status(dispatch.goal_id)
+    assert execution.agent_profile["permissions"] == added
+    assert ExecutionProfile.validate(execution.agent_profile, Repo) == :ok
+
+    run = %Shoestring.Harness.RunRecord{
+      provider_id: "codex_app_server_stdio",
+      extensions: %{ExecutionProfile.key() => execution.agent_profile}
+    }
+
+    assert {:ok, opts} = Shoestring.Harness.Dispatch.ElfEffect.launch_opts(run)
+    assert opts[:adapter_opts][:permissions] == added
+
+    # A dispatch whose agent added nothing has no permissions in its binding.
+    assert {:ok, plain, :recorded} = Dispatches.create(request(ctx))
+    assert Repo.get(Dispatch, plain.id).permissions == nil
+    assert {:ok, binding} = Dispatches.binding(plain.id, "Worker", Repo)
+    refute Map.has_key?(binding, "permissions")
+
+    run = %{run | extensions: %{ExecutionProfile.key() => binding}}
+    assert {:ok, opts} = Shoestring.Harness.Dispatch.ElfEffect.launch_opts(run)
+    refute Map.has_key?(opts[:adapter_opts], :permissions)
+  end
+
   test "an implement dispatch becomes a grant-authored, grant-approved plan queued for the service",
        ctx do
     assert {:ok, %Dispatch{state: "started"} = dispatch, :recorded} =

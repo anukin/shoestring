@@ -49,8 +49,10 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
 
   @doc """
   Prepares the sandbox for a run worktree bound to `workspace_ref`. Options:
-  `:worktrees_dir` (the service's worktree root) and `:home` (defaults to the
-  user's home).
+  `:worktrees_dir` (the service's worktree root), `:home` (defaults to the
+  user's home) and `:permissions`, what the person added to the agent
+  (`Shoestring.Agents.Permissions`: extra readable and writable folders and
+  the hosts its commands may reach).
 
   Each launch gets its own temporary directory (`CLAUDE_CODE_TMPDIR`), which
   its owner removes with `release/1` once the process tree is reaped. Claude
@@ -70,7 +72,11 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
         with {:ok, temp} <- Shoestring.SandboxTemp.create_short(@temp_prefix) do
           # Roots are the worktree, its gitdir, then <store>/objects and refs.
           repository = roots |> Enum.at(2) |> Path.dirname()
-          settings = settings(roots, worktree, repository, home, shared_temp(temp))
+
+          settings =
+            roots
+            |> settings(worktree, repository, home, shared_temp(temp))
+            |> widen(Keyword.get(opts, :permissions))
 
           {:ok,
            %{
@@ -112,6 +118,19 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
     %File.Stat{uid: uid} = File.stat!(temp)
     name = "claude-#{uid}"
     Enum.uniq([Path.join("/tmp", name), Path.join(Shoestring.SandboxTemp.short_root(), name)])
+  end
+
+  defp widen(settings, permissions) when permissions in [nil, %{}], do: settings
+
+  defp widen(settings, permissions) do
+    reads = permissions["read_paths"] || []
+    writes = permissions["write_paths"] || []
+    hosts = permissions["network_hosts"] || []
+
+    settings
+    |> update_in(["sandbox", "filesystem", "allowRead"], &Enum.uniq(&1 ++ reads ++ writes))
+    |> update_in(["sandbox", "filesystem", "allowWrite"], &Enum.uniq(&1 ++ writes))
+    |> put_in(["sandbox", "network", "allowedDomains"], hosts)
   end
 
   defp settings(roots, worktree, repository, home, deny_write) do

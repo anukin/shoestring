@@ -89,6 +89,31 @@ defmodule Shoestring.SessionTeamTest do
     assert Grants.get(ctx.grant.id).team == ctx.grant.team
   end
 
+  test "a new session's team carries what the person added to an agent; earlier ones do not",
+       ctx do
+    team = AgentProfiles.get_by_slug("builder")
+    worker = Agents.get(Enum.find(team.roles, &(&1.name == "Worker")).agent_id)
+
+    assert Enum.find(Agents.snapshot(team)["agents"], &(&1["slug"] == worker.slug))["permissions"] ==
+             nil
+
+    {:ok, _} = Agents.update(worker, %{"network_hosts" => "*", "read_paths" => "/data/in"})
+
+    entry =
+      Enum.find(
+        Agents.snapshot(AgentProfiles.get(team.id))["agents"],
+        &(&1["slug"] == worker.slug)
+      )
+
+    assert entry["permissions"] == %{"network_hosts" => ["*"], "read_paths" => ["/data/in"]}
+
+    # The session that already started keeps the team it started with.
+    worker_entry =
+      Enum.find(Grants.get(ctx.grant.id).team["agents"], &(&1["slug"] == worker.slug))
+
+    assert worker_entry["permissions"] == nil
+  end
+
   test "a dispatch names an agent by its job or slug; its model and limit are used", ctx do
     assert {:ok, request} = request(ctx, %{agent: "explorer"})
     assert {request.provider, request.model} == {"codex", "gpt-6-sol"}

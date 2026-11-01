@@ -73,12 +73,26 @@ defmodule Shoestring.Harness.CodexAppServer.GitSandbox do
   """
   def permissions(
         %{"writableRoots" => [_worktree, _gitdir, objects | _] = roots},
-        home \\ System.user_home!()
+        home \\ System.user_home!(),
+        added \\ nil
       ) do
+    added = added || %{}
+
     # Git reads the private store's own files (config, HEAD) beside its
-    # writable objects and refs.
-    entries = roots |> Map.new(&{&1, "write"}) |> Map.put_new(Path.dirname(objects), "read")
-    profile(entries, home)
+    # writable objects and refs. What the person added to the agent
+    # (`Shoestring.Agents.Permissions`) never narrows the run's own roots.
+    entries =
+      Map.new(added["read_paths"] || [], &{physical_path(&1), "read"})
+      |> Map.merge(Map.new(added["write_paths"] || [], &{physical_path(&1), "write"}))
+      |> Map.merge(Map.new(roots, &{&1, "write"}))
+      |> Map.put_new(Path.dirname(objects), "read")
+
+    profile = profile(entries, home)
+
+    # Codex's network is all or nothing: `*` is the only host it takes.
+    if added["network_hosts"] == ["*"],
+      do: put_in(profile, ["permissions", @profile, "network"], %{"enabled" => true}),
+      else: profile
   end
 
   @doc """

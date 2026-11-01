@@ -11,6 +11,9 @@ defmodule Shoestring.Agents.Agent do
   `may_propose_lessons` says whether it may propose lessons for the
   repositories it works in (`Shoestring.Lessons`); by default every job but
   the explorer may.
+
+  `read_paths`, `write_paths` and `network_hosts` are what the person lets an
+  implementer do beyond its sandbox (`Shoestring.Agents.Permissions`).
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -40,6 +43,10 @@ defmodule Shoestring.Agents.Agent do
     field :notes, :string
     field :max_minutes, :integer
     field :may_propose_lessons, :boolean
+    # What the person added beyond the sandbox (`Shoestring.Agents.Permissions`).
+    field :read_paths, {:array, :string}, default: []
+    field :write_paths, {:array, :string}, default: []
+    field :network_hosts, {:array, :string}, default: []
     field :lock_version, :integer, default: 1
     timestamps(type: :utc_datetime_usec)
   end
@@ -48,7 +55,7 @@ defmodule Shoestring.Agents.Agent do
     changeset =
       agent
       |> cast(
-        attrs,
+        Shoestring.Agents.Permissions.normalize(attrs),
         [
           :name,
           :slug,
@@ -58,7 +65,10 @@ defmodule Shoestring.Agents.Agent do
           :effort,
           :notes,
           :max_minutes,
-          :may_propose_lessons
+          :may_propose_lessons,
+          :read_paths,
+          :write_paths,
+          :network_hosts
         ],
         empty_values: [""]
       )
@@ -79,6 +89,7 @@ defmodule Shoestring.Agents.Agent do
       |> validate_inclusion(:provider, Map.keys(catalog))
       |> validate_number(:max_minutes, greater_than_or_equal_to: 1, less_than_or_equal_to: 240)
       |> unique_constraint(:slug)
+      |> Shoestring.Agents.Permissions.validate()
 
     kind = get_field(changeset, :kind)
     provider = get_field(changeset, :provider)

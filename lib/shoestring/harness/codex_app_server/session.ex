@@ -1031,7 +1031,14 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       policy ->
         params
         |> Map.delete("sandbox")
-        |> Map.put("config", Shoestring.Harness.CodexAppServer.GitSandbox.permissions(policy))
+        |> Map.put(
+          "config",
+          Shoestring.Harness.CodexAppServer.GitSandbox.permissions(
+            policy,
+            System.user_home!(),
+            state.opts[:permissions]
+          )
+        )
     end
   end
 

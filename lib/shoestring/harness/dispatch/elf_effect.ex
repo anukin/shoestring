@@ -126,6 +126,14 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
                 |> then(
                   &if(binding["effort"], do: Map.put(&1, :effort, binding["effort"]), else: &1)
                 )
+                # What the person added to the agent's sandbox, from the binding only.
+                |> Map.delete(:permissions)
+                |> then(
+                  &if(binding["permissions"],
+                    do: Map.put(&1, :permissions, binding["permissions"]),
+                    else: &1
+                  )
+                )
                 |> sandbox_plan_run(Keyword.get(opts, :adapter))
 
               Keyword.put(opts, :adapter_opts, adapter_opts)

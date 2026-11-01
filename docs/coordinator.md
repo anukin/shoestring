@@ -186,6 +186,25 @@ dispatch of that job on that model, however it is named; asking for more is
 refused and the coordinator is told to ask you. A session started before
 keeps working without a team: its dispatches name a worker.
 
+**Permissions beyond the sandbox.** Every worker runs sandboxed: it writes
+only its own worktree and private Git storage, cannot read the rest of your
+home folder, and has no network. On an Implementer's page (Agents → Edit)
+you may add folders it may also read, folders it may also read and write,
+and network hosts, one per line. Your home folder itself, anything above it
+and Shoestring's own state are refused. A session records them with its
+team when it starts, so later edits reach new sessions only.
+
+| | Folders | Network |
+| --- | --- | --- |
+| Claude | added to its sandbox's read and write lists | the hosts you list (`github.com`, `*.npmjs.org`) |
+| Codex | added to the run's permission profile | all or nothing: `*` turns it on for every host |
+| opencode | fixed; nothing can be added | fixed |
+
+Codex cannot limit its network to some hosts (a host list let every host
+through, checked offline with Codex 0.166.0), so the page only takes `*`
+for it. Whether Claude lets a listed host through was not checked, only
+that it refuses one not listed.
+
 ## 2. The coordinator dispatches
 
 ```sh

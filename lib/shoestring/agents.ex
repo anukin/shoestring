@@ -167,7 +167,8 @@ defmodule Shoestring.Agents do
           "model" => agent.model,
           "effort" => agent.effort,
           "max_minutes" => agent.max_minutes,
-          "may_propose_lessons" => agent.may_propose_lessons
+          "may_propose_lessons" => agent.may_propose_lessons,
+          "permissions" => Shoestring.Agents.Permissions.snapshot(agent)
         }
       end
 
@@ -219,10 +220,36 @@ defmodule Shoestring.Agents do
   fixed in code and not yet widened per agent.
   """
   def abilities(%{kind: kind, provider: provider} = agent),
-    do: kind |> abilities(provider) |> with_lessons(Map.get(agent, :may_propose_lessons), kind)
+    do:
+      kind
+      |> abilities(provider)
+      |> with_lessons(Map.get(agent, :may_propose_lessons), kind)
+      |> with_permissions(Shoestring.Agents.Permissions.snapshot(agent), provider)
 
   def abilities(%{"kind" => kind, "provider" => provider} = agent),
-    do: kind |> abilities(provider) |> with_lessons(agent["may_propose_lessons"], kind)
+    do:
+      kind
+      |> abilities(provider)
+      |> with_lessons(agent["may_propose_lessons"], kind)
+      |> with_permissions(agent["permissions"], provider)
+
+  # What the person added comes first; a default it widens no longer reads
+  # as "cannot".
+  defp with_permissions(abilities, nil, _provider), do: abilities
+
+  defp with_permissions(abilities, permissions, provider) do
+    network? = (permissions["network_hosts"] || []) != []
+
+    %{
+      abilities
+      | can: Shoestring.Agents.Permissions.lines(permissions, provider) ++ abilities.can,
+        cannot:
+          if(network?,
+            do: Enum.reject(abilities.cannot, &String.starts_with?(&1, "Use the network")),
+            else: abilities.cannot
+          )
+    }
+  end
 
   @lessons_line "Propose lessons for the repository"
 

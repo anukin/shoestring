@@ -295,6 +295,7 @@ defmodule Shoestring.Harness.ClaudeHeadless do
           nil -> []
           dir -> [worktrees_dir: dir]
         end
+        |> Keyword.put(:permissions, Map.get(opts, :permissions))
 
       case Sandbox.prepare(workdir, workspace_ref, sandbox_opts) do
         {:ok, sandbox} ->

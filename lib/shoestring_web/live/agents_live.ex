@@ -143,6 +143,10 @@ defmodule ShoestringWeb.AgentsLive do
 
   defp reset_model(attrs, _), do: attrs
 
+  defp lines(value) when is_list(value), do: Enum.join(value, "\n")
+  defp lines(value) when is_binary(value), do: value
+  defp lines(_value), do: ""
+
   defp providers, do: Enum.map(Harnesses.ids(), &{Harnesses.name(&1), &1})
   defp kind_options, do: Enum.map(@kinds, &{Agents.label(&1), &1})
 
@@ -352,6 +356,48 @@ defmodule ShoestringWeb.AgentsLive do
               type="checkbox"
               label="May propose lessons for the repositories it works in"
             />
+            <fieldset
+              :if={@form[:kind].value == "implementer"}
+              id="agent-permissions"
+              class="ss-fieldset"
+            >
+              <legend>Permissions beyond its sandbox</legend>
+              <p class="ss-footnote">
+                Empty is nothing beyond the sandbox. One full path or host per line. Never your
+                home folder itself or Shoestring's own state. Sessions already running keep the
+                permissions they started with.
+              </p>
+              <.input
+                field={@form[:read_paths]}
+                type="textarea"
+                label="Folders it may also read"
+                value={lines(@form[:read_paths].value)}
+                rows="2"
+                class="ss-input"
+              />
+              <.input
+                field={@form[:write_paths]}
+                type="textarea"
+                label="Folders it may also read and write"
+                value={lines(@form[:write_paths].value)}
+                rows="2"
+                class="ss-input"
+              />
+              <.input
+                field={@form[:network_hosts]}
+                type="textarea"
+                label={
+                  case @form[:provider].value do
+                    "codex" -> "Network: * for every host (Codex cannot limit hosts)"
+                    "opencode" -> "Hosts (opencode's sandbox is fixed: leave every box empty)"
+                    _ -> "Hosts its commands may reach (github.com, *.npmjs.org)"
+                  end
+                }
+                value={lines(@form[:network_hosts].value)}
+                rows="2"
+                class="ss-input"
+              />
+            </fieldset>
             <.input
               field={@form[:notes]}
               type="textarea"
