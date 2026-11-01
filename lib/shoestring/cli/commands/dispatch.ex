@@ -10,7 +10,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       [--file PATH]... [--stay-out PATH]...
       [--accept TEXT]... [--gate NAME]... [--test PATH]... [--attempts N]
       [--minutes M] [--batch LABEL --batch-size N] [--after DISPATCH]
-      [--lesson CODE]...
+      [--lesson CODE]... [--tasks FILE]
       [--session ID] [--request-id ID] [--repo PATH] [--dry-run] [--json]
   shoestring dispatch --purpose explore --worker PROVIDER:MODEL --title TEXT
       --brief FILE [--effort LEVEL] [common options]
@@ -46,6 +46,18 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   `--lesson CODE` cites an approved lesson of this repository (at most
   #{Shoestring.Lessons.max_cited()}; `shoestring lessons list`): the worker gets its text after the brief,
   and the dispatch records it. A lesson reaches a worker only this way.
+
+  `--tasks FILE` (IMPLEMENT only) makes a batch: FILE is a JSON list of 2
+  to 8 tasks, each `{"title", "brief" (optional, at most 1000 characters),
+  "files" (the files or directories it changes)}`. The tasks share the
+  coordinator's brief, checks and reviewer; each worker changes only its own
+  files, and a change outside them goes to the person. A batch whose files
+  overlap, or touch something shared (lockfiles, configuration, migrations,
+  symlinks), is refused. Its tasks run at once, each in its own worktree,
+  when the person's Settings allow more than one task at a time, else one
+  after another; each takes one of the grant's parallel places, and its
+  attempts and minutes count per task. The result is one commit per task:
+  `runs show` lists them and the commands that take them all.
 
   `--after DISPATCH` (IMPLEMENT only) follows another IMPLEMENT of this
   session: the new one is recorded `chained`, its room in the grant
@@ -92,6 +104,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     batch: :string,
     batch_size: :integer,
     after: :string,
+    tasks: :string,
     session: :string,
     request_id: :string,
     repo: :string,
@@ -199,6 +212,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         files: Keyword.get_values(opts, :file),
         stay_out: Keyword.get_values(opts, :stay_out),
         lessons: Keyword.get_values(opts, :lesson),
+        tasks: opts[:tasks] && read_tasks!(Command.expand(opts[:tasks], context)),
         accept: Keyword.get_values(opts, :accept),
         gates: Keyword.get_values(opts, :gate),
         tests: Keyword.get_values(opts, :test)
@@ -252,7 +266,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         batch_label: fields[:batch],
         batch_size: fields[:batch_size],
         after_dispatch: fields[:after],
-        lessons: Map.get(fields, :lessons, [])
+        lessons: Map.get(fields, :lessons, []),
+        tasks: fields[:tasks] || []
       }
 
       {:ok, Map.put(request, :request_id, fields[:request_id] || derived_request_id(request))}
@@ -318,8 +333,24 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       fields[:purpose] != "implement" and fields[:after] ->
         {:error, "--after is only for --purpose implement"}
 
+      fields[:purpose] != "implement" and fields[:tasks] not in [nil, []] ->
+        {:error, "--tasks is only for --purpose implement"}
+
       true ->
         :ok
+    end
+  end
+
+  defp read_tasks!(path) do
+    with {:ok, %{type: :regular, size: size}} when size <= 65_536 <- File.stat(path),
+         {:ok, tasks} when is_list(tasks) <- Jason.decode(File.read!(path)),
+         true <- Enum.all?(tasks, &is_map/1) do
+      tasks
+    else
+      _ ->
+        Refusal.refuse!(
+          "--tasks needs a JSON list of tasks, each {\"title\", \"brief\", \"files\"}: #{path}"
+        )
     end
   end
 
@@ -351,7 +382,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
            ] ++
              if(request.target, do: [request.target], else: []) ++
              if(request.after_dispatch, do: ["after", request.after_dispatch], else: []) ++
-             if(request.lessons != [], do: ["lessons" | request.lessons], else: []),
+             if(request.lessons != [], do: ["lessons" | request.lessons], else: []) ++
+             if(request.tasks != [], do: ["tasks", Jason.encode!(request.tasks)], else: []),
            <<0>>
          )
        )
@@ -387,6 +419,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       "of" => if(dispatch.purpose == "review", do: dispatch.plan["target_dispatch_id"]),
       "after" => dispatch.after_dispatch_id,
       "lessons" => dispatch.lesson_codes || [],
+      "tasks" => dispatch.task_count || 1,
       "title" => dispatch.title,
       "state" => Dispatches.state(dispatch),
       "goal_id" => dispatch.goal_id,
@@ -476,6 +509,49 @@ defmodule Shoestring.CLI.Commands.Dispatch do
 
   def message(:review_target_not_found, _request),
     do: "No such dispatch in this session to review."
+
+  def message(:review_target_batch, _request),
+    do:
+      "A batch IMPLEMENT has one commit per task; each was checked and, with a reviewer, " <>
+        "reviewed on its own. Nothing was queued."
+
+  def message(:batch_after, _request),
+    do:
+      "A batch cannot follow another dispatch yet; dispatch it once that one is taken. Nothing was queued."
+
+  def message({:batch_too_large, max}, _request),
+    do: "A batch has at most #{max} tasks. Nothing was queued."
+
+  def message({:batch_task_files, n}, _request),
+    do:
+      "Task #{n} of the batch needs `files`: the files or directories it changes (relative " <>
+        "paths, at most 32). Nothing was queued."
+
+  def message({:batch_scopes, blockers}, _request) do
+    reasons =
+      blockers
+      |> Enum.take(5)
+      |> Enum.map_join("; ", fn blocker ->
+        what = blocker["path"] || Enum.join(blocker["paths"] || [], " and ")
+
+        case blocker["reason"] do
+          "scope_overlap" ->
+            "tasks #{Enum.join(blocker["task_ids"], " and ")} both change #{what}"
+
+          "shared_surface" ->
+            "#{what} is shared (lockfiles, configuration, migrations)"
+
+          "symlink_scope" ->
+            "#{what} is or holds a symlink"
+
+          reason ->
+            "#{blocker["task_id"]}: #{reason}#{if what != "", do: " #{what}"}"
+        end
+      end)
+
+    "These tasks cannot run side by side: #{reasons}. Dispatch them one after another " <>
+      "(`after`), or split their files apart. Nothing was queued."
+  end
 
   def message(:review_target_not_implement, _request),
     do: "Only an IMPLEMENT dispatch can be reviewed."

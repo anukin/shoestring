@@ -37,7 +37,12 @@ defmodule Shoestring.Cobbler.PlanCapacityConfirmation do
          true <- task["id"] not in status.accepted,
          true <- Enum.all?(task["depends_on"], &(&1 in status.accepted)),
          false <- Enum.any?(status.retirements, &(&1["task_id"] == task["id"])),
-         true <- is_nil(status.active_run_id) do
+         # Sequential work confirms only between runs; in a fan-out a sibling
+         # may run while another task is confirmed, never that task itself.
+         true <-
+           is_nil(status.active_run_id) or
+             (status.dispatch_mode == :fanout_v1 and
+                not Enum.any?(status.active_children, &(&1.plan_task_id == task["id"]))) do
       payload = %{
         "confirmation_id" => command_id,
         "execution_id" => execution.execution_id,

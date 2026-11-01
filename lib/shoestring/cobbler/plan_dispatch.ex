@@ -19,7 +19,7 @@ defmodule Shoestring.Cobbler.PlanDispatch do
       Keyword.get(
         opts,
         :reservation_policy,
-        Application.get_env(:shoestring, :plan_reservation_policy)
+        Shoestring.Cobbler.Parallelism.policy()
       )
 
     case policy do

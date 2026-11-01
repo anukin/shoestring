@@ -102,15 +102,90 @@ defmodule Shoestring.CLI.Commands.Runs do
 
     call = Dispatches.Calls.get(dispatch.id)
 
+    batch = batch(dispatch)
+
     summary
     |> Map.merge(status)
+    |> Map.merge(batch)
     |> Map.put("lessons_proposed", lessons_proposed(dispatch))
     |> Map.merge(call_detail(call))
     |> Map.put("result", result)
     |> Map.put(
       "next",
-      next(summary["state"], dispatch, call, Map.merge(status, call_detail(call)))
+      next(
+        summary["state"],
+        dispatch,
+        call,
+        status |> Map.merge(call_detail(call)) |> Map.merge(batch)
+      )
     )
+  end
+
+  # A batch IMPLEMENT (C2): each task's state and accepted commit; once all
+  # are accepted, the commands that take them one after another, and how the
+  # person records the merge so the batch completes.
+  defp batch(%{task_count: n, goal_id: goal_id} = dispatch) when is_integer(n) and n > 1 do
+    with {:ok, %{planned?: true} = status} <-
+           Shoestring.Cobbler.ExecutionControl.status(goal_id),
+         %{revision: revision} <- Shoestring.Cobbler.Plans.authority(goal_id) do
+      accepted = Map.new(status[:accepted_evidence] || [], &{&1.plan_task_id, &1})
+      blocked = MapSet.new(status[:scope_blockers] || [], & &1.plan_task_id)
+      running = MapSet.new(status[:active_children] || [], & &1.plan_task_id)
+
+      tasks =
+        for task <- revision.content["tasks"] do
+          evidence = accepted[task["id"]]
+          worktree = evidence && worktree(evidence.run_id)
+
+          %{
+            "task" => task["id"],
+            "title" => task["title"],
+            "files" => get_in(task, ["hints", "files"]),
+            "state" =>
+              cond do
+                evidence -> "accepted"
+                MapSet.member?(blocked, task["id"]) -> "scope_blocked"
+                MapSet.member?(running, task["id"]) -> "running"
+                true -> "waiting"
+              end,
+            "commit" => evidence && evidence.commit,
+            "worktree" => worktree
+          }
+        end
+
+      take =
+        if Enum.all?(tasks, &(&1["state"] == "accepted" and &1["worktree"])) and
+             is_nil(status[:integration]) and not status.completed? do
+          ["cd #{Shoestring.Shell.argument(dispatch.repository_root)}"] ++
+            Enum.flat_map(tasks, fn task ->
+              [
+                "git fetch #{Shoestring.Shell.argument(task["worktree"])} #{task["commit"]}",
+                "git merge --no-edit #{task["commit"]}"
+              ]
+            end) ++
+            [
+              "shoestring execution integrate #{goal_id} --execution-id " <>
+                "#{status.execution.execution_id} --commit \"$(git rev-parse HEAD)\" " <>
+                "--reason \"Took the batch's commits\" --command-id #{Dispatches.uuid_for("integrate:#{goal_id}")} " <>
+                "--by #{Shoestring.CLI.WorkLoop.default_human()}",
+              "shoestring execution continue #{goal_id} --execution-id " <>
+                status.execution.execution_id
+            ]
+        end
+
+      %{"batch" => %{"tasks" => tasks, "take" => take}}
+    else
+      _ -> %{}
+    end
+  end
+
+  defp batch(_dispatch), do: %{}
+
+  defp worktree(run_id) do
+    case Shoestring.Worktrees.get(run_id) do
+      {:ok, %{path: path}} -> path
+      _ -> nil
+    end
   end
 
   # What the dispatch's worker proposed: the coordinator decides those still
@@ -140,6 +215,12 @@ defmodule Shoestring.CLI.Commands.Runs do
         )
     }
   end
+
+  defp next("needs_you", _dispatch, _call, %{"batch" => %{"take" => [_ | _]}}),
+    do:
+      "Every task of the batch passed its checks. The person takes the commits with " <>
+        "batch.take (each is merged in turn; a conflict is theirs to resolve), and its last " <>
+        "command records the merge so the batch completes"
 
   defp next("needs_you", dispatch, _call, _detail),
     do: "A person decides: shoestring follow #{dispatch.goal_id}"

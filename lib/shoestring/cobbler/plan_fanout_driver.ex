@@ -2,11 +2,12 @@ defmodule Shoestring.Cobbler.PlanFanoutDriver do
   @moduledoc """
   Production choice between sequential execution and the fan-out coordinator.
 
-  Fan-out is off unless trusted configuration enables it
-  (`config :shoestring, :plan_fanout, enabled: true`). No plan or model field
-  selects it. The reservation policy is `:plan_reservation_policy`, and every
-  limit and unit defaults to one, so raising concurrency is an explicit
-  operator decision.
+  Fan-out is off unless the person sets more than one task at once in
+  Settings (`Shoestring.Cobbler.Parallelism`) or trusted configuration
+  enables it (`config :shoestring, :plan_fanout, enabled: true`). No plan or
+  model field selects it. The reservation policy follows the same setting
+  (or `:plan_reservation_policy`); every limit and unit defaults to one, so
+  raising concurrency is an explicit operator decision.
 
   Selection is deterministic (queue policy version 1). A new execution uses
   fan-out only when the policy admits at least two concurrent children, at
@@ -58,11 +59,7 @@ defmodule Shoestring.Cobbler.PlanFanoutDriver do
         status.dispatch_mode == :fanout_v1 ->
           coordinate(goal_id, opts)
 
-        status.children == [] and
-          enabled?(
-            Keyword.get(opts, :plan_fanout, Application.get_env(:shoestring, :plan_fanout, []))
-          ) and
-            initial_fanout?(goal_id, opts) ->
+        status.children == [] and fanout_enabled?(opts) and initial_fanout?(goal_id, opts) ->
           case coordinate(goal_id, opts) do
             {:ok, %{reason: :independence_unverified}} -> PlanExecutor.resume(goal_id, opts)
             result -> result
@@ -118,7 +115,22 @@ defmodule Shoestring.Cobbler.PlanFanoutDriver do
       active = status.active_children
       classes = Enum.map(status.children, &{&1.run_id, &1.stop_class}) |> Map.new()
 
+      admission =
+        Enum.find_value(result.blocked, fn
+          %{reason: {:execution_admission_blocked, _} = reason} -> reason
+          _ -> nil
+        end)
+
       cond do
+        # Nothing has started yet and admission holds the ready tasks (a
+        # usage confirmation, a reset): wait as a held sequential task does,
+        # instead of trying to complete an execution with no children.
+        status.children == [] and admission != nil ->
+          {:error, admission}
+
+        status.children == [] ->
+          {:ok, %{disposition: :awaiting_task, blocked: result.blocked}}
+
         active == [] ->
           case PlanExecutor.complete_fanout(goal_id, opts) do
             {:ok, %{disposition: :blocked, reason: :fanout_work_outstanding}} ->
@@ -142,10 +154,18 @@ defmodule Shoestring.Cobbler.PlanFanoutDriver do
     end
   end
 
+  # Trusted options first, then the person's Settings (`Parallelism`).
+  defp fanout_enabled?(opts) do
+    case Keyword.fetch(opts, :plan_fanout) do
+      {:ok, config} -> enabled?(config)
+      :error -> Shoestring.Cobbler.Parallelism.fanout?()
+    end
+  end
+
   defp fanout_opts(opts) do
     policy =
       Keyword.get(opts, :reservation_policy) ||
-        Application.get_env(:shoestring, :plan_reservation_policy) ||
+        Shoestring.Cobbler.Parallelism.policy() ||
         ReservationPolicy.to_map(%ReservationPolicy{})
 
     Keyword.merge(opts, fanout_enabled: true, reservation_policy: policy)

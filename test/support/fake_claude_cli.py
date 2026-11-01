@@ -11,7 +11,8 @@ headless Claude run prints, in the 2.1.310 order: `system`/`init`, one
 and a `result` with token usage. Its argv is appended as one JSON line to
 FAKE_CLAUDE_LOG when that is set.
 
-FAKE_CLAUDE_SCENARIO=limit instead changes nothing and stops at the usage
+FAKE_CLAUDE_SCENARIO=batch appends a line to the first file its task contract
+names and commits it. FAKE_CLAUDE_SCENARIO=limit instead changes nothing and stops at the usage
 limit: a `rate_limit_event` whose five-hour window is full and rejected,
 then an error `result`. SYNTHETIC: Claude's real limit output has never been
 captured; the result copies the captured auth failure's shape
@@ -78,6 +79,33 @@ if SCENARIO == "limit":
         }
     )
     sys.exit(1)
+
+if SCENARIO == "batch":
+    # A batch task changes the first file its task contract names (the
+    # prompt's first line is the task, then its contract as JSON).
+    prompt = sys.argv[-1]
+    contract, _ = json.JSONDecoder().raw_decode(prompt.split("\n", 1)[1])
+    target = contract["task"]["hints"]["files"][0]
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    with open(target, "a") as handle:
+        handle.write("# changed by " + contract["task"]["id"] + "\n")
+    subprocess.run(["git", "add", target], check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Fake Worker", "-c", "user.email=worker@example.invalid",
+         "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Change " + target],
+        check=True,
+    )
+    emit({"type": "assistant", "session_id": SESSION, "message": {
+        "id": "msg_000000000000000000000002",
+        "content": [{"type": "text", "text": "Changed " + target + "."}]}})
+    usage(0.2, "allowed")
+    emit({"type": "result", "subtype": "success", "is_error": False,
+          "terminal_reason": "completed", "result": "Changed " + target + ".", "num_turns": 1,
+          "duration_ms": 1000, "total_cost_usd": 0.001,
+          "usage": {"input_tokens": 100, "output_tokens": 10,
+                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+          "session_id": SESSION})
+    sys.exit(0)
 
 with open("calc.py") as handle:
     source = handle.read()

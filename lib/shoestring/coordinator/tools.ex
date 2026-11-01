@@ -81,6 +81,25 @@ defmodule Shoestring.Coordinator.Tools do
                 "lookup needs minutes, a broad audit more). A finished dispatch counts only " <>
                 "the time it took against the grant."
           },
+          "tasks" => %{
+            "type" => "array",
+            "minItems" => 2,
+            "maxItems" => 8,
+            "description" =>
+              "IMPLEMENT only: a batch of tasks that may run at once, each in its own " <>
+                "worktree, sharing the brief, checks and reviewer. Each changes only its own " <>
+                "`files`; overlapping or shared files (lockfiles, configuration, migrations) " <>
+                "are refused. The result is one commit per task.",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "title" => %{"type" => "string"},
+                "brief" => %{"type" => "string", "description" => "This task only (1000 chars)"},
+                "files" => Map.put(@list, "description", "Files or directories it changes")
+              },
+              "required" => ["title", "files"]
+            }
+          },
           "lessons" =>
             Map.put(
               @list,
@@ -366,10 +385,23 @@ defmodule Shoestring.Coordinator.Tools do
          :ok <- agent_or_worker(args),
          :ok <- typed(args, @strings, &is_binary/1, "a string"),
          :ok <- typed(args, @lists, &string_list?/1, "a list of strings"),
-         :ok <- typed(args, @integers, &(is_integer(&1) and &1 > 0), "a positive integer") do
+         :ok <- typed(args, @integers, &(is_integer(&1) and &1 > 0), "a positive integer"),
+         :ok <-
+           typed(
+             args,
+             ["tasks"],
+             &(is_list(&1) and Enum.all?(&1, fn t -> is_map(t) end)),
+             "a list of tasks"
+           ) do
       fields =
         for key <- @strings ++ @lists ++ @integers, Map.has_key?(args, key), into: %{} do
           {String.to_existing_atom(key), args[key]}
+        end
+
+      fields =
+        case args["tasks"] do
+          nil -> fields
+          tasks -> Map.put(fields, :tasks, tasks)
         end
 
       {:ok, Map.merge(fields, %{session_id: binding.session_id, repository: binding.repository})}

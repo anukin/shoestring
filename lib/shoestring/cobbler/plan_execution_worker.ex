@@ -53,7 +53,7 @@ defmodule Shoestring.Cobbler.PlanExecutionWorker do
 
   @doc false
   def drive(goal_id, opts) do
-    if PlanFanoutDriver.enabled?(),
+    if Shoestring.Cobbler.Parallelism.fanout?(),
       do: PlanFanoutDriver.step(goal_id, opts),
       else: PlanExecutor.resume(goal_id, opts)
   end

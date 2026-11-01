@@ -247,6 +247,36 @@ A session id is not a secret: any program on your machine that knows it can
 dispatch under its grant. The grant's repository, models and limits are what
 bound that.
 
+### Tasks side by side (iteration 16 C2)
+
+Work that splits into tasks changing separate files can go as one batch
+IMPLEMENT: `tasks` (the tool) or `--tasks FILE` (a JSON list), 2 to 8 tasks,
+each `{"title", "brief", "files"}`. `files` declares the files or directories
+the task changes; `brief` (at most 1000 characters) is its own part, and the
+coordinator's brief, checks and reviewer are shared.
+
+- **Refused before anything is queued** when the tasks could not run side by
+  side: two tasks naming the same path (or a directory and a file in it), a
+  shared surface (lockfiles, `mix.exs`, `package.json`, `config/`, migrations,
+  generated code), or a symlink. Split the files apart, or use `after`.
+- **Whether they run at once is yours**: Settings, "IMPLEMENT tasks that may
+  run at once" (default 1: one after another, as before). With more, each task
+  runs in its own worktree from the same base, under iteration 7's
+  reservations; that setting changes only while nothing is running or waiting.
+  It also lets a `shoestring do` plan's tasks that change separate files run
+  at once.
+- **The grant**: a batch takes one parallel place per task, its attempts and
+  minutes count per task, and it reserves the fan-out's worst-case
+  verification time too; only the time actually taken counts afterwards.
+- **Enforced**: a task's change outside its own `files` blocks it for you
+  (`shoestring execution resolve-scope`), with its checks kept.
+- **Result**: one commit per task. When all have passed, the dispatch is
+  `needs_you`, and `runs show` lists each task and `batch.take`: fetch and
+  merge each commit in your checkout (a conflict is yours to resolve), then
+  record the merge (`shoestring execution integrate`) and `continue`; the
+  global checks then run and the batch completes. A later package (C3) will
+  integrate onto a Shoestring branch for you.
+
 ### Lessons (iteration 16 B)
 
 A lesson is one rule for work in one repository, shared by every agent and

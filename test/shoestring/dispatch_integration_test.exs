@@ -480,6 +480,182 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert Dispatches.usage(grant).running == 0
     end
 
+    @tag :batch
+    test "a batch's tasks run at once on their own files; taking them all completes it", _ctx do
+      System.put_env("FAKE_CLAUDE_SCENARIO", "batch")
+      on_exit(fn -> System.delete_env("FAKE_CLAUDE_SCENARIO") end)
+      source = source!("calc-batch")
+      File.write!(Path.join(source, "calc.py"), "def add(a, b):\n    return a + b\n")
+      File.write!(Path.join(source, "strings.py"), "def shout(text):\n    return text\n")
+      git!(source, ["add", "."])
+
+      git!(source, ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "two"])
+
+      base = git!(source, ["rev-parse", "HEAD"]) |> String.trim()
+      {:ok, facts} = Shoestring.Cobbler.Intake.repository(source)
+
+      grant =
+        grant!("s4", facts.root, %{
+          unread_usage: 6,
+          max_parallel: 2,
+          max_dispatches: 4,
+          max_total_seconds: 7_200
+        })
+
+      claude_reading!(0.2)
+
+      # The person allows two tasks at once.
+      {:ok, _} =
+        Shoestring.AgentProfiles.save_settings(Shoestring.AgentProfiles.settings(), %{
+          "parallel_tasks" => "2"
+        })
+
+      batch = fn request_id, tasks ->
+        Dispatches.create(%{
+          session_id: "s4",
+          request_id: request_id,
+          purpose: "implement",
+          provider: "claude",
+          model: "opus",
+          title: "Two small changes",
+          brief: @brief,
+          repository: source,
+          tasks: tasks
+        })
+      end
+
+      # Overlapping or shared files are refused before anything is recorded.
+      assert {:error, {:batch_scopes, [%{"reason" => "scope_overlap"}]}} =
+               batch.("x", [
+                 %{"title" => "A", "files" => ["calc.py"]},
+                 %{"title" => "B", "files" => ["calc.py"]}
+               ])
+
+      {:ok, dispatch, :recorded} =
+        batch.("b1", [
+          %{"title" => "Mark calc", "brief" => "Mark calc.py.", "files" => ["calc.py"]},
+          %{"title" => "Mark strings", "files" => ["strings.py"]}
+        ])
+
+      assert dispatch.task_count == 2
+      assert Dispatches.usage(grant).running == 2
+      job = job!(dispatch)
+
+      # Before anything runs, each task waits for its usage confirmation, as a
+      # held single task does: the job sleeps; it neither fails nor finishes.
+      assert {:snooze, 60} = PlanExecutionWorker.perform(job)
+      assert Dispatches.state(dispatch) == "held"
+
+      # Admitted, both tasks are dispatched before either has finished.
+      Stream.repeatedly(fn ->
+        _ = Dispatches.advance(dispatch)
+        PlanExecutionWorker.perform(job)
+      end)
+      |> Stream.take(12)
+      |> Enum.find(fn _ ->
+        Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^dispatch.goal_id), :count) == 2
+      end)
+
+      runs = Repo.all(from r in RunRecord, where: r.goal_id == ^dispatch.goal_id)
+      assert length(runs) == 2
+      assert Enum.all?(runs, &(&1.status not in ~w(completed failed)))
+
+      # While work holds reservations, the person cannot change how many run at once.
+      assert {:error, changeset} =
+               Shoestring.AgentProfiles.save_settings(Shoestring.AgentProfiles.settings(), %{
+                 "parallel_tasks" => "1"
+               })
+
+      assert {"change it when no IMPLEMENT task is running or waiting to run", _} =
+               changeset.errors[:parallel_tasks]
+
+      for run <- runs, do: finish_worker!(run.id)
+
+      # In the service the child inbox verifies each finished task by itself;
+      # here its jobs run between the execution's steps.
+      Stream.repeatedly(fn ->
+        _ = Oban.drain_queue(queue: :plan_child_inbox)
+        _ = Dispatches.advance(dispatch)
+        PlanExecutionWorker.perform(job)
+      end)
+      |> Stream.take(20)
+      |> Enum.find(fn _ -> Dispatches.state(dispatch) == "needs_you" end)
+
+      assert Dispatches.state(dispatch) == "needs_you"
+      shown = runs_show!(dispatch.id, "s4")
+
+      assert [
+               %{
+                 "task" => "dispatch-1",
+                 "state" => "accepted",
+                 "commit" => c1,
+                 "files" => ["calc.py"]
+               },
+               %{
+                 "task" => "dispatch-2",
+                 "state" => "accepted",
+                 "commit" => c2,
+                 "files" => ["strings.py"]
+               }
+             ] = shown["batch"]["tasks"]
+
+      assert shown["next"] =~ "Every task of the batch passed its checks"
+
+      # Each commit is its own task's change, from the same base.
+      for {task, commit, file} <- [
+            {"dispatch-1", c1, "calc.py"},
+            {"dispatch-2", c2, "strings.py"}
+          ] do
+        worktree = Enum.find(shown["batch"]["tasks"], &(&1["task"] == task))["worktree"]
+        assert git!(worktree, ["rev-parse", "#{commit}^"]) |> String.trim() == base
+
+        assert git!(worktree, ["diff", "--name-only", base, commit]) |> String.trim() == file
+      end
+
+      # The person takes both, then records the merge: the batch completes.
+      assert git!(source, ["rev-parse", "HEAD"]) |> String.trim() == base
+      [cd | take] = shown["batch"]["take"]
+      assert cd == "cd #{Shoestring.Shell.argument(facts.root)}"
+      {merges, [integrate, continue]} = Enum.split(take, -2)
+
+      for command <- merges do
+        {output, status} = System.cmd("sh", ["-c", command], cd: source, stderr_to_stdout: true)
+        assert status == 0, "#{command}: #{output}"
+      end
+
+      assert File.read!(Path.join(source, "calc.py")) =~ "# changed by dispatch-1"
+      assert File.read!(Path.join(source, "strings.py")) =~ "# changed by dispatch-2"
+      assert integrate =~ "shoestring execution integrate #{dispatch.goal_id}"
+      assert continue =~ "shoestring execution continue #{dispatch.goal_id}"
+
+      # The last commands as the CLI runs them, with the merge as HEAD.
+      head = git!(source, ["rev-parse", "HEAD"]) |> String.trim()
+
+      for command <- [integrate, continue] do
+        argv =
+          command
+          |> String.replace("\"$(git rev-parse HEAD)\"", head)
+          |> OptionParser.split()
+          |> tl()
+
+        context = %{
+          shell: Mix.Shell.Process,
+          with_repo: fn fun -> fun.(Repo) end,
+          cwd: source,
+          service: fn -> :ok end
+        }
+
+        Shoestring.CLI.Commands.Execution.run(tl(argv), context)
+      end
+
+      Stream.repeatedly(fn -> PlanExecutionWorker.perform(job) end)
+      |> Stream.take(10)
+      |> Enum.find(fn _ -> Dispatches.state(dispatch) == "completed" end)
+
+      assert Dispatches.state(dispatch) == "completed"
+      assert Dispatches.usage(grant).running == 0
+    end
+
     defp source!(name) do
       source = Path.join(Shoestring.State.root(), name)
       File.mkdir_p!(Path.join(source, "test"))
@@ -641,8 +817,8 @@ defmodule Shoestring.DispatchIntegrationTest do
   else
     @tag timeout: 120_000
     test "a dispatch end to end on an isolated local node" do
-      output = child!(["--exclude", "chain"])
-      assert output =~ "2 tests, 0 failures (1 excluded)"
+      output = child!(["--exclude", "chain", "--exclude", "batch"])
+      assert output =~ "2 tests, 0 failures (2 excluded)"
     end
 
     # Its own node and state: the usage-limit test leaves Claude's five-hour
@@ -650,7 +826,13 @@ defmodule Shoestring.DispatchIntegrationTest do
     @tag timeout: 120_000
     test "a dependent dispatch end to end on an isolated local node" do
       output = child!(["--only", "chain"])
-      assert output =~ "1 test, 0 failures (2 excluded)"
+      assert output =~ "1 test, 0 failures (3 excluded)"
+    end
+
+    @tag timeout: 120_000
+    test "a batch end to end on an isolated local node" do
+      output = child!(["--only", "batch"])
+      assert output =~ "1 test, 0 failures (3 excluded)"
     end
 
     defp child!(filter) do

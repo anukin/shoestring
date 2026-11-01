@@ -59,7 +59,7 @@ defmodule ShoestringWeb.ChatDispatches do
 
     lines =
       Enum.flat_map(
-        ~w(state worker reviewer waiting attempts_used duration_ms next result reviews report),
+        ~w(state worker reviewer waiting attempts_used duration_ms next batch result reviews report),
         &lines(&1, data[&1], data)
       )
 
@@ -92,6 +92,18 @@ defmodule ShoestringWeb.ChatDispatches do
   # text, one line per item; a shape not known here is shown as indented JSON.
   defp lines(_key, nil, _data), do: []
   defp lines(_key, [], _data), do: []
+
+  # A batch (C2): one line per task, then how to take them all.
+  defp lines("batch", %{"tasks" => tasks} = batch, _data) do
+    Enum.map(tasks, fn task ->
+      "task #{task["task"]} #{task["title"]} (#{Enum.join(task["files"] || [], ", ")}): " <>
+        task["state"] <> if(task["commit"], do: " at #{short_sha(task["commit"])}", else: "")
+    end) ++
+      case batch["take"] do
+        [_ | _] = take -> ["take them all:" | Enum.map(take, &("  " <> &1))]
+        _ -> []
+      end
+  end
 
   defp lines("waiting", %{"until" => until, "reason" => reason}, _data),
     do: ["waiting: until #{until} (#{reason})"]

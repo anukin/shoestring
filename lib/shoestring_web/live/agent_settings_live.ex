@@ -105,6 +105,25 @@ defmodule ShoestringWeb.AgentSettingsLive do
             </p>
           </div>
         </div>
+        <h2 class="ss-section">Parallel work</h2>
+        <div class="ss-fields">
+          <div>
+            <.input
+              field={@form[:parallel_tasks]}
+              type="number"
+              label="IMPLEMENT tasks that may run at once"
+              min="1"
+              max="8"
+              class="ss-input"
+            />
+            <p class="ss-small">
+              1 runs every task after the one before. More lets the tasks of a batch dispatch,
+              or a plan's tasks that change separate files, run at once, each in its own worktree;
+              you then take each task's commit and record the merge. It changes only while no
+              task is running or waiting to run.
+            </p>
+          </div>
+        </div>
         <h2 class="ss-section">Lessons and the web UI</h2>
         <div class="ss-fields">
           <.input

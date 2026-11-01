@@ -159,6 +159,13 @@ defmodule Shoestring.AgentProfiles do
   def save_settings(settings, attrs) do
     settings
     |> change_settings(attrs)
+    # One policy governs every held reservation: the number of tasks at once
+    # changes only while no work holds one.
+    |> Ecto.Changeset.validate_change(:parallel_tasks, fn field, _value ->
+      if Shoestring.Cobbler.Parallelism.busy?(),
+        do: [{field, "change it when no IMPLEMENT task is running or waiting to run"}],
+        else: []
+    end)
     |> Ecto.Changeset.optimistic_lock(:lock_version)
     |> Repo.update(
       stale_error_field: :lock_version,

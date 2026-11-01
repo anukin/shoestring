@@ -33,6 +33,8 @@ defmodule Shoestring.Dispatches.Dispatch do
     # Codes of the approved lessons the brief cites (`Shoestring.Lessons`),
     # given to the worker with it.
     field :lesson_codes, {:array, :string}, default: []
+    # A batch IMPLEMENT's tasks (C2), each with its own declared files; 1 otherwise.
+    field :task_count, :integer, default: 1
     field :batch_label, :string
     field :batch_size, :integer
     field :goal_id, :binary_id

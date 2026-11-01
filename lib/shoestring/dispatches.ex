@@ -43,6 +43,7 @@ defmodule Shoestring.Dispatches do
   }
 
   alias Shoestring.Cobbler.{ExecutionControl, ExecutionProfile, Intake, PlanContract, Plans}
+  alias Shoestring.Cobbler.{Parallelism, PlanIndependence}
   alias Shoestring.CLI.Result
   alias Shoestring.Dispatches.{Call, Calls, ChainWorker, Dispatch}
   alias Shoestring.Grants.Grant
@@ -120,7 +121,7 @@ defmodule Shoestring.Dispatches do
   # What past runs of this worker on this kind of task looked like.
   defp advice(prepared) do
     request = prepared.request
-    [task] = prepared.contract.content["tasks"]
+    [task | _] = prepared.contract.content["tasks"]
 
     kind = %{
       "harness" => request.provider,
@@ -286,6 +287,7 @@ defmodule Shoestring.Dispatches do
   defp prepare("implement", %{request: request} = prepared, facts) do
     with :ok <- reviewer(request),
          {:ok, after_id} <- after_dispatch(request, prepared),
+         {:ok, batch} <- batch_tasks(request, after_id, facts),
          {:ok, attempts} <- int(Map.get(request, :attempts, 1), :attempts, 1..20),
          {:ok, seconds} <- implement_seconds(request),
          {:ok, gates} <-
@@ -298,13 +300,15 @@ defmodule Shoestring.Dispatches do
              constraints: Enum.map(Map.get(request, :stay_out, []), &"Do not change #{&1}.")
            ),
          {:ok, contract} <-
-           PlanContract.new(plan(goal, prepared.title, request, gates, attempts, seconds)) do
+           PlanContract.new(plan(goal, prepared.title, request, gates, attempts, seconds, batch)) do
       {:ok,
        Map.merge(prepared, %{
          contract: contract,
          attempts: attempts,
          seconds: seconds,
-         after: after_id
+         total_seconds: contract.content["budget"]["max_total_duration_seconds"],
+         after: after_id,
+         task_count: max(length(batch), 1)
        })}
     end
   end
@@ -440,6 +444,7 @@ defmodule Shoestring.Dispatches do
          %Dispatch{} = target <- get(id) || {:error, :review_target_not_found},
          true <- target.session_id == request.session_id || {:error, :review_target_not_found},
          true <- target.purpose == "implement" || {:error, :review_target_not_implement},
+         true <- (target.task_count || 1) == 1 || {:error, :review_target_batch},
          :ok <- review_vendor(request, target),
          "completed" <- state(target),
          true <-
@@ -582,37 +587,175 @@ defmodule Shoestring.Dispatches do
         else: {:error, {:invalid_dispatch, :batch}}
       )
 
-  defp plan(goal, title, request, gates, attempts, seconds) do
+  defp plan(goal, title, request, gates, attempts, seconds, batch) do
     accept =
       case Map.get(request, :accept, []) do
         [] -> ["The task's checks pass at its final commit."]
         accept -> accept
       end
 
+    task = fn id, title, outcome, files, input ->
+      %{
+        "id" => id,
+        "title" => title,
+        "outcome" => outcome,
+        "depends_on" => [],
+        "inputs" => [input],
+        "expected_artifacts" => [],
+        "hints" => %{"files" => files, "symbols" => []},
+        "acceptance_criteria" => accept,
+        "gates" => gates,
+        "checkpoint" => %{
+          "condition" => "The task's checks have run and their results are recorded.",
+          "evidence" => ["The checks' results at the task's final commit."]
+        },
+        "risks" => [],
+        "execution" => %{"max_attempts" => attempts, "max_duration_seconds" => seconds}
+      }
+    end
+
+    tasks =
+      case batch do
+        [] ->
+          [
+            task.(
+              @task_id,
+              title,
+              title,
+              Map.get(request, :files, []),
+              "The coordinator's brief, given with this task."
+            )
+          ]
+
+        batch ->
+          for {item, n} <- Enum.with_index(batch, 1) do
+            task.(
+              "#{@task_id}-#{n}",
+              item.title,
+              item.brief,
+              item.files,
+              "The coordinator's brief, given with every task of this batch; change only " <>
+                "this task's files."
+            )
+          end
+      end
+
+    n = length(tasks)
+
     %{
       "version" => 1,
       "goal" => goal,
-      "budget" => %{"max_total_attempts" => attempts, "max_total_duration_seconds" => seconds},
-      "tasks" => [
-        %{
-          "id" => @task_id,
-          "title" => title,
-          "outcome" => title,
-          "depends_on" => [],
-          "inputs" => ["The coordinator's brief, given with this task."],
-          "expected_artifacts" => [],
-          "hints" => %{"files" => Map.get(request, :files, []), "symbols" => []},
-          "acceptance_criteria" => accept,
-          "gates" => gates,
-          "checkpoint" => %{
-            "condition" => "The task's checks have run and their results are recorded.",
-            "evidence" => ["The checks' results at the task's final commit."]
-          },
-          "risks" => [],
-          "execution" => %{"max_attempts" => attempts, "max_duration_seconds" => seconds}
-        }
-      ]
+      "budget" => %{
+        "max_total_attempts" => attempts * n,
+        "max_total_duration_seconds" => batch_seconds(n, attempts, seconds, goal)
+      },
+      "tasks" => tasks
     }
+  end
+
+  # A batch's time: its tasks' own, plus the verification a fan-out reserves
+  # for them at worst (every goal check at its command timeout, and a bounded
+  # final-scope check per task; `PlanFanout`). A single task needs neither.
+  # Only the time actually taken counts against the grant afterwards.
+  defp batch_seconds(1, _attempts, seconds, _goal), do: seconds
+
+  defp batch_seconds(n, attempts, seconds, goal) do
+    timeout =
+      :shoestring
+      |> Application.get_env(:plan_execution_opts, [])
+      |> Keyword.get(:gate_runner_opts, [])
+      |> Keyword.get(:timeout_ms, 120_000)
+
+    verification_ms =
+      length(get_in(goal, ["acceptance", "gates"]) || []) * timeout +
+        n * Shoestring.Cobbler.ScopeEvidence.final_scope_bound_ms(n * attempts)
+
+    seconds * n + div(verification_ms + 999, 1000)
+  end
+
+  # A batch IMPLEMENT (C2): two or more tasks, each declaring the files or
+  # directories it changes. They may run at once only when those scopes are
+  # separate and touch nothing shared (lockfiles, configuration, migrations,
+  # symlinks: `PlanIndependence`), so a batch that could not is refused here,
+  # before anything is recorded. Whether they do run at once is the person's
+  # setting (`Parallelism`).
+  defp batch_tasks(%{tasks: [_ | _] = tasks}, after_id, facts) do
+    max = Parallelism.max()
+
+    cond do
+      after_id != nil ->
+        {:error, :batch_after}
+
+      length(tasks) < 2 ->
+        {:error, {:invalid_dispatch, :tasks}}
+
+      length(tasks) > max ->
+        {:error, {:batch_too_large, max}}
+
+      true ->
+        with {:ok, items} <- batch_items(tasks),
+             :ok <- batch_scopes(items, facts),
+             do: {:ok, items}
+    end
+  end
+
+  defp batch_tasks(_request, _after_id, _facts), do: {:ok, []}
+
+  defp batch_items(tasks) do
+    Enum.reduce_while(Enum.with_index(tasks, 1), {:ok, []}, fn {task, n}, {:ok, acc} ->
+      with %{} <- task,
+           {:ok, title} <- text(redact(field(task, :title)), :task_title, 200),
+           {:ok, brief} <- optional_task_text(field(task, :brief), title),
+           files when is_list(files) and files != [] and length(files) <= 32 <-
+             field(task, :files),
+           true <- Enum.all?(files, &PlanIndependence.valid_path?/1) do
+        {:cont, {:ok, acc ++ [%{title: title, brief: brief, files: files}]}}
+      else
+        {:error, _} = error -> {:halt, error}
+        _ -> {:halt, {:error, {:batch_task_files, n}}}
+      end
+    end)
+  end
+
+  defp field(task, key), do: Map.get(task, key, Map.get(task, Atom.to_string(key)))
+
+  defp optional_task_text(nil, title), do: {:ok, title}
+  defp optional_task_text("", title), do: {:ok, title}
+  defp optional_task_text(text, _title), do: text(redact(text), :task_brief, 1000)
+
+  defp batch_scopes(items, facts) do
+    tasks =
+      for {item, n} <- Enum.with_index(items, 1),
+          do: %{"id" => "#{@task_id}-#{n}", "hints" => %{"files" => item.files}}
+
+    case PlanIndependence.declared(tasks, tree(facts)) do
+      %{"disposition" => "eligible"} -> :ok
+      %{"blockers" => blockers} -> {:error, {:batch_scopes, blockers}}
+    end
+  end
+
+  # The repository's committed files and symlinks at HEAD, read-only.
+  defp tree(facts) do
+    case System.cmd(
+           "git",
+           ["-C", facts.root, "ls-tree", "-r", "-z", "--full-tree", facts.head],
+           stderr_to_stdout: true
+         ) do
+      {output, 0} ->
+        entries =
+          for entry <- String.split(output, <<0>>, trim: true),
+              [meta, path] <- [String.split(entry, "\t", parts: 2)],
+              do: {hd(String.split(meta, " ")), path}
+
+        %{
+          verified?: true,
+          files: Enum.map(entries, &elem(&1, 1)),
+          symlinks: for({"120000", path} <- entries, do: path)
+        }
+
+      _ ->
+        %{verified?: false}
+    end
   end
 
   # -- Recording and starting --------------------------------------------
@@ -643,8 +786,9 @@ defmodule Shoestring.Dispatches do
               lesson_codes: prepared.lesson_codes,
               repository_root: prepared.root,
               base_revision: prepared.head,
-              max_attempts: prepared.attempts,
-              max_duration_seconds: prepared.seconds,
+              max_attempts: prepared.attempts * Map.get(prepared, :task_count, 1),
+              max_duration_seconds: Map.get(prepared, :total_seconds, prepared.seconds),
+              task_count: Map.get(prepared, :task_count, 1),
               agent: Map.get(request, :agent),
               batch_label: Map.get(request, :batch_label),
               batch_size: Map.get(request, :batch_size),
@@ -913,8 +1057,10 @@ defmodule Shoestring.Dispatches do
           nil -> nil
           provider -> "#{provider}:#{prepared.request.reviewer_model}"
         end,
-      attempts: prepared.attempts,
+      attempts: prepared.attempts * Map.get(prepared, :task_count, 1),
       seconds: prepared.seconds,
+      total_seconds: Map.get(prepared, :total_seconds, prepared.seconds),
+      width: Map.get(prepared, :task_count, 1),
       chained: prepared[:after] != nil
     }
   end
@@ -936,9 +1082,12 @@ defmodule Shoestring.Dispatches do
     %{
       attempts: Enum.sum_by(dispatches, fn {dispatch, _} -> dispatch.max_attempts end),
       seconds: Enum.sum_by(dispatches, fn {dispatch, state} -> used_seconds(dispatch, state) end),
+      # A batch takes one parallel place per task.
       running:
-        Enum.count(dispatches, fn {_, state} ->
-          state in ~w(starting queued running waiting held)
+        Enum.sum_by(dispatches, fn {dispatch, state} ->
+          if state in ~w(starting queued running waiting held),
+            do: dispatch.task_count || 1,
+            else: 0
         end)
     }
   end
@@ -1046,6 +1195,12 @@ defmodule Shoestring.Dispatches do
         "completed"
 
       {:ok, %{needs_user?: true}} ->
+        "needs_you"
+
+      # A batch whose tasks are all accepted waits for the person to take and
+      # integrate their commits (C2; `Shoestring.Cobbler.PlanIntegration`).
+      {:ok, %{dispatch_mode: :fanout_v1, active_run_ids: []} = current}
+      when current.accepted_count == current.total_tasks and current.total_tasks > 0 ->
         "needs_you"
 
       {:ok, %{active_run_id: run_id} = current} when is_binary(run_id) ->
@@ -1200,7 +1355,7 @@ defmodule Shoestring.Dispatches do
 
   def advance(%Dispatch{state: "started"} = dispatch, status) do
     with {:ok, current} <- status.(dispatch.goal_id),
-         {:ok, hold} <- hold(current),
+         {:ok, hold} <- hold(current, dispatch.goal_id),
          %Grant{revoked_at: nil} = grant <- Grants.get(dispatch.grant_id) do
       spend(dispatch, grant, hold)
     else
@@ -1232,7 +1387,7 @@ defmodule Shoestring.Dispatches do
   def confirm_hold(%Dispatch{state: "started"} = dispatch, by, status) do
     with true <- Authority.human?(by) || {:error, :non_human_identity},
          {:ok, current} <- status.(dispatch.goal_id),
-         {:ok, hold} <- hold(current) do
+         {:ok, hold} <- hold(current, dispatch.goal_id) do
       confirmed(confirm(dispatch, hold, by))
     else
       {:error, :non_human_identity} = error -> error
@@ -1253,7 +1408,7 @@ defmodule Shoestring.Dispatches do
   defp confirmed({:ok, _}), do: :confirmed
   defp confirmed({:error, _} = error), do: error
 
-  defp hold(%{completed?: false, needs_user?: false, cancelled?: false} = status) do
+  defp hold(%{completed?: false, needs_user?: false, cancelled?: false} = status, goal_id) do
     review = Enum.find(status[:reviews] || [], &(&1.state == "held"))
     decision = status[:last_admission]
 
@@ -1266,11 +1421,18 @@ defmodule Shoestring.Dispatches do
            review_id: review.review_id
          }}
 
+      # A batch (C2): the first held task without a confirmation yet; each
+      # task's hold is its own and spends its own pre-approval.
+      match?(%{"result" => "require_confirmation"}, decision) and
+          length(status.execution.ordered_task_ids) > 1 ->
+        batch_hold(status, decision, goal_id)
+
       match?(%{"result" => "require_confirmation"}, decision) and is_nil(status[:active_run_id]) ->
         {:ok,
          %{
            kind: :task,
            key: "task:#{decision["decision_id"]}",
+           task_id: @task_id,
            execution_id: status.execution.execution_id,
            attempt: Map.get(status.attempts, @task_id, 0) + 1
          }}
@@ -1280,7 +1442,41 @@ defmodule Shoestring.Dispatches do
     end
   end
 
-  defp hold(_status), do: :none
+  defp hold(_status, _goal_id), do: :none
+
+  defp batch_hold(status, decision, goal_id) do
+    scope = Application.get_env(:shoestring, :run_submission_scope, "subscription")
+    accepted = MapSet.new(status.accepted)
+    active = MapSet.new(status.active_children, & &1.plan_task_id)
+
+    # Only while the batch has a free place: a confirmation an admission
+    # consumes for a task that then cannot start would be spent for nothing.
+    room? = MapSet.size(active) < Parallelism.tasks()
+
+    status.execution.ordered_task_ids
+    |> Enum.reject(&(not room? or MapSet.member?(accepted, &1) or MapSet.member?(active, &1)))
+    |> Enum.find_value(:none, fn task_id ->
+      attempt = Map.get(status.attempts, task_id, 0) + 1
+
+      if Shoestring.Cobbler.PlanCapacityConfirmation.available(
+           goal_id,
+           status.execution,
+           %{"id" => task_id},
+           attempt,
+           scope
+         ),
+         do: nil,
+         else:
+           {:ok,
+            %{
+              kind: :task,
+              key: "task:#{decision["decision_id"]}:#{task_id}",
+              task_id: task_id,
+              execution_id: status.execution.execution_id,
+              attempt: attempt
+            }}
+    end)
+  end
 
   defp spend(dispatch, grant, hold) do
     detail = %{"hold" => hold.key, "dispatch_id" => dispatch.id}
@@ -1311,7 +1507,7 @@ defmodule Shoestring.Dispatches do
       dispatch.goal_id,
       %{
         execution_id: hold.execution_id,
-        task_id: @task_id,
+        task_id: hold.task_id,
         attempt: hold.attempt,
         scope: Application.get_env(:shoestring, :run_submission_scope, "subscription"),
         command_id: confirmation_id(dispatch, hold, by),
@@ -1337,7 +1533,8 @@ defmodule Shoestring.Dispatches do
 
   # A version-4-shaped UUID derived from the hold, so a repeated confirmation
   # carries the same id and replays instead of recording a second one.
-  defp uuid_for(key) do
+  @doc false
+  def uuid_for(key) do
     <<head::bitstring-size(48), _::4, mid::bitstring-size(12), _::2, tail::bitstring-size(62),
       _::bitstring>> =
       :crypto.hash(:sha256, "shoestring-dispatch-hold:" <> key)
