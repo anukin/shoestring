@@ -243,6 +243,9 @@ defmodule Shoestring.Coordinator.Tools do
   def call("runs_show", args, binding) do
     with {:ok, dispatch} <- own_dispatch(args, binding) do
       _ = Dispatches.advance(dispatch)
+      # What its worker proposed is read here and when it settles, never on a
+      # screen's refresh.
+      _ = Shoestring.Lessons.Harvest.dispatch(dispatch)
       {:ok, Runs.detail(dispatch)}
     end
   end

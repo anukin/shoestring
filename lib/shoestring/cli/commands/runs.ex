@@ -41,6 +41,7 @@ defmodule Shoestring.CLI.Commands.Runs do
         context.with_repo.(fn _repo ->
           dispatch = dispatch!(id)
           _ = Dispatches.advance(dispatch)
+          _ = Shoestring.Lessons.Harvest.dispatch(dispatch)
           Command.json(context, detail(dispatch))
         end)
 
@@ -100,7 +101,6 @@ defmodule Shoestring.CLI.Commands.Runs do
       end
 
     call = Dispatches.Calls.get(dispatch.id)
-    _ = Shoestring.Lessons.Harvest.dispatch(dispatch)
 
     summary
     |> Map.merge(status)

@@ -437,6 +437,12 @@ defmodule Shoestring.LessonsTest do
     assert :done = step.()
     assert Dispatches.state(dispatch) == "completed"
 
+    # A screen's refresh and the detail read nothing: proposals are read when
+    # the dispatch settles (the engine's inbox) or the coordinator asks.
+    _ = ShoestringWeb.ChatDispatches.rows("s1", %{}, DateTime.utc_now())
+    assert Shoestring.CLI.Commands.Runs.detail(dispatch)["lessons_proposed"] == []
+    assert Lessons.list(source_ref: dispatch.id) == []
+
     assert [%{text: "Read calc.py before test/.", state: "proposed"} = lesson] =
              Harvest.dispatch(dispatch)
 
