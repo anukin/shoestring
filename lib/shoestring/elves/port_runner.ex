@@ -107,9 +107,10 @@ defmodule Shoestring.Elves.PortRunner do
                     "os.write(1, b'#{@handshake_prefix}%d\\n' % os.getpid())\n" <>
                     "if os.read(0, 1) != b'\\n':\n" <>
                     "    sys.exit(125)\n" <>
-                    "fd = os.open(os.devnull, os.O_RDONLY)\n" <>
-                    "os.dup2(fd, 0)\n" <>
-                    "os.execvp(sys.argv[1], sys.argv[1:])\n"
+                    "if sys.argv[1] != 'keep-stdin':\n" <>
+                    "    fd = os.open(os.devnull, os.O_RDONLY)\n" <>
+                    "    os.dup2(fd, 0)\n" <>
+                    "os.execvp(sys.argv[2], sys.argv[2:])\n"
   @default_handshake_timeout_ms 15_000
 
   @doc false
@@ -117,7 +118,15 @@ defmodule Shoestring.Elves.PortRunner do
   # the Claude headless transport so the two launchers cannot drift apart.
   # The wrapper needs only os and sys: isolated mode without site starts in
   # about two thirds of the time and ignores PYTHON* variables.
-  def wrapper_args(executable, args), do: ["-I", "-S", "-c", @setsid_wrapper, executable | args]
+  #
+  # `keep_stdin: true` leaves the pipe from the port as the target's stdin,
+  # for a target that reads it by protocol and exits at its EOF (a Claude
+  # worker that may ask: its prompt and the person's answers arrive there).
+  # Everything else gets /dev/null, as above.
+  def wrapper_args(executable, args, opts \\ []) do
+    stdin = if Keyword.get(opts, :keep_stdin, false), do: "keep-stdin", else: "null-stdin"
+    ["-I", "-S", "-c", @setsid_wrapper, stdin, executable | args]
+  end
 
   @doc false
   def handshake_prefix, do: @handshake_prefix

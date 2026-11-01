@@ -75,6 +75,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.SandboxTest do
 
     assert sandbox.settings["sandbox"]["network"] == %{"allowedDomains" => []}
     assert sandbox.settings["sandbox"]["allowUnsandboxedCommands"] == false
+    refute sandbox.asks
 
     options = sandbox.options
     assert ["--permission-mode", "dontAsk"] == Enum.slice(options, -4, 2)
@@ -172,6 +173,85 @@ defmodule Shoestring.Harness.ClaudeHeadless.SandboxTest do
              })
   end
 
+  # Before, every sandboxed launch ran `dontAsk` with no prompt route: a
+  # command Claude wanted outside the sandbox ran sandboxed anyway or was
+  # refused, and the person never heard of it (VERIFIED offline, 2.1.316).
+  test "an agent that may ask gets the stdio prompt route; unsandboxed commands only through it",
+       ctx do
+    wt = worktree!(ctx, true)
+
+    {:ok, sandbox} =
+      Sandbox.prepare(wt.path, wt.workspace_ref,
+        worktrees_dir: ctx.worktrees,
+        home: ctx.home,
+        permissions: %{"may_ask" => true}
+      )
+
+    on_exit(fn -> Sandbox.release(sandbox.temp_dir) end)
+
+    assert sandbox.settings["sandbox"]["allowUnsandboxedCommands"] == true
+    # Commands inside the sandbox still run without asking.
+    assert sandbox.settings["sandbox"]["autoAllowBashIfSandboxed"] == true
+
+    assert Enum.take(sandbox.options, -6) == [
+             "--permission-mode",
+             "default",
+             "--permission-prompts",
+             "host",
+             "--permission-prompt-tool",
+             "stdio"
+           ]
+
+    refute "dontAsk" in sandbox.options
+    assert "--safe-mode" in sandbox.options
+    assert sandbox.asks
+
+    settings =
+      Enum.at(sandbox.options, Enum.find_index(sandbox.options, &(&1 == "--settings")) + 1)
+
+    assert Jason.decode!(settings) == sandbox.settings
+
+    # Off, or anything but true, keeps today's launch.
+    for permissions <- [%{"may_ask" => false}, %{"write_paths" => []}, nil] do
+      {:ok, plain} =
+        Sandbox.prepare(wt.path, wt.workspace_ref,
+          worktrees_dir: ctx.worktrees,
+          home: ctx.home,
+          permissions: permissions
+        )
+
+      Sandbox.release(plain.temp_dir)
+      refute plain.asks
+      assert plain.settings["sandbox"]["allowUnsandboxedCommands"] == false
+      assert ["--permission-mode", "dontAsk"] == Enum.slice(plain.options, -4, 2)
+    end
+  end
+
+  test "a launch that may ask reads its prompt from stdin, not its argv" do
+    session =
+      start_supervised!(
+        {Session,
+         [
+           run_request: request("workspace/fixture"),
+           owner: self(),
+           transport: Shoestring.Test.ArgvCaptureTransport,
+           model: "opus",
+           asks: true,
+           sandbox_options: ["--permission-prompt-tool", "stdio"]
+         ]}
+      )
+
+    opts = :sys.get_state(:sys.get_state(session).transport_pid)
+    args = Keyword.fetch!(opts, :args)
+    refute "Check the fixture" in args
+    assert Enum.take(args, -2) == ["--permission-prompt-tool", "stdio"]
+    assert ["--input-format", "stream-json"] in Enum.chunk_every(args, 2, 1, :discard)
+    assert Keyword.get(opts, :input) == :open
+
+    assert [%{"type" => "user", "message" => %{"content" => [%{"text" => "Check the fixture"}]}}] =
+             Keyword.fetch!(opts, :sent)
+  end
+
   test "sandbox flags go before the prompt and replace the permission bypass" do
     session =
       start_supervised!(
@@ -190,6 +270,8 @@ defmodule Shoestring.Harness.ClaudeHeadless.SandboxTest do
     assert Enum.take(args, -3) == ["--permission-mode", "dontAsk", "Check the fixture"]
     assert "--tools=Bash" in args
     refute "--dangerously-skip-permissions" in args
+    refute "--input-format" in args
+    refute Keyword.has_key?(:sys.get_state(:sys.get_state(session).transport_pid), :input)
   end
 
   # Before iteration 16 a launch outside the sandbox (a manual run in shared

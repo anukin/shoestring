@@ -60,6 +60,10 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
     * `:env` — explicit `[{binary, binary}]` environment overrides.
     * `:max_frame_size` — maximum stdout line size in bytes (default
       `262_144`). Oversized lines fail closed, never silently truncated.
+    * `:input` — `:closed` (default: stdin is `/dev/null`) or `:open`, for a
+      run driven over stdin (`--input-format stream-json`, a worker that may
+      ask the person): `send_frame/2` writes one line, and `close_input/1`
+      gives Claude its EOF once the run has its result, so it exits.
   """
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
@@ -70,6 +74,26 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
     GenServer.call(pid, :os_pid)
   catch
     :exit, _ -> nil
+  end
+
+  @doc "Writes one JSON line to the child's stdin (`input: :open` only)."
+  def send_frame(pid, frame) when is_pid(pid) and is_map(frame) do
+    GenServer.call(pid, {:send_frame, frame})
+  catch
+    :exit, _ -> {:error, :transport_down}
+  end
+
+  @doc """
+  Closes the child's stdin (`input: :open` only), the end of a stream-json
+  run: Claude exits at its EOF (VERIFIED offline with 2.1.316, exit 0 at
+  once). Closing a port closes both directions, so no exit status follows;
+  the transport keeps the process group, which `terminate_group/2` then
+  waits on, and sends no `claude_transport_closed`.
+  """
+  def close_input(pid) when is_pid(pid) do
+    GenServer.call(pid, :close_input)
+  catch
+    :exit, _ -> :ok
   end
 
   @doc "Closes the port without signalling (the child is already gone)."
@@ -101,10 +125,11 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
     args = Keyword.get(opts, :args, [])
     max_frame_size = Keyword.get(opts, :max_frame_size, @default_max_frame_size)
     env = Keyword.get(opts, :env, [])
+    input = Keyword.get(opts, :input, :closed)
 
     with {:ok, exec_path} <- resolve_executable(opts, command),
          {:ok, cd_opt} <- validate_cd(Keyword.get(opts, :cd)),
-         {:ok, launch} <- wrap_argv(exec_path, args) do
+         {:ok, launch} <- wrap_argv(exec_path, args, input) do
       {launch_exe, launch_args} = launch
 
       port_opts =
@@ -142,7 +167,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
                    os_pid: os_pid,
                    max_frame_size: max_frame_size,
                    discarding_oversized: false,
-                   closed: false
+                   closed: false,
+                   input: input,
+                   input_closed: false
                  }}
 
               {:error, reason} ->
@@ -218,6 +245,28 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
     {:reply, state.os_pid, state}
   end
 
+  def handle_call({:send_frame, frame}, _from, state) do
+    reply =
+      cond do
+        state.input != :open -> {:error, :input_not_open}
+        state.closed or state.input_closed -> {:error, :input_closed}
+        true -> port_write(state.port, [Jason.encode!(frame), "\n"])
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call(
+        :close_input,
+        _from,
+        %{input: :open, closed: false, input_closed: false} = state
+      ) do
+    safe_close_port(state.port)
+    {:reply, :ok, %{state | input_closed: true}}
+  end
+
+  def handle_call(:close_input, _from, state), do: {:reply, :ok, state}
+
   def handle_call(:close, _from, state) do
     send(state.owner, {:claude_transport_closed, self(), :normal})
     safe_close_port(state.port)
@@ -228,18 +277,25 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
     grace_ms = Keyword.get(opts, :kill_grace_ms, @default_kill_grace_ms)
     reap_ms = Keyword.get(opts, :reap_timeout_ms, @default_reap_timeout_ms)
 
+    # With stdin closed the port is gone and reports no exit; the group is
+    # watched instead, and a child that already exited at its EOF is left be.
+    await =
+      if state.input_closed,
+        do: &await_group_exit(state.os_pid, &1),
+        else: &await_exit(state.port, &1)
+
     result =
       if group_alive?(state.os_pid) do
         _ = killpg(state.os_pid, "TERM")
 
-        case await_exit(state.port, grace_ms) do
+        case await.(grace_ms) do
           {:ok, _status} ->
             :exited
 
           {:timeout, _port} ->
             _ = killpg(state.os_pid, "KILL")
 
-            case await_exit(state.port, reap_ms) do
+            case await.(reap_ms) do
               {:ok, _status} -> :killed
               {:timeout, _port} -> :reap_timeout
             end
@@ -282,6 +338,11 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
 
     {:stop, :normal, %{state | closed: true}}
   end
+
+  # Closing stdin closed the port: the child is exiting at its EOF, and the
+  # group stays this transport's to reap.
+  def handle_info({:EXIT, port, _reason}, %{port: port, input_closed: true} = state),
+    do: {:noreply, state}
 
   def handle_info({:EXIT, port, reason}, %{port: port} = state) do
     unless state.closed do
@@ -338,7 +399,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
        os_pid: nil,
        max_frame_size: max_frame_size,
        discarding_oversized: false,
-       closed: false
+       closed: false,
+       input: :closed,
+       input_closed: false
      }}
   end
 
@@ -384,15 +447,17 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
 
   defp validate_cd(other), do: {:error, {:invalid_workdir, other}}
 
-  defp wrap_argv(executable, args) do
+  defp wrap_argv(executable, args, input) when input in [:closed, :open] do
     case System.find_executable("python3") do
       nil ->
         {:error, :setsid_unavailable}
 
       python3 ->
-        {:ok, {python3, PortRunner.wrapper_args(executable, args)}}
+        {:ok, {python3, PortRunner.wrapper_args(executable, args, keep_stdin: input == :open)}}
     end
   end
+
+  defp wrap_argv(_executable, _args, input), do: {:error, {:invalid_input, input}}
 
   defp port_env(env) do
     Enum.map(env, fn
@@ -459,6 +524,30 @@ defmodule Shoestring.Harness.ClaudeHeadless.Transport do
     after
       timeout_ms -> {:timeout, port}
     end
+  end
+
+  defp await_group_exit(pgid, timeout_ms),
+    do: await_group_exit_until(pgid, System.monotonic_time(:millisecond) + timeout_ms)
+
+  defp await_group_exit_until(pgid, deadline) do
+    cond do
+      not group_alive?(pgid) ->
+        {:ok, nil}
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        {:timeout, nil}
+
+      true ->
+        Process.sleep(50)
+        await_group_exit_until(pgid, deadline)
+    end
+  end
+
+  defp port_write(port, data) do
+    true = Port.command(port, data)
+    :ok
+  rescue
+    _ -> {:error, :input_closed}
   end
 
   defp safe_close_port(port) when is_port(port) do

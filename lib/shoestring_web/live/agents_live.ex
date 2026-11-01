@@ -370,7 +370,7 @@ defmodule ShoestringWeb.AgentsLive do
               <.input
                 field={@form[:may_ask]}
                 type="checkbox"
-                label="May ask you, while it works, to run one command outside its sandbox (Codex; you decide each time)"
+                label="May ask you, while it works, to run one command outside its sandbox (Codex and Claude; you decide each time)"
               />
               <.input
                 field={@form[:read_paths]}

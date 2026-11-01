@@ -261,6 +261,7 @@ defmodule Shoestring.Harness.ClaudeHeadless do
         |> Keyword.put(:workdir, valid_workdir)
         |> Keyword.put_new(:tools, "Bash")
         |> Keyword.put_new(:permission_bypass, false)
+        |> Keyword.delete(:asks)
         |> apply_sandbox(sandbox)
 
       case Session.start_link(session_opts) do
@@ -311,9 +312,11 @@ defmodule Shoestring.Harness.ClaudeHeadless do
 
   defp apply_sandbox(session_opts, nil), do: session_opts
 
+  # Only a sandboxed launch asks the person (`Sandbox.prepare/3`).
   defp apply_sandbox(session_opts, sandbox) do
     session_opts
     |> Keyword.put(:permission_bypass, false)
+    |> Keyword.put(:asks, sandbox.asks)
     |> Keyword.put(:sandbox_options, sandbox.options)
     |> Keyword.put(:sandbox_temp_dir, sandbox.temp_dir)
     |> Keyword.update(:env, sandbox.env, &(&1 ++ sandbox.env))

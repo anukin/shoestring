@@ -97,6 +97,60 @@ defmodule Shoestring.Harness.ClaudeHeadless.TransportTest do
     end
   end
 
+  # A worker that may ask is driven over stdin (`--input-format stream-json`).
+  test "an open input carries lines to the child; closing it lets the child exit at EOF" do
+    cat = System.find_executable("cat")
+
+    {:ok, pid} = Transport.start_link(owner: self(), command: cat, executable: cat, input: :open)
+    assert_receive {:claude_transport_connected, ^pid}, 5_000
+    os_pid = Transport.os_pid(pid)
+
+    assert :ok = Transport.send_frame(pid, %{"type" => "user", "n" => 1})
+    assert_receive {:claude_transport_frame, ^pid, line}, 5_000
+    assert Jason.decode!(line) == %{"type" => "user", "n" => 1}
+
+    assert :ok = Transport.close_input(pid)
+    assert {:error, :input_closed} = Transport.send_frame(pid, %{"n" => 2})
+    # `cat` exits at its EOF; the transport still owns the group and never
+    # reports the closed port as the run's end.
+    assert {:ok, :already_exited} = Transport.terminate_group(pid, kill_grace_ms: 5_000)
+    {_, status} = System.cmd("kill", ["-0", "-#{os_pid}"], stderr_to_stdout: true)
+    assert status != 0
+    refute_received {:claude_transport_closed, ^pid, _}
+  end
+
+  test "a child left running after its input closes is still reaped with its group" do
+    sh = System.find_executable("sh")
+
+    # Ignores its EOF: `sleep` holds the group open.
+    {:ok, pid} =
+      Transport.start_link(
+        owner: self(),
+        command: sh,
+        executable: sh,
+        args: ["-c", "sleep 30"],
+        input: :open
+      )
+
+    assert_receive {:claude_transport_connected, ^pid}, 5_000
+    os_pid = Transport.os_pid(pid)
+    assert :ok = Transport.close_input(pid)
+    assert {:ok, :exited} = Transport.terminate_group(pid, kill_grace_ms: 5_000)
+    {_, status} = System.cmd("kill", ["-0", "-#{os_pid}"], stderr_to_stdout: true)
+    assert status != 0
+  end
+
+  test "a closed input takes no frames" do
+    sleep_bin = System.find_executable("sleep")
+
+    {:ok, pid} =
+      Transport.start_link(owner: self(), command: sleep_bin, executable: sleep_bin, args: ["30"])
+
+    assert_receive {:claude_transport_connected, ^pid}, 5_000
+    assert {:error, :input_not_open} = Transport.send_frame(pid, %{"n" => 1})
+    assert {:ok, _} = Transport.terminate_group(pid)
+  end
+
   test "missing executable fails closed" do
     # Unlinked start: a linked init-stop with an abnormal reason would
     # take the test process down with it.

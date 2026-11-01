@@ -3,8 +3,10 @@ defmodule Shoestring.PermissionAsks do
   A worker asking, mid-run, for more than its sandbox allows (iteration 16
   permissions): Codex's approval requests (`approvalPolicy: "on-request"`),
   which come only for a command run outside the sandbox or a file change it
-  would refuse. Approving one runs that one command with no sandbox at all
-  (VERIFIED offline with Codex 0.166.0): the person is told so.
+  would refuse, and Claude Code's `can_use_tool` permission requests, which
+  come only for a command it wants to run outside the sandbox. Approving one
+  runs that one command outside the sandbox (VERIFIED offline with Codex
+  0.166.0 and Claude Code 2.1.316): the person is told so.
 
   Only the person decides (`decide/4` takes a `human:` identity); nothing is
   ever decided by a timer, and an unanswered ask holds its worker until its

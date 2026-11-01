@@ -172,9 +172,9 @@ defmodule Shoestring.Agents.Permissions do
         hosts -> ["Reach " <> Enum.join(hosts, ", ") <> " from its commands"]
       end
 
-    # Asks reach the person from Codex workers; Claude's come later.
+    # Codex and Claude workers ask; opencode's sandbox is fixed.
     asks =
-      if permissions["may_ask"] == true and provider == "codex",
+      if permissions["may_ask"] == true and provider in ["codex", "claude"],
         do: [
           "Ask you, while it works, to run one command outside its sandbox; you decide each time"
         ],

@@ -212,11 +212,13 @@ deny with a reason) or with `shoestring asks`, `shoestring asks allow ASK`
 and `shoestring asks deny ASK --note "..."` in a terminal. Nothing answers
 an ask on a timer, and the coordinator cannot answer for you; `runs show`
 tells it the worker is waiting on you. Allowing runs that one command with
-full access to your files, anywhere you can write; its network stays as the
-agent's settings allow. A denial's reason is passed to the worker. For now
-only Codex workers ask (`approvalPolicy: on-request`); Claude and opencode
-workers are refused at once, as before. An ask whose worker stops (a cancel,
-a restart) ends unanswered.
+full access to your files, anywhere you can write. A Codex command's network
+stays as the agent's settings allow; a Claude command runs with no sandbox
+at all, network included. A denial's reason is passed to the worker. Codex
+workers ask through `approvalPolicy: on-request`, Claude workers through
+Claude Code's permission requests (only a command it wants to run outside
+the sandbox asks; commands inside it run as before). opencode workers do not
+ask. An ask whose worker stops (a cancel, a restart) ends unanswered.
 
 ## 2. The coordinator dispatches
 

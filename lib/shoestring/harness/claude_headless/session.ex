@@ -40,6 +40,16 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
 
   The parser never crashes the session: undecodable lines are counted and
   ignored, and normalization runs under `try/rescue`.
+
+  A worker that may ask the person (`asks: true`, set only for a sandboxed
+  launch by `Shoestring.Harness.ClaudeHeadless.Sandbox`) runs with
+  `--input-format stream-json` and its stdin open: the prompt is its first
+  line, a `can_use_tool` control request (a command it wants to run outside
+  the sandbox) becomes a `Shoestring.PermissionAsks` ask answered only by
+  the person's decision, never by a timer, and stdin closes once the result
+  arrives, so Claude exits. Any other control request is refused at once so
+  the worker never waits on it. An ask still open when the run ends is
+  expired.
   """
 
   use GenServer
@@ -73,7 +83,8 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     :exit_status,
     :max_frame_size,
     :cli_version,
-    :capacity_sink
+    :capacity_sink,
+    asks: %{}
   ]
 
   # --- Public API ---
@@ -238,7 +249,8 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     if state.transport_pid do
       ref = Process.monitor(state.transport_pid)
       os_pid = get_os_pid(state.transport_mod, state.transport_pid)
-      {:noreply, %{state | transport_ref: ref, transport_os_pid: os_pid, status: :running}}
+      state = %{state | transport_ref: ref, transport_os_pid: os_pid, status: :running}
+      {:noreply, send_prompt(state)}
     else
       argv =
         case Keyword.get(state.opts, :argv) do
@@ -259,20 +271,22 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
         |> maybe_put_opt(:executable, Keyword.get(state.opts, :executable))
         |> maybe_put_opt(:cd, Keyword.get(state.opts, :workdir))
         |> maybe_put_opt(:env, Keyword.get(state.opts, :env))
+        |> maybe_put_opt(:input, if(asks?(state), do: :open))
 
       case state.transport_mod.start_link(transport_opts) do
         {:ok, pid} ->
           ref = Process.monitor(pid)
           os_pid = get_os_pid(state.transport_mod, pid)
 
-          {:noreply,
-           %{
-             state
-             | transport_pid: pid,
-               transport_ref: ref,
-               transport_os_pid: os_pid,
-               status: :running
-           }}
+          state = %{
+            state
+            | transport_pid: pid,
+              transport_ref: ref,
+              transport_os_pid: os_pid,
+              status: :running
+          }
+
+          {:noreply, send_prompt(state)}
 
         {:error, reason} ->
           Logger.error("ClaudeHeadless: failed to spawn transport: #{inspect(reason)}")
@@ -353,7 +367,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   # The sandbox's temporary directory goes only after the process group has
   # been terminated and reaped, so nothing is still writing into it.
   def handle_call(:shutdown, _from, state) do
-    state = terminate_transport_group(state)
+    state = state |> expire_asks() |> terminate_transport_group()
     _ = Sandbox.release(Keyword.get(state.opts, :sandbox_temp_dir))
     {:stop, :normal, :ok, state}
   end
@@ -457,8 +471,151 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     end
   end
 
+  # The person's decision on an ask. Allowed, the command runs as Claude
+  # asked (with no sandbox); denied, Claude's tool result carries the
+  # reason (VERIFIED offline with 2.1.316: the model saw the message).
+  def handle_info({:permission_decision, ask_id, decision, note}, state) do
+    case Map.pop(state.asks, ask_id) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {ask, asks} ->
+        response =
+          if decision == :allow,
+            do: %{"behavior" => "allow", "updatedInput" => ask.input},
+            else: %{"behavior" => "deny", "message" => denial(note)}
+
+        state = %{state | asks: asks}
+
+        _ =
+          send_control_response(state, ask.request_id, %{
+            "subtype" => "success",
+            "response" => response
+          })
+
+        {:noreply, state}
+    end
+  end
+
   def handle_info(_other, state) do
     {:noreply, state}
+  end
+
+  # --- Asks (an agent that may ask) ---
+
+  defp asks?(state), do: Keyword.get(state.opts, :asks) == true
+
+  # The prompt is the first stdin line of a stream-json run; a run that
+  # cannot be given it fails rather than wait for input that never comes.
+  defp send_prompt(state) do
+    if asks?(state) do
+      frame = %{
+        "type" => "user",
+        "message" => %{
+          "role" => "user",
+          "content" => [%{"type" => "text", "text" => prompt(state)}]
+        }
+      }
+
+      case send_frame(state, frame) do
+        :ok ->
+          state
+
+        {:error, reason} ->
+          error = Error.new(:transport, "prompt_send_failed", inspect(reason))
+          state = state |> terminate_transport_group()
+          state = %{state | status: :failed, terminal_result: {:error, error}}
+
+          state
+          |> emit_synthetic_error(error)
+          |> reply_terminal_waiters()
+          |> reply_identity_waiters()
+      end
+    else
+      state
+    end
+  end
+
+  defp handle_control_request(%{"request_id" => id, "request" => request}, state)
+       when is_binary(id) and is_map(request) do
+    case request do
+      %{"subtype" => "can_use_tool"} ->
+        if asks?(state) and not terminal?(state) do
+          input = if is_map(request["input"]), do: request["input"], else: %{}
+          run_request = state.run_request
+
+          {:ok, ask} =
+            Shoestring.PermissionAsks.ask(%{
+              goal_id: run_request && run_request.goal_id,
+              run_id: state.run_id,
+              provider: "claude",
+              command: ask_command(request["tool_name"], input),
+              reason: input["description"] || request["description"],
+              cwd: Keyword.get(state.opts, :workdir)
+            })
+
+          %{state | asks: Map.put(state.asks, ask.id, %{request_id: id, input: input})}
+        else
+          response = %{"behavior" => "deny", "message" => "This worker may not ask the person."}
+          _ = send_control_response(state, id, %{"subtype" => "success", "response" => response})
+          state
+        end
+
+      other ->
+        Logger.warning("ClaudeHeadless: refusing control request #{inspect(other["subtype"])}")
+
+        _ =
+          send_control_response(state, id, %{
+            "subtype" => "error",
+            "error" => "Shoestring does not support #{inspect(other["subtype"])}"
+          })
+
+        state
+    end
+  end
+
+  defp handle_control_request(_frame, state), do: state
+
+  defp ask_command("Bash", %{"command" => command}) when is_binary(command), do: command
+
+  defp ask_command(tool, input),
+    do: "#{tool || "A tool"}: " <> Jason.encode!(Map.drop(input, ["dangerouslyDisableSandbox"]))
+
+  defp denial(note) when is_binary(note) and note != "",
+    do: "The person denied that request: " <> note
+
+  defp denial(_note), do: "The person denied that request."
+
+  defp send_control_response(state, request_id, response) do
+    send_frame(state, %{
+      "type" => "control_response",
+      "response" => Map.put(response, "request_id", request_id)
+    })
+  end
+
+  defp send_frame(%{transport_pid: pid, transport_mod: mod}, frame) when is_pid(pid) do
+    if function_exported?(mod, :send_frame, 2),
+      do: mod.send_frame(pid, frame),
+      else: {:error, :input_not_supported}
+  end
+
+  defp send_frame(_state, _frame), do: {:error, :transport_down}
+
+  # Claude waits for more input after its result; its EOF ends the run.
+  defp end_input(state) do
+    pid = state.transport_pid
+
+    if asks?(state) and is_pid(pid) and function_exported?(state.transport_mod, :close_input, 1),
+      do: state.transport_mod.close_input(pid)
+
+    state
+  end
+
+  defp expire_asks(%{asks: asks} = state) when map_size(asks) == 0, do: state
+
+  defp expire_asks(state) do
+    Enum.each(Map.keys(state.asks), &Shoestring.PermissionAsks.expire/1)
+    %{state | asks: %{}}
   end
 
   # --- Frame handling ---
@@ -474,6 +631,9 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
   rescue
     _ -> %{state | malformed_lines: state.malformed_lines + 1}
   end
+
+  defp handle_frame(%{"type" => "control_request"} = frame, state),
+    do: handle_control_request(frame, state)
 
   defp handle_frame(frame, state) do
     state = state |> track_cli_version(frame) |> observe_capacity(frame)
@@ -565,7 +725,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
 
   defp maybe_terminal(state, %HarnessEvent{kind: :result} = event) do
     if event.extensions["claude-headless:terminal"] == true do
-      %{state | status: :completed, terminal_result: {:ok, :completed}}
+      %{end_input(state) | status: :completed, terminal_result: {:ok, :completed}}
       |> resolve_pending_stop()
       |> reply_terminal_waiters()
       |> reply_identity_waiters()
@@ -576,7 +736,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
 
   defp maybe_terminal(state, %HarnessEvent{kind: :error} = event) do
     if event.extensions["claude-headless:terminal"] == true do
-      %{state | status: :failed, terminal_result: {:error, event.error}}
+      %{end_input(state) | status: :failed, terminal_result: {:error, event.error}}
       |> resolve_pending_stop()
       |> reply_terminal_waiters()
       |> reply_identity_waiters()
@@ -654,9 +814,15 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     state |> status_summary() |> Map.put(:terminal_result, state.terminal_result)
   end
 
-  defp reply_terminal_waiters(%{terminal_waiters: []} = state), do: state
-
+  # Every terminal path passes here: an ask left open can no longer be
+  # answered once the run has ended.
   defp reply_terminal_waiters(state) do
+    if terminal?(state), do: state |> expire_asks() |> do_reply_terminal_waiters(), else: state
+  end
+
+  defp do_reply_terminal_waiters(%{terminal_waiters: []} = state), do: state
+
+  defp do_reply_terminal_waiters(state) do
     if terminal?(state) do
       summary = terminal_summary(state)
       Enum.each(state.terminal_waiters, fn from -> GenServer.reply(from, {:ok, summary}) end)
@@ -714,11 +880,18 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     })
   end
 
+  defp prompt(state), do: (state.run_request && state.run_request.prompt) || "Execute task."
+
   defp default_argv(state) do
-    prompt = (state.run_request && state.run_request.prompt) || "Execute task."
     tools = Keyword.get(state.opts, :tools, "Bash")
 
     argv = ["claude", "--print", "--verbose", "--output-format", "stream-json"]
+
+    # An agent that may ask gets its prompt, and the person's answers, on stdin.
+    {argv, prompt_arg} =
+      if asks?(state),
+        do: {argv ++ ["--input-format", "stream-json"], []},
+        else: {argv, [prompt(state)]}
 
     argv =
       if Keyword.get(state.opts, :permission_bypass, false) and
@@ -750,7 +923,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     # (`Shoestring.Harness.ClaudeHeadless.Sandbox`), and never the bypass.
     sandbox_options = Keyword.get(state.opts, :sandbox_options, [])
 
-    argv ++ model_args ++ ["--tools=#{tools}"] ++ sandbox_options ++ [prompt]
+    argv ++ model_args ++ ["--tools=#{tools}"] ++ sandbox_options ++ prompt_arg
   end
 
   defp validate_workdir(nil), do: {:ok, nil}

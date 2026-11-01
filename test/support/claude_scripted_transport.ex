@@ -24,6 +24,20 @@ defmodule Shoestring.Harness.ClaudeScriptedTransport do
     GenServer.call(pid, :terminate_group)
   end
 
+  # A stream-json run's stdin (`input: :open`): frames are recorded, and the
+  # close is remembered, for a test to read back.
+  def send_frame(pid, frame) when is_map(frame) do
+    GenServer.call(pid, {:send_frame, frame})
+  end
+
+  def close_input(pid) do
+    GenServer.call(pid, :close_input)
+  end
+
+  def sent(pid), do: GenServer.call(pid, :sent)
+
+  def input_closed?(pid), do: GenServer.call(pid, :input_closed?)
+
   def emit(pid) do
     GenServer.call(pid, :emit)
   end
@@ -40,7 +54,9 @@ defmodule Shoestring.Harness.ClaudeScriptedTransport do
        lines: Keyword.get(opts, :lines, []),
        exit_status: Keyword.get(opts, :exit_status, 0),
        terminated: false,
-       test_pid: Keyword.get(opts, :test_pid)
+       test_pid: Keyword.get(opts, :test_pid),
+       sent: [],
+       input_closed: false
      }}
   end
 
@@ -81,6 +97,16 @@ defmodule Shoestring.Harness.ClaudeScriptedTransport do
 
     {:reply, {:ok, :killed}, %{state | terminated: true, lines: []}}
   end
+
+  def handle_call({:send_frame, _frame}, _from, %{input_closed: true} = state),
+    do: {:reply, {:error, :input_closed}, state}
+
+  def handle_call({:send_frame, frame}, _from, state),
+    do: {:reply, :ok, %{state | sent: state.sent ++ [frame]}}
+
+  def handle_call(:close_input, _from, state), do: {:reply, :ok, %{state | input_closed: true}}
+  def handle_call(:sent, _from, state), do: {:reply, state.sent, state}
+  def handle_call(:input_closed?, _from, state), do: {:reply, state.input_closed, state}
 
   def handle_call(:was_terminated, _from, state) do
     {:reply, state.terminated, state}

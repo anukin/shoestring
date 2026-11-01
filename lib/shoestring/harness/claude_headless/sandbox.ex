@@ -42,7 +42,8 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
           settings: map(),
           options: [String.t()],
           env: [{String.t(), String.t()}],
-          temp_dir: Path.t()
+          temp_dir: Path.t(),
+          asks: boolean()
         }
 
   @temp_prefix "sc"
@@ -61,6 +62,18 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
   (VERIFIED offline 2026-10-31 with 2.1.316: a sandboxed worker's `touch`
   there succeeded). That shared directory is also denied for writing, so if
   Claude ever falls back to it the run's commands fail visibly instead.
+
+  An agent that may ask (`"may_ask"` in its permissions) gets `asks: true`:
+  a command Claude wants to run outside the sandbox
+  (`dangerouslyDisableSandbox`) becomes a `can_use_tool` control request on
+  stdout that waits for the person's answer on stdin, instead of being run
+  sandboxed anyway. That takes `allowUnsandboxedCommands`, permission mode
+  `default` (`dontAsk` refuses without asking) and the stdio prompt route
+  (`--safe-mode` disables MCP, so no MCP prompt tool). Commands inside the
+  sandbox still run without asking, and one that hits the sandbox fails
+  with the system's error, as before (all VERIFIED offline with 2.1.316
+  against a scripted model, 2026-11-01). Allowed, the one command runs with
+  no sandbox at all.
   """
   @spec prepare(Path.t(), String.t(), keyword()) :: {:ok, t()} | {:error, atom()}
   def prepare(workdir, workspace_ref, opts \\ []) do
@@ -73,17 +86,22 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
           # Roots are the worktree, its gitdir, then <store>/objects and refs.
           repository = roots |> Enum.at(2) |> Path.dirname()
 
+          permissions = Keyword.get(opts, :permissions)
+          asks = is_map(permissions) and permissions["may_ask"] == true
+
           settings =
             roots
             |> settings(worktree, repository, home, shared_temp(temp))
-            |> widen(Keyword.get(opts, :permissions))
+            |> widen(permissions)
+            |> put_in(["sandbox", "allowUnsandboxedCommands"], asks)
 
           {:ok,
            %{
              settings: settings,
-             options: options(settings),
+             options: options(settings, asks),
              env: [{"CLAUDE_CODE_TMPDIR", temp} | env()],
-             temp_dir: temp
+             temp_dir: temp,
+             asks: asks
            }}
         end
 
@@ -162,9 +180,10 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
   def default_effort, do: "medium"
 
   # The flag set the live fan-out ran with (CLI 2.1.300 and 2.1.301), except
-  # its `--effort medium`: see `default_effort/0`.
-  defp options(settings) do
-    [
+  # its `--effort medium`: see `default_effort/0`. An agent that may ask
+  # swaps the last four for the stdio prompt route.
+  defp options(settings, asks) do
+    common = [
       "--safe-mode",
       "--restricted",
       "--setting-sources",
@@ -175,11 +194,20 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
       "--mcp-config",
       ~s({"mcpServers":{}}),
       "--disable-slash-commands",
-      "--no-session-persistence",
-      "--permission-mode",
-      "dontAsk",
-      "--permission-prompts",
-      "none"
+      "--no-session-persistence"
     ]
+
+    if asks,
+      do:
+        common ++
+          [
+            "--permission-mode",
+            "default",
+            "--permission-prompts",
+            "host",
+            "--permission-prompt-tool",
+            "stdio"
+          ],
+      else: common ++ ["--permission-mode", "dontAsk", "--permission-prompts", "none"]
   end
 end
