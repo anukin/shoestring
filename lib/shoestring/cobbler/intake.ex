@@ -18,7 +18,7 @@ defmodule Shoestring.Cobbler.Intake do
   @max_python_tests 16
   @max_map_paths 400
   @max_map_bytes 12_288
-  @python_test ~r/\Atest\/(?:[A-Za-z_][A-Za-z0-9_]*\/)*test_[A-Za-z0-9_]+\.py\z/
+  @python_test ~r/\Atests?\/(?:[A-Za-z_][A-Za-z0-9_]*\/)*test_[A-Za-z0-9_]+\.py\z/
   @elixir_test ~r/\Atest\/[A-Za-z0-9_][A-Za-z0-9_.\/-]{0,180}_test\.exs\z/
   @parameterless_gates ~w(mix_test mix_precommit mix_format_check mix_compile_strict)
 
@@ -68,7 +68,7 @@ defmodule Shoestring.Cobbler.Intake do
   @doc """
   Chooses the acceptance gates. Explicit `:gates` (parameterless gate names) and
   `:tests` (tracked test files) win; otherwise a Mix project gets `mix_test` and
-  a Python project with 1 to #{@max_python_tests} `test/**/test_*.py` files gets
+  a Python project with 1 to #{@max_python_tests} `test/**/test_*.py` or `tests/**/test_*.py` files gets
   `python_unittest` over them.
   """
   @spec gates(facts(), keyword()) :: {:ok, [map()]} | {:error, term()}

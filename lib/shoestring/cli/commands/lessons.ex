@@ -13,6 +13,7 @@ defmodule Shoestring.CLI.Commands.Lessons do
   shoestring lessons edit CODE --text TEXT [--by human:NAME]
   shoestring lessons retire CODE [--note TEXT] [--by human:NAME]
   shoestring lessons space [--json]
+  shoestring lessons move --from OLD_PATH --repo NEW_PATH [--by human:NAME]
 
   A lesson is one rule for work in one repository, shared by every agent
   that works there. Agents propose them (each agent's "may propose lessons"
@@ -31,11 +32,15 @@ defmodule Shoestring.CLI.Commands.Lessons do
   OLD); `edit` rewords an approved lesson; `retire` stops using one. These
   refuse without a terminal, so an agent cannot make them as you. `space` is
   what lessons take, per repository and in total, against the limit set in
-  Settings (default 200 MB per repository).
+  Settings (default 200 MB per repository). After moving a repository,
+  `move` explicitly moves its lessons to the new root, keeping their codes
+  and sources. The destination must be a Git repository with no lessons.
+  It shows both paths and asks before saving; old grants keep their scope.
   """
 
   @switches [
     repo: :string,
+    from: :string,
     all: :boolean,
     state: :string,
     text: :string,
@@ -62,6 +67,35 @@ defmodule Shoestring.CLI.Commands.Lessons do
 
       {opts, ["space"], []} ->
         context.with_repo.(fn _repo -> space(opts, context) end)
+
+      {opts, ["move"], []} ->
+        terminal!(context)
+        from = Command.expand(opts[:from], context) || Refusal.usage!("lessons")
+        to = Command.expand(opts[:repo], context) || Refusal.usage!("lessons")
+
+        context.with_repo.(fn _repo ->
+          with {:ok, facts} <- Shoestring.Cobbler.Intake.repository(to, uncommitted: :allow) do
+            from = root(from)
+
+            context.shell.error(
+              "Move lessons from #{from} to #{facts.root}; keep codes and sources."
+            )
+
+            unless Shoestring.CLI.Commands.Grant.confirmed?(
+                     context,
+                     "Move these lessons? [y/N] "
+                   ),
+                   do: Refusal.refuse!("Lessons not moved.")
+
+            case Lessons.move_repository(from, facts.root, opts[:by] || WorkLoop.default_human()) do
+              {:ok, count} -> Command.json(context, %{moved: count, repository: facts.root})
+              {:error, reason} -> Refusal.refuse!(message(reason))
+            end
+          else
+            {:error, _} ->
+              Refusal.refuse!("The destination must be a Git repository with a commit.")
+          end
+        end)
 
       {opts, [decision, code], []} when decision in ~w(approve reject replace edit retire) ->
         terminal!(context)
@@ -268,6 +302,12 @@ defmodule Shoestring.CLI.Commands.Lessons do
     do: "That lesson is #{state}; only an approved one can be reworded, retired or replaced."
 
   def message(:lesson_changed), do: "That lesson was just decided by someone else."
+
+  def message(:lessons_destination_not_empty),
+    do: "The destination already has lessons; nothing moved."
+
+  def message(:lessons_source_empty), do: "The old repository has no lessons; nothing moved."
+  def message(:invalid_repository_move), do: "Choose different old and new repository paths."
   def message(:non_human_identity), do: "--by must be human:NAME"
   def message({:too_long, field, max}), do: "The #{field} is at most #{max} bytes."
   def message({:invalid, field}), do: "The #{field} must be text."

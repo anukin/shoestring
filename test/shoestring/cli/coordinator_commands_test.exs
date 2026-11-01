@@ -138,6 +138,59 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
     end
   end
 
+  test "a command-line grant snapshots a team's limits and lesson switches", ctx do
+    {:ok, team} =
+      Shoestring.AgentProfiles.create(
+        Shoestring.ConfigurationFixtures.agent_attrs(%{
+          "slug" => "builder",
+          "roles" => [
+            %{"name" => "Coordinator", "provider" => "codex", "model" => "gpt-6-luna"},
+            %{"name" => "Worker", "provider" => "codex", "model" => "gpt-6-luna"}
+          ]
+        })
+      )
+
+    worker = Enum.find(team.roles, &(&1.name == "Worker"))
+    agent = Shoestring.Agents.get(worker.agent_id)
+
+    assert {:ok, _} =
+             Shoestring.Agents.update(agent, %{"max_minutes" => 2, "may_propose_lessons" => false})
+
+    grant = grant!(ctx, ["--team", "builder"])
+    assert grant["team"]["team"] == "builder"
+    entry = Enum.find(grant["team"]["agents"], &(&1["kind"] == "implementer"))
+    assert entry["max_minutes"] == 2
+    assert entry["may_propose_lessons"] == false
+    assert_received {:mix_shell, :error, ["  Team builder:"]}
+
+    request = %{
+      session_id: "s1",
+      request_id: "team-bound",
+      purpose: "implement",
+      provider: "codex",
+      model: "gpt-6-luna",
+      title: "One change",
+      brief: File.read!(ctx.brief),
+      repository: ctx.repo,
+      seconds: 121
+    }
+
+    slug = entry["slug"]
+    assert {:error, {:over_agent_limit, ^slug, 2}} = Dispatches.create(request)
+    assert {:ok, dispatch, :recorded} = Dispatches.create(%{request | seconds: 60})
+    assert dispatch.agent == slug
+    refute dispatch.brief =~ Shoestring.Lessons.lessons_file()
+
+    assert_raise Refusal, "Unknown team: missing", fn ->
+      Grant.run(
+        ["--models", "codex:gpt-6-luna", "--team", "missing"],
+        context(ctx, interactive: true)
+      )
+    end
+
+    assert length(Shoestring.Grants.list()) == 1
+  end
+
   test "grants are listed and shown with their history; extend and revoke ask a person", ctx do
     %{"grant_id" => id} = grant!(ctx)
 

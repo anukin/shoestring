@@ -13,7 +13,7 @@ defmodule Shoestring.Cobbler.PlanGate do
   a strict pattern that admits no shell metacharacter, no absolute path, and
   no parent-directory segment. The Mix formatting, compilation and precommit
   gates accept no parameters. Parameters a gate does not declare reject the plan.
-  `python_unittest` requires named repository-relative `test/**/test_*.py`
+  `python_unittest` requires named repository-relative `test/**/test_*.py` or `tests/**/test_*.py`
   files and uses Python's standard-library unittest runner with bytecode
   writing disabled, preserving the tested Git snapshot.
 
@@ -94,7 +94,7 @@ defmodule Shoestring.Cobbler.PlanGate do
 
   @max_test_paths 16
   @test_path_pattern ~r/\Atest\/[A-Za-z0-9_][A-Za-z0-9_.\/-]{0,180}_test\.exs\z/
-  @python_test_path_pattern ~r/\Atest\/(?:[A-Za-z_][A-Za-z0-9_]*\/)*test_[A-Za-z0-9_]+\.py\z/
+  @python_test_path_pattern ~r/\Atests?\/(?:[A-Za-z_][A-Za-z0-9_]*\/)*test_[A-Za-z0-9_]+\.py\z/
 
   @doc "The sorted list of built-in trusted gate names a plan may reference."
   @spec names() :: [String.t()]
@@ -281,7 +281,9 @@ defmodule Shoestring.Cobbler.PlanGate do
         Contract.invalid(field, "test_paths contains too many entries")
 
       not Enum.all?(value, &test_path?(&1, name)) ->
-        pattern = if name == "python_unittest", do: "test/**/test_*.py", else: "test/*_test.exs"
+        pattern =
+          if name == "python_unittest", do: "test(s)/**/test_*.py", else: "test/*_test.exs"
+
         Contract.invalid(field, "test_paths must be repository-relative #{pattern} paths")
 
       length(Enum.uniq(value)) != length(value) ->

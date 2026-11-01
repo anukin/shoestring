@@ -378,12 +378,14 @@ fn draw_agents(frame: &mut Frame, model: &Model, area: Rect) {
                 };
                 [
                     format!(
-                        "{} {} {:<11} {} · {}s {}",
+                        "{} {} {:<11} {} · {} {}",
                         glyph(&d.state),
                         short(&d.id),
                         job(&d.purpose),
                         d.state,
-                        d.elapsed,
+                        d.elapsed
+                            .map(|seconds| format!("{seconds}s"))
+                            .unwrap_or_else(|| "time unknown".into()),
                         d.waiting_until
                     ),
                     format!(
@@ -901,6 +903,16 @@ mod tests {
         assert!(text.contains("L-ABC234 · Run unittest with -B."));
         assert!(text.contains("approved by the coordinator"));
         assert!(text.contains(" o  open in the browser"));
+    }
+
+    #[test]
+    fn unknown_worker_time_is_explicit_instead_of_showing_service_downtime() {
+        let mut model = Model::new("s1");
+        model.apply_state(&json!({"dispatches": [{"dispatch_id": "d1", "purpose": "implement", "worker": "codex:m", "title": "One change", "state": "needs_you", "elapsed_seconds": null, "latest_step": "Shoestring lost the worker during a service stop or crash"}]}));
+        let text = screen(&model, 120, 24);
+        assert!(text.contains("time unknown"));
+        assert!(text.contains("service stop or crash"));
+        assert!(!text.contains("· 0s"));
     }
 
     #[test]

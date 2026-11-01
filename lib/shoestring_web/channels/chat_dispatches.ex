@@ -3,6 +3,7 @@ defmodule ShoestringWeb.ChatDispatches do
   alias Shoestring.Dispatches
   alias Shoestring.CLI.Commands.Runs
   alias ShoestringWeb.TerminalAccess
+  import Ecto.Query
   @final ~w(completed cancelled failed failed_to_start)
 
   def rows(session, cache, now) do
@@ -23,6 +24,7 @@ defmodule ShoestringWeb.ChatDispatches do
             end
 
           run = Dispatches.latest_run(dispatch)
+          lost? = lost_worker?(run)
           final? = detail["state"] in @final
 
           latest_at =
@@ -36,9 +38,10 @@ defmodule ShoestringWeb.ChatDispatches do
           row =
             Map.take(detail, ~w(dispatch_id purpose agent worker reviewer state title next))
             |> Map.merge(%{
-              "elapsed_seconds" => max(DateTime.diff(ended_at, dispatch.inserted_at), 0),
+              "elapsed_seconds" =>
+                if(not lost?, do: max(DateTime.diff(ended_at, dispatch.inserted_at), 0)),
               "waiting_until" => get_in(detail, ["waiting", "until"]),
-              "latest_step" => latest,
+              "latest_step" => if(lost?, do: lost_worker_text(), else: latest),
               "run_id" => run && run.id,
               "terminal" => terminal(run)
             })
@@ -56,6 +59,7 @@ defmodule ShoestringWeb.ChatDispatches do
 
   def detail(dispatch) do
     data = Runs.detail(dispatch)
+    run = Dispatches.latest_run(dispatch)
 
     lines =
       Enum.flat_map(
@@ -65,10 +69,26 @@ defmodule ShoestringWeb.ChatDispatches do
 
     %{
       "dispatch_id" => dispatch.id,
-      "lines" => lines,
-      "terminal" => terminal(Dispatches.latest_run(dispatch))
+      "lines" => lines ++ if(lost_worker?(run), do: [lost_worker_text()], else: []),
+      "terminal" => terminal(run)
     }
   end
+
+  defp lost_worker_text,
+    do:
+      "Shoestring lost the worker during a service stop or crash; its exact running time is unknown."
+
+  defp lost_worker?(%{status: "failed", goal_id: goal_id, id: run_id}) do
+    Shoestring.Repo.exists?(
+      from e in Shoestring.Trajectory.TrajectoryEvent,
+        where:
+          e.goal_id == ^goal_id and e.type == "run.failed" and
+            fragment("json_extract(?, '$.run_id')", e.payload) == ^run_id and
+            fragment("json_extract(?, '$.error_code')", e.payload) == "supervisor_crash"
+    )
+  end
+
+  defp lost_worker?(_run), do: false
 
   def steps(dispatch, after_sequence) do
     collect_steps(dispatch, after_sequence, [], 0)

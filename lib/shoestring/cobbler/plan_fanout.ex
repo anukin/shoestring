@@ -227,11 +227,18 @@ defmodule Shoestring.Cobbler.PlanFanout do
              revision.revision_number == execution.revision_number,
          {:ok, contract} <- PlanContract.new(revision.content),
          true <- status.children == [] or status.dispatch_mode == :fanout_v1,
-         source when is_binary(source) <-
+         repository when is_binary(repository) <-
            execution[:repository_path] || Keyword.get(opts, :repository_path),
+         source = execution[:base_source] || repository,
          true <-
            is_nil(execution[:repository_path]) or is_nil(Keyword.get(opts, :repository_path)) or
-             Path.expand(source) == Path.expand(Keyword.fetch!(opts, :repository_path)) do
+             Path.expand(Keyword.fetch!(opts, :repository_path)) in [
+               Path.expand(repository),
+               Path.expand(source)
+             ] do
+      # A chained dispatch's base exists in its predecessor's private
+      # worktree, while repository_path continues to identify the person's
+      # repository for authority checks.
       by_id = Map.new(contract.content["tasks"], &{&1["id"], &1})
 
       required = Enum.map(PlanContract.required_task_ids(contract), &Map.fetch!(by_id, &1))

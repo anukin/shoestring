@@ -510,15 +510,6 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   def message(:review_target_not_found, _request),
     do: "No such dispatch in this session to review."
 
-  def message(:review_target_batch, _request),
-    do:
-      "A batch IMPLEMENT has one commit per task; each was checked and, with a reviewer, " <>
-        "reviewed on its own. Nothing was queued."
-
-  def message(:batch_after, _request),
-    do:
-      "A batch cannot follow another dispatch yet; dispatch it once that one is taken. Nothing was queued."
-
   def message({:batch_too_large, max}, _request),
     do: "A batch has at most #{max} tasks. Nothing was queued."
 

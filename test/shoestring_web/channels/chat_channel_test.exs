@@ -55,6 +55,71 @@ defmodule ShoestringWeb.ChatChannelTest do
 
   defp git!(dir, args), do: {_, 0} = System.cmd("git", ["-C", dir | args], stderr_to_stdout: true)
 
+  test "a worker lost during a service stop has explicit wording and unknown elapsed time", ctx do
+    {:ok, dispatch, :recorded} =
+      Shoestring.Dispatches.create(%{
+        session_id: ctx.session,
+        request_id: "lost",
+        purpose: "implement",
+        provider: "codex",
+        model: "gpt-6-luna",
+        title: "One change",
+        brief: @brief,
+        repository: ctx.repo
+      })
+
+    run =
+      Repo.insert!(%Shoestring.Harness.RunRecord{
+        id: Ecto.UUID.generate(),
+        dispatch_id: Ecto.UUID.generate(),
+        goal_id: dispatch.goal_id,
+        provider_id: Fake.identity().adapter_id,
+        workspace_ref: "fixture",
+        request_version: 1,
+        prompt: "fixture",
+        policy: %{},
+        requested_capabilities: %{},
+        extensions: %{},
+        status: "failed"
+      })
+
+    {:ok, event} =
+      Trajectory.append(
+        dispatch.goal_id,
+        %{
+          "type" => "run.failed",
+          "schema_version" => 1,
+          "actor" => "test",
+          "occurred_at" => DateTime.add(DateTime.utc_now(), 900),
+          "payload" => %{
+            "run_id" => run.id,
+            "error_category" => "transport",
+            "error_code" => "supervisor_crash"
+          }
+        },
+        trusted: [run_id: run.id]
+      )
+
+    assert Shoestring.CLI.Follow.line(event) =~ "exact stop time is unknown"
+
+    for cache <- [%{}] do
+      {[row], _} =
+        ShoestringWeb.ChatDispatches.rows(
+          ctx.session,
+          cache,
+          DateTime.add(DateTime.utc_now(), 1800)
+        )
+
+      assert row["elapsed_seconds"] == nil
+      assert row["latest_step"] =~ "service stop or crash"
+    end
+
+    assert Enum.any?(
+             ShoestringWeb.ChatDispatches.detail(dispatch)["lines"],
+             &String.contains?(&1, "exact running time is unknown")
+           )
+  end
+
   defp grant(session, repo) do
     Grants.create(
       %{

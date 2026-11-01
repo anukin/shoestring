@@ -36,7 +36,9 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
              "type" => "capacity.snapshot_observed",
              "schema_version" => 2,
              "actor" => "cobbler",
-             "occurred_at" => now,
+             # Keep the original observation's state valid at its own time;
+             # admission below judges freshness at the current clock.
+             "occurred_at" => snapshot.observed_at || now,
              "idempotency_key" => "submission-snapshot:#{snapshot.snapshot_id}",
              "payload" => EventPayload.capacity_snapshot(snapshot, nil)
            }),

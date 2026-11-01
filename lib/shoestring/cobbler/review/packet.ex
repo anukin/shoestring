@@ -68,6 +68,14 @@ defmodule Shoestring.Cobbler.Review.Packet do
         "output_schema" => Findings.schema()
       }
 
+      # Keep the original single-task packet stable. A batch is reviewed
+      # against every approved task, with the complete merged diff.
+      packet =
+        case Map.get(attrs, :tasks) do
+          [_, _ | _] = tasks -> packet |> Map.delete("task") |> Map.put("tasks", tasks)
+          _ -> packet
+        end
+
       briefs =
         for {key, field} <- [{"implementation", :implementation_brief}, {"review", :review_brief}],
             text = Map.get(attrs, field),

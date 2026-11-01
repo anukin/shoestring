@@ -45,6 +45,23 @@ defmodule Shoestring.Cobbler.PlanFanoutDriverTest do
              PlanExecutor.complete_task_run(c.goal.id, child.run_id, c.opts)
   end
 
+  defp dispatch(c) do
+    %Shoestring.Dispatches.Dispatch{
+      id: Ecto.UUID.generate(),
+      state: "started",
+      purpose: "implement",
+      provider: "fake",
+      model: "fixture",
+      task_count: 2,
+      goal_id: c.goal.id,
+      execution_id: c.execution.execution_id,
+      repository_root: c.source,
+      inserted_at: PlanExecutorHelpers.now(),
+      updated_at: PlanExecutorHelpers.now(),
+      plan: c.plan
+    }
+  end
+
   test "fan-out is off by default and never selected by plan content" do
     refute PlanFanoutDriver.enabled?()
     refute PlanFanoutDriver.enabled?([])
@@ -54,6 +71,13 @@ defmodule Shoestring.Cobbler.PlanFanoutDriverTest do
 
   test "an eligible independent plan dispatches concurrent children through the driver" do
     c = unit(independent_only: true)
+
+    assert {:error, :fanout_execution_authority_required} =
+             Shoestring.Cobbler.PlanFanout.ready(
+               c.goal.id,
+               Keyword.put(c.opts, :repository_path, Path.join(c.root, "unrelated"))
+             )
+
     assert {:ok, %{disposition: :dispatched, dispatched: [north, south]}} = step(c)
     assert {north.plan_task_id, south.plan_task_id} == {"north", "south"}
 
@@ -125,6 +149,10 @@ defmodule Shoestring.Cobbler.PlanFanoutDriverTest do
 
     assert integration.commit == integrated and integration.by == "shoestring"
 
+    assert "merge: #{String.slice(integrated, 0, 12)}, merged by Shoestring" in ShoestringWeb.ChatDispatches.detail(
+             dispatch(c)
+           )["lines"]
+
     # Merged in plan order on the approved base, in Shoestring's worktree.
     {:ok, merge} =
       Worktrees.get(PlanExecutor.merge_workspace_id(c.execution.execution_id, c.base), c.opts)
@@ -185,7 +213,7 @@ defmodule Shoestring.Cobbler.PlanFanoutDriverTest do
   end
 
   test "a conflict is never resolved: recorded, aborted, and the person integrates by hand" do
-    c = unit(independent_only: true)
+    c = unit(independent_only: true, worktrees_dir: Shoestring.State.path(:worktrees))
     assert {:ok, %{dispatched: [north, south]}} = step(c)
     north_branch = commit_and_accept!(c, north)
 
@@ -214,6 +242,17 @@ defmodule Shoestring.Cobbler.PlanFanoutDriverTest do
              step(c)
 
     assert merge["reason"] == "conflict"
+
+    dispatch = dispatch(c)
+    detail = Shoestring.CLI.Commands.Runs.detail(dispatch)
+    assert detail["next"] =~ "merging south onto the base and north conflicts in lib/north.ex"
+    assert detail["next"] =~ "Shoestring never resolves a conflict"
+    assert detail["batch"]["take"] != nil
+    lines = ShoestringWeb.ChatDispatches.detail(dispatch)["lines"]
+
+    assert "merge: stopped, south conflicts in lib/north.ex (never resolved by Shoestring)" in lines
+
+    assert "take them all:" in lines
 
     assert {merge["plan_task_id"], merge["files"], merge["merged_task_ids"]} ==
              {"south", ["lib/north.ex"], ["north"]}
@@ -245,6 +284,41 @@ defmodule Shoestring.Cobbler.PlanFanoutDriverTest do
     assert {:ok, status} = PlanExecutor.status(c.goal.id, c.opts)
     assert PlanMerge.blocked(c.goal.id, status) == nil
     assert {:ok, %{disposition: :completed, commit: ^integrated}} = step(c)
+  end
+
+  test "CLI and chat explain merging, merged and failed integration with the commands to recover" do
+    c = unit(independent_only: true, worktrees_dir: Shoestring.State.path(:worktrees))
+    assert {:ok, %{dispatched: children}} = step(c)
+    for child <- children, do: commit_and_accept!(c, child)
+    dispatch = dispatch(c)
+
+    assert Shoestring.CLI.Commands.Runs.detail(dispatch)["next"] =~
+             "Shoestring merges their commits in its own worktree"
+
+    assert "merge: Shoestring is merging the commits" in ShoestringWeb.ChatDispatches.detail(
+             dispatch
+           )["lines"]
+
+    # An existing allocation with mismatching metadata is refused, never
+    # reset or silently overwritten. That failure is shown to the person.
+    {:ok, _} =
+      Worktrees.create(
+        c.source,
+        PlanExecutor.merge_workspace_id(c.execution.execution_id, c.base),
+        c.base,
+        worktrees_dir: c.opts[:worktrees_dir],
+        private_git: true
+      )
+
+    assert {:ok, %{disposition: :blocked, merge: %{"reason" => "failed"}}} = step(c)
+    detail = Shoestring.CLI.Commands.Runs.detail(dispatch)
+    assert detail["next"] =~ "Shoestring could not merge their commits"
+    assert detail["next"] =~ "batch.take"
+    assert detail["batch"]["integration"]["detail"] == ":merge_worktree_mismatch"
+
+    assert "merge: failed (:merge_worktree_mismatch)" in ShoestringWeb.ChatDispatches.detail(
+             dispatch
+           )["lines"]
   end
 
   test "a merge interrupted by a restart is aborted and redone; merged tasks are not merged twice" do

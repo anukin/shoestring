@@ -444,7 +444,6 @@ defmodule Shoestring.Dispatches do
          %Dispatch{} = target <- get(id) || {:error, :review_target_not_found},
          true <- target.session_id == request.session_id || {:error, :review_target_not_found},
          true <- target.purpose == "implement" || {:error, :review_target_not_implement},
-         true <- (target.task_count || 1) == 1 || {:error, :review_target_batch},
          :ok <- review_vendor(request, target),
          "completed" <- state(target),
          true <-
@@ -679,13 +678,10 @@ defmodule Shoestring.Dispatches do
   # symlinks: `PlanIndependence`), so a batch that could not is refused here,
   # before anything is recorded. Whether they do run at once is the person's
   # setting (`Parallelism`).
-  defp batch_tasks(%{tasks: [_ | _] = tasks}, after_id, facts) do
+  defp batch_tasks(%{tasks: [_ | _] = tasks}, _after_id, facts) do
     max = Parallelism.max()
 
     cond do
-      after_id != nil ->
-        {:error, :batch_after}
-
       length(tasks) < 2 ->
         {:error, {:invalid_dispatch, :tasks}}
 
@@ -861,7 +857,7 @@ defmodule Shoestring.Dispatches do
             call_off(dispatch, "after_not_found")
 
           "completed" ->
-            if usage(grant).running + 1 > grant.max_parallel,
+            if usage(grant).running + (dispatch.task_count || 1) > grant.max_parallel,
               do: :waiting,
               else: start_after(dispatch, before, opts)
 

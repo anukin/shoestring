@@ -411,6 +411,16 @@ defmodule Shoestring.Lessons do
   def space(repository \\ nil),
     do: Map.put(store().space(repository), :limit_bytes, limit_bytes())
 
+  @doc "The person explicitly reassigns lessons after moving a repository; codes and sources survive."
+  def move_repository(from, to, by) do
+    with :ok <- human(by),
+         true <-
+           (is_binary(from) and is_binary(to) and from != to) ||
+             {:error, :invalid_repository_move} do
+      store().move_repository(from, to)
+    end
+  end
+
   defp room(repository, incoming) do
     limit = limit_bytes()
 

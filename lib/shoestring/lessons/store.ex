@@ -45,6 +45,10 @@ defmodule Shoestring.Lessons.Store do
   """
   @callback space(repository() | nil) :: map()
 
+  @doc "Moves all lessons to an empty repository scope atomically; preserves codes and provenance."
+  @callback move_repository(repository(), repository()) ::
+              {:ok, non_neg_integer()} | {:error, term()}
+
   @doc "The configured store."
   def impl, do: Application.get_env(:shoestring, :lessons_store, Shoestring.Lessons.Store.Ecto)
 end

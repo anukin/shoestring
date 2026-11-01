@@ -101,6 +101,23 @@ defmodule Shoestring.Lessons.Store.Ecto do
   end
 
   @impl true
+  def move_repository(from, to) do
+    Repo.transaction(
+      fn ->
+        if Repo.exists?(from l in Lesson, where: l.repository_root == ^to),
+          do: Repo.rollback(:lessons_destination_not_empty)
+
+        {count, _} =
+          from(l in Lesson, where: l.repository_root == ^from)
+          |> Repo.update_all(set: [repository_root: to, updated_at: DateTime.utc_now()])
+
+        if count == 0, do: Repo.rollback(:lessons_source_empty), else: count
+      end,
+      mode: :immediate
+    )
+  end
+
+  @impl true
   def space(repository) do
     rows =
       Lesson

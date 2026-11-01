@@ -9,12 +9,13 @@ defmodule Shoestring.CLI.Commands.Grant do
       [--purposes explore,implement,review] [--max-dispatches N]
       [--max-parallel N] [--max-hours H] [--max-dispatch-minutes M]
       [--unread-usage N] [--max-turns N] [--session ID] [--repo PATH]
-      [--by human:NAME] [--json]
+      [--team NAME] [--by human:NAME] [--json]
 
   Lets a coordinator (Claude Code, Codex or opencode in a chat session) hand
   work to Shoestring without asking you each time, within these limits:
 
     --models                the only models it may dispatch to (enabled ones)
+    --team NAME             snapshot this team's agents, limits and switches
     --purposes              what it may dispatch (default: all three)
     --max-dispatches N      attempts in total, retries included (default 10)
     --max-parallel N        dispatches queued or running at once (default 3)
@@ -36,6 +37,7 @@ defmodule Shoestring.CLI.Commands.Grant do
 
   @switches [
     models: :string,
+    team: :string,
     purposes: :string,
     max_dispatches: :integer,
     max_parallel: :integer,
@@ -84,7 +86,8 @@ defmodule Shoestring.CLI.Commands.Grant do
       max_total_seconds: Keyword.get(opts, :max_hours, 4) * 3600,
       max_dispatch_seconds: Keyword.get(opts, :max_dispatch_minutes, 60) * 60,
       unread_usage: Keyword.get(opts, :unread_usage, 0),
-      max_turns: Keyword.get(opts, :max_turns, 20)
+      max_turns: Keyword.get(opts, :max_turns, 20),
+      team: team!(opts[:team])
     }
 
     describe(attrs, context)
@@ -101,6 +104,15 @@ defmodule Shoestring.CLI.Commands.Grant do
 
       {:error, reason} ->
         Refusal.refuse!("Not granted: #{reason_text(reason)}")
+    end
+  end
+
+  defp team!(nil), do: nil
+
+  defp team!(name) do
+    case Shoestring.AgentProfiles.get_by_slug(name) do
+      nil -> Refusal.refuse!("Unknown team: #{name}")
+      team -> Shoestring.Agents.snapshot(team)
     end
   end
 

@@ -96,19 +96,20 @@ defmodule Shoestring.Dispatches.Calls do
   def review_input(request, %Dispatch{} = target) do
     with %TrajectoryEvent{payload: completed} <- completion(target.goal_id),
          %{revision: revision} <- Plans.authority(target.goal_id),
-         [task] <- revision.content["tasks"],
+         tasks when is_list(tasks) and tasks != [] <- revision.content["tasks"],
          base = revision.content["goal"]["repository"]["base_revision"],
          commit when is_binary(commit) <- completed["commit"],
-         {:ok, worktree} <- worktree_with(target.goal_id, commit),
+         {:ok, result} <- Shoestring.CLI.Result.fetch(target.goal_id),
          {:ok, built} <-
            Packet.build(%{
              goal: revision.content["goal"],
-             task: task,
+             task: List.first(tasks),
+             tasks: tasks,
              revision_number: revision.revision_number,
              plan_digest: revision.digest,
              base: base,
              commit: commit,
-             worktree: worktree,
+             worktree: result.worktree,
              implementation_brief: target.brief,
              review_brief: Map.get(request, :brief),
              gates: get_in(completed, ["evidence", "gates"]) || []
@@ -138,23 +139,6 @@ defmodule Shoestring.Dispatches.Calls do
         order_by: [desc: e.sequence],
         limit: 1
     )
-  end
-
-  # The private worktree of the accepted run that holds `commit`.
-  defp worktree_with(goal_id, commit) do
-    Repo.all(
-      from e in TrajectoryEvent,
-        where:
-          e.goal_id == ^goal_id and e.type == "cobbler.plan.task.accepted" and
-            fragment("json_extract(?, '$.commit')", e.payload) == ^commit,
-        select: fragment("json_extract(?, '$.run_id')", e.payload)
-    )
-    |> Enum.find_value({:error, :review_worktree_missing}, fn run_id ->
-      case Worktrees.get(run_id) do
-        {:ok, worktree} -> {:ok, worktree.path}
-        _ -> nil
-      end
-    end)
   end
 
   @doc "What a dispatch row records of a call's input: everything but the packet."

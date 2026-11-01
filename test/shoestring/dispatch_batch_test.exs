@@ -182,7 +182,7 @@ defmodule Shoestring.DispatchBatchTest do
              "tasks dispatch-1 and dispatch-2 both change calc.py"
   end
 
-  test "a batch neither follows another nor is reviewed as one; --tasks is for IMPLEMENT", ctx do
+  test "a batch can wait for a predecessor; --tasks is for IMPLEMENT", ctx do
     {:ok, first, :recorded} =
       Dispatches.create(%{
         session_id: "s1",
@@ -195,7 +195,19 @@ defmodule Shoestring.DispatchBatchTest do
         repository: ctx.repo
       })
 
-    assert {:error, :batch_after} = batch(ctx, @two, %{after_dispatch: first.id})
+    # Waiting is allowed, but a batch wider than the entire grant could
+    # never start. Refuse it before reserving attempts or time.
+    assert {:error, {:outside_grant, :parallel}} =
+             batch(ctx, @two ++ [%{"title" => "Third", "files" => ["test/test_calc.py"]}], %{
+               after_dispatch: first.id
+             })
+
+    {:ok, _} = Shoestring.Grants.extend(ctx.grant, %{max_parallel: 3}, "human:operator")
+
+    assert {:ok, dependent, :recorded} = batch(ctx, @two, %{after_dispatch: first.id})
+    assert dependent.after_dispatch_id == first.id
+    assert dependent.state == "chained"
+    assert dependent.task_count == 2
 
     fields = %{
       session_id: "s1",
@@ -293,5 +305,55 @@ defmodule Shoestring.DispatchBatchTest do
              AgentProfiles.save_settings(AgentProfiles.settings(), %{"parallel_tasks" => "9"})
 
     assert changeset.errors[:parallel_tasks]
+  end
+
+  test "a full batch does not spend or record a hold confirmation until a place is free", ctx do
+    {:ok, grant} =
+      Shoestring.Grants.extend(
+        ctx.grant,
+        %{max_parallel: 3, add_unread_usage: 2},
+        "human:operator"
+      )
+
+    {:ok, _} = AgentProfiles.save_settings(AgentProfiles.settings(), %{"parallel_tasks" => "2"})
+
+    {:ok, dispatch, :recorded} =
+      batch(ctx, @two ++ [%{"title" => "Third", "files" => ["test/test_calc.py"]}])
+
+    {:ok, status} = Shoestring.Cobbler.ExecutionControl.status(dispatch.goal_id)
+
+    held = %{
+      status
+      | active_children: [%{plan_task_id: "dispatch-1"}, %{plan_task_id: "dispatch-2"}],
+        last_admission: %{
+          "result" => "require_confirmation",
+          "decision_id" => Ecto.UUID.generate()
+        }
+    }
+
+    full = fn _ -> {:ok, held} end
+    assert Dispatches.advance(dispatch, full) == :none
+    assert Dispatches.confirm_hold(dispatch, "human:operator", full) == :none
+    assert Shoestring.Grants.get(grant.id).unread_usage_used == 0
+
+    free = fn _ ->
+      {:ok, %{held | active_children: [%{plan_task_id: "dispatch-1"}], accepted: ["dispatch-2"]}}
+    end
+
+    assert Dispatches.advance(dispatch, free) == :confirmed
+    assert Shoestring.Grants.get(grant.id).unread_usage_used == 1
+
+    confirmation =
+      Shoestring.Cobbler.PlanCapacityConfirmation.available(
+        dispatch.goal_id,
+        status.execution,
+        %{"id" => "dispatch-3"},
+        1,
+        "subscription"
+      )
+
+    assert confirmation.payload["plan_task_id"] == "dispatch-3"
+    assert Dispatches.advance(dispatch, free) == :none
+    assert Shoestring.Grants.get(grant.id).unread_usage_used == 1
   end
 end

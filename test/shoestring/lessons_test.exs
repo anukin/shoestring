@@ -535,4 +535,57 @@ defmodule Shoestring.LessonsTest do
 
     assert Command.message({:lessons_space_full, 1}) =~ "1 MB limit"
   end
+
+  test "the person moves a repository's lessons explicitly; codes, state and provenance survive",
+       ctx do
+    {:ok, approved} = propose(%{"text" => "Run unittest with -B.", "dispatch" => ctx.dispatch.id})
+    {:ok, proposed} = propose(%{"text" => "Keep changes confined to the task."}, worker(ctx))
+    destination = new_repo!("moved")
+    {:ok, facts} = Shoestring.Cobbler.Intake.repository(destination)
+
+    context = %{
+      shell: Mix.Shell.Process,
+      with_repo: fn fun -> fun.(Repo) end,
+      cwd: ctx.repo,
+      interactive?: fn -> true end
+    }
+
+    args = ["move", "--from", ctx.root, "--repo", destination]
+
+    assert_raise Shoestring.CLI.Refusal, ~r/a person's decision/, fn ->
+      Command.run(args, %{context | interactive?: fn -> false end})
+    end
+
+    send(self(), {:mix_shell_input, :prompt, "n"})
+
+    assert_raise Shoestring.CLI.Refusal, "Lessons not moved.", fn ->
+      Command.run(args, context)
+    end
+
+    assert Lessons.get(approved.code).repository_root == ctx.root
+
+    send(self(), {:mix_shell_input, :prompt, "y"})
+    Command.run(args, context)
+    assert Lessons.list(repository: ctx.root) == []
+    assert {:ok, [moved]} = Lessons.for_brief(facts.root, [approved.code])
+
+    assert Map.drop(Map.from_struct(moved), [:repository_root, :updated_at]) ==
+             Map.drop(Map.from_struct(approved), [:repository_root, :updated_at])
+
+    assert Lessons.get(proposed.code).state == "proposed"
+    assert Lessons.space(facts.root).count == 2
+    assert {:error, {:lesson_not_approved, _}} = Lessons.for_brief(ctx.root, [approved.code])
+
+    assert {:error, :non_human_identity} =
+             Lessons.move_repository(facts.root, ctx.root, "grant:fixture")
+
+    assert {:error, :invalid_repository_move} =
+             Lessons.move_repository(facts.root, facts.root, "human:operator")
+
+    assert {:error, :lessons_destination_not_empty} =
+             Lessons.move_repository(ctx.root, facts.root, "human:operator")
+
+    assert {:error, :lessons_source_empty} =
+             Lessons.move_repository(ctx.root, destination <> "-other", "human:operator")
+  end
 end

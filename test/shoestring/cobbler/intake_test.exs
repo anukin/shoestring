@@ -66,6 +66,23 @@ defmodule Shoestring.Cobbler.IntakeTest do
     assert "Keep add pure." in contract["constraints"]
   end
 
+  test "Python tests in either test directory work for detection, explicit checks and plan gates" do
+    paths = ["test/test_calc.py", "tests/test_calc.py", "tests/unit/test_more.py"]
+    {:ok, facts} = Intake.repository(repo!(Enum.map(paths, &{&1, "import unittest\n"})))
+    assert {:ok, [gate]} = Intake.gates(facts)
+    assert gate["test_paths"] == paths
+    assert {:ok, [^gate]} = Intake.gates(facts, tests: paths)
+    assert {:ok, _} = Shoestring.Cobbler.PlanGate.validate(gate, :gates)
+
+    for path <- ["tests/../test_secret.py", "/tests/test_calc.py", "other/test_calc.py"] do
+      assert {:error, _} =
+               Shoestring.Cobbler.PlanGate.validate(
+                 %{"gate" => "python_unittest", "test_paths" => [path]},
+                 :gates
+               )
+    end
+  end
+
   test "a Mix project gets mix_test, and explicit flags replace detection" do
     root = repo!([{"mix.exs", "defmodule X.MixProject do end\n"}, {"test/x_test.exs", ""}])
     {:ok, facts} = Intake.repository(root)

@@ -446,6 +446,48 @@ defmodule Shoestring.DispatchesTest do
     assert by == Authority.grant_identity(ctx.grant.id)
   end
 
+  test "a held IMPLEMENT rechecks fresh usage without a confirmation or a replacement run", ctx do
+    reading = fn observed_at ->
+      Shoestring.ConfigurationFixtures.capacity_fixture(%{
+        observed_at: observed_at,
+        scope: "subscription",
+        windows: [
+          %{
+            kind: "primary",
+            state: :observed,
+            used_percent: 3.0,
+            reset_at: DateTime.add(observed_at, 3600)
+          },
+          %{
+            kind: "secondary",
+            state: :observed,
+            used_percent: 19.0,
+            reset_at: DateTime.add(observed_at, 86_400)
+          }
+        ],
+        extensions: %{
+          "codex:primary_window_minutes" => 300,
+          "codex:secondary_window_minutes" => 10_080
+        }
+      })
+    end
+
+    reading.(DateTime.add(DateTime.utc_now(), -600))
+    {:ok, dispatch, :recorded} = Dispatches.create(request(ctx))
+    [job] = jobs()
+    assert {:snooze, 60} = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
+    assert Dispatches.state(dispatch) == "held"
+    assert {:snooze, 60} = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
+    assert Repo.aggregate(Shoestring.Harness.RunRecord, :count) == 0
+    assert Grants.get(ctx.grant.id).unread_usage_used == 0
+
+    reading.(DateTime.utc_now())
+    assert {:snooze, 5} = Shoestring.Cobbler.PlanExecutionWorker.perform(job)
+    assert Dispatches.state(dispatch) == "running"
+    assert Repo.aggregate(Shoestring.Harness.RunRecord, :count) == 1
+    assert Grants.get(ctx.grant.id).unread_usage_used == 0
+  end
+
   test "cancelling one dispatch leaves its sibling queued and uncancelled", ctx do
     {:ok, first, :recorded} = Dispatches.create(request(ctx, %{request_id: "a"}))
     {:ok, sibling, :recorded} = Dispatches.create(request(ctx, %{request_id: "b"}))

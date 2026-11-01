@@ -11,7 +11,7 @@ defmodule Shoestring.Release do
     unless Shoestring.Release.Doctor.port_check() == "available",
       do:
         refuse(
-          "Initialization refused: configured endpoint port is unavailable; stop the old service before upgrading"
+          "Initialization refused: configured endpoint port is unavailable; if the old service is stopping, wait for it to exit and retry; otherwise stop it or choose another port"
         )
 
     _ =

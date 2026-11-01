@@ -34,7 +34,7 @@ pub struct Dispatch {
     pub title: String,
     pub state: String,
     pub reviewer: String,
-    pub elapsed: u64,
+    pub elapsed: Option<u64>,
     pub waiting_until: String,
     pub latest_step: String,
     pub next: String,
@@ -75,6 +75,8 @@ pub struct Model {
     pub session: String,
     /// The conversation `last_sequence` counts in; a handoff starts another.
     pub conversation_id: Option<String>,
+    /// Remove the old note only after it appears in the successor's block.
+    pub handoff_note_start: Option<usize>,
     pub coordinator: Option<String>,
     pub entries: Vec<Entry>,
     pub last_sequence: u64,
@@ -221,15 +223,18 @@ impl Model {
                 Kind::Notice,
                 held(text("reason"), payload["defer_until"].as_str()),
             ),
-            "conversation.handoff.requested" => self.push(
-                Kind::Notice,
-                if payload["note"] == true {
-                    "Handing off: the coordinator is writing its note for a fresh conversation."
-                } else {
-                    "Handing off: the fresh conversation gets Shoestring's facts only."
-                }
-                .into(),
-            ),
+            "conversation.handoff.requested" => {
+                self.handoff_note_start = (payload["note"] == true).then_some(self.entries.len());
+                self.push(
+                    Kind::Notice,
+                    if payload["note"] == true {
+                        "Handing off: the coordinator is writing its note for a fresh conversation."
+                    } else {
+                        "Handing off: the fresh conversation gets Shoestring's facts only."
+                    }
+                    .into(),
+                )
+            }
             "conversation.handed_off" => {
                 // The successor's events follow, numbered from its first.
                 self.last_sequence = 0;
@@ -241,6 +246,16 @@ impl Model {
                 )
             }
             "conversation.handoff.received" => {
+                if let Some(start) = self.handoff_note_start.take()
+                    && payload["note"].is_string()
+                {
+                    let mut index = 0;
+                    self.entries.retain(|entry| {
+                        let keep = index < start || entry.kind != Kind::Coordinator;
+                        index += 1;
+                        keep
+                    });
+                }
                 let note = match payload["note"].as_str() {
                     Some(note) => format!("The previous coordinator's note:\n{}", clean(note)),
                     None => format!(
@@ -304,7 +319,7 @@ impl Model {
                 title: clean_line(d["title"].as_str().unwrap_or_default()),
                 state: clean_line(d["state"].as_str().unwrap_or("?")),
                 reviewer: clean_line(d["reviewer"].as_str().unwrap_or("none")),
-                elapsed: d["elapsed_seconds"].as_u64().unwrap_or(0),
+                elapsed: d["elapsed_seconds"].as_u64(),
                 waiting_until: clean_line(d["waiting_until"].as_str().unwrap_or_default()),
                 latest_step: clean_line(d["latest_step"].as_str().unwrap_or_default()),
                 next: clean_line(d["next"].as_str().unwrap_or_default()),
@@ -713,8 +728,11 @@ mod tests {
         model.joined("old");
         model.apply_events(&json!({"events": [
             event(1, "conversation.opened", json!({"provider": "claude", "model": "opus"})),
+            event(6, "conversation.message.coordinator", json!({"text": "Earlier answer stays."})),
             event(7, "conversation.handoff.requested", json!({"note": true})),
-            event(8, "conversation.handed_off", json!({"successor_id": "new"})),
+            event(8, "conversation.message.coordinator", json!({"text": "Keep ids at 8 digits."})),
+            event(9, "conversation.message.coordinator", json!({"text": "Keep checks hermetic."})),
+            event(10, "conversation.handed_off", json!({"successor_id": "new"})),
         ]}));
         assert_eq!(model.last_sequence, 0);
         assert_eq!(model.conversation_id.as_deref(), Some("new"));
@@ -722,7 +740,7 @@ mod tests {
             event(1, "conversation.opened", json!({"provider": "claude", "model": "opus"})),
             event(2, "conversation.handoff.received", json!({
                 "facts": "Facts from Shoestring's records\u{1b}[2J: 3 of 4 dispatch attempts left",
-                "note": "Keep ids at 8 digits.", "note_status": "written"})),
+                "note": "Keep ids at 8 digits.\n\nKeep checks hermetic.", "note_status": "written"})),
         ]}));
         assert_eq!(model.last_sequence, 2);
         let carried = model.entries.last().unwrap();
@@ -730,6 +748,28 @@ mod tests {
         assert!(carried.text.contains("3 of 4 dispatch attempts left"));
         assert!(carried.text.contains("note:\nKeep ids at 8 digits."));
         assert!(!carried.text.contains('\u{1b}'));
+        assert_eq!(
+            model
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == Kind::Coordinator)
+                .count(),
+            1
+        );
+        assert!(
+            model
+                .entries
+                .iter()
+                .any(|entry| entry.text == "Earlier answer stays.")
+        );
+        assert_eq!(
+            model
+                .entries
+                .iter()
+                .filter(|entry| entry.text.contains("Keep ids at 8 digits."))
+                .count(),
+            1
+        );
 
         model.apply_events(&json!({"events": [event(3, "conversation.handoff.received",
             json!({"facts": "f", "note_status": "skipped:turns_exhausted"}))]}));

@@ -274,7 +274,8 @@ defmodule Shoestring.Grants do
 
       # A dispatch that follows another waits for it, so it does not run
       # beside it; it takes its parallel room when it starts.
-      not request[:chained] and usage.running + (request[:width] || 1) > grant.max_parallel ->
+      (request[:width] || 1) > grant.max_parallel or
+          (not request[:chained] and usage.running + (request[:width] || 1) > grant.max_parallel) ->
         {:error, {:outside_grant, :parallel}}
 
       request.seconds > grant.max_dispatch_seconds ->

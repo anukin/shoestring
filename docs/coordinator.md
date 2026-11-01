@@ -147,6 +147,10 @@ the coordinator (`export SHOESTRING_SESSION=…`). Without a terminal it
 refuses: a coordinator, which runs commands without one, cannot grant
 itself. The grant covers one repository and these limits:
 
+Pass `--team builder` (or another saved team name) to record that team's
+agents, per-agent time limits and lesson switches, as chat does. The model
+allowlist still comes from `--models`; choosing a team does not widen it.
+
 | Limit | Default | Meaning |
 | --- | --- | --- |
 | `--models` | required | the only models it may dispatch to (enabled ones) |
@@ -277,6 +281,11 @@ coordinator's brief, checks and reviewer are shared.
   commit, and `result.take` fetches and merges just that one. `runs show`
   lists each task and `batch.integration` (`merging`, then `merged`). A batch
   that completes can be followed with `after` like any IMPLEMENT.
+- **Review and follow**: `shoestring dispatch --purpose review --of DISPATCH` can review a completed
+  batch's merged commit against every task contract and its final checks.
+  A batch can itself use `after`; all its children start from the
+  predecessor's verified commit in private storage. It waits until the
+  grant has a parallel place for every task.
 - **A conflict is never resolved for you.** If a task's commit conflicts
   with those merged before it, the merge is aborted and recorded, and the
   dispatch is `needs_you`: `batch.integration` names the task and the files,
@@ -292,6 +301,13 @@ A lesson is one rule for work in one repository, shared by every agent and
 vendor that works there: "run unittest with `-B`; the bare runner finds no
 tests", "never edit `priv/gen`, regenerate it". Lessons belong to the
 repository (its root path): none is ever shown or cited in another.
+
+After moving a repository, run `shoestring lessons move --from OLD_PATH --repo NEW_PATH`.
+This is a person's decision in a terminal: it shows both
+paths and asks before moving all lesson states, preserving codes and
+provenance. The new path must be a Git repository with a commit and no
+lessons of its own. Existing grants keep their original repository scope;
+start a new session for the new location.
 
 **Who proposes.** Any agent whose "may propose lessons" is on (the Agents
 page; by default every job but the explorer):

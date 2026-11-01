@@ -48,6 +48,28 @@ defmodule Shoestring.Release.RefusalTest do
     refute File.exists?(path)
   end
 
+  test "a busy endpoint tells a person restarting to wait for the old runtime to exit" do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(listener)
+    before = Application.fetch_env!(:shoestring, ShoestringWeb.Endpoint)
+
+    Application.put_env(
+      :shoestring,
+      ShoestringWeb.Endpoint,
+      Keyword.put(before, :http, ip: {127, 0, 0, 1}, port: port)
+    )
+
+    on_exit(fn ->
+      :gen_tcp.close(listener)
+      Application.put_env(:shoestring, ShoestringWeb.Endpoint, before)
+    end)
+
+    message = refused(&Shoestring.Release.initialize/0)
+    assert message =~ "if the old service is stopping, wait for it to exit and retry"
+    assert message =~ "otherwise stop it or choose another port"
+    assert length(String.split(message, "\n")) == 1
+  end
+
   test "a preview refusal and a text dispatch refusal are one line each", %{dir: dir} do
     assert refused(&Shoestring.Release.diagnostics_preview/0) ==
              "Operation refused: existing_database_required"

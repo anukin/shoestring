@@ -498,9 +498,9 @@ defmodule Shoestring.DispatchIntegrationTest do
       grant =
         grant!("s4", facts.root, %{
           unread_usage: 6,
-          max_parallel: 2,
-          max_dispatches: 4,
-          max_total_seconds: 7_200
+          max_parallel: 3,
+          max_dispatches: 6,
+          max_total_seconds: 14_400
         })
 
       claude_reading!(0.2)
@@ -635,6 +635,156 @@ defmodule Shoestring.DispatchIntegrationTest do
                shown["batch"]["integration"]
 
       assert shown["result"]["checks"] != []
+
+      # A review gets all task contracts and the full integrated diff from
+      # the original base. The merge is absent from every worker's store.
+      review_request = %{
+        session_id: "s4",
+        request_id: "batch-review",
+        purpose: "review",
+        provider: "codex",
+        model: "gpt-6-luna",
+        title: "Review the batch",
+        brief: "REVIEW - check both changes",
+        repository: source,
+        target: dispatch.id
+      }
+
+      assert {:ok, review, :recorded} = Dispatches.create(review_request)
+      call = Shoestring.Dispatches.Calls.get(review.id)
+      input = Jason.decode!(call.input_json)
+      packet = Jason.decode!(input["packet_json"])
+      assert packet["base_commit"] == base
+      assert packet["commit"] == merged
+      assert Enum.map(packet["tasks"], & &1["id"]) == ["dispatch-1", "dispatch-2"]
+      refute Map.has_key?(packet, "task")
+      assert packet["diff"] =~ "+# changed by dispatch-1"
+      assert packet["diff"] =~ "+# changed by dispatch-2"
+      assert [%{"gate" => "python_unittest", "exit_status" => 0}] = packet["gates"]
+
+      assert {:error, {:reviewer_same_vendor, _}} =
+               Dispatches.create(%{
+                 review_request
+                 | request_id: "same-vendor",
+                   provider: "claude",
+                   model: "opus"
+               })
+
+      # A dependent batch starts both children from that private merge;
+      # nothing has been fetched into the person's repository.
+      assert {:ok, extra_review, :recorded} =
+               Dispatches.create(%{review_request | request_id: "extra-review"})
+
+      assert {:ok, dependent, :recorded} =
+               Dispatches.create(%{
+                 session_id: "s4",
+                 request_id: "dependent-batch",
+                 purpose: "implement",
+                 provider: "claude",
+                 model: "opus",
+                 title: "Follow the batch",
+                 brief: @brief,
+                 repository: source,
+                 after_dispatch: dispatch.id,
+                 tasks: [
+                   %{"title" => "Calc again", "files" => ["calc.py"]},
+                   %{"title" => "Strings again", "files" => ["strings.py"]}
+                 ]
+               })
+
+      assert dependent.state == "chained"
+      assert Dispatches.follow(dependent) == :waiting
+      assert {:ok, _} = Dispatches.cancel(extra_review, "Only one batch review is needed.")
+      assert {:ok, dependent, :recorded} = Dispatches.follow(dependent)
+      assert dependent.base_revision == merged
+      dependent_job = job!(dependent)
+
+      Stream.repeatedly(fn ->
+        _ = Dispatches.advance(dependent)
+        PlanExecutionWorker.perform(dependent_job)
+      end)
+      |> Stream.take(12)
+      |> Enum.find(fn _ ->
+        Repo.aggregate(from(r in RunRecord, where: r.goal_id == ^dependent.goal_id), :count) == 2
+      end)
+
+      dependent_runs = Repo.all(from r in RunRecord, where: r.goal_id == ^dependent.goal_id)
+      assert length(dependent_runs) == 2
+
+      for run <- dependent_runs do
+        {:ok, tree} = Worktrees.get(run.id)
+        assert tree.base_commit == merged
+        assert File.read!(Path.join(tree.path, "calc.py")) =~ "# changed by dispatch-1"
+        assert File.read!(Path.join(tree.path, "strings.py")) =~ "# changed by dispatch-2"
+        finish_worker!(run.id)
+      end
+
+      Stream.repeatedly(fn ->
+        _ = Oban.drain_queue(queue: :plan_child_inbox)
+        PlanExecutionWorker.perform(dependent_job)
+      end)
+      |> Stream.take(20)
+      |> Enum.find(fn _ -> Dispatches.state(dependent) == "completed" end)
+
+      assert Dispatches.state(dependent) == "completed"
+      dependent_commit = runs_show!(dependent.id, "s4")["result"]["commit"]
+
+      # The person's default of one uses the same private base, then chains
+      # its second task from the first. Exercise both execution modes.
+      {:ok, _} =
+        Shoestring.Grants.extend(
+          Shoestring.Grants.get(grant.id),
+          %{add_dispatches: 2, add_seconds: 7200},
+          "human:operator"
+        )
+
+      {:ok, _} =
+        Shoestring.AgentProfiles.save_settings(Shoestring.AgentProfiles.settings(), %{
+          "parallel_tasks" => "1"
+        })
+
+      assert {:ok, sequential, :recorded} =
+               Dispatches.create(%{
+                 session_id: "s4",
+                 request_id: "sequential-batch",
+                 purpose: "implement",
+                 provider: "claude",
+                 model: "opus",
+                 title: "Follow sequentially",
+                 brief: @brief,
+                 repository: source,
+                 after_dispatch: dependent.id,
+                 seconds: 600,
+                 tasks: [
+                   %{"title" => "Calc", "files" => ["calc.py"]},
+                   %{"title" => "Strings", "files" => ["strings.py"]}
+                 ]
+               })
+
+      sequential_job = job!(sequential)
+
+      Enum.reduce(~w(dispatch-1 dispatch-2), dependent_commit, fn task, expected_base ->
+        run_id = Shoestring.Cobbler.PlanExecutor.task_run_id(sequential.goal_id, task, 1)
+
+        Stream.repeatedly(fn ->
+          _ = Dispatches.advance(sequential)
+          PlanExecutionWorker.perform(sequential_job)
+        end)
+        |> Stream.take(12)
+        |> Enum.find(fn _ -> Repo.get(RunRecord, run_id) != nil end)
+
+        assert Repo.get(RunRecord, run_id)
+        {:ok, tree} = Worktrees.get(run_id)
+        assert tree.base_commit == expected_base
+        finish_worker!(run_id)
+        git!(tree.path, ["rev-parse", "HEAD"]) |> String.trim()
+      end)
+
+      Stream.repeatedly(fn -> PlanExecutionWorker.perform(sequential_job) end)
+      |> Stream.take(10)
+      |> Enum.find(fn _ -> Dispatches.state(sequential) == "completed" end)
+
+      assert Dispatches.state(sequential) == "completed"
 
       assert Enum.sort(
                shown["result"]["diff_stat"]
