@@ -7,6 +7,14 @@ defmodule Shoestring.Harness.OpencodeAcp.Conversation do
   Shoestring tools. `execute` is denied; MCP's `codemode: false` keeps the tools
   available without JavaScript fetch. Project/user agent configuration is not
   loaded. Model and effort selection failures refuse instead of falling back.
+
+  The process runs under `Shoestring.Harness.OpencodeAcp.Sandbox.coordinator/3`
+  (macOS `sandbox-exec`): opencode's own path check follows a symlink in the
+  checkout to its target (VERIFIED offline, 2.0.31), so the system refuses
+  reads of the home directory outside the checkout and opencode's own
+  directories. There is no unsandboxed fallback; `sandbox: false` exists
+  only for the scripted test double, whose own files the profile does not
+  cover.
   Protocol and policy are tested with a scripted local transport; a live
   subscription session is separately budgeted evidence.
   """
@@ -14,7 +22,7 @@ defmodule Shoestring.Harness.OpencodeAcp.Conversation do
   @behaviour Shoestring.Harness.Conversation
   alias Shoestring.Harness.{Conversation, ConversationEvent, Error}
   alias Shoestring.Harness.Capacity.Codex.StdioTransport
-  alias Shoestring.Harness.OpencodeAcp.ProcessTree
+  alias Shoestring.Harness.OpencodeAcp.{ProcessTree, Sandbox}
   @exit_wait_ms 2_000
   @agent "shoestring-coordinator"
   @impl Conversation
@@ -114,7 +122,8 @@ defmodule Shoestring.Harness.OpencodeAcp.Conversation do
         state: :starting,
         interrupting: false,
         tools: %{},
-        exit_wait_ms: Keyword.get(opts, :exit_wait_ms, @exit_wait_ms)
+        exit_wait_ms: Keyword.get(opts, :exit_wait_ms, @exit_wait_ms),
+        sandbox_temp: nil
       }
 
       case launch(state, opts) do
@@ -149,16 +158,17 @@ defmodule Shoestring.Harness.OpencodeAcp.Conversation do
       {"SHOESTRING_CHAT_TOOL_TOKEN", get_in(state.spec, [:tools, :token]) || false}
     ]
 
-    env =
-      Enum.reduce(Keyword.get(opts, :env, []), env, fn {k, v}, acc ->
-        List.keystore(acc, k, 0, {k, v})
-      end)
+    with true <- not is_nil(executable) || {:error, failure("binary_missing"), state},
+         {:ok, command, args, sandbox_env, state} <- confine(state, executable, opts) do
+      env =
+        Enum.reduce(sandbox_env ++ Keyword.get(opts, :env, []), env, fn {k, v}, acc ->
+          List.keystore(acc, k, 0, {k, v})
+        end)
 
-    if executable do
       case StdioTransport.start_link(
              owner: self(),
-             executable: executable,
-             args: ["acp"],
+             executable: command,
+             args: args,
              cd: state.spec.workdir,
              env: env
            ) do
@@ -173,8 +183,25 @@ defmodule Shoestring.Harness.OpencodeAcp.Conversation do
         _ ->
           {:error, failure("start_failed"), state}
       end
+    end
+  end
+
+  defp confine(state, executable, opts) do
+    if Keyword.get(opts, :sandbox, true) == false do
+      {:ok, executable, ["acp"], [], state}
     else
-      {:error, failure("binary_missing"), state}
+      sandbox_opts = Keyword.merge([executable: executable], Keyword.get(opts, :sandbox_opts, []))
+
+      case Sandbox.coordinator(state.spec.workdir, state.dir, sandbox_opts) do
+        {:ok, sandbox} ->
+          {:ok, sandbox.command, sandbox.args, sandbox.env,
+           %{state | sandbox_temp: sandbox.temp_dir}}
+
+        {:error, reason} ->
+          {:error,
+           failure("sandbox_unavailable", "opencode's coordinator cannot be confined: #{reason}"),
+           state}
+      end
     end
   end
 
@@ -517,6 +544,7 @@ defmodule Shoestring.Harness.OpencodeAcp.Conversation do
       })
 
   defp failure(code), do: Error.new(:transport, code, "opencode conversation " <> code)
+  defp failure(code, message), do: Error.new(:transport, code, message)
 
   defp emit(state, type, fields) do
     ordinal = state.ordinal + 1
@@ -544,6 +572,7 @@ defmodule Shoestring.Harness.OpencodeAcp.Conversation do
     end
 
     _ = Shoestring.SandboxTemp.remove(state.dir, "shoestring-opencode-chat")
+    _ = Sandbox.release_coordinator(state.sandbox_temp)
     %{state | transport: nil, state: :closed}
   end
 

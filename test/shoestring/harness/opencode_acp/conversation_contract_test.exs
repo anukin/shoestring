@@ -12,7 +12,8 @@ defmodule Shoestring.Harness.OpencodeAcp.ConversationContractTest do
     do: open_with(spec, env: Shoestring.Harness.ConversationMemorySuite.env(context))
 
   defp open_with(spec, opts) do
-    opts = Keyword.put(opts, :executable, @cli)
+    # The scripted double is not opencode; the sandbox has its own tests.
+    opts = opts |> Keyword.put(:executable, @cli) |> Keyword.put_new(:sandbox, false)
 
     case start_supervised(%{id: make_ref(), start: {Conversation, :start_link, [spec, opts]}}) do
       {:error, {error, _}} -> {:error, error}

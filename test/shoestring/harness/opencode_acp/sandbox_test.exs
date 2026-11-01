@@ -220,4 +220,126 @@ defmodule Shoestring.Harness.OpencodeAcp.SandboxTest do
 
     request
   end
+
+  describe "an opencode coordinator" do
+    # The person's checkout lives under home, with links pointing out of it.
+    setup ctx do
+      repo = Path.join(ctx.home, "projects/app")
+      File.mkdir_p!(repo)
+      git!(repo, ["init", "-q", "-b", "main"])
+      File.write!(Path.join(repo, "inside.txt"), "inside\n")
+      File.ln_s!(Path.join(ctx.home, "shared/private.txt"), Path.join(repo, "link.txt"))
+      File.ln_s!(Path.join(ctx.home, "shared"), Path.join(repo, "linkdir"))
+      config = Path.join(Path.dirname(ctx.home), "private-config")
+      File.mkdir_p!(config)
+      %{repo: repo, config: config}
+    end
+
+    defp coordinator(ctx, opts \\ []) do
+      result =
+        Sandbox.coordinator(
+          ctx.repo,
+          ctx.config,
+          Keyword.merge(
+            [home: ctx.home, env: %{}, executable: Path.join(ctx.home, ".opencode/bin/opencode")],
+            opts
+          )
+        )
+
+      with {:ok, %{temp_dir: dir}} <- result,
+           do: on_exit(fn -> Sandbox.release_coordinator(dir) end)
+
+      result
+    end
+
+    defp run(profile, argv, env \\ []) do
+      {out, status} =
+        System.cmd("/usr/bin/sandbox-exec", ["-p", profile | argv],
+          env: env,
+          stderr_to_stdout: true
+        )
+
+      {status, out}
+    end
+
+    # opencode 2.0.31 read a symlink in the checkout to its target in home
+    # (VERIFIED offline, 2026-11-01); the system now decides on the target.
+    test "reads the checkout but not through a link out of it, and writes nothing there", ctx do
+      {:ok, %{args: ["-p", profile, _exe, "acp"], env: env}} = coordinator(ctx)
+
+      assert {0, "inside\n"} = run(profile, ["/bin/cat", Path.join(ctx.repo, "inside.txt")])
+
+      for escaped <- [
+            Path.join(ctx.repo, "link.txt"),
+            Path.join(ctx.repo, "linkdir/private.txt"),
+            Path.join(ctx.home, "shared/private.txt")
+          ] do
+        assert {status, out} = run(profile, ["/bin/cat", escaped])
+        assert status != 0 and out =~ "Operation not permitted", escaped
+        refute out =~ ~r/^private$/m
+      end
+
+      write = fn path ->
+        elem(run(profile, ["/bin/sh", "-c", ~s(echo x > "$1"), "sh", path]), 0) == 0
+      end
+
+      refute write.(Path.join(ctx.repo, "new.txt"))
+      refute File.exists?(Path.join(ctx.repo, "new.txt"))
+      assert write.(Path.join(ctx.home, ".local/share/opencode/opencode.db"))
+      assert write.(Path.join(ctx.config, "scratch"))
+      {"TMPDIR", tmp} = List.keyfind(env, "TMPDIR", 0)
+      assert write.(Path.join(tmp, "scratch"))
+
+      # Git reads the checkout for opencode's project detection.
+      assert {0, _} = run(profile, ["git", "-C", ctx.repo, "status", "--short"], env)
+    end
+
+    test "keeps opencode's own directories and the caller's configuration", ctx do
+      {:ok, sandbox} = coordinator(ctx)
+      assert sandbox.command == "/usr/bin/sandbox-exec"
+      assert sandbox.identity =~ ~r/^macos_seatbelt:coordinator:v1:sha256:[0-9a-f]{64}$/
+      assert {"TMPDIR", tmp} = List.keyfind(sandbox.env, "TMPDIR", 0)
+      assert {"HOME", ^tmp} = List.keyfind(sandbox.env, "HOME", 0)
+      assert {"XDG_DATA_HOME", data} = List.keyfind(sandbox.env, "XDG_DATA_HOME", 0)
+      assert data == physical(Path.join(ctx.home, ".local/share"))
+      # The coordinator's configuration is the caller's private directory.
+      refute List.keyfind(sandbox.env, "XDG_CONFIG_HOME", 0)
+      assert {"GIT_CONFIG_GLOBAL", "/dev/null"} in sandbox.env
+
+      assert :ok = Sandbox.release_coordinator(sandbox.temp_dir)
+      refute File.exists?(sandbox.temp_dir)
+    end
+
+    test "the coordinator launches confined, and refuses when it cannot be", ctx do
+      # A stand-in for sandbox-exec that records how it was launched.
+      record = Path.join(Path.dirname(ctx.home), "launched")
+      stub = Path.join(Path.dirname(ctx.home), "sandbox-exec")
+      File.write!(stub, "#!/bin/sh\nprintf '%s\\0' \"$@\" > #{record}\n")
+      File.chmod!(stub, 0o755)
+      spec = %{owner: self(), workdir: ctx.repo, model: "opus"}
+      opencode = Path.join(ctx.home, ".opencode/bin/opencode")
+
+      open = fn sandbox_exec ->
+        Shoestring.Harness.OpencodeAcp.Conversation.start_link(spec,
+          executable: opencode,
+          handshake_timeout_ms: 2_000,
+          sandbox_opts: [home: ctx.home, env: %{}, sandbox_exec: sandbox_exec]
+        )
+      end
+
+      Process.flag(:trap_exit, true)
+      assert {:error, _} = open.(stub)
+
+      assert ["-p", profile, launched, "acp"] =
+               record |> File.read!() |> String.split(<<0>>, trim: true)
+
+      assert launched == physical(opencode)
+
+      assert profile =~ ~s[(deny file-read* (subpath "#{physical(ctx.home)}"))]
+
+      File.rm!(record)
+      assert {:error, %{code: "sandbox_unavailable"}} = open.("/nonexistent/sandbox-exec")
+      refute File.exists?(record)
+    end
+  end
 end

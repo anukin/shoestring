@@ -258,7 +258,7 @@ defmodule Shoestring.Conversations.EngineTest do
       engine =
         start_engine(ctx.conversation,
           conversation_module: ctx.converse_module,
-          conversation_opts: [executable: Path.expand("test/support/" <> ctx.cli)]
+          conversation_opts: [executable: Path.expand("test/support/" <> ctx.cli), sandbox: false]
         )
 
       :ok = say(engine, "SPLIT keep sk-synthetic123 and readable text")

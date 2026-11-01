@@ -51,6 +51,7 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
         }
 
   @temp_prefix "shoestring-opencode"
+  @coordinator_prefix "shoestring-opencode-coordinator"
 
   @doc """
   Builds the sandboxed launch for `opencode acp` in `workdir`. Options:
@@ -81,6 +82,103 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
            "macos_seatbelt:v#{@profile_version}:sha256:" <>
              (:crypto.hash(:sha256, profile) |> Base.encode16(case: :lower))
        }}
+    end
+  end
+
+  @doc """
+  The read-only twin for an opencode coordinator
+  (`Shoestring.Harness.OpencodeAcp.Conversation`) working in the person's
+  checkout `repo`, with its private configuration in `config_dir`.
+
+  opencode's own check on paths outside the project
+  (`external_directory`) refuses `..` and absolute paths but follows a
+  symlink inside the checkout: a link to a file in the home directory was
+  read and its contents reached the model (VERIFIED offline, 2.0.31,
+  2026-11-01). Under this profile the system decides on the link's target:
+  the home directory is unreadable except the checkout and its Git
+  directories, opencode's data, state and cache directories (its login and
+  session database), its install directory, `config_dir` and the launch's
+  temporary directory (`HOME` and `TMPDIR`). Nothing in the checkout is
+  writable; only opencode's own directories, `config_dir` and the temporary
+  directory are. The network stays open (its model provider and
+  Shoestring's tool endpoint). Outside the home directory the system reads
+  as it does for the worker profile.
+
+  Options: `:home`, `:executable`, `:sandbox_exec` and `:env` (where the XDG
+  directories are read from). The caller removes the temporary directory
+  with `release_coordinator/1` once the process tree is reaped.
+  """
+  @spec coordinator(Path.t(), Path.t(), keyword()) :: {:ok, t()} | {:error, atom()}
+  def coordinator(repo, config_dir, opts \\ []) do
+    sandbox_exec = Keyword.get(opts, :sandbox_exec, @sandbox_exec)
+    home = GitSandbox.physical_path(Keyword.get_lazy(opts, :home, &System.user_home!/0))
+    env = Keyword.get_lazy(opts, :env, &System.get_env/0)
+
+    with :ok <- mechanism(sandbox_exec),
+         {:ok, executable} <- executable(Keyword.get(opts, :executable)),
+         true <- File.dir?(repo) || {:error, :invalid_workdir},
+         paths = opencode_paths(home, env),
+         {:ok, tmp} <- Shoestring.SandboxTemp.create(@coordinator_prefix),
+         {:ok, profile} <-
+           coordinator_profile(repo, config_dir, paths, install_dir(executable), tmp, home)
+           |> release_coordinator_on_error(tmp) do
+      {:ok,
+       %{
+         command: sandbox_exec,
+         args: ["-p", profile, executable, "acp"],
+         env: coordinator_env(tmp, paths),
+         temp_dir: tmp,
+         identity:
+           "macos_seatbelt:coordinator:v#{@profile_version}:sha256:" <>
+             (:crypto.hash(:sha256, profile) |> Base.encode16(case: :lower))
+       }}
+    end
+  end
+
+  @doc "Removes a coordinator launch's temporary directory once its process tree is reaped."
+  @spec release_coordinator(Path.t() | nil) :: :ok | {:error, :not_a_sandbox_temp_dir}
+  def release_coordinator(dir), do: Shoestring.SandboxTemp.remove(dir, @coordinator_prefix)
+
+  defp release_coordinator_on_error({:error, _} = error, tmp) do
+    _ = release_coordinator(tmp)
+    error
+  end
+
+  defp release_coordinator_on_error(ok, _tmp), do: ok
+
+  # `XDG_CONFIG_HOME` is the caller's private configuration directory.
+  defp coordinator_env(tmp, paths) do
+    [
+      {"HOME", tmp},
+      {"TMPDIR", tmp},
+      {"XDG_DATA_HOME", Path.dirname(paths.data)},
+      {"XDG_STATE_HOME", Path.dirname(paths.state)},
+      {"XDG_CACHE_HOME", Path.dirname(paths.cache)}
+    ] ++ ClaudeSandbox.git_env() ++ [{"PYTHONDONTWRITEBYTECODE", "1"}]
+  end
+
+  defp coordinator_profile(repo, config_dir, paths, install, tmp, home) do
+    config_dir = GitSandbox.physical_path(config_dir)
+    writable = [paths.data, paths.state, paths.cache, tmp, config_dir]
+    readable = writable ++ GitSandbox.git_dirs(repo) ++ [install]
+
+    if Enum.all?([home | readable], &quotable?/1) do
+      sinks = Enum.map_join(@dev_sinks, " ", &"(literal #{q(&1)})")
+      subpaths = fn list -> Enum.map_join(list, " ", &"(subpath #{q(&1)})") end
+
+      # Later rules take precedence over earlier ones.
+      {:ok,
+       """
+       (version 1)
+       (allow default)
+       (deny file-write*)
+       (allow file-write* #{subpaths.(writable)} #{sinks} (regex #"^/dev/fd/") (regex #"^/dev/ttys"))
+       (deny file-read* (subpath #{q(home)}))
+       (allow file-read-metadata (subpath #{q(home)}))
+       (allow file-read* #{subpaths.(readable)})
+       """}
+    else
+      {:error, :unsafe_sandbox_path}
     end
   end
 

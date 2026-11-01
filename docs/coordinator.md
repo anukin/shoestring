@@ -588,6 +588,17 @@ model: the model was offered only read, glob, grep and `shoestring_dispatch`;
 available"; the file was unchanged; resume kept the session. Configuration
 an opencode organisation pushes to a signed-in account was not exercised.
 
+opencode's own check refuses reads outside the checkout (`..`, absolute
+paths) but follows a symlink inside it: a link to a file in your home folder
+was read, and its contents reached the model (checked offline, 2.0.31). So
+the coordinator also runs under macOS `sandbox-exec`: your home folder is
+unreadable except the checkout and its Git directories, opencode's own data,
+state, cache and install folders and its private configuration, and nothing
+in the checkout is writable. The system decides on a link's target, so the
+same link now reads as "Unable to read" (checked offline through Shoestring's
+own launch, 2.0.31). Without `sandbox-exec` (not macOS) the opencode
+coordinator does not start.
+
 Native macOS arm64 releases build `priv/bin/shoestring-chat` during assets.deploy
 and include it alongside the terminal helper. `shoestring chat` resolves that
 binary from the installed application's priv directory; cargo is a build-time

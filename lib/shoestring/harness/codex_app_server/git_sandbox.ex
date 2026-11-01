@@ -104,15 +104,17 @@ defmodule Shoestring.Harness.CodexAppServer.GitSandbox do
   """
   def read_only_permissions(paths, home \\ System.user_home!()) do
     paths
-    |> Enum.flat_map(&with_git_dirs/1)
+    |> Enum.flat_map(&git_dirs/1)
     |> Map.new(&{&1, "read"})
     |> profile(home)
   end
 
-  # A checkout's Git directories, when its `.git` is a file pointing
-  # elsewhere (a private run worktree, or a linked worktree of the person's):
-  # Git reads them for `git log` and `git status`.
-  defp with_git_dirs(path) do
+  @doc """
+  A checkout's physical path with its Git directories, when its `.git` is a
+  file pointing elsewhere (a private run worktree, or a linked worktree of
+  the person's): Git reads them for `git log` and `git status`.
+  """
+  def git_dirs(path) do
     path = physical_path(path)
 
     case File.read(Path.join(path, ".git")) do
