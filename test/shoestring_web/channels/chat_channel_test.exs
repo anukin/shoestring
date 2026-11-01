@@ -789,7 +789,18 @@ defmodule ShoestringWeb.ChatChannelTest do
 
     successor = Conversations.get(ctx.session)
     assert successor.predecessor_id == ctx.conversation.id
-    on_exit(fn -> if pid = Conversations.engine(successor), do: GenServer.stop(pid) end)
+    # Cleanup for a failure before the end. The engine can already be gone:
+    # its own stop below, or one a joined channel started again exiting with
+    # the test (1 of 7 gate runs: GenServer.stop found no process).
+    on_exit(fn ->
+      if pid = Conversations.engine(successor) do
+        try do
+          GenServer.stop(pid)
+        catch
+          :exit, _gone -> :ok
+        end
+      end
+    end)
 
     # The person's next message reaches the successor, with the handoff.
     ref = say(socket, "SAY after")
@@ -803,7 +814,7 @@ defmodule ShoestringWeb.ChatChannelTest do
     Process.unlink(socket.channel_pid)
     :ok = close(socket)
 
-    {:ok, reply, _socket} =
+    {:ok, reply, rejoined} =
       subscribe_and_join(ctx.socket, ChatChannel, "conversation:#{ctx.session}", %{
         "after" => last + 3,
         "conversation_id" => ctx.conversation.id
@@ -814,7 +825,14 @@ defmodule ShoestringWeb.ChatChannelTest do
     assert [%{"type" => "conversation.opened", "sequence" => 1} | _] =
              events_until("conversation.opened")
 
-    GenServer.stop(Conversations.engine(successor))
+    # Leave first: a joined channel starts its conversation's engine again
+    # when it finds none running.
+    Process.unlink(rejoined.channel_pid)
+    :ok = close(rejoined)
+    engine = Conversations.engine(successor)
+    ref = Process.monitor(engine)
+    GenServer.stop(engine)
+    assert_receive {:DOWN, ^ref, :process, ^engine, :normal}, 5_000
   end
 
   test "at boot, engines start for conversations whose session has a grant", ctx do
