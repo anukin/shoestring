@@ -280,6 +280,7 @@ defmodule Shoestring.Harness.ClaudeHeadless do
           end
 
         {:error, reason} ->
+          _ = Sandbox.release(sandbox && sandbox.temp_dir)
           {:error, Error.new(:transport, "session_start_failed", inspect(reason))}
       end
     end
@@ -313,6 +314,7 @@ defmodule Shoestring.Harness.ClaudeHeadless do
     session_opts
     |> Keyword.put(:permission_bypass, false)
     |> Keyword.put(:sandbox_options, sandbox.options)
+    |> Keyword.put(:sandbox_temp_dir, sandbox.temp_dir)
     |> Keyword.update(:env, sandbox.env, &(&1 ++ sandbox.env))
   end
 

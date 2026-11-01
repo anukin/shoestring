@@ -41,12 +41,16 @@ defmodule Shoestring.Harness.ClaudeHeadless.SandboxTest do
     wt
   end
 
-  defp prepare(ctx, wt, ref \\ nil),
-    do:
+  defp prepare(ctx, wt, ref \\ nil) do
+    result =
       Sandbox.prepare(wt.path, ref || wt.workspace_ref,
         worktrees_dir: ctx.worktrees,
         home: ctx.home
       )
+
+    with {:ok, %{temp_dir: dir}} <- result, do: on_exit(fn -> Sandbox.release(dir) end)
+    result
+  end
 
   test "a private run worktree gets write roots, read limits, flags and a home-free Git", ctx do
     wt = worktree!(ctx, true)
@@ -82,6 +86,62 @@ defmodule Shoestring.Harness.ClaudeHeadless.SandboxTest do
     assert {"GIT_CONFIG_GLOBAL", "/dev/null"} in sandbox.env
     assert {"GIT_CONFIG_VALUE_1", "/dev/null"} in sandbox.env
     assert {"PYTHONDONTWRITEBYTECODE", "1"} in sandbox.env
+  end
+
+  # Before this, Claude kept its default temporary directory, the shared
+  # /tmp/claude-<uid> that holds every other Claude session's files, and its
+  # sandbox let a worker's Bash write there (VERIFIED offline with 2.1.316).
+  test "each launch gets its own short temporary directory; the shared one is denied", ctx do
+    assert {:ok, sandbox} = prepare(ctx, worktree!(ctx, true))
+    assert {:ok, other} = prepare(ctx, worktree!(ctx, true))
+
+    assert {"CLAUDE_CODE_TMPDIR", temp} = List.keyfind(sandbox.env, "CLAUDE_CODE_TMPDIR", 0)
+    assert {"CLAUDE_CODE_TMPDIR", other_temp} = List.keyfind(other.env, "CLAUDE_CODE_TMPDIR", 0)
+    assert other_temp != temp
+    assert sandbox.temp_dir == temp
+    assert File.dir?(temp)
+    assert Path.dirname(temp) == Shoestring.SandboxTemp.short_root()
+    # Claude Code falls back to the shared directory above about 32 characters.
+    assert String.length(temp) <= 32
+    assert {:ok, %File.Stat{mode: mode, uid: uid}} = File.stat(temp)
+    assert Bitwise.band(mode, 0o777) == 0o700
+
+    shared = "claude-#{uid}"
+    deny = sandbox.settings["sandbox"]["filesystem"]["denyWrite"]
+    assert Path.join("/tmp", shared) in deny
+    assert Path.join(Shoestring.SandboxTemp.short_root(), shared) in deny
+    # The run's own roots stay writable and its temporary directory is not denied.
+    refute Enum.any?(deny, &String.starts_with?(temp, &1))
+    refute Enum.any?(sandbox.settings["sandbox"]["filesystem"]["allowWrite"], &(&1 in deny))
+
+    File.write!(Path.join(temp, "cwd-file"), "x")
+    assert :ok = Sandbox.release(temp)
+    refute File.exists?(temp)
+    assert {:error, :not_a_sandbox_temp_dir} = Sandbox.release(ctx.worktrees)
+    assert File.dir?(ctx.worktrees)
+  end
+
+  test "a session's shutdown removes its temporary directory after stopping the process group",
+       ctx do
+    {:ok, sandbox} = prepare(ctx, worktree!(ctx, true))
+
+    session =
+      start_supervised!(
+        {Session,
+         [
+           run_request: request("workspace/fixture"),
+           owner: self(),
+           transport: Shoestring.Test.ArgvCaptureTransport,
+           model: "opus",
+           sandbox_options: sandbox.options,
+           sandbox_temp_dir: sandbox.temp_dir,
+           env: sandbox.env
+         ]}
+      )
+
+    assert File.dir?(sandbox.temp_dir)
+    assert :ok = Session.shutdown(session)
+    refute File.exists?(sandbox.temp_dir)
   end
 
   test "anything but a registered private run worktree fails closed", ctx do

@@ -38,12 +38,27 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
     {"GIT_CONFIG_VALUE_1", "/dev/null"}
   ]
 
-  @type t :: %{settings: map(), options: [String.t()], env: [{String.t(), String.t()}]}
+  @type t :: %{
+          settings: map(),
+          options: [String.t()],
+          env: [{String.t(), String.t()}],
+          temp_dir: Path.t()
+        }
+
+  @temp_prefix "sc"
 
   @doc """
   Prepares the sandbox for a run worktree bound to `workspace_ref`. Options:
   `:worktrees_dir` (the service's worktree root) and `:home` (defaults to the
   user's home).
+
+  Each launch gets its own temporary directory (`CLAUDE_CODE_TMPDIR`), which
+  its owner removes with `release/1` once the process tree is reaped. Claude
+  Code's sandbox lets Bash write to its temporary directory, by default the
+  shared `/tmp/claude-<uid>` that holds every other Claude session's files
+  (VERIFIED offline 2026-10-31 with 2.1.316: a sandboxed worker's `touch`
+  there succeeded). That shared directory is also denied for writing, so if
+  Claude ever falls back to it the run's commands fail visibly instead.
   """
   @spec prepare(Path.t(), String.t(), keyword()) :: {:ok, t()} | {:error, atom()}
   def prepare(workdir, workspace_ref, opts \\ []) do
@@ -52,10 +67,19 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
 
     case GitSandbox.policy(workdir, workspace_ref, root) do
       {:ok, %{"writableRoots" => [worktree | _] = roots}} ->
-        # Roots are the worktree, its gitdir, then <store>/objects and refs.
-        repository = roots |> Enum.at(2) |> Path.dirname()
-        settings = settings(roots, worktree, repository, home)
-        {:ok, %{settings: settings, options: options(settings), env: env()}}
+        with {:ok, temp} <- Shoestring.SandboxTemp.create_short(@temp_prefix) do
+          # Roots are the worktree, its gitdir, then <store>/objects and refs.
+          repository = roots |> Enum.at(2) |> Path.dirname()
+          settings = settings(roots, worktree, repository, home, shared_temp(temp))
+
+          {:ok,
+           %{
+             settings: settings,
+             options: options(settings),
+             env: [{"CLAUDE_CODE_TMPDIR", temp} | env()],
+             temp_dir: temp
+           }}
+        end
 
       {:ok, nil} ->
         {:error, :not_a_private_run_worktree}
@@ -77,7 +101,20 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
   @spec git_env() :: [{String.t(), String.t()}]
   def git_env, do: @git_env
 
-  defp settings(roots, worktree, repository, home) do
+  @doc "Removes a launch's temporary directory once its process tree is reaped."
+  @spec release(Path.t() | nil) :: :ok | {:error, :not_a_sandbox_temp_dir}
+  def release(dir), do: Shoestring.SandboxTemp.remove_short(dir, @temp_prefix)
+
+  # Claude Code's shared temporary directory, `/tmp/claude-<uid>`, by both
+  # spellings (macOS's /tmp is a link to /private/tmp). The uid is the
+  # owner of the directory just created.
+  defp shared_temp(temp) do
+    %File.Stat{uid: uid} = File.stat!(temp)
+    name = "claude-#{uid}"
+    Enum.uniq([Path.join("/tmp", name), Path.join(Shoestring.SandboxTemp.short_root(), name)])
+  end
+
+  defp settings(roots, worktree, repository, home, deny_write) do
     %{
       "alwaysThinkingEnabled" => false,
       "attribution" => %{"commit" => "", "pr" => ""},
@@ -89,6 +126,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
         "excludedCommands" => [],
         "filesystem" => %{
           "allowWrite" => roots,
+          "denyWrite" => deny_write,
           "denyRead" => [home],
           "allowRead" => [worktree, repository]
         },

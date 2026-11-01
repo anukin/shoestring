@@ -26,6 +26,7 @@ defmodule Shoestring.Terminal.LaunchTest do
 
     for provider <- ~w(claude codex fixture) do
       assert {:ok, profile} = Launch.profile(provider, fixture.request, fixture.worktree.path)
+      release(profile)
       assert profile.env["USER"] == "terminal-fixture-user"
       assert profile.env["PATH"] == System.get_env("PATH")
       refute Map.has_key?(profile.env, "SHOESTRING_TERMINAL_UNAPPROVED")
@@ -38,6 +39,7 @@ defmodule Shoestring.Terminal.LaunchTest do
     on_exit(fn -> ProviderCliGuard.assert_no_provider_cli_spawned!(guard) end)
     fixture = TerminalHelpers.create!()
     assert {:ok, profile} = Launch.profile("claude", fixture.request, fixture.worktree.path)
+    release(profile)
     refute "--no-session-persistence" in profile.argv
     refute "--permission-prompts" in profile.argv
     assert "--safe-mode" in profile.argv
@@ -50,6 +52,20 @@ defmodule Shoestring.Terminal.LaunchTest do
     assert settings["sandbox"]["failIfUnavailable"] == true
     assert settings["sandbox"]["allowUnsandboxedCommands"] == false
     assert settings["sandbox"]["network"]["allowedDomains"] == []
+    # Its own temporary directory, never Claude's shared one.
+    temp = profile.env["CLAUDE_CODE_TMPDIR"]
+    assert Path.dirname(temp) == Shoestring.SandboxTemp.short_root()
+
+    assert Enum.any?(
+             settings["sandbox"]["filesystem"]["denyWrite"],
+             &(Path.basename(&1) =~ ~r/\Aclaude-\d+\z/)
+           )
+
     assert List.last(profile.argv) == fixture.request.prompt
   end
+
+  defp release(%{env: %{"CLAUDE_CODE_TMPDIR" => dir}}),
+    do: on_exit(fn -> Shoestring.Harness.ClaudeHeadless.Sandbox.release(dir) end)
+
+  defp release(_profile), do: :ok
 end

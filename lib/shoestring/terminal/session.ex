@@ -80,8 +80,13 @@ defmodule Shoestring.Terminal.Session do
       }
 
       case command(state, %{"op" => "hello", "version" => Protocol.version()}) do
-        :ok -> {:ok, state}
-        {:error, reason} -> {:stop, reason}
+        :ok ->
+          {:ok, state}
+
+        {:error, reason} ->
+          close_port(port)
+          release_temp(profile)
+          {:stop, reason}
       end
     else
       {:error, reason} -> {:stop, reason}
@@ -215,7 +220,16 @@ defmodule Shoestring.Terminal.Session do
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_reason, state), do: close_port(state.port)
+  def terminate(_reason, state) do
+    close_port(state.port)
+    release_temp(state.profile)
+  end
+
+  # A Claude terminal's own temporary directory (`Launch.profile/3`).
+  defp release_temp(%{env: %{"CLAUDE_CODE_TMPDIR" => dir}}),
+    do: Shoestring.Harness.ClaudeHeadless.Sandbox.release(dir)
+
+  defp release_temp(_profile), do: :ok
 
   defp frame(_frame, %{terminal: terminal} = state) when terminal != nil, do: state
 

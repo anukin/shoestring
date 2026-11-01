@@ -350,8 +350,11 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     {:reply, {:ok, status_summary(state)}, state}
   end
 
+  # The sandbox's temporary directory goes only after the process group has
+  # been terminated and reaped, so nothing is still writing into it.
   def handle_call(:shutdown, _from, state) do
     state = terminate_transport_group(state)
+    _ = Sandbox.release(Keyword.get(state.opts, :sandbox_temp_dir))
     {:stop, :normal, :ok, state}
   end
 

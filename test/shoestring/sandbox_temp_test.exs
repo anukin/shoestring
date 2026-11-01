@@ -34,4 +34,40 @@ defmodule Shoestring.SandboxTempTest do
 
     assert File.dir?(nested)
   end
+
+  test "a short directory is private, under /tmp, and only it can be removed" do
+    {:ok, dir} = SandboxTemp.create_short("st")
+    on_exit(fn -> SandboxTemp.remove_short(dir, "st") end)
+    assert Path.dirname(dir) == SandboxTemp.short_root()
+    assert Path.basename(dir) =~ ~r/\Ast-[0-9a-f]{12}\z/
+    assert {:ok, %File.Stat{mode: mode}} = File.stat(dir)
+    assert Bitwise.band(mode, 0o777) == 0o700
+
+    # Another prefix, a nested path, a non-hex name and a symlink are refused.
+    assert {:error, :not_a_sandbox_temp_dir} = SandboxTemp.remove_short(dir, "sx")
+    nested = Path.join(dir, "st-000000000000")
+    File.mkdir_p!(nested)
+    assert {:error, :not_a_sandbox_temp_dir} = SandboxTemp.remove_short(nested, "st")
+
+    assert {:error, :not_a_sandbox_temp_dir} =
+             SandboxTemp.remove_short(
+               Path.join(SandboxTemp.short_root(), "st-nothexnothex"),
+               "st"
+             )
+
+    link =
+      Path.join(
+        SandboxTemp.short_root(),
+        "st-#{Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)}"
+      )
+
+    File.ln_s!(nested, link)
+    on_exit(fn -> File.rm(link) end)
+    assert {:error, :not_a_sandbox_temp_dir} = SandboxTemp.remove_short(link, "st")
+    assert File.dir?(nested)
+
+    assert :ok = SandboxTemp.remove_short(dir, "st")
+    refute File.exists?(dir)
+    assert :ok = SandboxTemp.remove_short(nil, "st")
+  end
 end

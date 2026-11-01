@@ -14,7 +14,7 @@ defmodule Shoestring.Terminal.Launch do
     with {:ok, %{} = _policy} <-
            Shoestring.Harness.CodexAppServer.GitSandbox.policy(workdir, request.workspace_ref),
          {:ok, executable, args, extra_env} <- command(provider, request, workdir),
-         executable when is_binary(executable) <- System.find_executable(executable) do
+         executable when is_binary(executable) <- found(executable, extra_env) do
       # Claude's macOS credential lookup needs USER even when HOME is set.
       # Preserve that identity without inheriting credential variables.
       env =
@@ -35,6 +35,18 @@ defmodule Shoestring.Terminal.Launch do
       {:ok, nil} -> {:error, :private_terminal_worktree_required}
       nil -> {:error, :terminal_executable_missing}
       {:error, _} = error -> error
+    end
+  end
+
+  # A prepared Claude sandbox's temporary directory goes when nothing launches.
+  defp found(executable, extra_env) do
+    with nil <- System.find_executable(executable) do
+      case List.keyfind(extra_env, "CLAUDE_CODE_TMPDIR", 0) do
+        {_, dir} -> Sandbox.release(dir)
+        nil -> :ok
+      end
+
+      nil
     end
   end
 
