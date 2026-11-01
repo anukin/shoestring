@@ -526,6 +526,61 @@ defmodule ShoestringWeb.ChatChannelTest do
     assert_push "state", %{"asks" => []}, 5_000
   end
 
+  test "allow for this agent is offered for one plain command and adds its rule", ctx do
+    {:ok, _, socket} =
+      subscribe_and_join(ctx.socket, ChatChannel, "conversation:#{ctx.session}", %{})
+
+    assert_push "state", %{"asks" => []}, 5_000
+
+    insert = fn agent, rule_key ->
+      ask =
+        Repo.insert!(%Shoestring.PermissionAsks.Ask{
+          goal_id: Ecto.UUID.generate(),
+          run_id: "run-1",
+          session_id: ctx.session,
+          agent: agent,
+          provider: "codex",
+          command: rule_key || "Change files under /data",
+          rule_key: rule_key
+        })
+
+      {:ok, _} = Registry.register(Shoestring.PermissionAsks.registry(), ask.id, nil)
+      ask
+    end
+
+    {:ok, _} =
+      Shoestring.Agents.create(%{
+        "name" => "Builder",
+        "slug" => "builder",
+        "kind" => "implementer",
+        "provider" => "codex",
+        "model" => "gpt-6-luna"
+      })
+
+    plain = insert.("builder", "/bin/zsh -lc 'npm test'")
+    assert_push "state", %{"asks" => [%{"for_agent" => true}]}, 5_000
+    change = insert.("builder", nil)
+    gone = insert.("no-such-agent", "/bin/zsh -lc 'npm test'")
+
+    assert_push "state",
+                %{"asks" => [%{"for_agent" => true}, %{"for_agent" => false}, _]},
+                5_000
+
+    ref = push(socket, "decide_ask", %{"ask_id" => change.id, "decision" => "allow_agent"})
+    assert_reply ref, :error, %{"reason" => "not_ruleable"}, 5_000
+    ref = push(socket, "decide_ask", %{"ask_id" => gone.id, "decision" => "allow_agent"})
+    assert_reply ref, :error, %{"reason" => "agent_gone"}, 5_000
+
+    ref = push(socket, "decide_ask", %{"ask_id" => plain.id, "decision" => "allow_agent"})
+    assert_reply ref, :ok, %{}, 5_000
+    id = plain.id
+    assert_receive {:permission_decision, ^id, :allow, nil}
+
+    assert Shoestring.Agents.get_by_slug("builder").allowed_commands == [
+             "/bin/zsh -lc 'npm test'"
+           ]
+  end
+
   test "a finished report reads as text in the detail, not as one line of JSON", ctx do
     {:ok, %{"dispatch_id" => id}} =
       Tools.call(

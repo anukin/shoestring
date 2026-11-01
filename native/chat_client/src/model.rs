@@ -53,6 +53,8 @@ pub struct Ask {
     pub command: String,
     pub reason: String,
     pub cwd: String,
+    /// Whether "allow for this agent" is offered: one plain command.
+    pub for_agent: bool,
 }
 
 /// A lesson approved in the session's repository (`docs/chat-channel.md`).
@@ -384,6 +386,7 @@ impl Model {
                     agent: clean_line(a["agent"].as_str().unwrap_or("its worker")),
                     dispatch: clean_line(a["dispatch_id"].as_str().unwrap_or_default()),
                     provider: clean_line(a["provider"].as_str().unwrap_or_default()),
+                    for_agent: a["for_agent"].as_bool() == Some(true),
                     id,
                 })
             })

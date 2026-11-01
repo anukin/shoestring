@@ -13,6 +13,13 @@ defmodule Shoestring.PermissionAsks do
   session ends. The worker's session registers each ask it is waiting on
   (`Shoestring.PermissionAsks.Registry`); an ask whose session is gone can no
   longer be answered and is recorded as expired.
+
+  "Allow for this agent" (`decide/4` with `"allow_agent"`) also adds the
+  ask's exact command to its agent's rules (`Shoestring.Agents.allow_command/2`);
+  a later ask from that agent's workers for exactly that command is allowed
+  at once, recorded as decided by `rule:<agent>`. Only a command a rule may
+  cover is offered (`rule_key`; never a file change or a compound shell
+  command), and rules are read at each ask, so removing one applies at once.
   """
 
   import Ecto.Query
@@ -22,6 +29,7 @@ defmodule Shoestring.PermissionAsks do
 
   @registry Shoestring.PermissionAsks.Registry
   @max_text 4_000
+  @decisions ["allow", "allow_agent", "deny"]
 
   def registry, do: @registry
 
@@ -29,7 +37,9 @@ defmodule Shoestring.PermissionAsks do
   Records an ask from the calling worker session, which waits for
   `{:permission_decision, ask_id, decision, note}` (decision `:allow` or
   `:deny`). `attrs`: `:goal_id`, `:run_id`, `:provider`, `:command`,
-  `:reason`, `:cwd`.
+  `:reason`, `:cwd`, and `:rule_key`, the exact command a rule may cover
+  (nil for anything else). An ask an agent's rule covers is allowed at once:
+  the decision is sent straight back.
   """
   def ask(attrs) do
     dispatch =
@@ -44,43 +54,46 @@ defmodule Shoestring.PermissionAsks do
         command: clip(attrs.command) || "(no command given)",
         reason: clip(attrs[:reason]),
         cwd: clip(attrs[:cwd]),
+        rule_key:
+          if(Shoestring.Agents.Permissions.ruleable?(attrs[:rule_key]), do: attrs[:rule_key]),
         dispatch_id: dispatch && dispatch.id,
         session_id: dispatch && dispatch.session_id,
         agent: dispatch && dispatch.agent
       })
 
     {:ok, _} = Registry.register(@registry, ask.id, nil)
-    broadcast(ask)
-    {:ok, ask}
+
+    if ask.rule_key && Shoestring.Agents.allows_command?(ask.agent, ask.rule_key) do
+      {:ok, ask} = settle(ask, "allowed", "rule:" <> ask.agent, nil)
+      send(self(), {:permission_decision, ask.id, :allow, nil})
+      {:ok, ask}
+    else
+      broadcast(ask)
+      {:ok, ask}
+    end
   end
 
   @doc """
-  The person's decision on a pending ask: `"allow"` or `"deny"`, with an
-  optional `note` for a denial (its reason reaches the worker). `{:ok, ask}`,
-  or `{:error, :not_pending | :ask_gone | :non_human_identity | :invalid_decision}`.
+  The person's decision on a pending ask: `"allow"`, `"allow_agent"` (allow,
+  and let the agent's workers run this exact command again without asking)
+  or `"deny"`, with an optional `note` for a denial (its reason reaches the
+  worker). `{:ok, ask}`, or `{:error, :not_pending | :ask_gone |
+  :non_human_identity | :invalid_decision | :not_ruleable | :agent_gone |
+  :too_many_rules | :agent_changed}`; nothing is decided or added on an error.
   """
   def decide(ask_id, decision, by, note \\ nil)
 
   def decide(ask_id, decision, "human:" <> name = by, note) when name != "" do
-    with true <- decision in ["allow", "deny"] || {:error, :invalid_decision},
+    with true <- decision in @decisions || {:error, :invalid_decision},
          %Ask{state: "pending"} = ask <- Repo.get(Ask, ask_id) || {:error, :not_pending} do
       case Registry.lookup(@registry, ask.id) do
         [{pid, _}] ->
-          state = if decision == "allow", do: "allowed", else: "denied"
-          note = if decision == "deny", do: clip(note)
+          {state, answer, note} = outcome(decision, note)
 
-          case settle(ask, state, by, note) do
-            {:ok, ask} ->
-              send(
-                pid,
-                {:permission_decision, ask.id, %{"allow" => :allow, "deny" => :deny}[decision],
-                 note}
-              )
-
-              {:ok, ask}
-
-            error ->
-              error
+          with :ok <- add_rule(decision, ask),
+               {:ok, ask} <- settle(ask, state, by, note) do
+            send(pid, {:permission_decision, ask.id, answer, if(answer == :deny, do: note)})
+            {:ok, ask}
           end
 
         [] ->
@@ -94,6 +107,20 @@ defmodule Shoestring.PermissionAsks do
   end
 
   def decide(_ask_id, _decision, _by, _note), do: {:error, :non_human_identity}
+
+  defp outcome("allow", _note), do: {"allowed", :allow, nil}
+  defp outcome("deny", note), do: {"denied", :deny, clip(note)}
+
+  defp outcome("allow_agent", _note),
+    do: {"allowed", :allow, "Allowed for this agent: it runs this command again without asking."}
+
+  defp add_rule("allow_agent", %Ask{rule_key: nil}), do: {:error, :not_ruleable}
+
+  defp add_rule("allow_agent", ask) do
+    with {:ok, _agent} <- Shoestring.Agents.allow_command(ask.agent, ask.rule_key), do: :ok
+  end
+
+  defp add_rule(_decision, _ask), do: :ok
 
   # Only a pending ask is decided, once.
   defp settle(ask, state, by, note) do

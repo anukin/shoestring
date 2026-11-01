@@ -16,7 +16,7 @@ defmodule Shoestring.Agents do
   import Ecto.Query
 
   alias Shoestring.{AgentProfiles, Repo}
-  alias Shoestring.Agents.Agent
+  alias Shoestring.Agents.{Agent, Permissions}
   alias Shoestring.AgentProfiles.Definition
 
   @labels %{
@@ -76,6 +76,51 @@ defmodule Shoestring.Agents do
       end
     end)
   end
+
+  @doc """
+  Adds `command` to the agent's `allowed_commands` ("allow for this agent"):
+  its workers may then run that exact command outside the sandbox without
+  asking. Only an implementer's, never opencode's, and only a plain command
+  (`Shoestring.Agents.Permissions.ruleable?/1`). Teams keep no copy of the
+  rules, so no team revision is made.
+  """
+  def allow_command(slug, command) do
+    with %Agent{} = agent <- get_by_slug(slug || "") || {:error, :agent_gone},
+         true <-
+           (agent.kind == "implementer" and agent.provider != "opencode") ||
+             {:error, :not_ruleable},
+         true <- Permissions.ruleable?(command) || {:error, :not_ruleable} do
+      cond do
+        command in agent.allowed_commands ->
+          {:ok, agent}
+
+        length(agent.allowed_commands) >= Permissions.max_rules() ->
+          {:error, :too_many_rules}
+
+        true ->
+          # Only the rules change; the lock makes an open edit form reload
+          # instead of saving over the new rule.
+          agent
+          |> Ecto.Changeset.change(allowed_commands: agent.allowed_commands ++ [command])
+          |> Ecto.Changeset.optimistic_lock(:lock_version)
+          |> Repo.update(stale_error_field: :lock_version)
+          |> case do
+            {:ok, agent} -> {:ok, agent}
+            {:error, _changeset} -> {:error, :agent_changed}
+          end
+      end
+    end
+  end
+
+  @doc "Whether the agent `slug` has a rule for exactly `command`, read now."
+  def allows_command?(slug, command) when is_binary(slug) and is_binary(command) do
+    case get_by_slug(slug) do
+      %Agent{kind: "implementer", allowed_commands: commands} -> command in commands
+      _ -> false
+    end
+  end
+
+  def allows_command?(_slug, _command), do: false
 
   defp refresh_teams(agent) do
     agent
@@ -225,6 +270,7 @@ defmodule Shoestring.Agents do
       |> abilities(provider)
       |> with_lessons(Map.get(agent, :may_propose_lessons), kind)
       |> with_permissions(Shoestring.Agents.Permissions.snapshot(agent), provider)
+      |> with_rules(Map.get(agent, :allowed_commands), kind)
 
   def abilities(%{"kind" => kind, "provider" => provider} = agent),
     do:
@@ -239,7 +285,7 @@ defmodule Shoestring.Agents do
 
   defp with_permissions(abilities, permissions, provider) do
     network? = (permissions["network_hosts"] || []) != []
-    asks? = permissions["may_ask"] == true and provider == "codex"
+    asks? = permissions["may_ask"] == true and provider in ["codex", "claude"]
 
     cannot =
       abilities.cannot
@@ -252,6 +298,18 @@ defmodule Shoestring.Agents do
         cannot: cannot
     }
   end
+
+  # The commands its workers run outside the sandbox without asking. Read
+  # live from the agent, never from a snapshot.
+  defp with_rules(abilities, [_ | _] = commands, "implementer"),
+    do: %{
+      abilities
+      | can:
+          abilities.can ++
+            Enum.map(commands, &("Run without asking you, outside its sandbox: " <> &1))
+    }
+
+  defp with_rules(abilities, _commands, _kind), do: abilities
 
   @lessons_line "Propose lessons for the repository"
 

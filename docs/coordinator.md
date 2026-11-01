@@ -220,6 +220,18 @@ Claude Code's permission requests (only a command it wants to run outside
 the sandbox asks; commands inside it run as before). opencode workers do not
 ask. An ask whose worker stops (a cancel, a restart) ends unanswered.
 
+**Allow for this agent.** For one plain command, `a` in the popup (or
+`shoestring asks allow ASK --for-agent`) allows it and lets that agent's
+workers run exactly the same command again without asking; the ask is
+recorded as decided by `rule:<agent>`. Only the exact text matches, never a
+prefix: a different URL or one more flag asks again. A file change, or a
+command joined with `;`, `&`, `|`, backquotes, `$(` or a line break, is
+never offered and always asks. The agent's page lists these commands under
+"Commands it may run outside its sandbox without asking" (at most 20); you
+can type one there or delete its line to remove it. They are read each time
+a worker asks, so a change applies at once, also to workers already
+running.
+
 ## 2. The coordinator dispatches
 
 ```sh

@@ -9,21 +9,32 @@ defmodule Shoestring.CLI.Commands.Asks do
 
   @help """
   shoestring asks [--session ID | --all] [--json]
-  shoestring asks allow ASK [--by human:NAME]
+  shoestring asks allow ASK [--for-agent] [--by human:NAME]
   shoestring asks deny ASK [--note TEXT] [--by human:NAME]
 
   A worker whose agent may ask (the Agents page) can ask you, while it works,
   to run one command outside its sandbox. Allowing it runs that one command
-  with full access to your files, anywhere you can write; its network stays
-  as the agent's settings allow. Denying it lets the worker go on without
-  it; --note is the reason it is told. The worker waits for your answer:
+  with full access to your files, anywhere you can write; a Codex command's
+  network stays as the agent's settings allow, a Claude command has no
+  sandbox at all. --for-agent also lets that agent's workers run exactly
+  this command again without asking (offered for one plain command, not a
+  file change or a command joined with ;, &, | or $(...); the Agents page
+  lists and removes these). Denying it lets the worker go on without it;
+  --note is the reason it is told. The worker waits for your answer:
   nothing decides an ask on a timer. ASK is its id or the first 8
   characters of it. `allow` and `deny` refuse without a terminal, so an
   agent cannot answer as you. The session is ID or SHOESTRING_SESSION;
   --all lists every session's.
   """
 
-  @switches [session: :string, all: :boolean, json: :boolean, note: :string, by: :string]
+  @switches [
+    session: :string,
+    all: :boolean,
+    json: :boolean,
+    note: :string,
+    by: :string,
+    for_agent: :boolean
+  ]
 
   def help, do: @help
 
@@ -41,6 +52,13 @@ defmodule Shoestring.CLI.Commands.Asks do
             )
 
         by = opts[:by] || WorkLoop.default_human()
+
+        decision =
+          cond do
+            opts[:for_agent] && decision == "allow" -> "allow_agent"
+            opts[:for_agent] -> Refusal.refuse!("--for-agent goes with allow.")
+            true -> decision
+          end
 
         context.with_repo.(fn _repo ->
           case PermissionAsks.decide(find!(ask).id, decision, by, opts[:note]) do
@@ -78,7 +96,12 @@ defmodule Shoestring.CLI.Commands.Asks do
           "#{String.slice(ask.id, 0, 8)}  #{ask.agent || "worker"} (#{ask.provider}) asks to run:\n" <>
             "    $ #{ask.command}\n" <>
             if(ask.reason, do: "    why: #{ask.reason}\n", else: "") <>
-            "    shoestring asks allow #{String.slice(ask.id, 0, 8)}   |   shoestring asks deny #{String.slice(ask.id, 0, 8)} --note \"...\""
+            "    shoestring asks allow #{String.slice(ask.id, 0, 8)}   |   shoestring asks deny #{String.slice(ask.id, 0, 8)} --note \"...\"" <>
+            if(ask.rule_key,
+              do:
+                "\n    shoestring asks allow #{String.slice(ask.id, 0, 8)} --for-agent   (and again without asking)",
+              else: ""
+            )
         )
       end
     end
@@ -94,6 +117,7 @@ defmodule Shoestring.CLI.Commands.Asks do
       "command" => ask.command,
       "reason" => ask.reason,
       "cwd" => ask.cwd,
+      "for_agent" => not is_nil(ask.rule_key),
       "asked_at" => ask.inserted_at
     }
 
@@ -116,5 +140,17 @@ defmodule Shoestring.CLI.Commands.Asks do
   def message(:ask_gone), do: "That worker is no longer running; its ask has ended."
   def message(:non_human_identity), do: "--by must be human:NAME"
   def message(:invalid_decision), do: "Answer allow or deny."
+
+  def message(:not_ruleable),
+    do:
+      "That ask cannot be allowed for the agent (a file change, or a command joined with ;, &, | or $(...)); allow it once."
+
+  def message(:agent_gone), do: "Its agent no longer exists; allow it once."
+
+  def message(:too_many_rules),
+    do:
+      "That agent already has #{Shoestring.Agents.Permissions.max_rules()} commands; remove one on the Agents page."
+
+  def message(:agent_changed), do: "Its agent was just changed; try again."
   def message(other), do: "Not answered: #{inspect(other)}"
 end

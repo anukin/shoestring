@@ -97,6 +97,75 @@ defmodule Shoestring.Agents.PermissionsTest do
           )
   end
 
+  # 1571f8e let Claude workers ask but still listed "Ask for more" under
+  # what a Claude implementer cannot do.
+  test "an implementer that may ask reads so, for Codex and Claude; opencode never asks" do
+    for provider <- ["codex", "claude"] do
+      abilities = Agents.abilities(%{kind: "implementer", provider: provider, may_ask: true})
+
+      assert Enum.any?(abilities.can, &String.starts_with?(&1, "Ask you, while it works")),
+             provider
+
+      refute Enum.any?(abilities.cannot, &String.starts_with?(&1, "Ask for more")), provider
+
+      off = Agents.abilities(%{kind: "implementer", provider: provider, may_ask: false})
+      refute Enum.any?(off.can, &String.starts_with?(&1, "Ask you, while it works")), provider
+    end
+  end
+
+  # "Allow for this agent": exact commands only, never a compound one.
+  test "a rule is one plain command; compound shell commands are refused" do
+    assert Permissions.ruleable?("/bin/zsh -lc 'curl -sS https://example.invalid/notes'")
+    assert Permissions.ruleable?("npm install --offline")
+
+    for compound <- [
+          "a; b",
+          "a && b",
+          "a || b",
+          "a | b",
+          "a & ",
+          "echo `id`",
+          "echo $(id)",
+          "a\nb",
+          "a\rb",
+          " padded",
+          "",
+          String.duplicate("x", 501),
+          nil
+        ] do
+      refute Permissions.ruleable?(compound), inspect(compound)
+    end
+
+    cast = fn attrs ->
+      %Agent{}
+      |> Ecto.Changeset.cast(Permissions.normalize(attrs), [:kind, :provider, :allowed_commands])
+      |> Permissions.validate(home: @home, state: @state)
+    end
+
+    ok = cast.(Map.put(base("claude"), "allowed_commands", "npm test\n\n make lint \n"))
+    assert ok.valid?
+    assert Ecto.Changeset.get_field(ok, :allowed_commands) == ["npm test", "make lint"]
+
+    assert error(cast.(Map.put(base("codex"), "allowed_commands", "make && make install"))) =~
+             "one plain command"
+
+    assert error(
+             cast.(
+               Map.put(
+                 base("codex"),
+                 "allowed_commands",
+                 Enum.map_join(1..21, "\n", &"echo #{&1}")
+               )
+             )
+           ) =~
+             "at most 20 commands"
+
+    assert error(cast.(Map.put(base("opencode"), "allowed_commands", "npm test"))) =~ "fixed"
+
+    assert error(cast.(Map.put(base("claude", "reviewer"), "allowed_commands", "npm test"))) =~
+             "only an implementer"
+  end
+
   test "a saved agent's additions reach its team snapshot and read plainly on the page" do
     {:ok, agent} =
       Agents.create(%{

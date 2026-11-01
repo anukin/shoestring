@@ -103,6 +103,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.PermissionAsksTest do
              PermissionAsks.for_goal(ctx.goal_id)
 
     assert ask.command == "curl -sS https://example.invalid/notes"
+    assert ask.rule_key == "curl -sS https://example.invalid/notes"
     assert ask.reason == "Fetch the release notes"
     assert PermissionAsks.waiting?(ask)
     # Nothing answers it by itself.

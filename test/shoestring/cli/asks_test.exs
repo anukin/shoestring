@@ -85,4 +85,43 @@ defmodule Shoestring.CLI.AsksTest do
     assert_raise Refusal, ~r/already answered/, fn -> Asks.run(["allow", short], context()) end
     assert_raise Refusal, ~r/No such ask/, fn -> Asks.run(["allow", "nothere1"], context()) end
   end
+
+  test "--for-agent allows and lets the agent run exactly that command again without asking" do
+    {:ok, _} = Shoestring.ModelCatalog.add("codex", "gpt-6-luna")
+
+    {:ok, _} =
+      Shoestring.Agents.create(%{
+        "name" => "Builder",
+        "slug" => "builder",
+        "kind" => "implementer",
+        "provider" => "codex",
+        "model" => "gpt-6-luna"
+      })
+
+    ask = waiting!("s1")
+    Repo.update!(Ecto.Changeset.change(ask, rule_key: ask.command))
+    short = String.slice(ask.id, 0, 8)
+
+    Asks.run([], context())
+    assert_receive {:mix_shell, :info, [text]}
+    assert text =~ "shoestring asks allow #{short} --for-agent"
+
+    assert_raise Refusal, ~r/goes with allow/, fn ->
+      Asks.run(["deny", short, "--for-agent"], context())
+    end
+
+    Asks.run(["allow", short, "--for-agent"], context())
+    assert_receive {:mix_shell, :info, [json]}
+    assert %{"state" => "allowed"} = Jason.decode!(json)
+    assert Shoestring.Agents.get_by_slug("builder").allowed_commands == [ask.command]
+
+    # A file change or compound command is refused, and stays waiting.
+    other = waiting!("s1")
+
+    assert_raise Refusal, ~r/cannot be allowed for the agent/, fn ->
+      Asks.run(["allow", String.slice(other.id, 0, 8), "--for-agent"], context())
+    end
+
+    assert PermissionAsks.waiting?(Repo.get(Ask, other.id))
+  end
 end

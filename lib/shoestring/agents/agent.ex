@@ -49,6 +49,9 @@ defmodule Shoestring.Agents.Agent do
     field :network_hosts, {:array, :string}, default: []
     # Whether its worker may ask the person, mid-run, for more.
     field :may_ask, :boolean, default: true
+    # Exact commands its workers may run outside the sandbox without asking
+    # again ("allow for this agent", `Shoestring.Agents.Permissions`).
+    field :allowed_commands, {:array, :string}, default: []
     field :lock_version, :integer, default: 1
     timestamps(type: :utc_datetime_usec)
   end
@@ -71,7 +74,8 @@ defmodule Shoestring.Agents.Agent do
           :read_paths,
           :write_paths,
           :network_hosts,
-          :may_ask
+          :may_ask,
+          :allowed_commands
         ],
         empty_values: [""]
       )

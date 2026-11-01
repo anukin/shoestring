@@ -123,6 +123,8 @@ defmodule Shoestring.PermissionAsksTest do
     assert [%Ask{state: "pending"} = ask] = PermissionAsks.for_goal(ctx.goal_id)
     assert ask.command =~ "curl -sS https://example.invalid/notes"
     assert ask.reason == "Fetch the release notes"
+    # The exact command is what a rule for its agent would match.
+    assert ask.rule_key == "/bin/zsh -lc 'curl -sS https://example.invalid/notes'"
     assert PermissionAsks.waiting?(ask)
     # Nothing answers it by itself.
     _ = :sys.get_state(session)
@@ -167,6 +169,20 @@ defmodule Shoestring.PermissionAsksTest do
     push(session, transport, @approval)
     assert answer(transport, 77)["result"] == %{"decision" => "decline"}
     assert PermissionAsks.for_goal(ctx.goal_id) == []
+  end
+
+  test "a file change is asked, but never offered a rule", ctx do
+    {session, transport} = session!(ctx, %{"may_ask" => true})
+
+    push(session, transport, %{
+      "jsonrpc" => "2.0",
+      "id" => 78,
+      "method" => "item/fileChange/requestApproval",
+      "params" => %{"threadId" => "thread-1", "turnId" => "turn-1", "grantRoot" => "/data"}
+    })
+
+    assert [%Ask{command: "Change files under /data", rule_key: nil}] =
+             PermissionAsks.for_goal(ctx.goal_id)
   end
 
   test "an unsupported request is refused so the worker never waits on it", ctx do

@@ -19,12 +19,24 @@ defmodule Shoestring.Agents.Permissions do
 
   Never your home folder itself or anything above it, nor Shoestring's own
   state (its database, keys and every run's worktree).
+
+  `allowed_commands` are the exact commands its workers may run outside the
+  sandbox without asking again ("allow for this agent" on an ask, or typed
+  on the Agents page). A rule matches only that exact command text, never a
+  prefix or pattern, and never a compound shell command (`;`, `&`, `|`,
+  backquotes, `$(`, a line break): those ask every time. Rules are read when
+  a worker asks, so a change applies at once, to running workers too. They
+  are not part of a dispatch's snapshot.
   """
 
   import Ecto.Changeset
 
   @fields [:read_paths, :write_paths, :network_hosts]
+  @list_fields @fields ++ [:allowed_commands]
   @max_paths 10
+  @max_rules 20
+  @max_command 500
+  @compound ~r/[;&|`\r\n]|\$\(/
   @max_hosts 20
   @max_bytes 500
   @host ~r/\A(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}\z/
@@ -33,7 +45,7 @@ defmodule Shoestring.Agents.Permissions do
 
   @doc "Form text (one entry per line) into lists; lists pass through."
   def normalize(attrs) when is_map(attrs) do
-    Enum.reduce(@fields, attrs, fn field, attrs ->
+    Enum.reduce(@list_fields, attrs, fn field, attrs ->
       Enum.reduce([field, Atom.to_string(field)], attrs, fn key, attrs ->
         case Map.get(attrs, key) do
           text when is_binary(text) ->
@@ -56,7 +68,7 @@ defmodule Shoestring.Agents.Permissions do
     state = Keyword.get_lazy(opts, :state, &Shoestring.State.root/0) |> Path.expand()
     kind = get_field(changeset, :kind)
     provider = get_field(changeset, :provider)
-    set? = Enum.any?(@fields, &(get_field(changeset, &1) not in [nil, []]))
+    set? = Enum.any?(@list_fields, &(get_field(changeset, &1) not in [nil, []]))
 
     cond do
       set? and kind != "implementer" ->
@@ -70,7 +82,39 @@ defmodule Shoestring.Agents.Permissions do
         |> validate_paths(:read_paths, home, state)
         |> validate_paths(:write_paths, home, state)
         |> validate_hosts(provider)
+        |> validate_commands()
     end
+  end
+
+  @doc """
+  Whether a rule may cover `command`: one plain command of at most
+  #{@max_command} bytes, not a compound shell command.
+  """
+  def ruleable?(command) when is_binary(command),
+    do:
+      String.trim(command) == command and command != "" and byte_size(command) <= @max_command and
+        not String.contains?(command, <<0>>) and not Regex.match?(@compound, command)
+
+  def ruleable?(_command), do: false
+
+  def max_rules, do: @max_rules
+
+  defp validate_commands(changeset) do
+    validate_change(changeset, :allowed_commands, fn :allowed_commands, commands ->
+      cond do
+        length(commands) > @max_rules ->
+          [allowed_commands: "at most #{@max_rules} commands"]
+
+        bad = Enum.find(commands, &(not ruleable?(&1))) ->
+          [
+            allowed_commands:
+              "#{String.slice(bad, 0, 60)}: one plain command (no ;, &, |, backquotes, $( or line breaks; at most #{@max_command} characters)"
+          ]
+
+        true ->
+          []
+      end
+    end)
   end
 
   defp validate_paths(changeset, field, home, state) do

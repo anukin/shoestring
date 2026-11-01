@@ -214,24 +214,35 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
         if !ask.reason.is_empty() {
             body.push(format!("Why: {}", ask.reason));
         }
-        body.push(
+        body.push(format!(
             "Allowing runs this one command with full access to your files, anywhere you \
-             can write; its network stays as the agent's settings allow. It waits for you: \
-             nothing decides this on a timer."
-                .into(),
-        );
+             can write; {} It waits for you: nothing decides this on a timer.",
+            if ask.provider == "codex" {
+                "its network stays as the agent's settings allow."
+            } else {
+                "it runs with no sandbox, network included."
+            }
+        ));
+        const ONCE: &[(&str, &str)] = &[
+            ("y", "allow once"),
+            ("n", "deny"),
+            ("r", "deny with a reason"),
+            ("Esc", "later"),
+        ];
+        const FOR_AGENT: &[(&str, &str)] = &[
+            ("y", "allow once"),
+            ("a", "allow for this agent"),
+            ("n", "deny"),
+            ("r", "deny with a reason"),
+            ("Esc", "later"),
+        ];
         draw_attention(
             frame,
             &Attention {
                 title: "A worker asks to run a command outside its sandbox",
                 tone: Tone::Question,
                 body,
-                keys: &[
-                    ("y", "allow once"),
-                    ("n", "deny"),
-                    ("r", "deny with a reason"),
-                    ("Esc", "later"),
-                ],
+                keys: if ask.for_agent { FOR_AGENT } else { ONCE },
             },
         );
     }
@@ -970,7 +981,19 @@ mod tests {
         assert!(text.contains("nothing decides this on a timer"));
         assert!(text.contains(" y  allow once"));
         assert!(text.contains(" r  deny with a reason"));
+        assert!(text.contains("its network stays as the agent's settings allow"));
+        assert!(!text.contains("allow for this agent"));
         assert!(!text.contains('\u{1b}'));
+
+        // A Claude command runs with no sandbox; one plain command may be
+        // allowed for the agent.
+        model.apply_state(
+            &json!({"asks": [{"ask_id": "a2", "dispatch_id": "d1", "agent": "builder",
+            "provider": "claude", "command": "curl https://example.invalid", "for_agent": true}]}),
+        );
+        let text = screen(&model, 120, 30);
+        assert!(text.contains("no sandbox, network included"));
+        assert!(text.contains(" a  allow for this agent"));
     }
 
     #[test]

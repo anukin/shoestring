@@ -227,10 +227,10 @@ fn send_answer(
         note,
     });
     model.asks_answered.insert(ask.id.clone());
-    model.note(if decision == "allow" {
-        "Allowed once"
-    } else {
-        "Denied"
+    model.note(match decision {
+        "allow" => "Allowed once",
+        "allow_agent" => "Allowed; this agent runs it again without asking",
+        _ => "Denied",
     });
 }
 
@@ -265,6 +265,9 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
     if let Some(ask) = model.current_ask().cloned() {
         match key.code {
             KeyCode::Char('y') => send_answer(model, outbox, &ask, "allow", None),
+            KeyCode::Char('a') if ask.for_agent => {
+                send_answer(model, outbox, &ask, "allow_agent", None)
+            }
             KeyCode::Char('n') => send_answer(model, outbox, &ask, "deny", None),
             KeyCode::Char('r') => model.deny_reason = Some((ask, String::new())),
             KeyCode::Esc => {
@@ -567,6 +570,25 @@ mod tests {
                 note: None
             }
         );
+
+        // `a` allows for the agent only when the service offers it.
+        model.apply_state(&json!({"asks": [ask("a5")]}));
+        key(&mut model, KeyCode::Char('a'), &tx);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(model.current_ask().unwrap().id, "a5");
+        let mut plain = ask("a6");
+        plain["for_agent"] = json!(true);
+        model.apply_state(&json!({"asks": [plain]}));
+        key(&mut model, KeyCode::Char('a'), &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Outgoing::DecideAsk {
+                id: "a6".into(),
+                decision: "allow_agent".into(),
+                note: None
+            }
+        );
+        assert!(model.current_ask().is_none());
 
         // Disconnected, nothing is sent and the ask stays.
         model.apply_state(&json!({"asks": [ask("a4")]}));

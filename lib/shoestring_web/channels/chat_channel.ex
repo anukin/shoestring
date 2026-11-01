@@ -225,6 +225,8 @@ defmodule ShoestringWeb.ChatChannel do
         "command" => ask.command,
         "reason" => ask.reason,
         "cwd" => ask.cwd,
+        # Whether "allow for this agent" is offered: one plain command.
+        "for_agent" => not is_nil(ask.rule_key),
         "asked_at" => ask.inserted_at
       }
     end
@@ -338,7 +340,7 @@ defmodule ShoestringWeb.ChatChannel do
   # The person answers a worker's ask from its popup: allow it once, or deny
   # it, with an optional reason the worker is told.
   def handle_in("decide_ask", %{"ask_id" => id, "decision" => decision} = payload, socket)
-      when is_binary(id) and decision in ["allow", "deny"] do
+      when is_binary(id) and decision in ["allow", "allow_agent", "deny"] do
     session = socket.assigns.conversation.session_id
     note = payload["note"]
     note = if is_binary(note), do: String.slice(note, 0, @max_reason)
@@ -451,7 +453,7 @@ defmodule ShoestringWeb.ChatChannel do
   end
 
   # Reasons the client can act on; anything else is logged, not echoed.
-  @codes ~w(message_too_large pending_input_too_large context_limit_reached empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity turn_running handoff_in_progress lesson_not_found lesson_changed ask_not_found not_pending ask_gone)a
+  @codes ~w(message_too_large pending_input_too_large context_limit_reached empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity turn_running handoff_in_progress lesson_not_found lesson_changed ask_not_found not_pending ask_gone not_ruleable agent_gone too_many_rules agent_changed)a
 
   defp code(reason) when reason in @codes, do: Atom.to_string(reason)
   defp code({:invalid_payload, _type, _version, _changeset}), do: "invalid_message"

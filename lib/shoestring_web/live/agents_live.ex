@@ -373,6 +373,13 @@ defmodule ShoestringWeb.AgentsLive do
                 label="May ask you, while it works, to run one command outside its sandbox (Codex and Claude; you decide each time)"
               />
               <.input
+                field={@form[:allowed_commands]}
+                type="textarea"
+                label="Commands it may run outside its sandbox without asking (exactly as written; applies at once, also to workers already running)"
+                value={lines(@form[:allowed_commands].value)}
+                rows="2"
+              />
+              <.input
                 field={@form[:read_paths]}
                 type="textarea"
                 label="Folders it may also read"

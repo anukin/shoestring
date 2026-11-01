@@ -551,7 +551,8 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
               provider: "claude",
               command: ask_command(request["tool_name"], input),
               reason: input["description"] || request["description"],
-              cwd: Keyword.get(state.opts, :workdir)
+              cwd: Keyword.get(state.opts, :workdir),
+              rule_key: if(request["tool_name"] == "Bash", do: input["command"])
             })
 
           %{state | asks: Map.put(state.asks, ask.id, %{request_id: id, input: input})}

@@ -106,6 +106,29 @@ defmodule ShoestringWeb.AgentsLiveTest do
     {:ok, edit, _} = live(conn, "/agents/#{worker.slug}/edit")
     assert edit |> element("#agent_write_paths") |> render() =~ "/data/out\n/data/cache"
 
+    # Commands it may run without asking: listed, refused when compound,
+    # removed by deleting their line; teams keep no copy.
+    {:ok, _} = Agents.allow_command(worker.slug, "/bin/zsh -lc 'npm test'")
+    {:ok, edit, _} = live(conn, "/agents/#{worker.slug}/edit")
+    assert edit |> element("#agent_allowed_commands") |> render() =~ "npm test"
+    {:ok, show, _} = live(conn, "/agents/#{worker.slug}")
+
+    assert has_element?(
+             show,
+             "#agent-#{worker.slug}-can",
+             "Run without asking you, outside its sandbox: /bin/zsh -lc 'npm test'"
+           )
+
+    edit
+    |> form("#agent-form", agent: %{allowed_commands: "make && make install"})
+    |> render_submit()
+
+    assert has_element?(edit, "#agent-errors", "one plain command")
+
+    edit |> form("#agent-form", agent: %{allowed_commands: ""}) |> render_submit()
+    assert {"/agents/" <> _, _} = assert_redirect(edit)
+    assert Agents.get(worker.id).allowed_commands == []
+
     # Jobs other than implementer have no such section.
     coordinator = Enum.find(Agents.list(), &(&1.kind == "coordinator"))
     {:ok, other, _} = live(conn, "/agents/#{coordinator.slug}/edit")

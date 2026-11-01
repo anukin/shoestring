@@ -606,7 +606,8 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
           provider: "codex",
           command: ask_command(method, params),
           reason: params["reason"],
-          cwd: params["cwd"]
+          cwd: params["cwd"],
+          rule_key: rule_key(method, params)
         })
 
       entry = %{rpc_id: id, thread_id: params["threadId"], turn_id: params["turnId"]}
@@ -1187,6 +1188,13 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
 
   defp ask_command("item/fileChange/requestApproval", params),
     do: "Change files" <> if(params["grantRoot"], do: " under " <> params["grantRoot"], else: "")
+
+  # Only a command, never a file change, may be allowed for the agent.
+  defp rule_key("item/commandExecution/requestApproval", %{"command" => command})
+       when is_binary(command),
+       do: command
+
+  defp rule_key(_method, _params), do: nil
 
   defp expire_asks(state),
     do: Enum.each(Map.keys(state.asks), &Shoestring.PermissionAsks.expire/1)
