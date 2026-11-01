@@ -471,6 +471,61 @@ defmodule ShoestringWeb.ChatChannelTest do
     assert_reply ref, :error, %{"reason" => "lesson_not_found"}, 5_000
   end
 
+  test "a worker's ask is in the state; the person answers it from chat, for this session only",
+       ctx do
+    {:ok, _, socket} =
+      subscribe_and_join(ctx.socket, ChatChannel, "conversation:#{ctx.session}", %{})
+
+    assert_push "state", %{"asks" => []}, 5_000
+
+    # The test process stands in for the worker session waiting on the asks.
+    insert = fn session ->
+      ask =
+        Repo.insert!(%Shoestring.PermissionAsks.Ask{
+          goal_id: Ecto.UUID.generate(),
+          run_id: "run-1",
+          session_id: session,
+          agent: "builder",
+          provider: "codex",
+          command: "curl https://example.invalid",
+          reason: "Fetch notes"
+        })
+
+      {:ok, _} = Registry.register(Shoestring.PermissionAsks.registry(), ask.id, nil)
+      ask
+    end
+
+    mine = insert.(ctx.session)
+    other = insert.("someone-else")
+
+    assert_push "state",
+                %{"asks" => [%{"ask_id" => id, "command" => "curl https://example.invalid"}]},
+                5_000
+
+    assert id == mine.id
+
+    ref = push(socket, "decide_ask", %{"ask_id" => other.id, "decision" => "allow"})
+    assert_reply ref, :error, %{"reason" => "ask_not_found"}, 5_000
+    assert Repo.get(Shoestring.PermissionAsks.Ask, other.id).state == "pending"
+
+    ref =
+      push(socket, "decide_ask", %{
+        "ask_id" => mine.id,
+        "decision" => "deny",
+        "note" => "Use the cache."
+      })
+
+    assert_reply ref, :ok, %{}, 5_000
+    assert_receive {:permission_decision, ^id, :deny, "Use the cache."}
+
+    assert %{state: "denied", decided_by: "human:" <> _} =
+             Repo.get(Shoestring.PermissionAsks.Ask, mine.id)
+
+    ref = push(socket, "decide_ask", %{"ask_id" => mine.id, "decision" => "allow"})
+    assert_reply ref, :error, %{"reason" => "not_pending"}, 5_000
+    assert_push "state", %{"asks" => []}, 5_000
+  end
+
   test "a finished report reads as text in the detail, not as one line of JSON", ctx do
     {:ok, %{"dispatch_id" => id}} =
       Tools.call(

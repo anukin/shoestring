@@ -109,10 +109,15 @@ defmodule Shoestring.Agents.PermissionsTest do
         "network_hosts" => "*"
       })
 
+    # An implementer may ask by default; that is recorded too.
     assert Permissions.snapshot(agent) == %{
              "write_paths" => ["/data/out"],
-             "network_hosts" => ["*"]
+             "network_hosts" => ["*"],
+             "may_ask" => true
            }
+
+    assert Permissions.snapshot(%{agent | write_paths: [], network_hosts: [], may_ask: false}) ==
+             nil
 
     abilities = Agents.abilities(agent)
     assert "Also read and write /data/out" in abilities.can

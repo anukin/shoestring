@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 
 use shoestring_chat::connection::{self, Config, Outgoing, Shared, lock};
 use shoestring_chat::editor::Command;
-use shoestring_chat::model::{Connection, Detail, Model};
+use shoestring_chat::model::{Ask, Connection, Detail, Model};
 use shoestring_chat::ui;
 
 const FRAME: Duration = Duration::from_millis(33);
@@ -208,6 +208,32 @@ async fn input(model: &Shared, outbox: &mpsc::UnboundedSender<Outgoing>) -> io::
     Ok(())
 }
 
+/// Sends the person's answer to an ask and hides it until the service drops it.
+fn send_answer(
+    model: &mut Model,
+    outbox: &mpsc::UnboundedSender<Outgoing>,
+    ask: &Ask,
+    decision: &str,
+    note: Option<String>,
+) {
+    if model.connection != Connection::Live {
+        model.note("Disconnected; the answer was not sent");
+        return;
+    }
+    let note = note.filter(|n| !n.is_empty());
+    let _ = outbox.send(Outgoing::DecideAsk {
+        id: ask.id.clone(),
+        decision: decision.into(),
+        note,
+    });
+    model.asks_answered.insert(ask.id.clone());
+    model.note(if decision == "allow" {
+        "Allowed once"
+    } else {
+        "Denied"
+    });
+}
+
 /// Applies one key; true when the person is leaving.
 fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<Outgoing>) -> bool {
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -215,6 +241,43 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
 
     if control && key.code == KeyCode::Char('c') {
         return true;
+    }
+    // A denial's reason being typed takes every key until sent or dropped.
+    if let Some((ask, mut reason)) = model.deny_reason.take() {
+        match key.code {
+            KeyCode::Enter => {
+                send_answer(model, outbox, &ask, "deny", Some(reason.trim().to_string()));
+            }
+            KeyCode::Esc => {}
+            KeyCode::Backspace => {
+                reason.pop();
+                model.deny_reason = Some((ask, reason));
+            }
+            KeyCode::Char(c) if !control && reason.chars().count() < 500 => {
+                reason.push(c);
+                model.deny_reason = Some((ask, reason));
+            }
+            _ => model.deny_reason = Some((ask, reason)),
+        }
+        return false;
+    }
+    // A worker's ask waits for the person; Esc puts it off until `A`.
+    if let Some(ask) = model.current_ask().cloned() {
+        match key.code {
+            KeyCode::Char('y') => send_answer(model, outbox, &ask, "allow", None),
+            KeyCode::Char('n') => send_answer(model, outbox, &ask, "deny", None),
+            KeyCode::Char('r') => model.deny_reason = Some((ask, String::new())),
+            KeyCode::Esc => {
+                model.asks_later.insert(ask.id.clone());
+                model.note("The worker keeps waiting; press A to answer it");
+            }
+            _ => {}
+        }
+        return false;
+    }
+    if key.code == KeyCode::Char('A') && !model.asks_later.is_empty() {
+        model.asks_later.clear();
+        return false;
     }
     if let Some(lesson) = model.retire.take() {
         if key.code == KeyCode::Char('y') {
@@ -440,6 +503,79 @@ mod tests {
     fn key(model: &mut Model, code: KeyCode, tx: &mpsc::UnboundedSender<Outgoing>) {
         key_pressed(model, KeyEvent::new(code, KeyModifiers::NONE), tx);
     }
+    #[test]
+    fn a_workers_ask_waits_for_the_persons_answer_and_takes_a_typed_reason() {
+        let mut model = Model::new("s1");
+        model.connection = Connection::Live;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let ask = |id: &str| {
+            json!({"ask_id": id, "dispatch_id": "d1", "agent": "builder", "provider": "codex",
+                   "command": "/bin/zsh -lc 'curl https://example.invalid'", "reason": "Fetch notes"})
+        };
+        model.apply_state(&json!({"asks": [ask("a1"), ask("a2")]}));
+        assert_eq!(model.current_ask().unwrap().id, "a1");
+
+        // Other keys answer nothing; the composer gets nothing either.
+        key(&mut model, KeyCode::Char('x'), &tx);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(model.current_ask().unwrap().id, "a1");
+
+        key(&mut model, KeyCode::Char('y'), &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Outgoing::DecideAsk {
+                id: "a1".into(),
+                decision: "allow".into(),
+                note: None
+            }
+        );
+        // Hidden at once, before the service drops it.
+        assert_eq!(model.current_ask().unwrap().id, "a2");
+
+        // r types a reason; Backspace edits it; Enter sends the denial with it.
+        key(&mut model, KeyCode::Char('r'), &tx);
+        for c in "use cachx".chars() {
+            key(&mut model, KeyCode::Char(c), &tx);
+        }
+        key(&mut model, KeyCode::Backspace, &tx);
+        key(&mut model, KeyCode::Char('e'), &tx);
+        assert!(rx.try_recv().is_err());
+        key(&mut model, KeyCode::Enter, &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Outgoing::DecideAsk {
+                id: "a2".into(),
+                decision: "deny".into(),
+                note: Some("use cache".into())
+            }
+        );
+        assert!(model.current_ask().is_none());
+
+        // A new ask; Esc puts it off without answering, A brings it back.
+        model.apply_state(&json!({"asks": [ask("a3")]}));
+        key(&mut model, KeyCode::Esc, &tx);
+        assert!(model.current_ask().is_none());
+        assert!(rx.try_recv().is_err());
+        key(&mut model, KeyCode::Char('A'), &tx);
+        assert_eq!(model.current_ask().unwrap().id, "a3");
+        key(&mut model, KeyCode::Char('n'), &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Outgoing::DecideAsk {
+                id: "a3".into(),
+                decision: "deny".into(),
+                note: None
+            }
+        );
+
+        // Disconnected, nothing is sent and the ask stays.
+        model.apply_state(&json!({"asks": [ask("a4")]}));
+        model.connection = Connection::Reconnecting("lost".into());
+        key(&mut model, KeyCode::Char('y'), &tx);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(model.current_ask().unwrap().id, "a4");
+    }
+
     #[test]
     fn a_lesson_approved_while_open_pops_up_once_and_can_be_opened_or_retired() {
         let mut model = Model::new("s1");

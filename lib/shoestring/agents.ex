@@ -239,15 +239,17 @@ defmodule Shoestring.Agents do
 
   defp with_permissions(abilities, permissions, provider) do
     network? = (permissions["network_hosts"] || []) != []
+    asks? = permissions["may_ask"] == true and provider == "codex"
+
+    cannot =
+      abilities.cannot
+      |> Enum.reject(&(network? and String.starts_with?(&1, "Use the network")))
+      |> Enum.reject(&(asks? and String.starts_with?(&1, "Ask for more")))
 
     %{
       abilities
       | can: Shoestring.Agents.Permissions.lines(permissions, provider) ++ abilities.can,
-        cannot:
-          if(network?,
-            do: Enum.reject(abilities.cannot, &String.starts_with?(&1, "Use the network")),
-            else: abilities.cannot
-          )
+        cannot: cannot
     }
   end
 

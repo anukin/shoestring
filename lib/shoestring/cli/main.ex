@@ -42,6 +42,7 @@ defmodule Shoestring.CLI.Main do
     {"chat", Commands.Chat},
     {"advice", Commands.Advice},
     {"lessons", Commands.Lessons},
+    {"asks", Commands.Asks},
     {"capacity", Commands.Capacity}
   ]
 
@@ -76,6 +77,8 @@ defmodule Shoestring.CLI.Main do
     advice      what past runs of each harness, model and kind of task looked like
     lessons list | show | approve | reject | retire | space
                 the rules coordinators proposed for a repository, and your decisions
+    asks [allow | deny ASK]
+                what workers are waiting on you to allow or deny, and your answers
     capacity    each provider's latest usage reading and what admission is likely to do
 
   `shoestring COMMAND --help` describes a command. Commands that print data

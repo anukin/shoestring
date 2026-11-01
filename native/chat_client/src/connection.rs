@@ -25,14 +25,35 @@ const LAST_RETRY: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outgoing {
-    Say { message_id: String, text: String },
+    Say {
+        message_id: String,
+        text: String,
+    },
     CancelTurn,
-    Watch { id: String },
+    Watch {
+        id: String,
+    },
     Unwatch,
-    CancelDispatch { id: String, reason: String },
-    ConfirmDispatch { id: String },
-    RetireLesson { code: String },
-    Handoff { note: bool },
+    CancelDispatch {
+        id: String,
+        reason: String,
+    },
+    ConfirmDispatch {
+        id: String,
+    },
+    RetireLesson {
+        code: String,
+    },
+    Handoff {
+        note: bool,
+    },
+    /// The person's answer to a worker's ask: "allow" or "deny", with an
+    /// optional reason for a denial.
+    DecideAsk {
+        id: String,
+        decision: String,
+        note: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -289,6 +310,10 @@ where
         Outgoing::ConfirmDispatch { id } => ("confirm_dispatch", json!({"dispatch_id": id})),
         Outgoing::RetireLesson { code } => ("retire_lesson", json!({ "code": code })),
         Outgoing::Handoff { note } => ("handoff", json!({ "note": note })),
+        Outgoing::DecideAsk { id, decision, note } => (
+            "decide_ask",
+            json!({"ask_id": id, "decision": decision, "note": note}),
+        ),
     };
     let reference = refs.next();
     let frame = Frame {
@@ -332,6 +357,7 @@ fn reply(
             Outgoing::RetireLesson { .. } => "Not retired",
             Outgoing::Watch { .. } | Outgoing::Unwatch => "Dispatch unavailable",
             Outgoing::Handoff { .. } => "No handoff",
+            Outgoing::DecideAsk { .. } => "Not answered",
         };
         lock(model).note(format!("{what}: {}", describe(reason)));
     }

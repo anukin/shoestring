@@ -47,6 +47,8 @@ defmodule Shoestring.Agents.Agent do
     field :read_paths, {:array, :string}, default: []
     field :write_paths, {:array, :string}, default: []
     field :network_hosts, {:array, :string}, default: []
+    # Whether its worker may ask the person, mid-run, for more.
+    field :may_ask, :boolean, default: true
     field :lock_version, :integer, default: 1
     timestamps(type: :utc_datetime_usec)
   end
@@ -68,7 +70,8 @@ defmodule Shoestring.Agents.Agent do
           :may_propose_lessons,
           :read_paths,
           :write_paths,
-          :network_hosts
+          :network_hosts,
+          :may_ask
         ],
         empty_values: [""]
       )

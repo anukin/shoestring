@@ -137,6 +137,8 @@ defmodule Shoestring.Agents.Permissions do
   dispatch keeps: nil when nothing was added.
   """
   def snapshot(agent) do
+    asks? = field_value(agent, :kind) == "implementer" and field_value(agent, :may_ask) != false
+
     map =
       for field <- @fields,
           value = field_value(agent, field),
@@ -144,11 +146,17 @@ defmodule Shoestring.Agents.Permissions do
           into: %{},
           do: {Atom.to_string(field), value}
 
+    map = if asks?, do: Map.put(map, "may_ask", true), else: map
     if map == %{}, do: nil, else: map
   end
 
-  defp field_value(%{} = agent, field),
-    do: Map.get(agent, field) || Map.get(agent, Atom.to_string(field))
+  # A stored `false` is a value, not a missing one.
+  defp field_value(%{} = agent, field) do
+    case Map.fetch(agent, field) do
+      {:ok, value} when not is_nil(value) -> value
+      _ -> Map.get(agent, Atom.to_string(field))
+    end
+  end
 
   @doc "Plain-language lines for what the additions let the agent do."
   def lines(nil, _provider), do: []
@@ -164,6 +172,14 @@ defmodule Shoestring.Agents.Permissions do
         hosts -> ["Reach " <> Enum.join(hosts, ", ") <> " from its commands"]
       end
 
-    reads ++ writes ++ hosts
+    # Asks reach the person from Codex workers; Claude's come later.
+    asks =
+      if permissions["may_ask"] == true and provider == "codex",
+        do: [
+          "Ask you, while it works, to run one command outside its sandbox; you decide each time"
+        ],
+        else: []
+
+    reads ++ writes ++ hosts ++ asks
   end
 end

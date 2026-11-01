@@ -94,8 +94,9 @@ defmodule Shoestring.SessionTeamTest do
     team = AgentProfiles.get_by_slug("builder")
     worker = Agents.get(Enum.find(team.roles, &(&1.name == "Worker")).agent_id)
 
+    # Nothing added: only that it may ask, the default.
     assert Enum.find(Agents.snapshot(team)["agents"], &(&1["slug"] == worker.slug))["permissions"] ==
-             nil
+             %{"may_ask" => true}
 
     {:ok, _} = Agents.update(worker, %{"network_hosts" => "*", "read_paths" => "/data/in"})
 
@@ -105,13 +106,18 @@ defmodule Shoestring.SessionTeamTest do
         &(&1["slug"] == worker.slug)
       )
 
-    assert entry["permissions"] == %{"network_hosts" => ["*"], "read_paths" => ["/data/in"]}
+    assert entry["permissions"] == %{
+             "network_hosts" => ["*"],
+             "read_paths" => ["/data/in"],
+             "may_ask" => true
+           }
 
     # The session that already started keeps the team it started with.
     worker_entry =
       Enum.find(Grants.get(ctx.grant.id).team["agents"], &(&1["slug"] == worker.slug))
 
-    assert worker_entry["permissions"] == nil
+    assert worker_entry["permissions"] == %{"may_ask" => true}
+    refute Map.has_key?(worker_entry["permissions"], "read_paths")
   end
 
   test "a dispatch names an agent by its job or slug; its model and limit are used", ctx do

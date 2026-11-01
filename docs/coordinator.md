@@ -205,6 +205,19 @@ through, checked offline with Codex 0.166.0), so the page only takes `*`
 for it. Whether Claude lets a listed host through was not checked, only
 that it refuses one not listed.
 
+**Asks while it works.** An Implementer whose "may ask" is on (the default)
+can ask you, mid-run, to run one command outside its sandbox. Its worker
+waits; you answer in the chat screen's popup (`y` allow once, `n` deny, `r`
+deny with a reason) or with `shoestring asks`, `shoestring asks allow ASK`
+and `shoestring asks deny ASK --note "..."` in a terminal. Nothing answers
+an ask on a timer, and the coordinator cannot answer for you; `runs show`
+tells it the worker is waiting on you. Allowing runs that one command with
+full access to your files, anywhere you can write; its network stays as the
+agent's settings allow. A denial's reason is passed to the worker. For now
+only Codex workers ask (`approvalPolicy: on-request`); Claude and opencode
+workers are refused at once, as before. An ask whose worker stops (a cancel,
+a restart) ends unanswered.
+
 ## 2. The coordinator dispatches
 
 ```sh

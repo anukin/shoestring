@@ -183,6 +183,58 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
             },
         );
     }
+    // A worker waiting on the person: drawn on top of everything else.
+    if let Some((ask, reason)) = &model.deny_reason {
+        draw_attention(
+            frame,
+            &Attention {
+                title: "Deny with a reason",
+                tone: Tone::Question,
+                body: vec![
+                    format!("$ {}", ask.command),
+                    format!("The worker is told: {reason}_"),
+                ],
+                keys: &[("Enter", "deny and tell it"), ("Esc", "back")],
+            },
+        );
+    } else if let Some(ask) = model.current_ask() {
+        let mut body = vec![
+            format!(
+                "{} {} on {}",
+                short(&ask.dispatch),
+                ask.agent,
+                if ask.provider.is_empty() {
+                    "its provider"
+                } else {
+                    &ask.provider
+                }
+            ),
+            format!("$ {}", ask.command),
+        ];
+        if !ask.reason.is_empty() {
+            body.push(format!("Why: {}", ask.reason));
+        }
+        body.push(
+            "Allowing runs this one command with full access to your files, anywhere you \
+             can write; its network stays as the agent's settings allow. It waits for you: \
+             nothing decides this on a timer."
+                .into(),
+        );
+        draw_attention(
+            frame,
+            &Attention {
+                title: "A worker asks to run a command outside its sandbox",
+                tone: Tone::Question,
+                body,
+                keys: &[
+                    ("y", "allow once"),
+                    ("n", "deny"),
+                    ("r", "deny with a reason"),
+                    ("Esc", "later"),
+                ],
+            },
+        );
+    }
     view
 }
 
@@ -903,6 +955,22 @@ mod tests {
         assert!(text.contains("L-ABC234 · Run unittest with -B."));
         assert!(text.contains("approved by the coordinator"));
         assert!(text.contains(" o  open in the browser"));
+    }
+
+    #[test]
+    fn a_workers_ask_says_what_allowing_does_and_its_keys() {
+        let mut model = Model::new("s1");
+        model.apply_state(&json!({"asks": [{"ask_id": "a1", "dispatch_id": "d1", "agent": "builder",
+            "provider": "codex", "command": "curl https://example.invalid", "reason": "Fetch notes\u{1b}[2J"}]}));
+        let text = screen(&model, 120, 30);
+        assert!(text.contains("A worker asks to run a command outside its sandbox"));
+        assert!(text.contains("$ curl https://example.invalid"));
+        assert!(text.contains("Why: Fetch notes"));
+        assert!(text.contains("full access to your files"));
+        assert!(text.contains("nothing decides this on a timer"));
+        assert!(text.contains(" y  allow once"));
+        assert!(text.contains(" r  deny with a reason"));
+        assert!(!text.contains('\u{1b}'));
     }
 
     #[test]

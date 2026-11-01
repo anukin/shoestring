@@ -42,6 +42,19 @@ pub struct Dispatch {
     pub terminal: String,
 }
 
+/// A worker waiting on the person to let it run one command outside its
+/// sandbox, or to refuse it (`docs/chat-channel.md`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Ask {
+    pub id: String,
+    pub dispatch: String,
+    pub agent: String,
+    pub provider: String,
+    pub command: String,
+    pub reason: String,
+    pub cwd: String,
+}
+
 /// A lesson approved in the session's repository (`docs/chat-channel.md`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lesson {
@@ -103,6 +116,13 @@ pub struct Model {
     /// Lessons approved since this screen opened, shown one at a time; the
     /// ones approved before it opened are on the Lessons page.
     pub lessons: std::collections::VecDeque<Lesson>,
+    /// What workers are waiting on the person for now, oldest first (the
+    /// service's list each state); answered or put off ones are not shown.
+    pub asks: Vec<Ask>,
+    pub asks_answered: std::collections::HashSet<String>,
+    pub asks_later: std::collections::HashSet<String>,
+    /// A denial whose reason is being typed.
+    pub deny_reason: Option<(Ask, String)>,
     pub lessons_seen: std::collections::HashSet<String>,
     pub lessons_loaded: bool,
     /// A lesson the person is asked to confirm retiring.
@@ -338,6 +358,7 @@ impl Model {
         self.team = team(&state["grant"]["team"]);
         self.web_url = state["web_url"].as_str().map(clean_line);
         self.apply_lessons(&state["lessons"]);
+        self.apply_asks(&state["asks"]);
         self.capacity = state["capacity"]["providers"]
             .as_array()
             .into_iter()
@@ -346,6 +367,38 @@ impl Model {
             .collect();
 
         self.dirty = true;
+    }
+
+    /// The asks the service lists; an answer sent hides its ask at once.
+    fn apply_asks(&mut self, asks: &Value) {
+        let Some(asks) = asks.as_array() else { return };
+        let text = |a: &Value, k: &str| clean(a[k].as_str().unwrap_or_default());
+        self.asks = asks
+            .iter()
+            .filter_map(|a| {
+                let id = clean_line(a["ask_id"].as_str()?);
+                Some(Ask {
+                    command: text(a, "command"),
+                    reason: text(a, "reason"),
+                    cwd: clean_line(a["cwd"].as_str().unwrap_or_default()),
+                    agent: clean_line(a["agent"].as_str().unwrap_or("its worker")),
+                    dispatch: clean_line(a["dispatch_id"].as_str().unwrap_or_default()),
+                    provider: clean_line(a["provider"].as_str().unwrap_or_default()),
+                    id,
+                })
+            })
+            .collect();
+        let listed: std::collections::HashSet<String> =
+            self.asks.iter().map(|a| a.id.clone()).collect();
+        self.asks_answered.retain(|id| listed.contains(id));
+        self.asks_later.retain(|id| listed.contains(id));
+    }
+
+    /// The ask to show now: the oldest neither answered nor put off.
+    pub fn current_ask(&self) -> Option<&Ask> {
+        self.asks
+            .iter()
+            .find(|a| !self.asks_answered.contains(&a.id) && !self.asks_later.contains(&a.id))
     }
 
     /// New approved lessons queue a popup each; those present when the

@@ -368,6 +368,11 @@ defmodule ShoestringWeb.AgentsLive do
                 permissions they started with.
               </p>
               <.input
+                field={@form[:may_ask]}
+                type="checkbox"
+                label="May ask you, while it works, to run one command outside its sandbox (Codex; you decide each time)"
+              />
+              <.input
                 field={@form[:read_paths]}
                 type="textarea"
                 label="Folders it may also read"

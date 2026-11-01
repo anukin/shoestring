@@ -86,6 +86,7 @@ Sent by the client, each answered with `ok` or `error` and a `reason`:
 | `cancel_dispatch` | `dispatch_id`, `reason` | Cancels one dispatch of this session, recorded as the person's request. The client confirms with the person first. |
 | `confirm_dispatch` | `dispatch_id` | Starts one held dispatch of this session: the person confirms its usage hold themselves, spending none of the grant's pre-approvals (`not_held` when it is not held). The client asks first. |
 | `retire_lesson` | `code` | The person retires an approved lesson of this session's repository (`lesson_not_found`, `lesson_not_approved`). The client asks first. |
+| `decide_ask` | `ask_id`, `decision` (`allow` or `deny`), `note` (optional) | The person answers one of this session's workers' asks (`ask_not_found`, `not_pending` once answered or ended, `ask_gone` when its worker stopped). A denial's `note`, at most 500 bytes, is the reason the worker is told. |
 | `handoff` | `note` (boolean, default true) | Continues the session in a fresh conversation (see Handoff). Refused with `turn_running` during a turn and `handoff_in_progress` while one is under way, except that `note: false` skips a note turn that is held. |
 
 ## Handoff
@@ -181,7 +182,14 @@ carries `lessons`, the lessons approved in the session's repository since its
 grant (code, text, `proposed_by`, `approved_by`), and `web_url`. Those already
 there when the screen opens are only marked seen; each later one is a green
 popup: Enter dismisses it, `o` opens it on the web Lessons page, `r` asks
-(red) and only `y` sends `retire_lesson`. `/web` opens the web UI. Every popup that needs the person is drawn
+(red) and only `y` sends `retire_lesson`. `state` also carries `asks`, what
+the session's workers are waiting on the person for now (`ask_id`,
+`dispatch_id`, `agent`, `provider`, `command`, `reason`, `cwd`, `asked_at`).
+The oldest is a yellow popup on top of everything, saying that allowing runs
+that one command with full access to the person's files while its network
+stays as the agent's settings allow: `y` allows it once, `n` denies it, `r`
+types a reason and Enter denies with it, and Esc puts it off until `A`. The
+worker keeps waiting; nothing answers it on a timer. `/web` opens the web UI. Every popup that needs the person is drawn
 the same way: a centred box with a thick border and title in its tone's
 colour (green for news, yellow for a question, red for an action that cannot be undone),
 what it is about, and the answering keys highlighted on their own line. It

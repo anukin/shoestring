@@ -42,6 +42,7 @@ defmodule Shoestring.Application do
         {Phoenix.PubSub, name: Shoestring.PubSub},
         Shoestring.Coordinator.ToolTokens,
         {Registry, keys: :unique, name: Shoestring.Conversations.Registry},
+        {Registry, keys: :unique, name: Shoestring.PermissionAsks.Registry},
         {DynamicSupervisor, name: Shoestring.Conversations.Supervisor, strategy: :one_for_one},
         Shoestring.Terminal.Supervisor,
         {Oban, Application.fetch_env!(:shoestring, Oban)}

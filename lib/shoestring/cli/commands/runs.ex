@@ -103,6 +103,7 @@ defmodule Shoestring.CLI.Commands.Runs do
     call = Dispatches.Calls.get(dispatch.id)
 
     batch = batch(dispatch)
+    asks = asks(dispatch)
 
     summary
     |> Map.merge(status)
@@ -110,16 +111,41 @@ defmodule Shoestring.CLI.Commands.Runs do
     |> Map.put("lessons_proposed", lessons_proposed(dispatch))
     |> Map.merge(call_detail(call))
     |> Map.put("result", result)
+    |> Map.put("asks", asks)
     |> Map.put(
       "next",
-      next(
-        summary["state"],
-        dispatch,
-        call,
-        status |> Map.merge(call_detail(call)) |> Map.merge(batch)
-      )
+      case asks do
+        [ask | _] ->
+          "Its worker is waiting for the person to allow or deny one command outside its " <>
+            "sandbox: #{ask["command"]}. Tell them; they answer in the chat screen's popup " <>
+            "or with `shoestring asks`. You cannot answer for them."
+
+        [] ->
+          next(
+            summary["state"],
+            dispatch,
+            call,
+            status |> Map.merge(call_detail(call)) |> Map.merge(batch)
+          )
+      end
     )
   end
+
+  # What the dispatch's worker is waiting on the person for now
+  # (`Shoestring.PermissionAsks`).
+  defp asks(%{goal_id: goal_id}) when is_binary(goal_id) do
+    for ask <- Shoestring.PermissionAsks.for_goal(goal_id),
+        Shoestring.PermissionAsks.waiting?(ask) do
+      %{
+        "ask_id" => ask.id,
+        "command" => ask.command,
+        "reason" => ask.reason,
+        "asked_at" => ask.inserted_at
+      }
+    end
+  end
+
+  defp asks(_dispatch), do: []
 
   # A batch IMPLEMENT (C2): each task's state and accepted commit, and how
   # their integration stands. Shoestring merges the accepted commits itself

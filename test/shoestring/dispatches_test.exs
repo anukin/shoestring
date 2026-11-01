@@ -75,6 +75,32 @@ defmodule Shoestring.DispatchesTest do
 
   defp jobs, do: Repo.all(Oban.Job)
 
+  test "runs show says the worker waits on the person while it has an open ask", ctx do
+    assert {:ok, dispatch, :recorded} = Dispatches.create(request(ctx, %{request_id: "ask"}))
+
+    refute (Shoestring.CLI.Commands.Runs.detail(dispatch)["next"] || "") =~
+             "waiting for the person"
+
+    # The test process stands in for the worker session waiting on it.
+    ask =
+      Repo.insert!(%Shoestring.PermissionAsks.Ask{
+        goal_id: dispatch.goal_id,
+        run_id: "run-1",
+        session_id: "s1",
+        provider: "codex",
+        command: "curl https://example.invalid"
+      })
+
+    {:ok, _} = Registry.register(Shoestring.PermissionAsks.registry(), ask.id, nil)
+    detail = Shoestring.CLI.Commands.Runs.detail(dispatch)
+    assert [%{"command" => "curl https://example.invalid"}] = detail["asks"]
+    assert detail["next"] =~ "waiting for the person to allow or deny"
+    assert detail["next"] =~ "You cannot answer for them"
+
+    {:ok, _} = Shoestring.PermissionAsks.decide(ask.id, "allow", "human:p")
+    assert Shoestring.CLI.Commands.Runs.detail(dispatch)["asks"] == []
+  end
+
   # Iteration 16 permissions: what the person added to the team's agent
   # travels with the dispatch into the worker's binding, and only there.
   test "an implementer's added permissions are kept on its dispatch and given to its worker",

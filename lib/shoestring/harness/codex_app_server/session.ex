@@ -42,6 +42,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     {"PYTHONDONTWRITEBYTECODE", "1"} | Shoestring.Harness.ClaudeHeadless.Sandbox.git_env()
   ]
   @default_handshake_timeout_ms 15_000
+  @approval_requests ["item/commandExecution/requestApproval", "item/fileChange/requestApproval"]
 
   defstruct [
     :run_id,
@@ -79,7 +80,10 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     # `process_owner: :adapter`): it adopts the group after the handshake and
     # reaps it after the verdict, so this session must not tear the group
     # down on its own success path first.
-    :elf_owned_process_group
+    :elf_owned_process_group,
+    # Approval requests waiting on the person (`Shoestring.PermissionAsks`):
+    # ask id => the request to answer.
+    asks: %{}
   ]
 
   # --- Public API ---
@@ -356,6 +360,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
   def handle_call(:shutdown, _from, state) do
     reap_descendants(state)
     close_owned_transport(state)
+    expire_asks(state)
     {:stop, :normal, :ok, state}
   end
 
@@ -549,11 +554,72 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     end
   end
 
+  # The person's decision on an approval request (`Shoestring.PermissionAsks`).
+  # A denial's reason reaches the worker as a steer of its turn, since a
+  # decline carries none (VERIFIED offline with Codex 0.166.0).
+  def handle_info({:permission_decision, ask_id, decision, note}, state) do
+    case Map.pop(state.asks, ask_id) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {ask, asks} ->
+        answer = if decision == :allow, do: "accept", else: "decline"
+        state = send_result(%{state | asks: asks}, ask.rpc_id, %{"decision" => answer})
+
+        state =
+          if decision == :deny and is_binary(note) and note != "" and ask.turn_id do
+            send_untracked(state, "turn/steer", %{
+              "threadId" => ask.thread_id,
+              "expectedTurnId" => ask.turn_id,
+              "input" => [
+                %{"type" => "text", "text" => "The person denied that request: " <> note}
+              ]
+            })
+          else
+            state
+          end
+
+        {:noreply, state}
+    end
+  end
+
   def handle_info(_other, state) do
     {:noreply, state}
   end
 
   # --- RPC Protocol Logic ---
+
+  # A request from Codex. Approval requests come only under
+  # `approvalPolicy: "on-request"` (an agent that may ask) and wait for the
+  # person; any other request is refused so the worker is never left waiting.
+  defp handle_rpc_frame(%{"id" => id, "method" => method} = frame, state)
+       when not is_nil(id) and method in @approval_requests do
+    params = frame["params"] || %{}
+
+    if asks?(state) do
+      request = state.run_request
+
+      {:ok, ask} =
+        Shoestring.PermissionAsks.ask(%{
+          goal_id: request && request.goal_id,
+          run_id: state.run_id,
+          provider: "codex",
+          command: ask_command(method, params),
+          reason: params["reason"],
+          cwd: params["cwd"]
+        })
+
+      entry = %{rpc_id: id, thread_id: params["threadId"], turn_id: params["turnId"]}
+      %{state | asks: Map.put(state.asks, ask.id, entry)}
+    else
+      send_result(state, id, %{"decision" => "decline"})
+    end
+  end
+
+  defp handle_rpc_frame(%{"id" => id, "method" => method}, state) when not is_nil(id) do
+    Logger.warning("CodexAppServer: refusing unsupported request #{inspect(method)}")
+    send_error(state, id, -32601, "Shoestring does not support #{method}")
+  end
 
   defp handle_rpc_frame(%{"id" => id, "error" => err}, state)
        when not is_nil(id) and not is_nil(err) do
@@ -1016,7 +1082,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         params
 
       _policy ->
-        Map.merge(params, %{"cwd" => state.opts[:workdir], "approvalPolicy" => "never"})
+        Map.merge(params, %{"cwd" => state.opts[:workdir], "approvalPolicy" => approval(state)})
     end
   end
 
@@ -1031,6 +1097,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
       policy ->
         params
         |> Map.delete("sandbox")
+        |> Map.put("approvalPolicy", approval(state))
         |> Map.put(
           "config",
           Shoestring.Harness.CodexAppServer.GitSandbox.permissions(
@@ -1072,6 +1139,57 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         pending_requests: Map.put(state.pending_requests, id, {tag, params})
     }
   end
+
+  # A request whose response nobody waits on: its id is never tracked, so
+  # neither its result nor an error (a steer that arrives after the turn
+  # ended) can fail the run.
+  defp send_untracked(state, method, params) do
+    id = state.next_request_id
+
+    if state.transport_pid do
+      state.transport_mod.send_frame(state.transport_pid, %{
+        "method" => method,
+        "id" => id,
+        "params" => params
+      })
+    end
+
+    %{state | next_request_id: id + 1}
+  end
+
+  defp send_result(state, id, result) do
+    if state.transport_pid,
+      do: state.transport_mod.send_frame(state.transport_pid, %{"id" => id, "result" => result})
+
+    state
+  end
+
+  defp send_error(state, id, code, message) do
+    if state.transport_pid,
+      do:
+        state.transport_mod.send_frame(state.transport_pid, %{
+          "id" => id,
+          "error" => %{"code" => code, "message" => message}
+        })
+
+    state
+  end
+
+  defp asks?(state),
+    do:
+      get_in(state.opts, [:permissions, "may_ask"]) == true and
+        state.opts[:git_sandbox_policy] != nil
+
+  defp approval(state), do: if(asks?(state), do: "on-request", else: "never")
+
+  defp ask_command("item/commandExecution/requestApproval", params),
+    do: params["command"] || get_in(params, ["commandActions", Access.at(0), "command"])
+
+  defp ask_command("item/fileChange/requestApproval", params),
+    do: "Change files" <> if(params["grantRoot"], do: " under " <> params["grantRoot"], else: "")
+
+  defp expire_asks(state),
+    do: Enum.each(Map.keys(state.asks), &Shoestring.PermissionAsks.expire/1)
 
   defp send_notification(state, method, params) do
     payload = %{"method" => method, "params" => params}

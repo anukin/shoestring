@@ -208,8 +208,26 @@ defmodule ShoestringWeb.ChatChannel do
       "dispatches" => rows,
       "capacity" => Capacity.report(),
       "lessons" => lessons(conversation, grant),
+      "asks" => asks(conversation),
       "web_url" => ShoestringWeb.Endpoint.url()
     }
+  end
+
+  # What this session's workers are waiting on the person for now
+  # (`Shoestring.PermissionAsks`); the client shows each as an attention item.
+  defp asks(conversation) do
+    for ask <- Shoestring.PermissionAsks.pending(conversation.session_id) do
+      %{
+        "ask_id" => ask.id,
+        "dispatch_id" => ask.dispatch_id,
+        "agent" => ask.agent,
+        "provider" => ask.provider,
+        "command" => ask.command,
+        "reason" => ask.reason,
+        "cwd" => ask.cwd,
+        "asked_at" => ask.inserted_at
+      }
+    end
   end
 
   # The lessons approved in this session's repository since its grant: the
@@ -317,6 +335,29 @@ defmodule ShoestringWeb.ChatChannel do
     end
   end
 
+  # The person answers a worker's ask from its popup: allow it once, or deny
+  # it, with an optional reason the worker is told.
+  def handle_in("decide_ask", %{"ask_id" => id, "decision" => decision} = payload, socket)
+      when is_binary(id) and decision in ["allow", "deny"] do
+    session = socket.assigns.conversation.session_id
+    note = payload["note"]
+    note = if is_binary(note), do: String.slice(note, 0, @max_reason)
+
+    result =
+      case Shoestring.Repo.get(Shoestring.PermissionAsks.Ask, id) do
+        %{session_id: ^session} ->
+          Shoestring.PermissionAsks.decide(id, decision, WorkLoop.default_human(), note)
+
+        _ ->
+          {:error, :ask_not_found}
+      end
+
+    case result do
+      {:ok, _} -> {:reply, :ok, socket}
+      {:error, reason} -> {:reply, {:error, %{"reason" => code(reason)}}, socket}
+    end
+  end
+
   # The person retires a lesson of this session's repository from its popup.
   def handle_in("retire_lesson", %{"code" => lesson}, socket) when is_binary(lesson) do
     root = socket.assigns.conversation.repository_root
@@ -410,7 +451,7 @@ defmodule ShoestringWeb.ChatChannel do
   end
 
   # Reasons the client can act on; anything else is logged, not echoed.
-  @codes ~w(message_too_large pending_input_too_large context_limit_reached empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity turn_running handoff_in_progress lesson_not_found lesson_changed)a
+  @codes ~w(message_too_large pending_input_too_large context_limit_reached empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity turn_running handoff_in_progress lesson_not_found lesson_changed ask_not_found not_pending ask_gone)a
 
   defp code(reason) when reason in @codes, do: Atom.to_string(reason)
   defp code({:invalid_payload, _type, _version, _changeset}), do: "invalid_message"
