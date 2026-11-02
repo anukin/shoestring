@@ -58,7 +58,7 @@ defmodule ShoestringWeb.AttentionComponents do
       </div>
       <div :if={@item.run_id} class="ss-attention-choices">
         <.link id={"#{@item.id}-run"} navigate={~p"/runs/#{@item.run_id}"} class="ss-button">
-          Open run
+          Raw events
         </.link>
       </div>
     </div>

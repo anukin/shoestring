@@ -433,6 +433,35 @@ defmodule ShoestringWeb.RunLiveTest do
       {:ok, goal: goal, task: task, run: run, worktree: worktree}
     end
 
+    test "a run Shoestring routed is labelled so, a finished one offers no stop, and its diff shows, redacted",
+         %{conn: conn, run: run, worktree: worktree} do
+      Repo.update_all(from(r in RunRecord, where: r.id == ^run.id),
+        set: [
+          extensions: %{Shoestring.Cobbler.PlanBinding.key() => %{"plan_task_id" => "dispatch"}},
+          status: "completed"
+        ]
+      )
+
+      File.write!(
+        Path.join(worktree.path, "lib.ex"),
+        "defmodule Lib do\n  # Authorization: Bearer abc.def.ghi\n  def test, do: :changed\nend\n"
+      )
+
+      {:ok, view, html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#routed-run-banner")
+      refute has_element?(view, "#manual-execution-banner")
+      refute html =~ "Manual Override"
+      refute html =~ "bypasses automated admission"
+      refute has_element?(view, "#btn-cancel-run")
+      refute has_element?(view, "#btn-request-stop")
+
+      # The uncommitted change is the diff, with the secret redacted.
+      assert has_element?(view, "#worktree-diff", "def test, do: :changed")
+      assert has_element?(view, "#worktree-diff", "[REDACTED]")
+      refute render(view) =~ "abc.def.ghi"
+    end
+
     test "renders all required manual run UI sections", %{
       conn: conn,
       run: run,

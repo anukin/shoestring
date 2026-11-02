@@ -290,6 +290,39 @@ defmodule ShoestringWeb.SessionsLiveTest do
     end
   end
 
+  describe "the open dispatch's worktree" do
+    test "shows its branch and what changed, and links to its raw events", %{conn: conn} = ctx do
+      run_id = Ecto.UUID.generate()
+      {:ok, worktree} = Shoestring.Worktrees.create(ctx.repo, run_id, "HEAD")
+      File.write!(Path.join(worktree.path, "calc.py"), "def add(a, b):\n    return a + b\n")
+
+      Repo.insert!(%Shoestring.Harness.RunRecord{
+        id: run_id,
+        dispatch_id: Ecto.UUID.generate(),
+        goal_id: ctx.builder.goal_id,
+        provider_id: "fake",
+        workspace_ref: worktree.workspace_ref,
+        request_version: 1,
+        prompt: "fixture",
+        policy: %{},
+        requested_capabilities: %{},
+        extensions: %{},
+        status: "running"
+      })
+
+      {:ok, view, _} = live(conn, "/sessions/#{ctx.session}?agent=builder")
+      changes = "#dispatch-#{ctx.builder.id}-changes"
+      assert has_element?(view, changes, worktree.branch)
+      assert has_element?(view, "#{changes} pre", "calc.py")
+
+      assert has_element?(
+               view,
+               "#dispatch-#{ctx.builder.id}-run[href='/runs/#{run_id}']",
+               "Raw events"
+             )
+    end
+  end
+
   describe "news" do
     defp finish!(dispatch),
       do:

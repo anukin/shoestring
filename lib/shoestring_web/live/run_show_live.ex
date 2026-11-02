@@ -232,7 +232,10 @@ defmodule ShoestringWeb.RunShowLive do
   defp maybe_refresh_on_event(socket, _event), do: socket
 
   defp load_run_details(socket, run, goal) do
-    socket = assign(socket, :session_link, session_link(goal))
+    socket =
+      socket
+      |> assign(:session_link, session_link(goal))
+      |> assign(:routed?, routed?(run))
 
     events =
       if goal do
@@ -279,7 +282,8 @@ defmodule ShoestringWeb.RunShowLive do
       if worktree do
         diff_text =
           case Worktrees.diff(worktree) do
-            {:ok, %{diff: patch}} when is_binary(patch) and patch != "" ->
+            # The patch against the run's base, uncommitted changes included.
+            {:ok, %{patch: patch}} when is_binary(patch) and patch != "" ->
               patch
 
             _ ->
@@ -426,6 +430,13 @@ defmodule ShoestringWeb.RunShowLive do
 
   defp format_occurred_at(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
   defp format_occurred_at(other), do: to_string(other)
+
+  # A run Shoestring started for a plan task (a dispatch, or `shoestring do`),
+  # admitted and routed by Cobbler; any other run was started by hand.
+  defp routed?(%{extensions: extensions}) when is_map(extensions),
+    do: Map.has_key?(extensions, Shoestring.Cobbler.PlanBinding.key())
+
+  defp routed?(_run), do: false
 
   # The Sessions page of the coordinator dispatch this run belongs to, if any.
   defp session_link(nil), do: nil

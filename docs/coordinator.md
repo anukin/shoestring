@@ -452,6 +452,13 @@ its dispatches; open a dispatch for a feed of what its worker did:
   marked final; a long message is clipped to three lines until opened;
 - its asks, and Shoestring's own steps (the lines `runs log` prints).
 
+Under the feed are its worktree's branch and what changed from its base,
+uncommitted changes included, and a **Raw events** link to the run page: every
+event the run recorded, its prompt and its diff, for debugging. The run page
+labels a dispatched run as Shoestring's, and only a run started by hand at
+`/runs/new` as a manual one; it offers stop and cancel only while a run can
+still stop.
+
 The coordinator's panel has the same shape: its turns, the names of the tools
 it used (never their inputs), its messages and yours. Filters narrow a feed
 to one kind. A feed keeps its last 500 rows and counts the rest. Model

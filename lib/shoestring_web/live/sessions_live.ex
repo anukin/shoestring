@@ -87,6 +87,7 @@ defmodule ShoestringWeb.SessionsLive do
            agent_key: nil,
            open_id: nil,
            items: [],
+           changes: nil,
            seen: nil,
            reason_for: nil,
            reason_error: nil
@@ -389,8 +390,31 @@ defmodule ShoestringWeb.SessionsLive do
       socket
     else
       socket
-      |> assign(fingerprint: print, feed_omitted: feed.omitted)
+      |> assign(fingerprint: print, feed_omitted: feed.omitted, changes: changes(assigns))
       |> stream(:feed, rows, reset: true)
+    end
+  end
+
+  # The open dispatch's worktree: its branch and what changed from its base,
+  # uncommitted changes included. Read with a private index copy, so a
+  # worker writing the worktree is never disturbed; redacted like the feed.
+  defp changes(assigns) do
+    with %{id: id} <- open_dispatch(assigns),
+         run_id when is_binary(run_id) <- get_in(assigns.status, [id, "run_id"]),
+         {:ok, worktree} <- Shoestring.Worktrees.get(run_id) do
+      stat =
+        case Shoestring.Worktrees.Git.observe(worktree.path, [
+               "diff",
+               "--stat",
+               worktree.base_commit
+             ]) do
+          {out, 0} -> out |> String.trim_trailing() |> ShoestringWeb.RunPresentation.redact_text()
+          _ -> nil
+        end
+
+      %{branch: worktree.branch, stat: stat}
+    else
+      _ -> nil
     end
   end
 
@@ -840,13 +864,21 @@ defmodule ShoestringWeb.SessionsLive do
                     omitted={@feed_omitted}
                     live?={not final?(d, assigns)}
                   />
+                  <div :if={@changes} id={"dispatch-#{d.id}-changes"} class="ss-changes">
+                    <p class="ss-small">
+                      Its worktree, branch <code>{@changes.branch}</code>{if @changes.stat == "",
+                        do: ": nothing changed yet.",
+                        else: ":"}
+                    </p>
+                    <pre :if={@changes.stat not in [nil, ""]} phx-no-format>{@changes.stat}</pre>
+                  </div>
                   <div class="ss-links">
                     <.link
                       :if={get_in(@status, [d.id, "run_id"])}
                       id={"dispatch-#{d.id}-run"}
                       navigate={~p"/runs/#{get_in(@status, [d.id, "run_id"])}"}
                     >
-                      Open run
+                      Raw events
                     </.link>
                     <.link
                       :if={get_in(@status, [d.id, "terminal"])}
