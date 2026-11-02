@@ -176,6 +176,152 @@ defmodule Shoestring.AttentionTest do
     end
   end
 
+  describe "stopped dispatches" do
+    # A dispatch whose execution waits for the person; its status is fixed
+    # here, as `Shoestring.Dispatches.state/2`'s own tests fix it.
+    defp stopped(ctx, status) do
+      Attention.items(ctx.session, %{ctx.builder.id => "needs_you"},
+        status: fn _goal -> {:ok, status} end
+      )
+    end
+
+    test "a stopped merge says where it conflicts and that Shoestring never resolves it", ctx do
+      execution_id = Ecto.UUID.generate()
+      commits = [String.duplicate("1", 40), String.duplicate("2", 40)]
+
+      status = %{
+        execution: %{execution_id: execution_id},
+        integration: nil,
+        accepted_evidence: Enum.map(commits, &%{commit: &1}),
+        reviews: []
+      }
+
+      {:ok, _} =
+        Shoestring.Trajectory.append(ctx.builder.goal_id, %{
+          "type" => "cobbler.plan.merge.blocked",
+          "schema_version" => 1,
+          "actor" => "cobbler",
+          "occurred_at" => DateTime.utc_now(),
+          "idempotency_key" =>
+            "plan-merge-blocked:#{execution_id}:" <>
+              Base.encode16(:crypto.hash(:sha256, Enum.join(commits, ",")), case: :lower),
+          "payload" => %{
+            "execution_id" => execution_id,
+            "revision_number" => 1,
+            "plan_digest" => String.duplicate("a", 64),
+            "accepted_commits" => commits,
+            "reason" => "conflict",
+            "plan_task_id" => "dispatch-2",
+            "files" => ["calc.py"],
+            "merged_task_ids" => ["dispatch-1"]
+          }
+        })
+
+      assert [%{kind: :stopped, reason: :merge} = item] = stopped(ctx, status)
+      assert item.id == "stopped-" <> ctx.builder.id
+      assert item.title == "Shoestring's merge stopped"
+      assert item.note =~ "merging dispatch-2 conflicts in calc.py"
+      assert item.note =~ "Shoestring never resolves a conflict"
+      assert item.choices == []
+    end
+
+    test "a blocked review lists its blocking findings and the commands that decide it", ctx do
+      goal = ctx.builder.goal_id
+
+      review = %{
+        needs_user?: true,
+        state: "escalated",
+        plan_task_id: "dispatch-1",
+        reason: nil,
+        unavailable: nil,
+        findings: [
+          %{
+            "id" => "F1",
+            "severity" => "blocking",
+            "reference" => "supported",
+            "path" => "calc.py",
+            "line" => 2,
+            "claim" => "add() still raises"
+          },
+          %{"id" => "F2", "severity" => "minor", "reference" => "supported", "claim" => "naming"}
+        ]
+      }
+
+      assert [%{reason: :review} = item] = stopped(ctx, %{reviews: [review]})
+      assert item.title == "A review needs your decision"
+      assert item.note =~ "still asks for changes after the last repair round"
+      assert item.lines == ["F1 calc.py:2 add() still raises"]
+
+      assert item.commands == [
+               ~s(shoestring review accept #{goal} dispatch-1 --reason "REASON"),
+               ~s(shoestring review reject #{goal} dispatch-1 --reason "REASON")
+             ]
+
+      # A review that failed may be called once more.
+      failed = %{review | state: "failed", reason: "transport", findings: []}
+      assert [%{reason: :review} = item] = stopped(ctx, %{reviews: [failed]})
+      assert item.note =~ "could not finish (transport)"
+      assert List.last(item.commands) =~ "shoestring review retry #{goal} dispatch-1"
+
+      # A review that doesn't wait for the person is not why it stopped.
+      settled = %{review | needs_user?: false}
+      assert [%{reason: :other}] = stopped(ctx, %{reviews: [settled]})
+    end
+
+    test "a worker Shoestring lost says so and how to cancel it", ctx do
+      run =
+        Repo.insert!(%Shoestring.Harness.RunRecord{
+          id: Ecto.UUID.generate(),
+          dispatch_id: Ecto.UUID.generate(),
+          goal_id: ctx.builder.goal_id,
+          provider_id: Shoestring.Harness.Fake.identity().adapter_id,
+          workspace_ref: "fixture",
+          request_version: 1,
+          prompt: "fixture",
+          policy: %{},
+          requested_capabilities: %{},
+          extensions: %{},
+          status: "failed"
+        })
+
+      # Failed some other way: not lost.
+      assert [%{reason: :other, run_id: run_id}] = stopped(ctx, %{})
+      assert run_id == run.id
+
+      {:ok, _} =
+        Shoestring.Trajectory.append(ctx.builder.goal_id, %{
+          "type" => "run.failed",
+          "schema_version" => 1,
+          "actor" => "test",
+          "occurred_at" => DateTime.utc_now(),
+          "payload" => %{
+            "run_id" => run.id,
+            "error_category" => "transport",
+            "error_code" => "supervisor_crash"
+          }
+        })
+
+      assert [%{reason: :lost} = item] = stopped(ctx, %{})
+      assert item.title == "Shoestring lost this worker"
+      assert item.note =~ "during a service stop or crash"
+      assert item.commands == [~s(shoestring runs cancel #{ctx.builder.id} --reason "REASON")]
+    end
+
+    test "any other stop gives its last step and how to follow it", ctx do
+      assert [%{reason: :other} = item] = stopped(ctx, %{})
+      assert item.title == "This dispatch stopped and needs your decision"
+      assert item.commands == ["shoestring follow #{ctx.builder.goal_id}"]
+      assert [_last_step] = item.lines
+    end
+
+    test "only a dispatch waiting for the person is listed", ctx do
+      assert Attention.items(ctx.session, %{ctx.builder.id => "running"},
+               status: fn _ -> {:ok, %{}} end
+             ) ==
+               []
+    end
+  end
+
   describe "count and broadcast" do
     test "counts every waiting ask and the listed sessions' holds", ctx do
       other = session()

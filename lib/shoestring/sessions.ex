@@ -31,7 +31,7 @@ defmodule Shoestring.Sessions do
 
   Each listed session counts its dispatches by the state
   `Shoestring.Dispatches.state/2` derives (a stored dispatch is only
-  `started` while it runs, holds or completes): `working`, `held`, `failed`,
+  `started` while it runs, holds or completes): `working`, `held`, `stopped` (waiting for the person), `failed`,
   and `asks` waiting. `counts: false` leaves those out, for a caller that
   needs only which sessions are listed.
   """
@@ -61,6 +61,7 @@ defmodule Shoestring.Sessions do
     Map.merge(summary, %{
       working: Enum.sum(for {state, n} <- states, state not in @settled, do: n),
       held: count.("held"),
+      stopped: count.("needs_you"),
       failed: count.("failed") + count.("failed_to_start"),
       asks: length(PermissionAsks.pending(summary.session_id))
     })

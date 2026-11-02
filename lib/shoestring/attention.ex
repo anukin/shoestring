@@ -1,20 +1,24 @@
 defmodule Shoestring.Attention do
   @moduledoc """
   What needs the person now, built in one place for every screen that shows
-  it (iteration 17, phase 2): the Sessions page, the nav's count and the
-  chat screen's asks.
-
-  Two kinds today:
+  it (iteration 17): the Sessions page, the nav's count and the chat
+  screen's asks.
 
     * an ask a worker is waiting on (`Shoestring.PermissionAsks`), answered
       with `answer/5`;
     * a held dispatch, one whose provider's remaining usage could not be
       confirmed (`Shoestring.Dispatches.confirm_hold/3`), started with
-      `start_held/3`.
+      `start_held/3`;
+    * a stopped dispatch, one whose execution waits for a person
+      (`Shoestring.Dispatches.state/2` is `needs_you`): Shoestring's merge of
+      a batch stopped, a review needs a decision, Shoestring lost the worker,
+      or its tasks stopped some other way (out of time or attempts, files
+      outside their scope, failed final checks). These are decided in a
+      terminal, so their items say what happened and give the commands.
 
-  Each item carries the words the chat screen's popups use and the choices
-  that answer it. Nothing here decides anything by itself: an item stays
-  until the person answers it or its work ends.
+  Each item carries the words the chat screen and `runs show` use and the
+  choices that answer it. Nothing here decides anything by itself: an item
+  stays until the person answers it or its work ends.
 
   Anything that changes the list broadcasts `{:attention_changed,
   session_id}` on `topic/0`: an ask recorded or settled, and a held dispatch
@@ -22,7 +26,10 @@ defmodule Shoestring.Attention do
   broadcasts, so a screen that shows the count also re-reads it on a timer.
   """
 
-  alias Shoestring.{AgentProfiles, Dispatches, PermissionAsks, Sessions}
+  alias Shoestring.{AgentProfiles, Dispatches, PermissionAsks, Repo, Sessions}
+  alias Shoestring.CLI.Commands.Runs
+  alias Shoestring.Cobbler.{ExecutionControl, PlanMerge}
+  alias Shoestring.Cobbler.Review.Findings
   alias Shoestring.PermissionAsks.Ask
 
   @topic "attention"
@@ -36,10 +43,28 @@ defmodule Shoestring.Attention do
 
   @doc """
   Everything in `session_id` that needs the person: its asks, oldest first,
-  then its holds. `states` (dispatch id to `Shoestring.Dispatches.state/2`)
-  spares re-deriving states a caller already has.
+  then its held dispatches, then its stopped ones. `states` (dispatch id to
+  `Shoestring.Dispatches.state/2`) spares re-deriving states a caller
+  already has; `status:` reads an execution's status (tests pass a fixed
+  one; `Shoestring.Cobbler.ExecutionControl.status/1` otherwise).
   """
-  def items(session_id, states \\ %{}), do: asks(session_id) ++ held(session_id, states)
+  def items(session_id, states \\ %{}, opts \\ []) do
+    dispatches = waiting(session_id, states)
+    status = Keyword.get(opts, :status, &ExecutionControl.status/1)
+
+    asks(session_id) ++
+      for({dispatch, "held"} <- dispatches, do: held_item(dispatch)) ++
+      for({dispatch, "needs_you"} <- dispatches, do: stopped_item(dispatch, status))
+  end
+
+  # The session's dispatches that wait for the person, with their state.
+  defp waiting(session_id, states) do
+    for dispatch <- Dispatches.list(session_id),
+        dispatch.state == "started",
+        state = states[dispatch.id] || Dispatches.state(dispatch),
+        state in ~w(held needs_you),
+        do: {dispatch, state}
+  end
 
   @doc "The asks `session_id`'s workers are waiting on, as items."
   def asks(session_id), do: Enum.map(PermissionAsks.pending(session_id), &ask_item/1)
@@ -54,7 +79,8 @@ defmodule Shoestring.Attention do
 
   @doc """
   How many things need the person: every ask a worker is waiting on, and the
-  held dispatches of the sessions the Sessions page lists (`session_days`).
+  held and stopped dispatches of the sessions the Sessions page lists
+  (`session_days`).
   """
   def count do
     asks = PermissionAsks.pending()
@@ -62,7 +88,7 @@ defmodule Shoestring.Attention do
     sessions =
       Sessions.recent(AgentProfiles.settings().session_days, DateTime.utc_now(), counts: false).sessions
 
-    length(asks) + Enum.sum_by(sessions, &length(held(&1.session_id)))
+    length(asks) + Enum.sum_by(sessions, &length(waiting(&1.session_id, %{})))
   end
 
   # -- Answering -----------------------------------------------------------------
@@ -187,6 +213,181 @@ defmodule Shoestring.Attention do
           "confirmation; none of the grant's pre-approvals is spent.",
       choices: [{"start", "Start it"}]
     }
+  end
+
+  # A stopped dispatch: why it stopped, in the words `runs show` and the
+  # chat screen use, and the commands that decide it in a terminal.
+  defp stopped_item(dispatch, read_status) do
+    status =
+      case read_status.(dispatch.goal_id) do
+        {:ok, status} -> status
+        _ -> %{}
+      end
+
+    review = Enum.find(status[:reviews] || [], &Map.get(&1, :needs_user?))
+    merge = status != %{} && PlanMerge.blocked(dispatch.goal_id, status)
+
+    base = %{
+      id: "stopped-" <> dispatch.id,
+      kind: :stopped,
+      dispatch: dispatch,
+      dispatch_id: dispatch.id,
+      agent: dispatch.agent,
+      at: dispatch.updated_at,
+      subject: dispatch.title,
+      why: nil,
+      lines: [],
+      commands: [],
+      run_id: run_id(dispatch),
+      choices: []
+    }
+
+    cond do
+      merge -> Map.merge(base, merge_stopped(dispatch, merge))
+      review -> Map.merge(base, review_blocked(dispatch, review))
+      lost?(base.run_id, dispatch.goal_id) -> Map.merge(base, lost(dispatch))
+      true -> Map.merge(base, other_stop(dispatch))
+    end
+  end
+
+  defp merge_stopped(dispatch, merge) do
+    take = get_in(Runs.detail(dispatch), ["batch", "take"]) || []
+
+    how =
+      if take == [],
+        do: " Follow it in a terminal to see what is left: shoestring follow #{dispatch.goal_id}",
+        else:
+          " Merge the commits yourself in a terminal with the commands below, resolving it; " <>
+            "the last two record your merge so the final checks run."
+
+    %{
+      reason: :merge,
+      title: "Shoestring's merge stopped",
+      summary: "Merge stopped: " <> dispatch.title,
+      note:
+        case merge["reason"] do
+          "conflict" ->
+            "Every task passed its checks, but merging #{merge["plan_task_id"]} conflicts in " <>
+              "#{Enum.join(merge["files"] || [], ", ")}. Shoestring never resolves a conflict." <>
+              how
+
+          _ ->
+            "Every task passed its checks, but Shoestring could not merge their commits" <>
+              if(merge["detail"], do: " (#{merge["detail"]}).", else: ".") <> how
+        end,
+      commands: take
+    }
+  end
+
+  defp review_blocked(dispatch, review) do
+    task = review.plan_task_id
+    goal = dispatch.goal_id
+
+    why =
+      cond do
+        review.state == "escalated" ->
+          "The reviewer still asks for changes after the last repair round."
+
+        review.state == "failed" ->
+          "The review could not finish" <>
+            if(review.reason, do: " (#{review.reason}).", else: ".")
+
+        review.unavailable ->
+          "No reviewer could run (#{review.unavailable})."
+
+        true ->
+          "The review was called as many times as it may."
+      end
+
+    retry? =
+      review.state == "failed" or (review.state == "pending" and is_nil(review.unavailable))
+
+    %{
+      reason: :review,
+      title: "A review needs your decision",
+      summary: "Review needs you: " <> dispatch.title,
+      note:
+        why <>
+          " Decide in a terminal: accept takes the commit despite the review, reject fails " <>
+          "the attempt" <> if(retry?, do: ", retry allows one more review call.", else: "."),
+      lines:
+        for finding <- review.findings || [], Findings.blocking?(finding) do
+          where =
+            case finding do
+              %{"path" => path, "line" => line} when is_binary(path) and is_integer(line) ->
+                " #{path}:#{line}"
+
+              %{"path" => path} when is_binary(path) ->
+                " #{path}"
+
+              _ ->
+                ""
+            end
+
+          "#{finding["id"]}#{where} #{finding["claim"]}"
+        end,
+      commands:
+        [
+          ~s(shoestring review accept #{goal} #{task} --reason "REASON"),
+          ~s(shoestring review reject #{goal} #{task} --reason "REASON")
+        ] ++
+          if(retry?,
+            do: [~s(shoestring review retry #{goal} #{task} --reason "REASON")],
+            else: []
+          )
+    }
+  end
+
+  defp lost(dispatch) do
+    %{
+      reason: :lost,
+      title: "Shoestring lost this worker",
+      summary: "Lost worker: " <> dispatch.title,
+      note:
+        "Shoestring lost the worker during a service stop or crash; its exact running time " <>
+          "is unknown. Ask the coordinator to dispatch it again, or cancel it in a terminal.",
+      commands: [~s(shoestring runs cancel #{dispatch.id} --reason "REASON")]
+    }
+  end
+
+  defp other_stop(dispatch) do
+    last =
+      case List.last(Runs.log(dispatch, 0)["entries"] || []) do
+        %{"line" => line} when is_binary(line) -> [String.trim(line)]
+        _ -> []
+      end
+
+    %{
+      reason: :other,
+      title: "This dispatch stopped and needs your decision",
+      summary: "Stopped: " <> dispatch.title,
+      note:
+        "Its tasks stopped where Shoestring can't go on by itself: out of time or attempts, " <>
+          "files changed outside their scope, or failed final checks. Its last step says which.",
+      lines: last,
+      commands: ["shoestring follow #{dispatch.goal_id}"]
+    }
+  end
+
+  defp run_id(dispatch) do
+    case Dispatches.latest_run(dispatch) do
+      %{id: id} -> id
+      _ -> nil
+    end
+  end
+
+  defp lost?(nil, _goal_id), do: false
+
+  defp lost?(run_id, goal_id) do
+    import Ecto.Query
+
+    Repo.exists?(
+      from e in Shoestring.Trajectory.TrajectoryEvent,
+        where:
+          e.goal_id == ^goal_id and e.type == "run.failed" and
+            fragment("json_extract(?, '$.run_id')", e.payload) == ^run_id and
+            fragment("json_extract(?, '$.error_code')", e.payload) == "supervisor_crash"
+    )
   end
 
   defp clip(note) when is_binary(note) do

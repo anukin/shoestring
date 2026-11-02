@@ -290,6 +290,46 @@ defmodule ShoestringWeb.SessionsLiveTest do
     end
   end
 
+  describe "news" do
+    defp finish!(dispatch),
+      do:
+        Repo.update_all(from(d in Dispatch, where: d.id == ^dispatch.id),
+          set: [state: "cancelled", updated_at: DateTime.utc_now()]
+        )
+
+    test "an agent whose dispatch finishes while the page is open gets a dot until opened",
+         %{conn: conn} = ctx do
+      # The grant runs two at once: this one finishes before the next is made.
+      earlier = dispatch_fixture(ctx, "implement", nil, "Finished before")
+      finish!(earlier)
+      scouting = dispatch_fixture(ctx, "implement", "scout", "Look around")
+
+      {:ok, view, _} = live(conn, "/sessions/#{ctx.session}?agent=builder")
+      # What had finished when the page opened is not news.
+      refute has_element?(view, "[id$=-news]")
+
+      finish!(scouting)
+      send(view.pid, :refresh)
+      assert has_element?(view, "#agent-scout-news")
+      refute has_element?(view, "#agent-builder-news")
+
+      view |> element("#agent-scout") |> render_click()
+      refute has_element?(view, "#agent-scout-news")
+    end
+
+    test "opening an agent before its work finishes doesn't hide the dot when it does",
+         %{conn: conn} = ctx do
+      scouting = dispatch_fixture(ctx, "implement", "scout", "Look around")
+      {:ok, view, _} = live(conn, "/sessions/#{ctx.session}?agent=builder")
+      view |> element("#agent-scout") |> render_click()
+      view |> element("#agent-builder") |> render_click()
+
+      finish!(scouting)
+      send(view.pid, :refresh)
+      assert has_element?(view, "#agent-scout-news")
+    end
+  end
+
   describe "links in" do
     test "the Agents page's recent work opens the dispatch in its session", %{conn: conn} = ctx do
       {:ok, _} =

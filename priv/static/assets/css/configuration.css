@@ -157,3 +157,8 @@ body:has(.ss-product) #flash-error .alert { background:#f5f7f4; color:#943a29; b
 .ss-attention-reason label { font-size:13px; font-weight:500; }
 .ss-badge { display:inline-block; margin-left:6px; min-width:18px; padding:3px 6px; border-radius:999px; background:#7a5200; color:#fff; font-size:11px; font-weight:700; line-height:1; text-align:center; vertical-align:1px; }
 @media(max-width:700px) { .ss-needs a { flex-wrap:wrap; } .ss-needs-what { white-space:normal; } .ss-attention { margin-inline:10px; } .ss-attention-choices .ss-button { flex:1 1 auto; } }
+/* Sessions, phase 3: stopped dispatches and news. */
+.ss-attention-lines { margin:0; padding-left:18px; list-style:disc; font-size:13px; color:var(--ss-ink); display:grid; gap:4px; overflow-wrap:anywhere; }
+.ss-attention-commands { margin:4px 0 0; padding:10px 12px; border:1px solid #e6c886; border-radius:6px; background:var(--ss-paper); font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:12.5px; white-space:pre-wrap; overflow-wrap:anywhere; max-height:240px; overflow:auto; }
+.ss-news { display:inline-block; width:8px; height:8px; margin-left:6px; border-radius:50%; background:var(--ss-accent); vertical-align:2px; }
+.ss-sr { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }

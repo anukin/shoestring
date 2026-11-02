@@ -11,7 +11,12 @@ defmodule ShoestringWeb.SessionsLive do
   answered on the dispatch it belongs to with the chat screen's choices: an
   ask is allowed once, allowed for its agent, denied, or denied with a
   reason; a held dispatch is started. The first answer wins, from whichever
-  screen. Nothing else on the page acts.
+  screen. A stopped dispatch (a merge stopped, a review blocked, a lost
+  worker) says what happened and gives the commands that decide it in a
+  terminal. Nothing else on the page acts.
+
+  An agent whose dispatch finished while the page was open shows a green dot
+  until it is opened: news, not something that needs the person.
 
   It updates as the work moves: an ask or an event committed for the open
   dispatch refreshes it at once, and a two-second tick covers what
@@ -35,7 +40,7 @@ defmodule ShoestringWeb.SessionsLive do
   }
 
   alias Shoestring.CLI.WorkLoop
-  alias ShoestringWeb.{ChatDispatches, SessionActivity}
+  alias ShoestringWeb.{AttentionComponents, ChatDispatches, SessionActivity}
 
   @tick_ms 2_000
   @refresh_ms 200
@@ -82,6 +87,7 @@ defmodule ShoestringWeb.SessionsLive do
            agent_key: nil,
            open_id: nil,
            items: [],
+           seen: nil,
            reason_for: nil,
            reason_error: nil
          )
@@ -237,6 +243,7 @@ defmodule ShoestringWeb.SessionsLive do
         {:noreply,
          socket
          |> assign(agent_key: agent && agent.key, open_id: open, filter: filter)
+         |> mark_seen()
          |> follow()
          |> load_feed()}
     end
@@ -268,8 +275,16 @@ defmodule ShoestringWeb.SessionsLive do
 
   defp refresh(socket) do
     case Sessions.get(socket.assigns.session_id) do
-      nil -> socket
-      session -> socket |> assign(session: session) |> load_status() |> follow() |> load_feed()
+      nil ->
+        socket
+
+      session ->
+        socket
+        |> assign(session: session)
+        |> load_status()
+        |> mark_seen()
+        |> follow()
+        |> load_feed()
     end
   end
 
@@ -426,6 +441,40 @@ defmodule ShoestringWeb.SessionsLive do
   end
 
   defp final?(dispatch, assigns), do: state(dispatch, assigns) in Sessions.final_states()
+
+  # News: a dispatch that finished while the page was open, until its agent
+  # is opened. What had finished when the page opened is not news, and
+  # nothing is stored: the dots last as long as the page.
+  defp mark_seen(socket) do
+    assigns = socket.assigns
+
+    finished =
+      for d <- assigns.session.dispatches, final?(d, assigns), into: MapSet.new(), do: d.id
+
+    seen =
+      case {assigns.seen, current_agent(assigns)} do
+        {nil, _} ->
+          finished
+
+        {seen, nil} ->
+          seen
+
+        # Only what has finished: one still running is news when it ends,
+        # even if its agent was opened before.
+        {seen, agent} ->
+          MapSet.union(seen, MapSet.intersection(MapSet.new(agent.dispatches, & &1.id), finished))
+      end
+
+    assign(socket, seen: seen)
+  end
+
+  defp news?(agent, assigns),
+    do:
+      is_struct(assigns.seen, MapSet) and
+        Enum.any?(
+          agent.dispatches,
+          &(final?(&1, assigns) and not MapSet.member?(assigns.seen, &1.id))
+        )
 
   defp needs(%{kind: "coordinator"}, _assigns), do: 0
 
@@ -599,8 +648,8 @@ defmodule ShoestringWeb.SessionsLive do
               else: "dispatches"}
             <span :if={s.working > 0}>· {s.working} working</span>
             <span :if={s.failed > 0}>· {s.failed} failed</span>
-            <span :if={s.held + s.asks > 0} class="ss-chip ss-chip-ask">
-              {s.held + s.asks} needs you
+            <span :if={s.held + s.stopped + s.asks > 0} class="ss-chip ss-chip-ask">
+              {s.held + s.stopped + s.asks} needs you
             </span>
           </span>
         </li>
@@ -662,7 +711,9 @@ defmodule ShoestringWeb.SessionsLive do
           <ul>
             <li :for={item <- @items} id={"needs-#{item.id}"}>
               <.link patch={item_link(@session.session_id, @groups, item)}>
-                <span class="ss-needs-what">{item.summary}</span>
+                <span class="ss-needs-what">
+                  {ShoestringWeb.RunPresentation.redact_text(item.summary)}
+                </span>
                 <span class="ss-small">
                   {item.agent || "no agent"} · {String.slice(item.dispatch_id || "", 0, 8)}
                 </span>
@@ -680,7 +731,17 @@ defmodule ShoestringWeb.SessionsLive do
               aria-current={if a.key == @agent_key, do: "true"}
             >
               <span class="ss-row">
-                <strong>{a.name}</strong>
+                <strong>
+                  {a.name}
+                  <span
+                    :if={news?(a, assigns)}
+                    id={"agent-#{a.key}-news"}
+                    class="ss-news"
+                    title="Finished while this page was open"
+                  >
+                    <span class="ss-sr">new: finished while this page was open</span>
+                  </span>
+                </strong>
                 <span class={elem(agent_chip(a, assigns), 0)}>{elem(agent_chip(a, assigns), 1)}</span>
               </span>
               <span class="ss-small">{kind_label(a.kind)} · {agent_via(a)}</span>
@@ -756,7 +817,7 @@ defmodule ShoestringWeb.SessionsLive do
                   </span>
                 </.link>
                 <%= if d.id == @open_id do %>
-                  <.attention_card
+                  <AttentionComponents.card
                     :for={item <- Enum.filter(@items, &(&1.dispatch_id == d.id))}
                     item={item}
                     reason_for={@reason_for}
@@ -802,90 +863,6 @@ defmodule ShoestringWeb.SessionsLive do
         </div>
       </section>
     </Layouts.app>
-    """
-  end
-
-  attr :item, :map, required: true
-  attr :reason_for, :string, default: nil
-  attr :reason_error, :string, default: nil
-
-  # The chat screen's popup, as a card: the same title, words and choices.
-  defp attention_card(%{item: %{kind: :held}} = assigns) do
-    ~H"""
-    <div id={@item.id} class="ss-attention" role="group" aria-label={@item.title}>
-      <h3>{@item.title}</h3>
-      <p class="ss-attention-subject">{@item.subject}</p>
-      <p>{@item.note}</p>
-      <div class="ss-attention-choices">
-        <button
-          id={"#{@item.id}-start"}
-          type="button"
-          class="ss-button ss-primary"
-          phx-click="start_held"
-          phx-value-dispatch={@item.dispatch_id}
-        >
-          Start it
-        </button>
-        <span class="ss-small">Or leave it held: nothing starts it unless you do.</span>
-      </div>
-    </div>
-    """
-  end
-
-  defp attention_card(%{item: %{kind: :ask}} = assigns) do
-    assigns = assign(assigns, :ask_id, assigns.item.ask.id)
-
-    ~H"""
-    <div id={@item.id} class="ss-attention" role="group" aria-label={@item.title}>
-      <h3>{@item.title}</h3>
-      <p class="ss-attention-subject">
-        <code :if={@item.ask.kind == "command"}>{@item.subject}</code>
-        <span :if={@item.ask.kind != "command"}>{@item.subject}</span>
-      </p>
-      <p :if={@item.why}>Why: {@item.why}</p>
-      <p>{@item.note}</p>
-      <%= if @reason_for == @ask_id do %>
-        <form
-          id={"#{@item.id}-reason-form"}
-          class="ss-attention-reason"
-          phx-submit="deny_reason"
-        >
-          <input type="hidden" name="ask" value={@ask_id} />
-          <label for={"#{@item.id}-reason"}>The worker is told</label>
-          <textarea
-            id={"#{@item.id}-reason"}
-            name="note"
-            class="ss-input"
-            rows="2"
-            maxlength="500"
-            phx-mounted={JS.focus()}
-          ></textarea>
-          <p :if={@reason_error} id={"#{@item.id}-reason-error"} class="ss-notice">
-            {@reason_error}
-          </p>
-          <div class="ss-attention-choices">
-            <button id={"#{@item.id}-deny-reason"} type="submit" class="ss-button ss-primary">
-              Deny and tell it
-            </button>
-            <button type="button" class="ss-button" phx-click="reason_back">Back</button>
-          </div>
-        </form>
-      <% else %>
-        <div class="ss-attention-choices">
-          <button
-            :for={{choice, text} <- @item.choices}
-            id={"#{@item.id}-#{String.replace(choice, "_", "-")}"}
-            type="button"
-            class={["ss-button", choice == "allow" && "ss-primary"]}
-            phx-click={if(choice == "deny_reason", do: "reason", else: "answer")}
-            phx-value-ask={@ask_id}
-            phx-value-decision={choice}
-          >
-            {text}
-          </button>
-        </div>
-      <% end %>
-    </div>
     """
   end
 

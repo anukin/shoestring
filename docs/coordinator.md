@@ -467,8 +467,27 @@ grant's pre-approvals. An ask is open in the chat screen and on the page at
 once: the first answer wins, and the other screen is told it was already
 answered.
 
+A dispatch that stopped and waits for you is listed too, with what happened
+and the commands that decide it in a terminal:
+
+- Shoestring's merge of a batch stopped: where it conflicts (Shoestring never
+  resolves a conflict) and the commands that take the commits and record
+  your merge;
+- a review needs your decision: why, its blocking findings, and `shoestring
+  review accept`, `reject` or `retry`;
+- Shoestring lost the worker during a service stop or crash: ask the
+  coordinator to dispatch it again, or `shoestring runs cancel` it;
+- anything else (out of time or attempts, files outside a task's scope,
+  failed final checks): its last step and `shoestring follow`.
+
+Finished and failed work is news, not something that needs you: an agent
+whose dispatch finished while the page was open shows a green dot until you
+open it. Nothing is stored, so a reload starts with no dots. Text a worker or
+reviewer wrote is redacted on every card, as in the feed.
+
 The nav shows how many things need you beside **Sessions**: every ask a worker
-is waiting on, and the held dispatches of the sessions the page lists. A
+is waiting on, and the held and stopped dispatches of the sessions the page
+lists. A
 session with a waiting ask stays listed however old it is. The count changes
 at once when an ask is made or answered or a hold is started, and is re-read
 every five seconds for a dispatch becoming held, which nothing announces.
