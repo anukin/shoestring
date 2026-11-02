@@ -9,6 +9,7 @@ defmodule ShoestringWeb.RunShowLive do
   alias Shoestring.Trajectory.{ArtifactStore, Goal, Task, TrajectoryEvent}
   alias Shoestring.Worktrees
   alias ShoestringWeb.RunPresentation
+  import Ecto.Query, only: [from: 2]
   require Logger
 
   @max_changed_files 100
@@ -231,6 +232,8 @@ defmodule ShoestringWeb.RunShowLive do
   defp maybe_refresh_on_event(socket, _event), do: socket
 
   defp load_run_details(socket, run, goal) do
+    socket = assign(socket, :session_link, session_link(goal))
+
     events =
       if goal do
         case Trajectory.replay(goal.id) do
@@ -423,4 +426,19 @@ defmodule ShoestringWeb.RunShowLive do
 
   defp format_occurred_at(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
   defp format_occurred_at(other), do: to_string(other)
+
+  # The Sessions page of the coordinator dispatch this run belongs to, if any.
+  defp session_link(nil), do: nil
+
+  defp session_link(goal) do
+    case Shoestring.Repo.one(
+           from(d in Shoestring.Dispatches.Dispatch, where: d.goal_id == ^goal.id, limit: 1)
+         ) do
+      %{session_id: session, agent: agent, id: id} when is_binary(session) ->
+        ~p"/sessions/#{session}?#{Enum.reject([agent: agent, dispatch: id], &is_nil(elem(&1, 1)))}"
+
+      _ ->
+        nil
+    end
+  end
 end

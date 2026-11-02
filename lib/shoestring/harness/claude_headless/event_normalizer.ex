@@ -336,6 +336,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
       }
       |> maybe_put("claude-headless:command", sanitize_string(input["command"]))
       |> maybe_put("claude-headless:description", sanitize_string(input["description"]))
+      |> maybe_put("claude-headless:file_path", sanitize_string(input["file_path"]))
       |> maybe_put("claude-headless:message_id", message_id)
       |> maybe_put("claude-headless:request_id", request_id)
 
@@ -344,7 +345,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
 
   defp assistant_block_extensions(%{"type" => "text", "text" => text}, _frame, _mid, _rid)
        when is_binary(text) and text != "" do
-    public_output(text)
+    public_output(text, "assistant")
   end
 
   # Reasoning-adjacent blocks are never persisted (Codex parity).
@@ -376,7 +377,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
 
   defp user_block_extensions(%{"type" => "text", "text" => text}, _result)
        when is_binary(text) and text != "" do
-    public_output(text)
+    public_output(text, "user")
   end
 
   defp user_block_extensions(_block, _result), do: :skip
@@ -554,12 +555,15 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizer do
   def sanitize_string(val), do: to_string(val)
 
   # Public assistant text: retained whole and redacted for storage.
-  defp public_output(text) do
+  # `role` says who wrote the text: the worker (`assistant`) or a tool
+  # result handed back to it (`user`), which is not the worker speaking.
+  defp public_output(text, role) do
     retained = text |> sanitize_string() |> Security.redact_retained()
 
     if byte_size(retained) > @max_output_bytes,
       do: {:oversized, byte_size(retained)},
-      else: {:output, %{"claude-headless:output_text" => retained}}
+      else:
+        {:output, %{"claude-headless:output_text" => retained, "claude-headless:role" => role}}
   end
 
   # Tool stdio is a diagnostic preview. Truncation is recorded explicitly,

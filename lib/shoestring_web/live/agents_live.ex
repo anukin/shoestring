@@ -72,6 +72,8 @@ defmodule ShoestringWeb.AgentsLive do
 
     %{
       id: dispatch.id,
+      session_id: dispatch.session_id,
+      agent: dispatch.agent,
       title: dispatch.title,
       purpose: dispatch.purpose,
       state: Dispatches.state(dispatch),
@@ -220,7 +222,15 @@ defmodule ShoestringWeb.AgentsLive do
       </dl>
       <ul :if={@card.recent != []} id={"agent-#{@card.agent.slug}-work"} class="ss-work">
         <li :for={row <- @card.recent} id={"work-#{row.id}"}>
-          <span class="ss-work-title">{row.title}</span>
+          <.link
+            :if={row.session_id}
+            id={"work-#{row.id}-session"}
+            navigate={~p"/sessions/#{row.session_id}?#{[agent: row.agent, dispatch: row.id]}"}
+            class="ss-work-title"
+          >
+            {row.title}
+          </.link>
+          <span :if={!row.session_id} class="ss-work-title">{row.title}</span>
           <span class="ss-small">
             {row.state}{if(duration(row.seconds), do: " · #{duration(row.seconds)}")}{if(row.tokens,
               do: " · #{row.tokens} output tokens"

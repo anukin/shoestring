@@ -14,6 +14,8 @@ defmodule Shoestring.AgentProfiles.Settings do
     field :open_browser_on_start, :boolean, default: true
     # How many IMPLEMENT tasks may run at once (`Shoestring.Cobbler.Parallelism`).
     field :parallel_tasks, :integer, default: 1
+    # How many days back the Sessions page lists sessions.
+    field :session_days, :integer, default: 7
     field :lock_version, :integer, default: 1
     timestamps(type: :utc_datetime_usec)
   end
@@ -41,9 +43,12 @@ defmodule Shoestring.AgentProfiles.Settings do
       :refresh_seconds,
       :lessons_space_mb,
       :open_browser_on_start,
-      :parallel_tasks
+      :parallel_tasks,
+      :session_days
     ])
     |> validate_number(:parallel_tasks, greater_than_or_equal_to: 1, less_than_or_equal_to: 8)
+    |> validate_required([:session_days])
+    |> validate_number(:session_days, greater_than_or_equal_to: 1, less_than_or_equal_to: 365)
     |> validate_number(:lessons_space_mb,
       greater_than_or_equal_to: 1,
       less_than_or_equal_to: 100_000

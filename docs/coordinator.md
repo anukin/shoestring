@@ -431,6 +431,33 @@ ran, as it happens: each command Codex starts, each file Claude reads or
 search it makes (redacted, at most 200 characters each; the last 50 are
 kept and earlier ones counted).
 
+### The Sessions page (iteration 17)
+
+The web UI's **Sessions** page lists the coordinator sessions active in the
+last 7 days. Change the number of days in the field at the top of the page or
+in Settings ("Sessions shown on the Sessions page"), from 1 to 365. Older
+sessions are only hidden, and the page says how many.
+
+A session's page lists its agents: the coordinator first, then the team's
+agents, then any worker that ran a dispatch no agent names. Pick one to see
+its dispatches; open a dispatch for a feed of what its worker did:
+
+- each command, with its exit code and time taken;
+- each file it changed, from its worktree, with line counts (Codex) or the
+  tool that changed it (Claude);
+- its messages, the text the worker writes as it goes, with its last one
+  marked final; a long message is clipped to three lines until opened;
+- its asks, and Shoestring's own steps (the lines `runs log` prints).
+
+The coordinator's panel has the same shape: its turns, the names of the tools
+it used (never their inputs), its messages and yours. Filters narrow a feed
+to one kind. A feed keeps its last 500 rows and counts the rest. Model
+reasoning is never shown, since no event keeps it, and every row is redacted
+as the run page redacts. The page refreshes as soon as an ask changes or the
+open dispatch commits an event, and every two seconds otherwise (EXPLORE and
+REVIEW progress is not broadcast). It only reads: answer asks and start held
+dispatches in the chat screen.
+
 When a dispatch's task or review is held because its provider's remaining
 usage cannot be confirmed — always for opencode, which reports none; always
 for Claude, whose own usage reports can defer work but never admit it alone;

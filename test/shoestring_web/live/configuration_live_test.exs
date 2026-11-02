@@ -3,14 +3,17 @@ defmodule ShoestringWeb.ConfigurationLiveTest do
   import Shoestring.ConfigurationFixtures
   alias Shoestring.{Agents, AgentProfiles}
 
-  test "product navigation has usage, teams, agents, lessons and settings", %{conn: conn} do
+  test "product navigation has usage, teams, agents, sessions, lessons and settings", %{
+    conn: conn
+  } do
     {:ok, view, _} = live(conn, "/")
     assert has_element?(view, "#nav-usage[aria-current=page]")
     assert has_element?(view, "#nav-teams[href='/teams']")
     assert has_element?(view, "#nav-agents[href='/agents']")
+    assert has_element?(view, "#product-nav a:nth-child(4)#nav-sessions[href='/sessions']")
     assert has_element?(view, "#nav-lessons[href='/lessons']")
     assert has_element?(view, "#nav-settings[href='/settings']")
-    refute has_element?(view, "#product-nav a:nth-child(6)")
+    refute has_element?(view, "#product-nav a:nth-child(7)")
   end
 
   # The agents a team is made of.

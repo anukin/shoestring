@@ -134,6 +134,13 @@ defmodule ShoestringWeb.AgentSettingsLive do
             max="100000"
             class="ss-input"
           /><.input
+            field={@form[:session_days]}
+            type="number"
+            label="Sessions shown on the Sessions page (days)"
+            min="1"
+            max="365"
+            class="ss-input"
+          /><.input
             field={@form[:open_browser_on_start]}
             type="checkbox"
             label="Open this page in the default browser when shoestring start is ready"

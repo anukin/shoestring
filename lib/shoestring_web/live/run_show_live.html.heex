@@ -16,6 +16,9 @@
     </div>
   <% else %>
     <div class="max-w-6xl mx-auto space-y-8 p-6">
+      <.link :if={@session_link} id="run-session" navigate={@session_link} class="text-sm">
+        Back to session
+      </.link>
       <%!-- Banner: Clearly labeled as MANUAL EXECUTION --%>
       <div
         id="manual-execution-banner"

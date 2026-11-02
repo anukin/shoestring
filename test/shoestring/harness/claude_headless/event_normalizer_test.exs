@@ -299,4 +299,44 @@ defmodule Shoestring.Harness.ClaudeHeadless.EventNormalizerTest do
       refute Map.has_key?(event.extensions, "claude-headless:output_tokens")
     end
   end
+
+  describe "what the Sessions feed reads" do
+    test "a file tool's path is kept, and text says whether the worker wrote it" do
+      session = "aaaaaaaa-0000-4000-a000-000000000003"
+
+      assistant = %{
+        "type" => "assistant",
+        "session_id" => session,
+        "message" => %{
+          "content" => [
+            %{"type" => "text", "text" => "I'll fix the rounding."},
+            %{
+              "type" => "tool_use",
+              "id" => "toolu_000000000000000000000101",
+              "name" => "Edit",
+              "input" => %{"file_path" => "/work/tree/lib/rounding.ex", "old_string" => "a"}
+            }
+          ]
+        }
+      }
+
+      user = %{
+        "type" => "user",
+        "session_id" => session,
+        "message" => %{"content" => [%{"type" => "text", "text" => "tool said hi"}]}
+      }
+
+      {:ok, [text, edit]} = EventNormalizer.normalize(assistant, @run_id, 1, %{})
+      assert text.extensions["claude-headless:output_text"] == "I'll fix the rounding."
+      assert text.extensions["claude-headless:role"] == "assistant"
+      assert edit.extensions["claude-headless:tool_name"] == "Edit"
+      assert edit.extensions["claude-headless:file_path"] == "/work/tree/lib/rounding.ex"
+      # The edit's content is never kept, only where it went.
+      refute Enum.any?(Map.values(edit.extensions), &(&1 == "a"))
+
+      {:ok, [echoed]} = EventNormalizer.normalize(user, @run_id, 3, %{})
+      assert echoed.extensions["claude-headless:output_text"] == "tool said hi"
+      assert echoed.extensions["claude-headless:role"] == "user"
+    end
+  end
 end
