@@ -296,6 +296,43 @@ defmodule Shoestring.CLI.FollowTest do
            }) == "Task add: checks failed (python_unittest)."
   end
 
+  test "waiting for another task or for a fresh usage reading is said plainly" do
+    # The explanations as the live admission recorded them (2026-11-02).
+    occupied = %{
+      "result" => "defer_until",
+      "reason_code" => "scope_occupied",
+      "explanation" =>
+        "Candidate scope 'subscription' is currently occupied by active execution; manual " <>
+          "confirmation cannot bypass active occupancy",
+      "candidate" => %{"provider_id" => "claude"}
+    }
+
+    line = Follow.line(%{type: "admission.decided", payload: occupied})
+    assert line =~ "Waiting: another task is running"
+    assert line =~ "parallel tasks"
+    refute line =~ "scope 'subscription'"
+
+    stale = %{
+      occupied
+      | "result" => "require_confirmation",
+        "reason_code" => "stale_observation",
+        "explanation" =>
+          "Capacity observation is stale; requires fresh observation or attributable " <>
+            "single-decision confirmation"
+    }
+
+    line = Follow.line(%{type: "admission.decided", payload: stale})
+    assert line =~ "Waiting: claude's usage reading is out of date"
+    refute line =~ "attributable"
+
+    # Any other reason keeps the admission's own words.
+    other = %{occupied | "reason_code" => "hard_quota", "explanation" => "Quota refused."}
+    assert Follow.line(%{type: "admission.decided", payload: other}) == "Waiting: Quota refused."
+
+    assert Follow.line(%{type: "admission.decided", payload: %{occupied | "result" => "admit"}}) ==
+             nil
+  end
+
   test "work left uncommitted is named, not reported as a failed check" do
     # As recorded live when a worker stopped without committing.
     dirty = %{

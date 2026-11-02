@@ -18,7 +18,9 @@ defmodule Shoestring.CLI.Commands.Grant do
     --team NAME             snapshot this team's agents, limits and switches
     --purposes              what it may dispatch (default: all three)
     --max-dispatches N      attempts in total, retries included (default 10)
-    --max-parallel N        dispatches queued or running at once (default 3)
+    --max-parallel N        dispatches queued or running at once (default 3);
+                            how many run side by side is Settings' parallel
+                            tasks (1 by default: one after another)
     --max-hours H           total time its dispatches may use (default 4)
     --max-dispatch-minutes  the most one dispatch may use (default 60)
     --unread-usage N        dispatches it may start when a provider's
@@ -124,7 +126,7 @@ defmodule Shoestring.CLI.Commands.Grant do
     shell.error("  Purposes: #{Enum.join(attrs.purposes, ", ")}")
 
     shell.error(
-      "  Up to #{attrs.max_dispatches} attempts, #{attrs.max_parallel} at once, " <>
+      "  Up to #{attrs.max_dispatches} attempts, #{attrs.max_parallel} queued or running at once, " <>
         "#{div(attrs.max_total_seconds, 3600)} hours in total, " <>
         "#{div(attrs.max_dispatch_seconds, 60)} minutes each"
     )

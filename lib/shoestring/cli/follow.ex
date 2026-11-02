@@ -306,7 +306,7 @@ defmodule Shoestring.CLI.Follow do
         "Task #{task}: started (attempt #{p["attempt"]})."
 
       "admission.decided" ->
-        if p["result"] != "admit", do: "Waiting: #{p["explanation"]}"
+        if p["result"] != "admit", do: "Waiting: " <> admission_wait(p)
 
       "cobbler.plan.admission.waiting" ->
         "Task #{task} is waiting: " <> waiting_reason(p)
@@ -410,6 +410,23 @@ defmodule Shoestring.CLI.Follow do
   defp waiting_reason(%{"reason" => reason, "provider_id" => provider}),
     do:
       "capacity for #{provider} could not be checked (#{reason}); the service retries every minute."
+
+  # The admission's own explanation is written for Shoestring's operators;
+  # the two a person meets most often are said plainly.
+  defp admission_wait(%{"reason_code" => "scope_occupied"}),
+    do:
+      "another task is running, and Shoestring runs one task at a time unless Settings " <>
+        "allows more (parallel tasks). This one starts when that one finishes; it checks " <>
+        "every minute."
+
+  defp admission_wait(%{"reason_code" => "stale_observation"} = p),
+    do:
+      "#{provider(p)}'s usage reading is out of date, so whether it has room is unknown. It " <>
+        "starts when you start it, or once a fresh reading shows room."
+
+  defp admission_wait(p), do: p["explanation"] || "not admitted yet."
+
+  defp provider(p), do: get_in(p, ["candidate", "provider_id"]) || "Its provider"
 
   defp not_run(skipped) when is_list(skipped) and skipped != [],
     do: " Not run: #{Enum.join(skipped, ", ")}."
