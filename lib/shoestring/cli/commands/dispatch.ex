@@ -117,10 +117,14 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   def run(args, context) do
     case OptionParser.parse(args, strict: @switches) do
       {opts, [], []} ->
-        request = request!(opts, context)
+        # Checked before the repository opens; the request itself, which
+        # reads the session's team for `--agent`, only once it is open.
+        fields = fields!(opts, context)
 
         if opts[:dry_run] do
           context.with_repo.(fn _repo ->
+            request = request!(fields)
+
             case Dispatches.dry_run(request) do
               {:ok, report} ->
                 capacity = Shoestring.CLI.Commands.Capacity.for_provider(request.provider)
@@ -139,7 +143,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
               {:error, reason} -> Refusal.refuse!(Messages.message(reason, context.start_hint))
             end
 
-            create(request, context)
+            create(request!(fields), context)
           end)
         end
 
@@ -157,7 +161,9 @@ defmodule Shoestring.CLI.Commands.Dispatch do
 
     case result do
       {:ok, dispatch, outcome} ->
-        if dispatch.title != request.title or dispatch.brief != request.brief do
+        # The stored brief also carries the lessons text Shoestring adds, so
+        # it is compared before that: only a real redaction is reported.
+        if redacted?(request.title) or redacted?(request.brief) do
           context.shell.error(
             "Secret-looking text in the title or brief was recorded as [REDACTED]; " <>
               "the worker reads the redacted brief."
@@ -188,7 +194,12 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     end
   end
 
-  defp request!(opts, context) do
+  defp redacted?(text) when is_binary(text),
+    do: Shoestring.Harness.Security.redact_retained(text) != text
+
+  defp redacted?(_text), do: false
+
+  defp fields!(opts, context) do
     for key <- [:purpose, :title, :brief],
         is_nil(opts[key]),
         do: Refusal.refuse!("dispatch needs --#{key}")
@@ -202,22 +213,23 @@ defmodule Shoestring.CLI.Commands.Dispatch do
           "No coordinator session: pass --session ID or set SHOESTRING_SESSION (shoestring grant prints it)"
         )
 
-    fields =
-      opts
-      |> Map.new()
-      |> Map.merge(%{
-        session_id: session,
-        brief: read_brief!(Command.expand(opts[:brief], context)),
-        repository: Command.expand(opts[:repo], context) || context.cwd,
-        files: Keyword.get_values(opts, :file),
-        stay_out: Keyword.get_values(opts, :stay_out),
-        lessons: Keyword.get_values(opts, :lesson),
-        tasks: opts[:tasks] && read_tasks!(Command.expand(opts[:tasks], context)),
-        accept: Keyword.get_values(opts, :accept),
-        gates: Keyword.get_values(opts, :gate),
-        tests: Keyword.get_values(opts, :test)
-      })
+    opts
+    |> Map.new()
+    |> Map.merge(%{
+      session_id: session,
+      brief: read_brief!(Command.expand(opts[:brief], context)),
+      repository: Command.expand(opts[:repo], context) || context.cwd,
+      files: Keyword.get_values(opts, :file),
+      stay_out: Keyword.get_values(opts, :stay_out),
+      lessons: Keyword.get_values(opts, :lesson),
+      tasks: opts[:tasks] && read_tasks!(Command.expand(opts[:tasks], context)),
+      accept: Keyword.get_values(opts, :accept),
+      gates: Keyword.get_values(opts, :gate),
+      tests: Keyword.get_values(opts, :test)
+    })
+  end
 
+  defp request!(fields) do
     case build_request(fields) do
       {:ok, request} -> request
       {:error, message} -> Refusal.refuse!(message)

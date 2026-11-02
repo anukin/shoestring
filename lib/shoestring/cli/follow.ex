@@ -338,7 +338,11 @@ defmodule Shoestring.CLI.Follow do
             "Task #{task}: checks could not run in a sandbox (#{p["gate"]}: #{reason}); needs your decision."
 
           nil ->
-            "Task #{task}: checks failed (#{p["gate"]})." <> not_run(p["skipped"])
+            if uncommitted?(p),
+              do:
+                "Task #{task}: the worker left its change uncommitted, so its checks could not " <>
+                  "run (they run on its last commit); needs your decision.",
+              else: "Task #{task}: checks failed (#{p["gate"]})." <> not_run(p["skipped"])
         end
 
       "cobbler.plan.gate.started" ->
@@ -415,7 +419,17 @@ defmodule Shoestring.CLI.Follow do
   defp optional(%{"required" => false}), do: " (optional)"
   defp optional(_payload), do: ""
 
+  # The checks run on the worker's last commit; a worktree with changes
+  # left uncommitted is refused before any check runs.
+  defp uncommitted?(p), do: String.starts_with?(p["reason"] || "", "{:gate_worktree_dirty,")
+
   defp gate_result(p) do
+    if uncommitted?(p),
+      do: "not run: the worker left its change uncommitted",
+      else: result_text(p)
+  end
+
+  defp result_text(p) do
     seconds = :erlang.float_to_binary((p["duration_ms"] || 0) / 1000, decimals: 1)
 
     case p["result"] do

@@ -363,7 +363,8 @@ defmodule Shoestring.Attention do
       summary: "Stopped: " <> dispatch.title,
       note:
         "Its tasks stopped where Shoestring can't go on by itself: out of time or attempts, " <>
-          "files changed outside their scope, or failed final checks. Its last step says which.",
+          "a change left uncommitted, files changed outside their scope, or failed checks. " <>
+          "Its last step says which.",
       lines: last,
       commands: ["shoestring follow #{dispatch.goal_id}"]
     }

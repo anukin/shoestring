@@ -191,6 +191,76 @@ defmodule Shoestring.CLI.CoordinatorCommandsTest do
     assert length(Shoestring.Grants.list()) == 1
   end
 
+  test "dispatch --agent reads the session's team only once the repository is open", ctx do
+    {:ok, _team} =
+      Shoestring.AgentProfiles.create(
+        Shoestring.ConfigurationFixtures.agent_attrs(%{
+          "slug" => "builder",
+          "roles" => [
+            %{"name" => "Coordinator", "provider" => "codex", "model" => "gpt-6-luna"},
+            %{"name" => "Worker", "provider" => "codex", "model" => "gpt-6-luna"}
+          ]
+        })
+      )
+
+    grant!(ctx, ["--team", "builder"])
+
+    # As in a real command, nothing reaches the database before `with_repo`
+    # opens it: outside it the repository names one that is not running.
+    Repo.put_dynamic_repo(:repository_not_open)
+    on_exit(fn -> Repo.put_dynamic_repo(Repo) end)
+
+    context = %{
+      context(ctx)
+      | with_repo: fn fun ->
+          Repo.put_dynamic_repo(Repo)
+
+          try do
+            fun.(Repo)
+          after
+            Repo.put_dynamic_repo(:repository_not_open)
+          end
+        end
+    }
+
+    args =
+      ["--purpose", "implement", "--agent", "implementer", "--title", "Make add return the sum"] ++
+        ["--brief", ctx.brief, "--file", "calc.py"]
+
+    Dispatch.run(args, context)
+    Repo.put_dynamic_repo(Repo)
+    created = json!()
+    dispatch = Dispatches.get(created["dispatch_id"])
+    assert {dispatch.provider, dispatch.model} == {"codex", "gpt-6-luna"}
+    assert dispatch.agent =~ "implementer"
+  end
+
+  test "dispatch says it redacted the brief only when it did", ctx do
+    grant!(ctx)
+
+    # Shoestring adds its own text to every brief; that is no redaction.
+    Dispatch.run(dispatch_args(ctx), context(ctx))
+    assert %{"dispatch_id" => _} = json!()
+    refute_received {:mix_shell, :error, ["Secret-looking" <> _]}
+    assert Dispatches.list("s1") |> hd() |> Map.get(:brief) != File.read!(ctx.brief)
+
+    secret = Path.join(System.tmp_dir!(), "shoestring-brief-#{Ecto.UUID.generate()}.md")
+
+    File.write!(
+      secret,
+      "IMPLEMENT - make add() return the sum\nUse Authorization: Bearer abc.def.ghi\n"
+    )
+
+    Dispatch.run(
+      dispatch_args(%{ctx | brief: secret}, ["--request-id", "with-secret"]),
+      context(ctx)
+    )
+
+    assert %{"dispatch_id" => id} = json!()
+    assert_received {:mix_shell, :error, ["Secret-looking" <> _]}
+    refute Dispatches.get(id).brief =~ "abc.def.ghi"
+  end
+
   test "grants are listed and shown with their history; extend and revoke ask a person", ctx do
     %{"grant_id" => id} = grant!(ctx)
 

@@ -296,6 +296,30 @@ defmodule Shoestring.CLI.FollowTest do
            }) == "Task add: checks failed (python_unittest)."
   end
 
+  test "work left uncommitted is named, not reported as a failed check" do
+    # As recorded live when a worker stopped without committing.
+    dirty = %{
+      "plan_task_id" => "dispatch",
+      "gate" => "python_unittest",
+      "result" => "error",
+      "duration_ms" => 87,
+      "reason" => ~s({:gate_worktree_dirty, "/state/worktrees/run-1"})
+    }
+
+    assert Follow.line(%{type: "cobbler.plan.gate.completed", payload: dirty}) ==
+             "  Check python_unittest: not run: the worker left its change uncommitted."
+
+    assert Follow.line(%{type: "cobbler.plan.task.gate_failed", payload: dirty}) ==
+             "Task dispatch: the worker left its change uncommitted, so its checks could not " <>
+               "run (they run on its last commit); needs your decision."
+
+    # Any other error keeps its plain wording.
+    other = %{dirty | "reason" => "{:gate_commit_unresolvable, \"/x\"}"}
+
+    assert Follow.line(%{type: "cobbler.plan.gate.completed", payload: other}) ==
+             "  Check python_unittest: not verified."
+  end
+
   test "an admitted or running task is never prompted for", c do
     admitted = running(c, %{last_admission: %{"result" => "admit", "decision_id" => "d2"}})
 

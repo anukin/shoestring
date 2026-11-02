@@ -251,9 +251,12 @@ and approved under the grant (recorded as `grant:ID`, with
 `author_kind: grant`), and an execution the service runs in a private copy
 of the repository at its `HEAD`. The checks decide acceptance; the result is
 a verified commit to fetch and merge, and your checkout is never changed.
-The worker reads the brief under "Coordinator brief". Secret-looking values
-in the title or brief (`api_key=…`, `token: …`, `sk-…`) are recorded, and
-given to the worker, as `[REDACTED]`; `dispatch` says so on stderr.
+The worker reads the brief under "Coordinator brief", and is told to commit
+its change when done: the checks run on its last commit and refuse a
+worktree with uncommitted changes, which the dispatch's steps then name ("the
+worker left its change uncommitted"). Secret-looking values in the title or
+brief (`api_key=…`, `token: …`, `sk-…`) are recorded, and given to the
+worker, as `[REDACTED]`; `dispatch` says so on stderr, and only then.
 
 `--reviewer` names a model from another vendor than the worker's (the grant
 must allow REVIEW and that model). Iteration 8's cross-review then runs

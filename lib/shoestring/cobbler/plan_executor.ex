@@ -1861,6 +1861,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
               "revision_number" => execution.revision_number,
               "plan_digest" => execution.plan_digest
             }) <>
+            finish_instructions() <>
             profile_instructions(execution[:agent_profile]) <>
             review_prompt(execution, task_id, attempt, Keyword.get(opts, :reserved_sibling)) <>
             (Keyword.get(opts, :replacement_prompt) || ""),
@@ -1902,6 +1903,15 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       Keyword.take(opts, [:writer_opts, :publish_fun, :reservation_id, :reserved_sibling])
     )
   end
+
+  # The checks run on the worker's last commit and refuse a worktree with
+  # uncommitted changes, so a worker that stops before committing fails them
+  # with its work done (seen live with Claude Code, 2026-11-02).
+  defp finish_instructions,
+    do:
+      "\nWhen your change is done, commit it in this worktree (git add, then git commit) " <>
+        "and leave the worktree clean: Shoestring runs the task's checks on your last commit " <>
+        "and refuses a worktree with uncommitted changes.\n"
 
   defp profile_instructions(nil), do: ""
 

@@ -156,6 +156,8 @@ defmodule Shoestring.DispatchIntegrationTest do
       refute "--dangerously-skip-permissions" in argv
       prompt = List.last(argv)
       assert prompt =~ "Coordinator brief:\n" <> brief
+      # The checks refuse uncommitted work, so the worker is told to commit.
+      assert prompt =~ "commit it in this worktree (git add, then git commit)"
       assert prompt =~ "Preserve signed zero"
       assert prompt =~ "calc.py"
 
