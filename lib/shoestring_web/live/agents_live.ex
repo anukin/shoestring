@@ -6,6 +6,7 @@ defmodule ShoestringWeb.AgentsLive do
   that uses it.
   """
   use ShoestringWeb, :live_view
+  on_mount ShoestringWeb.NeedsYou
   alias Shoestring.{Agents, AgentProfiles, Dispatches, Harnesses}
   alias Shoestring.Agents.Agent
 
@@ -250,7 +251,12 @@ defmodule ShoestringWeb.AgentsLive do
 
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope} product_page="agents">
+    <Layouts.app
+      flash={@flash}
+      current_scope={@current_scope}
+      product_page="agents"
+      needs_you={@needs_you}
+    >
       <%= case @live_action do %>
         <% :index -> %>
           <div class="ss-heading">

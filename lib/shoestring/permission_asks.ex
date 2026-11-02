@@ -8,7 +8,9 @@ defmodule Shoestring.PermissionAsks do
   runs that one command outside the sandbox (VERIFIED offline with Codex
   0.166.0 and Claude Code 2.1.316): the person is told so.
 
-  Only the person decides (`decide/4` takes a `human:` identity); nothing is
+  Only the person decides (`decide/4` takes a `human:` identity, and the
+  chat screen and the Sessions page both answer through
+  `Shoestring.Attention.answer/5`); the first answer wins, and nothing is
   ever decided by a timer, and an unanswered ask holds its worker until its
   session ends. The worker's session registers each ask it is waiting on
   (`Shoestring.PermissionAsks.Registry`); an ask whose session is gone can no
@@ -93,10 +95,24 @@ defmodule Shoestring.PermissionAsks do
         [{pid, _}] ->
           {state, answer, note} = outcome(decision, note)
 
-          with :ok <- add_rule(decision, ask),
-               {:ok, ask} <- settle(ask, state, by, note) do
-            send(pid, {:permission_decision, ask.id, answer, if(answer == :deny, do: note)})
-            {:ok, ask}
+          # Settling and the rule are one write: two screens answering at
+          # once can't leave a rule behind for an ask the other one denied.
+          Repo.transaction(fn ->
+            with {:ok, ask} <- mark(ask, state, by, note),
+                 :ok <- add_rule(decision, ask) do
+              ask
+            else
+              {:error, reason} -> Repo.rollback(reason)
+            end
+          end)
+          |> case do
+            {:ok, ask} ->
+              broadcast(ask)
+              send(pid, {:permission_decision, ask.id, answer, if(answer == :deny, do: note)})
+              {:ok, ask}
+
+            {:error, _} = error ->
+              error
           end
 
         [] ->
@@ -127,6 +143,13 @@ defmodule Shoestring.PermissionAsks do
 
   # Only a pending ask is decided, once.
   defp settle(ask, state, by, note) do
+    with {:ok, ask} <- mark(ask, state, by, note) do
+      broadcast(ask)
+      {:ok, ask}
+    end
+  end
+
+  defp mark(ask, state, by, note) do
     now = DateTime.utc_now()
 
     {count, _} =
@@ -135,20 +158,26 @@ defmodule Shoestring.PermissionAsks do
         set: [state: state, decided_by: by, note: note, decided_at: now, updated_at: now]
       )
 
-    if count == 1 do
-      ask = Repo.get!(Ask, ask.id)
-      broadcast(ask)
-      {:ok, ask}
-    else
-      {:error, :not_pending}
-    end
+    if count == 1, do: {:ok, Repo.get!(Ask, ask.id)}, else: {:error, :not_pending}
   end
 
   @doc "The calling session's ask ended without a decision (its run stopped)."
   def expire(ask_id),
     do: with(%Ask{} = ask <- Repo.get(Ask, ask_id), do: settle(ask, "expired", nil, nil))
 
-  @doc "The asks a coordinator session's workers are waiting on now, oldest first."
+  @doc """
+  The asks a coordinator session's workers are waiting on now, oldest first;
+  with no session, every session's.
+  """
+  def pending do
+    from(a in Ask,
+      where: not is_nil(a.session_id) and a.state == "pending",
+      order_by: [a.inserted_at, a.id]
+    )
+    |> Repo.all()
+    |> Enum.filter(&waiting?/1)
+  end
+
   def pending(session_id) do
     from(a in Ask,
       where: a.session_id == ^session_id and a.state == "pending",
@@ -170,13 +199,12 @@ defmodule Shoestring.PermissionAsks do
 
   defp broadcast(%Ask{session_id: nil}), do: :ok
 
-  defp broadcast(%Ask{} = ask),
-    do:
-      Phoenix.PubSub.broadcast(
-        Shoestring.PubSub,
-        topic(ask.session_id),
-        {:permission_ask, ask.id}
-      )
+  # The session's screens hear the ask itself; every screen showing the
+  # needs-you count hears that it may have changed.
+  defp broadcast(%Ask{} = ask) do
+    Phoenix.PubSub.broadcast(Shoestring.PubSub, topic(ask.session_id), {:permission_ask, ask.id})
+    Shoestring.Attention.changed(ask.session_id)
+  end
 
   defp clip(nil), do: nil
   defp clip(text) when is_binary(text), do: String.slice(text, 0, @max_text)

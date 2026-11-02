@@ -1,5 +1,6 @@
 defmodule ShoestringWeb.UsageLive do
   use ShoestringWeb, :live_view
+  on_mount ShoestringWeb.NeedsYou
   alias Shoestring.{AgentProfiles, Usage}
 
   def mount(_params, _session, socket) do
@@ -33,7 +34,12 @@ defmodule ShoestringWeb.UsageLive do
 
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope} product_page="usage">
+    <Layouts.app
+      flash={@flash}
+      current_scope={@current_scope}
+      product_page="usage"
+      needs_you={@needs_you}
+    >
       <div class="ss-heading">
         <div>
           <h1>Usage</h1>

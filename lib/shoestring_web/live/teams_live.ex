@@ -5,6 +5,7 @@ defmodule ShoestringWeb.TeamsLive do
   limit; a team is edited by choosing an agent for each role.
   """
   use ShoestringWeb, :live_view
+  on_mount ShoestringWeb.NeedsYou
   alias Shoestring.{Agents, AgentProfiles}
   alias Shoestring.AgentProfiles.{Definition, Role}
 
@@ -161,7 +162,12 @@ defmodule ShoestringWeb.TeamsLive do
 
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope} product_page="teams">
+    <Layouts.app
+      flash={@flash}
+      current_scope={@current_scope}
+      product_page="teams"
+      needs_you={@needs_you}
+    >
       <%= if @live_action == :index do %>
         <div class="ss-heading">
           <div>

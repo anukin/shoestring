@@ -154,6 +154,61 @@ defmodule Shoestring.SessionsFixtures do
     })
   end
 
+  @doc """
+  An ask of `dispatch`'s worker that the calling process waits on, as a
+  worker session does: an answer arrives as
+  `{:permission_decision, ask_id, decision, note}`. A plain command a rule
+  may cover unless `attrs` say otherwise.
+  """
+  def waiting_ask(dispatch, attrs \\ %{}) do
+    ask =
+      Repo.insert!(
+        struct(
+          Shoestring.PermissionAsks.Ask,
+          Map.merge(
+            %{
+              goal_id: dispatch.goal_id,
+              run_id: "run-1",
+              dispatch_id: dispatch.id,
+              session_id: dispatch.session_id,
+              agent: dispatch.agent,
+              provider: "codex",
+              command: "npm ci",
+              rule_key: "npm ci",
+              reason: "The frontend's tests need its packages.",
+              kind: "command"
+            },
+            attrs
+          )
+        )
+      )
+
+    {:ok, _} = Registry.register(Shoestring.PermissionAsks.registry(), ask.id, nil)
+    ask
+  end
+
+  @doc """
+  An EXPLORE dispatch the coordinator made, held: no usage reading
+  confirms its provider has room, so it waits for a person to start it.
+  """
+  def held_fixture(ctx, title \\ "Where is add?") do
+    {:ok, %{"dispatch_id" => id}} =
+      Shoestring.Coordinator.Tools.call(
+        "dispatch",
+        %{
+          "purpose" => "explore",
+          "worker" => "codex:gpt-6-luna",
+          "title" => title,
+          "brief" => "EXPLORE - where is add?\nContract: a report.\n"
+        },
+        %{session_id: ctx.session, repository: ctx.repo}
+      )
+
+    {:snooze, _} = Shoestring.Dispatches.Calls.step(id)
+    "held" = Dispatches.state(Dispatches.get(id))
+    Dispatches.get(id)
+  end
+
   @doc "Tells subscribers of the goal that `event` was committed, as the writer does."
   def broadcast(event),
     do:

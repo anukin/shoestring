@@ -1,5 +1,6 @@
 defmodule ShoestringWeb.TerminalLive do
   use ShoestringWeb, :live_view
+  on_mount ShoestringWeb.NeedsYou
   alias Shoestring.Harness.RunRecord
   alias ShoestringWeb.TerminalAccess
 
@@ -38,7 +39,12 @@ defmodule ShoestringWeb.TerminalLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope} product_page="terminal">
+    <Layouts.app
+      flash={@flash}
+      current_scope={@current_scope}
+      product_page="terminal"
+      needs_you={@needs_you}
+    >
       <section id="terminal-page" class="ss-terminal-page">
         <.link id="terminal-back" navigate={~p"/runs/#{@run_id}"}>Back to run</.link>
         <div class="ss-heading ss-terminal-heading">

@@ -216,7 +216,7 @@ defmodule ShoestringWeb.ChatChannel do
   # What this session's workers are waiting on the person for now
   # (`Shoestring.PermissionAsks`); the client shows each as an attention item.
   defp asks(conversation) do
-    for ask <- Shoestring.PermissionAsks.pending(conversation.session_id) do
+    for %{ask: ask} = item <- Shoestring.Attention.asks(conversation.session_id) do
       %{
         "ask_id" => ask.id,
         "dispatch_id" => ask.dispatch_id,
@@ -227,7 +227,7 @@ defmodule ShoestringWeb.ChatChannel do
         "cwd" => ask.cwd,
         "kind" => ask.kind,
         # Whether "allow for this agent" is offered: one plain command.
-        "for_agent" => not is_nil(ask.rule_key),
+        "for_agent" => {"allow_agent", "Allow for this agent"} in item.choices,
         "asked_at" => ask.inserted_at
       }
     end
@@ -322,16 +322,7 @@ defmodule ShoestringWeb.ChatChannel do
   def handle_in("confirm_dispatch", %{"dispatch_id" => id}, socket) when is_binary(id) do
     session = socket.assigns.conversation.session_id
 
-    result =
-      case Dispatches.get(id) do
-        %{session_id: ^session} = dispatch ->
-          Dispatches.confirm_hold(dispatch, WorkLoop.default_human())
-
-        _ ->
-          {:error, :dispatch_not_found}
-      end
-
-    case result do
+    case Shoestring.Attention.start_held(session, id, WorkLoop.default_human()) do
       :confirmed -> {:reply, :ok, socket}
       :none -> {:reply, {:error, %{"reason" => "not_held"}}, socket}
       {:error, reason} -> {:reply, {:error, %{"reason" => code(reason)}}, socket}
@@ -339,23 +330,19 @@ defmodule ShoestringWeb.ChatChannel do
   end
 
   # The person answers a worker's ask from its popup: allow it once, or deny
-  # it, with an optional reason the worker is told.
+  # it, with an optional reason the worker is told. The Sessions page answers
+  # through the same `Attention.answer/5`; the first answer wins.
   def handle_in("decide_ask", %{"ask_id" => id, "decision" => decision} = payload, socket)
       when is_binary(id) and decision in ["allow", "allow_agent", "deny"] do
     session = socket.assigns.conversation.session_id
-    note = payload["note"]
-    note = if is_binary(note), do: String.slice(note, 0, @max_reason)
 
-    result =
-      case Shoestring.Repo.get(Shoestring.PermissionAsks.Ask, id) do
-        %{session_id: ^session} ->
-          Shoestring.PermissionAsks.decide(id, decision, WorkLoop.default_human(), note)
-
-        _ ->
-          {:error, :ask_not_found}
-      end
-
-    case result do
+    case Shoestring.Attention.answer(
+           session,
+           id,
+           decision,
+           WorkLoop.default_human(),
+           payload["note"]
+         ) do
       {:ok, _} -> {:reply, :ok, socket}
       {:error, reason} -> {:reply, {:error, %{"reason" => code(reason)}}, socket}
     end

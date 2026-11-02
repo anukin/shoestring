@@ -18,21 +18,52 @@ defmodule Shoestring.Sessions do
   alias Shoestring.Grants.Grant
 
   @final ~w(completed cancelled failed failed_to_start)
+  # Not working: finished, or waiting on the person.
+  @settled @final ++ ~w(held needs_you)
 
   @doc "Dispatch states after which a dispatch changes no more."
   def final_states, do: @final
 
   @doc """
   The sessions active in the last `days` days, newest activity first, and
-  how many older sessions are hidden.
+  how many older sessions are hidden. A session a worker's ask is waiting
+  in stays listed however old it is.
+
+  Each listed session counts its dispatches by the state
+  `Shoestring.Dispatches.state/2` derives (a stored dispatch is only
+  `started` while it runs, holds or completes): `working`, `held`, `failed`,
+  and `asks` waiting. `counts: false` leaves those out, for a caller that
+  needs only which sessions are listed.
   """
-  def recent(days, now \\ DateTime.utc_now()) when is_integer(days) and days > 0 do
+  def recent(days, now \\ DateTime.utc_now(), opts \\ []) when is_integer(days) and days > 0 do
     since = DateTime.add(now, -days * 86_400)
+    asking = MapSet.new(PermissionAsks.pending(), & &1.session_id)
 
     {shown, hidden} =
-      Enum.split_with(summaries(), &(DateTime.compare(&1.last_at, since) != :lt))
+      Enum.split_with(
+        summaries(),
+        &(DateTime.compare(&1.last_at, since) != :lt or MapSet.member?(asking, &1.session_id))
+      )
 
+    shown = if Keyword.get(opts, :counts, true), do: Enum.map(shown, &with_counts/1), else: shown
     %{sessions: shown, hidden: length(hidden)}
+  end
+
+  defp with_counts(summary) do
+    states =
+      summary.session_id
+      |> Shoestring.Dispatches.list()
+      |> Enum.map(&Shoestring.Dispatches.state/1)
+      |> Enum.frequencies()
+
+    count = &Map.get(states, &1, 0)
+
+    Map.merge(summary, %{
+      working: Enum.sum(for {state, n} <- states, state not in @settled, do: n),
+      held: count.("held"),
+      failed: count.("failed") + count.("failed_to_start"),
+      asks: length(PermissionAsks.pending(summary.session_id))
+    })
   end
 
   defp summaries do
@@ -68,9 +99,7 @@ defmodule Shoestring.Sessions do
       Enum.flat_map(grants ++ conversations, &[&1.inserted_at, &1.updated_at]) ++
         Enum.map(dispatches, fn {_state, _count, at} -> stamp(at) end)
 
-    counts = Map.new(dispatches, fn {state, count, _at} -> {state, count} end)
-    total = counts |> Map.values() |> Enum.sum()
-    final = @final |> Enum.map(&Map.get(counts, &1, 0)) |> Enum.sum()
+    total = dispatches |> Enum.map(&elem(&1, 1)) |> Enum.sum()
 
     %{
       session_id: id,
@@ -78,11 +107,7 @@ defmodule Shoestring.Sessions do
       coordinator: coordinator(List.last(conversations)),
       started_at: stamps |> Enum.reject(&is_nil/1) |> Enum.min(DateTime, fn -> nil end),
       last_at: stamps |> Enum.reject(&is_nil/1) |> Enum.max(DateTime),
-      dispatches: total,
-      working: total - final - Map.get(counts, "held", 0),
-      held: Map.get(counts, "held", 0),
-      failed: Map.get(counts, "failed", 0) + Map.get(counts, "failed_to_start", 0),
-      asks: length(PermissionAsks.pending(id))
+      dispatches: total
     }
   end
 

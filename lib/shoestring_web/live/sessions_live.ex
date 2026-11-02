@@ -7,19 +7,26 @@ defmodule ShoestringWeb.SessionsLive do
   The coordinator's panel has the same shape: its turns, the tools it used
   and both sides' messages.
 
-  The page only reads: answering asks or starting a held dispatch stays in
-  the chat screen. It updates as the work moves: an ask or an event
-  committed for the open dispatch refreshes it at once, and a two-second
-  tick covers what Shoestring does not broadcast (EXPLORE and REVIEW
-  progress, dispatch states).
+  What needs the person (`Shoestring.Attention`) is listed at the top, and
+  answered on the dispatch it belongs to with the chat screen's choices: an
+  ask is allowed once, allowed for its agent, denied, or denied with a
+  reason; a held dispatch is started. The first answer wins, from whichever
+  screen. Nothing else on the page acts.
+
+  It updates as the work moves: an ask or an event committed for the open
+  dispatch refreshes it at once, and a two-second tick covers what
+  Shoestring does not broadcast (EXPLORE and REVIEW progress, dispatch
+  states, a dispatch becoming held).
   """
   use ShoestringWeb, :live_view
+  on_mount ShoestringWeb.NeedsYou
 
   alias Phoenix.LiveView.JS
 
   alias Shoestring.{
     AgentProfiles,
     Agents,
+    Attention,
     Conversations,
     Harnesses,
     PermissionAsks,
@@ -27,6 +34,7 @@ defmodule ShoestringWeb.SessionsLive do
     Trajectory
   }
 
+  alias Shoestring.CLI.WorkLoop
   alias ShoestringWeb.{ChatDispatches, SessionActivity}
 
   @tick_ms 2_000
@@ -72,7 +80,10 @@ defmodule ShoestringWeb.SessionsLive do
            refresh_pending: false,
            fingerprint: nil,
            agent_key: nil,
-           open_id: nil
+           open_id: nil,
+           items: [],
+           reason_for: nil,
+           reason_error: nil
          )
          |> stream_configure(:feed, dom_id: &"feed-#{&1.id}")
          |> stream(:feed, [])}
@@ -120,6 +131,79 @@ defmodule ShoestringWeb.SessionsLive do
       {:noreply, socket}
     end
   end
+
+  # -- Answering what needs you --------------------------------------------------
+
+  def handle_event("answer", %{"ask" => id, "decision" => decision}, socket)
+      when decision in ["allow", "allow_agent", "deny"] do
+    {:noreply, answered(socket, id, decision, nil)}
+  end
+
+  def handle_event("reason", %{"ask" => id}, socket),
+    do: {:noreply, assign(socket, reason_for: id, reason_error: nil)}
+
+  def handle_event("reason_back", _params, socket),
+    do: {:noreply, assign(socket, reason_for: nil, reason_error: nil)}
+
+  def handle_event("deny_reason", %{"ask" => id, "note" => note}, socket) do
+    if String.trim(to_string(note)) == "" do
+      {:noreply,
+       assign(socket, reason_error: "Write the reason the worker is told, or choose Deny.")}
+    else
+      {:noreply, answered(socket, id, "deny", note)}
+    end
+  end
+
+  def handle_event("start_held", %{"dispatch" => id}, socket) do
+    socket =
+      case Attention.start_held(socket.assigns.session_id, id, WorkLoop.default_human()) do
+        :confirmed ->
+          put_flash(socket, :info, "Started: it runs as soon as its provider admits it.")
+
+        :none ->
+          put_flash(socket, :error, "It is not held any more.")
+
+        {:error, reason} ->
+          put_flash(socket, :error, refusal(reason))
+      end
+
+    {:noreply, refresh(socket)}
+  end
+
+  defp answered(socket, id, decision, note) do
+    session = socket.assigns.session_id
+
+    socket =
+      case Attention.answer(session, id, decision, WorkLoop.default_human(), note) do
+        {:ok, ask} -> put_flash(socket, :info, answer_text(ask, decision, note))
+        {:error, reason} -> put_flash(socket, :error, refusal(reason))
+      end
+
+    socket |> assign(reason_for: nil, reason_error: nil) |> refresh()
+  end
+
+  defp answer_text(%{kind: "network"}, "allow", _note), do: "Allowed for the rest of this run."
+  defp answer_text(_ask, "allow", _note), do: "Allowed once."
+
+  defp answer_text(ask, "allow_agent", _note),
+    do: "Allowed for #{ask.agent} from now on: it is in the agent's allowed commands."
+
+  defp answer_text(_ask, "deny", nil), do: "Denied."
+  defp answer_text(_ask, "deny", _note), do: "Denied. The worker is told your reason."
+
+  defp refusal(:not_pending), do: "That was already answered, perhaps in the chat screen."
+  defp refusal(:ask_gone), do: "Its worker stopped waiting, so it can no longer be answered."
+  defp refusal(:ask_not_found), do: "This session has no such ask."
+  defp refusal(:dispatch_not_found), do: "This session has no such dispatch."
+  defp refusal(:not_ruleable), do: "A rule can't cover this one. Allow it once instead."
+  defp refusal(:agent_gone), do: "Its agent no longer exists. Allow it once instead."
+
+  defp refusal(:too_many_rules),
+    do:
+      "Its agent has as many allowed commands as it may. Remove one on its page, or allow this once."
+
+  defp refusal(:agent_changed), do: "Its agent changed while you answered. Try again."
+  defp refusal(reason), do: "It could not be done (#{reason})."
 
   defp days_error(changeset) do
     case Keyword.get(changeset.errors, :lock_version) do
@@ -195,13 +279,15 @@ defmodule ShoestringWeb.SessionsLive do
     session = socket.assigns.session
     now = DateTime.utc_now()
     {rows, cache} = ChatDispatches.rows(session.session_id, socket.assigns.cache, now)
-    asks = PermissionAsks.pending(session.session_id)
+    states = Map.new(rows, &{&1["dispatch_id"], &1["state"]})
+    items = Attention.items(session.session_id, states)
 
     assign(socket,
       groups: Sessions.agents(session),
       status: Map.new(rows, &{&1["dispatch_id"], &1}),
       cache: cache,
-      asks: Enum.frequencies_by(asks, & &1.dispatch_id),
+      items: items,
+      asks: items |> Enum.filter(&(&1.kind == :ask)) |> Enum.frequencies_by(& &1.dispatch_id),
       coordinator_status: coordinator_status(session),
       now: now
     )
@@ -416,6 +502,14 @@ defmodule ShoestringWeb.SessionsLive do
 
   defp agent_link(session_id, key), do: ~p"/sessions/#{session_id}?#{[agent: key]}"
 
+  # The needs-you strip opens the item's dispatch under the agent it is grouped with.
+  defp item_link(session_id, groups, item) do
+    case Enum.find(groups, fn g -> Enum.any?(g.dispatches, &(&1.id == item.dispatch_id)) end) do
+      nil -> ~p"/sessions/#{session_id}"
+      group -> dispatch_link(session_id, group.key, item.dispatch_id)
+    end
+  end
+
   defp dispatch_link(session_id, key, id),
     do: ~p"/sessions/#{session_id}?#{[agent: key, dispatch: id]}"
 
@@ -463,7 +557,12 @@ defmodule ShoestringWeb.SessionsLive do
   @impl true
   def render(%{live_action: :index} = assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope} product_page="sessions">
+    <Layouts.app
+      flash={@flash}
+      current_scope={@current_scope}
+      product_page="sessions"
+      needs_you={@needs_you}
+    >
       <div class="ss-heading">
         <div>
           <h1>Sessions</h1>
@@ -533,7 +632,12 @@ defmodule ShoestringWeb.SessionsLive do
       )
 
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope} product_page="sessions">
+    <Layouts.app
+      flash={@flash}
+      current_scope={@current_scope}
+      product_page="sessions"
+      needs_you={@needs_you}
+    >
       <section id="session-page">
         <.link id="session-back" navigate={~p"/sessions"} class="ss-small">All sessions</.link>
         <div id="session-head" class="ss-heading">
@@ -550,10 +654,22 @@ defmodule ShoestringWeb.SessionsLive do
             </p>
           </div>
         </div>
-        <p :if={Enum.any?(@groups, &(needs(&1, assigns) > 0))} id="session-needs" class="ss-needs">
-          Something here needs you. Answer asks and start held dispatches in the chat screen
-          (<code>shoestring chat</code>).
-        </p>
+        <div :if={@items != []} id="needs-you" class="ss-needs" aria-live="polite">
+          <p class="ss-needs-head">
+            <strong>Needs you</strong>
+            · {length(@items)} in this session. Also shown in the chat screen; the first answer wins.
+          </p>
+          <ul>
+            <li :for={item <- @items} id={"needs-#{item.id}"}>
+              <.link patch={item_link(@session.session_id, @groups, item)}>
+                <span class="ss-needs-what">{item.summary}</span>
+                <span class="ss-small">
+                  {item.agent || "no agent"} · {String.slice(item.dispatch_id || "", 0, 8)}
+                </span>
+              </.link>
+            </li>
+          </ul>
+        </div>
         <div class="ss-session">
           <nav id="session-agents" class="ss-agents" aria-label="Agents in this session">
             <.link
@@ -640,7 +756,20 @@ defmodule ShoestringWeb.SessionsLive do
                   </span>
                 </.link>
                 <%= if d.id == @open_id do %>
-                  <p :if={get_in(@status, [d.id, "next"])} class="ss-small ss-next">
+                  <.attention_card
+                    :for={item <- Enum.filter(@items, &(&1.dispatch_id == d.id))}
+                    item={item}
+                    reason_for={@reason_for}
+                    reason_error={@reason_error}
+                  />
+                  <p
+                    :if={
+                      get_in(@status, [d.id, "next"]) &&
+                        not Enum.any?(@items, &(&1.dispatch_id == d.id))
+                    }
+                    id={"dispatch-#{d.id}-next"}
+                    class="ss-small ss-next"
+                  >
                     {get_in(@status, [d.id, "next"])}
                   </p>
                   <.feed
@@ -673,6 +802,90 @@ defmodule ShoestringWeb.SessionsLive do
         </div>
       </section>
     </Layouts.app>
+    """
+  end
+
+  attr :item, :map, required: true
+  attr :reason_for, :string, default: nil
+  attr :reason_error, :string, default: nil
+
+  # The chat screen's popup, as a card: the same title, words and choices.
+  defp attention_card(%{item: %{kind: :held}} = assigns) do
+    ~H"""
+    <div id={@item.id} class="ss-attention" role="group" aria-label={@item.title}>
+      <h3>{@item.title}</h3>
+      <p class="ss-attention-subject">{@item.subject}</p>
+      <p>{@item.note}</p>
+      <div class="ss-attention-choices">
+        <button
+          id={"#{@item.id}-start"}
+          type="button"
+          class="ss-button ss-primary"
+          phx-click="start_held"
+          phx-value-dispatch={@item.dispatch_id}
+        >
+          Start it
+        </button>
+        <span class="ss-small">Or leave it held: nothing starts it unless you do.</span>
+      </div>
+    </div>
+    """
+  end
+
+  defp attention_card(%{item: %{kind: :ask}} = assigns) do
+    assigns = assign(assigns, :ask_id, assigns.item.ask.id)
+
+    ~H"""
+    <div id={@item.id} class="ss-attention" role="group" aria-label={@item.title}>
+      <h3>{@item.title}</h3>
+      <p class="ss-attention-subject">
+        <code :if={@item.ask.kind == "command"}>{@item.subject}</code>
+        <span :if={@item.ask.kind != "command"}>{@item.subject}</span>
+      </p>
+      <p :if={@item.why}>Why: {@item.why}</p>
+      <p>{@item.note}</p>
+      <%= if @reason_for == @ask_id do %>
+        <form
+          id={"#{@item.id}-reason-form"}
+          class="ss-attention-reason"
+          phx-submit="deny_reason"
+        >
+          <input type="hidden" name="ask" value={@ask_id} />
+          <label for={"#{@item.id}-reason"}>The worker is told</label>
+          <textarea
+            id={"#{@item.id}-reason"}
+            name="note"
+            class="ss-input"
+            rows="2"
+            maxlength="500"
+            phx-mounted={JS.focus()}
+          ></textarea>
+          <p :if={@reason_error} id={"#{@item.id}-reason-error"} class="ss-notice">
+            {@reason_error}
+          </p>
+          <div class="ss-attention-choices">
+            <button id={"#{@item.id}-deny-reason"} type="submit" class="ss-button ss-primary">
+              Deny and tell it
+            </button>
+            <button type="button" class="ss-button" phx-click="reason_back">Back</button>
+          </div>
+        </form>
+      <% else %>
+        <div class="ss-attention-choices">
+          <button
+            :for={{choice, text} <- @item.choices}
+            id={"#{@item.id}-#{String.replace(choice, "_", "-")}"}
+            type="button"
+            class={["ss-button", choice == "allow" && "ss-primary"]}
+            phx-click={if(choice == "deny_reason", do: "reason", else: "answer")}
+            phx-value-ask={@ask_id}
+            phx-value-decision={choice}
+          >
+            {text}
+          </button>
+        </div>
+      <% end %>
+    </div>
     """
   end
 
@@ -742,7 +955,7 @@ defmodule ShoestringWeb.SessionsLive do
               </button>
             <% :ask -> %>
               {row.text}
-              <span :if={row.waiting} class="ss-chip ss-chip-ask">waiting for you in chat</span>
+              <span :if={row.waiting} class="ss-chip ss-chip-ask">waiting for you</span>
             <% _ -> %>
               {row.text}
           <% end %>

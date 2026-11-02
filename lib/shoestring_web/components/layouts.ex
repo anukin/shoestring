@@ -34,6 +34,10 @@ defmodule ShoestringWeb.Layouts do
   slot :inner_block, required: true
   attr :product_page, :string, default: nil
 
+  attr :needs_you, :integer,
+    default: nil,
+    doc: "how many things need the person (`ShoestringWeb.NeedsYou`), shown on Sessions"
+
   def app(assigns) do
     ~H"""
     <%= if @product_page do %>
@@ -57,6 +61,14 @@ defmodule ShoestringWeb.Layouts do
               aria-current={if @product_page == String.downcase(label), do: "page"}
             >
               {label}
+              <span
+                :if={label == "Sessions" and is_integer(@needs_you) and @needs_you > 0}
+                id="nav-needs-you"
+                class="ss-badge"
+                aria-label={"#{@needs_you} #{if @needs_you == 1, do: "needs", else: "need"} you"}
+              >
+                {@needs_you}
+              </span>
             </.link>
           </nav>
         </header>

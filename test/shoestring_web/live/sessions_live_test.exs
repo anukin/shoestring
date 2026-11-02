@@ -156,6 +156,140 @@ defmodule ShoestringWeb.SessionsLiveTest do
     end
   end
 
+  describe "what needs you" do
+    setup ctx do
+      {:ok, _} =
+        Shoestring.Agents.create(%{
+          "name" => "Builder",
+          "slug" => "builder",
+          "kind" => "implementer",
+          "provider" => "codex",
+          "model" => "gpt-6-luna"
+        })
+
+      Map.put(ctx, :ask, waiting_ask(ctx.builder))
+    end
+
+    test "an ask is listed at the top and answered on its dispatch: allow once",
+         %{conn: conn} = ctx do
+      {:ok, view, _} = live(conn, "/sessions/#{ctx.session}")
+      card = "#ask-#{ctx.ask.id}"
+
+      assert has_element?(
+               view,
+               "#needs-you #needs-ask-#{ctx.ask.id}",
+               "Run outside its sandbox: npm ci"
+             )
+
+      assert has_element?(view, "#dispatch-#{ctx.builder.id} #{card}", "$ npm ci")
+      assert has_element?(view, card, "nothing decides this on a timer")
+      assert has_element?(view, "#{card}-allow-agent")
+      assert has_element?(view, "#nav-needs-you", "1")
+
+      view |> element("#{card}-allow") |> render_click()
+
+      id = ctx.ask.id
+      assert_receive {:permission_decision, ^id, :allow, nil}
+      assert Repo.get(Shoestring.PermissionAsks.Ask, id).state == "allowed"
+      refute has_element?(view, card)
+      refute has_element?(view, "#needs-you")
+      refute has_element?(view, "#nav-needs-you")
+      assert render(view) =~ "Allowed once."
+    end
+
+    test "allow for this agent writes its rule", %{conn: conn} = ctx do
+      {:ok, view, _} = live(conn, "/sessions/#{ctx.session}")
+      view |> element("#ask-#{ctx.ask.id}-allow-agent") |> render_click()
+
+      id = ctx.ask.id
+      assert_receive {:permission_decision, ^id, :allow, nil}
+      assert Shoestring.Agents.get_by_slug("builder").allowed_commands == ["npm ci"]
+    end
+
+    test "deny with a reason asks for the reason, then tells the worker", %{conn: conn} = ctx do
+      {:ok, view, _} = live(conn, "/sessions/#{ctx.session}")
+      card = "#ask-#{ctx.ask.id}"
+      view |> element("#{card}-deny-reason") |> render_click()
+      assert has_element?(view, "#{card}-reason-form")
+
+      view
+      |> element("#{card}-reason-form")
+      |> render_submit(%{"ask" => ctx.ask.id, "note" => "  "})
+
+      assert has_element?(view, "#{card}-reason-error")
+      assert Repo.get(Shoestring.PermissionAsks.Ask, ctx.ask.id).state == "pending"
+
+      view
+      |> element("#{card}-reason-form")
+      |> render_submit(%{"ask" => ctx.ask.id, "note" => "Use the lockfile cache."})
+
+      id = ctx.ask.id
+      assert_receive {:permission_decision, ^id, :deny, "Use the lockfile cache."}
+      refute has_element?(view, card)
+    end
+
+    test "a plain deny tells the worker no reason", %{conn: conn} = ctx do
+      {:ok, view, _} = live(conn, "/sessions/#{ctx.session}")
+      view |> element("#ask-#{ctx.ask.id}-deny") |> render_click()
+      id = ctx.ask.id
+      assert_receive {:permission_decision, ^id, :deny, nil}
+    end
+
+    test "a network ask offers allow for this run and deny, never allow for this agent",
+         %{conn: conn} = ctx do
+      network =
+        waiting_ask(ctx.builder, %{
+          kind: "network",
+          provider: "claude",
+          command: "registry.npmjs.org"
+        })
+
+      {:ok, view, _} = live(conn, "/sessions/#{ctx.session}")
+      card = "#ask-#{network.id}"
+      assert has_element?(view, "#{card}-allow", "Allow for this run")
+      assert has_element?(view, "#{card}-deny")
+      refute has_element?(view, "#{card}-allow-agent")
+      refute has_element?(view, "#{card}-deny-reason")
+    end
+
+    test "an ask answered in the chat screen first is refused here", %{conn: conn} = ctx do
+      {:ok, view, _} = live(conn, "/sessions/#{ctx.session}")
+      id = ctx.ask.id
+
+      # The chat channel's own path, as `decide_ask` takes it.
+      {:ok, _} = Shoestring.Attention.answer(ctx.session, id, "deny", "human:operator")
+      assert_receive {:permission_decision, ^id, :deny, nil}
+
+      view |> element("#ask-#{id}-allow") |> render_click()
+      assert render(view) =~ "already answered"
+      refute_receive {:permission_decision, ^id, _, _}, 100
+      assert Repo.get(Shoestring.PermissionAsks.Ask, id).state == "denied"
+    end
+
+    test "a held dispatch is started from its card", %{conn: conn} = ctx do
+      held = held_fixture(ctx)
+      {:ok, view, _} = live(conn, "/sessions/#{ctx.session}?agent=scout&dispatch=#{held.id}")
+
+      assert has_element?(view, "#needs-held-#{held.id}")
+      assert has_element?(view, "#held-#{held.id}", "Start this held dispatch?")
+      view |> element("#held-#{held.id}-start") |> render_click()
+
+      assert Shoestring.Dispatches.Calls.get(held.id).confirmed_by ==
+               Shoestring.CLI.WorkLoop.default_human()
+
+      refute has_element?(view, "#held-#{held.id}")
+      refute has_element?(view, "#needs-held-#{held.id}")
+    end
+
+    test "the nav's count is on every product page and follows answers", %{conn: conn} = ctx do
+      {:ok, view, _} = live(conn, "/agents")
+      assert has_element?(view, "#nav-sessions #nav-needs-you", "1")
+
+      {:ok, _} = Shoestring.Attention.answer(ctx.session, ctx.ask.id, "allow", "human:operator")
+      refute has_element?(view, "#nav-needs-you")
+    end
+  end
+
   describe "links in" do
     test "the Agents page's recent work opens the dispatch in its session", %{conn: conn} = ctx do
       {:ok, _} =

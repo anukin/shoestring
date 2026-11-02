@@ -455,8 +455,23 @@ to one kind. A feed keeps its last 500 rows and counts the rest. Model
 reasoning is never shown, since no event keeps it, and every row is redacted
 as the run page redacts. The page refreshes as soon as an ask changes or the
 open dispatch commits an event, and every two seconds otherwise (EXPLORE and
-REVIEW progress is not broadcast). It only reads: answer asks and start held
-dispatches in the chat screen.
+REVIEW progress is not broadcast).
+
+What needs you is listed at the top of a session's page: each ask a worker is
+waiting on, and each held dispatch. Its card, on the dispatch it belongs to,
+has the chat screen's words and choices. An ask is allowed once, allowed for
+its agent (a plain command only), denied, or denied with a reason the worker
+is told; a network ask is allowed for the rest of its run or denied. A held
+dispatch is started, as `s` does in the chat screen, spending none of the
+grant's pre-approvals. An ask is open in the chat screen and on the page at
+once: the first answer wins, and the other screen is told it was already
+answered.
+
+The nav shows how many things need you beside **Sessions**: every ask a worker
+is waiting on, and the held dispatches of the sessions the page lists. A
+session with a waiting ask stays listed however old it is. The count changes
+at once when an ask is made or answered or a hold is started, and is re-read
+every five seconds for a dispatch becoming held, which nothing announces.
 
 When a dispatch's task or review is held because its provider's remaining
 usage cannot be confirmed — always for opencode, which reports none; always

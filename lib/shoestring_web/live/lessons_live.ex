@@ -6,6 +6,7 @@ defmodule ShoestringWeb.LessonsLive do
   in Settings.
   """
   use ShoestringWeb, :live_view
+  on_mount ShoestringWeb.NeedsYou
   alias Shoestring.Lessons
   alias Shoestring.CLI.Commands.Lessons, as: Messages
   alias Shoestring.CLI.WorkLoop
@@ -124,7 +125,12 @@ defmodule ShoestringWeb.LessonsLive do
 
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope} product_page="lessons">
+    <Layouts.app
+      flash={@flash}
+      current_scope={@current_scope}
+      product_page="lessons"
+      needs_you={@needs_you}
+    >
       <div class="ss-heading">
         <div>
           <h1>Lessons</h1>

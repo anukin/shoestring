@@ -48,6 +48,26 @@ defmodule Shoestring.SessionsTest do
     assert DateTime.compare(listed.started_at, listed.last_at) == :lt
   end
 
+  test "the list counts dispatches by their derived state: a held one needs you, not working" do
+    ctx = session()
+    held_fixture(ctx)
+    [listed] = Enum.filter(Sessions.recent(7).sessions, &(&1.session_id == ctx.session))
+
+    # Its stored state is `started`; only its derived state says it is held.
+    assert {listed.dispatches, listed.held, listed.working, listed.asks} == {1, 1, 0, 0}
+  end
+
+  test "a session a worker's ask waits in stays listed however old it is" do
+    ctx = session()
+    builder = dispatch_fixture(ctx, "implement", "builder", "One change")
+    age!(ctx.session, 30 * 86_400)
+    refute ctx.session in Enum.map(Sessions.recent(7).sessions, & &1.session_id)
+
+    waiting_ask(builder)
+    [listed] = Sessions.recent(7).sessions
+    assert {listed.session_id, listed.asks} == {ctx.session, 1}
+  end
+
   test "agents: the coordinator, then the team's agents in order, then workers no agent names" do
     ctx = session()
     implement = dispatch_fixture(ctx, "implement", "builder", "One change")
