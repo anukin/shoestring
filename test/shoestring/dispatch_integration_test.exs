@@ -812,6 +812,116 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert File.read!(Path.join(source, "strings.py")) =~ "# changed by dispatch-2"
     end
 
+    @tag :parallel
+    test "separate dispatches run one after another, at parallel tasks 1 and at 2",
+         _ctx do
+      System.put_env("FAKE_CLAUDE_SCENARIO", "batch")
+      on_exit(fn -> System.delete_env("FAKE_CLAUDE_SCENARIO") end)
+      source = source!("calc-parallel")
+      # The checks pass from the start; each worker only marks its own file.
+      File.write!(Path.join(source, "calc.py"), "def add(a, b):\n    return a + b\n")
+      File.write!(Path.join(source, "strings.py"), "def shout(text):\n    return text\n")
+      git!(source, ["add", "."])
+
+      git!(source, ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "two"])
+
+      {:ok, facts} = Shoestring.Cobbler.Intake.repository(source)
+
+      grant =
+        grant!("s5", facts.root, %{
+          unread_usage: 8,
+          max_parallel: 2,
+          max_dispatches: 4,
+          max_total_seconds: 14_400
+        })
+
+      claude_reading!(0.2)
+
+      dispatch = fn request_id, file ->
+        {:ok, dispatch, :recorded} =
+          Dispatches.create(%{
+            session_id: "s5",
+            request_id: request_id,
+            purpose: "implement",
+            provider: "claude",
+            model: "opus",
+            title: "Mark #{file}",
+            brief: @brief,
+            repository: source,
+            files: [file]
+          })
+
+        dispatch
+      end
+
+      runs = fn dispatch ->
+        Repo.all(from r in RunRecord, where: r.goal_id == ^dispatch.goal_id)
+      end
+
+      # Each step: confirm a hold the grant pre-approves, then run the job.
+      step = fn dispatch ->
+        _ = Dispatches.advance(dispatch)
+        PlanExecutionWorker.perform(job!(dispatch))
+      end
+
+      started? = fn dispatch ->
+        Stream.repeatedly(fn -> step.(dispatch) end)
+        |> Stream.take(8)
+        |> Enum.find(fn _ -> runs.(dispatch) != [] end)
+
+        runs.(dispatch) != []
+      end
+
+      finish! = fn dispatch ->
+        for run <- runs.(dispatch), do: finish_worker!(run.id)
+
+        Stream.repeatedly(fn -> step.(dispatch) end)
+        |> Stream.take(8)
+        |> Enum.find(fn _ -> Dispatches.state(dispatch) == "completed" end)
+
+        assert Dispatches.state(dispatch) == "completed"
+      end
+
+      occupied? = fn dispatch ->
+        Repo.exists?(
+          from e in TrajectoryEvent,
+            where:
+              e.goal_id == ^dispatch.goal_id and e.type == "admission.decided" and
+                fragment("json_extract(?, '$.reason_code')", e.payload) == "scope_occupied"
+        )
+      end
+
+      # The default of 1: while the first runs, the second waits its turn.
+      first = dispatch.("p1", "calc.py")
+      second = dispatch.("p2", "strings.py")
+      assert started?.(first)
+      refute started?.(second)
+      assert occupied?.(second)
+      finish!.(first)
+      assert started?.(second)
+      finish!.(second)
+
+      # At 2 it is the same: Settings' parallel tasks lets one batch's tasks
+      # run at once (the batch test above), not two dispatches of one task
+      # each. A single-task plan never takes the fan-out path, so the second
+      # waits for the first's task claim, as `follow` says.
+      {:ok, _} =
+        Shoestring.AgentProfiles.save_settings(Shoestring.AgentProfiles.settings(), %{
+          "parallel_tasks" => "2"
+        })
+
+      third = dispatch.("p3", "calc.py")
+      fourth = dispatch.("p4", "strings.py")
+      assert started?.(third)
+      assert Dispatches.usage(grant).running == 2
+      refute started?.(fourth)
+      assert occupied?.(fourth)
+      finish!.(third)
+      assert started?.(fourth)
+      finish!.(fourth)
+      assert Dispatches.usage(grant).running == 0
+    end
+
     defp source!(name) do
       source = Path.join(Shoestring.State.root(), name)
       File.mkdir_p!(Path.join(source, "test"))
@@ -973,8 +1083,8 @@ defmodule Shoestring.DispatchIntegrationTest do
   else
     @tag timeout: 120_000
     test "a dispatch end to end on an isolated local node" do
-      output = child!(["--exclude", "chain", "--exclude", "batch"])
-      assert output =~ "2 tests, 0 failures (2 excluded)"
+      output = child!(["--exclude", "chain", "--exclude", "batch", "--exclude", "parallel"])
+      assert output =~ "2 tests, 0 failures (3 excluded)"
     end
 
     # Its own node and state: the usage-limit test leaves Claude's five-hour
@@ -982,13 +1092,20 @@ defmodule Shoestring.DispatchIntegrationTest do
     @tag timeout: 120_000
     test "a dependent dispatch end to end on an isolated local node" do
       output = child!(["--only", "chain"])
-      assert output =~ "1 test, 0 failures (3 excluded)"
+      assert output =~ "1 test, 0 failures (4 excluded)"
     end
 
     @tag timeout: 120_000
     test "a batch end to end on an isolated local node" do
       output = child!(["--only", "batch"])
-      assert output =~ "1 test, 0 failures (3 excluded)"
+      assert output =~ "1 test, 0 failures (4 excluded)"
+    end
+
+    # Its own node: the person's parallel tasks setting changes here.
+    @tag timeout: 120_000
+    test "separate dispatches one after another on an isolated local node" do
+      output = child!(["--only", "parallel"])
+      assert output =~ "1 test, 0 failures (4 excluded)"
     end
 
     defp child!(filter) do

@@ -156,7 +156,7 @@ allowlist still comes from `--models`; choosing a team does not widen it.
 | `--models` | required | the only models it may dispatch to (enabled ones) |
 | `--purposes` | all | `explore`, `implement`, `review` |
 | `--max-dispatches` | 10 | attempts in total, retries included |
-| `--max-parallel` | 3 | dispatches queued or running at once; how many run side by side is Settings' **parallel tasks** (1 by default, so one runs while the others wait: "another task is running") |
+| `--max-parallel` | 3 | dispatches queued or running at once. Separate dispatches still run one after another (the others wait: "another task is running"); only one batch dispatch's tasks run side by side, when Settings' **parallel tasks** is 2 or more (see [Tasks side by side](#tasks-side-by-side-iteration-16-c2)) |
 | `--max-hours` | 4 | the time its dispatches may reserve in total |
 | `--max-dispatch-minutes` | 60 | the most one dispatch may reserve |
 | `--unread-usage` | 0 | dispatches it may start when a provider's remaining usage cannot be read |

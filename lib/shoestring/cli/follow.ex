@@ -415,9 +415,9 @@ defmodule Shoestring.CLI.Follow do
   # the two a person meets most often are said plainly.
   defp admission_wait(%{"reason_code" => "scope_occupied"}),
     do:
-      "another task is running, and Shoestring runs one task at a time unless Settings " <>
-        "allows more (parallel tasks). This one starts when that one finishes; it checks " <>
-        "every minute."
+      "another task is running, and dispatches run one at a time: only the tasks of one " <>
+        "batch dispatch (--tasks) run at once, when Settings' parallel tasks is 2 or more. " <>
+        "This one starts when that one finishes; it checks every minute."
 
   defp admission_wait(%{"reason_code" => "stale_observation"} = p),
     do:

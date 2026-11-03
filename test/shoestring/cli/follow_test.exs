@@ -309,7 +309,11 @@ defmodule Shoestring.CLI.FollowTest do
 
     line = Follow.line(%{type: "admission.decided", payload: occupied})
     assert line =~ "Waiting: another task is running"
-    assert line =~ "parallel tasks"
+    # Settings' parallel tasks does not let separate dispatches overlap, so
+    # the line must not say it would (the parallel dispatch integration test).
+    assert line =~ "dispatches run one at a time"
+    assert line =~ "only the tasks of one batch dispatch"
+    refute line =~ "unless Settings allows more"
     refute line =~ "scope 'subscription'"
 
     stale = %{
