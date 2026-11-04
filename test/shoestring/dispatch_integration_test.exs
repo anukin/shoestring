@@ -832,7 +832,7 @@ defmodule Shoestring.DispatchIntegrationTest do
           unread_usage: 10,
           max_parallel: 3,
           max_dispatches: 6,
-          max_total_seconds: 18_000
+          max_total_seconds: 21_600
         })
 
       claude_reading!(0.2)
@@ -845,10 +845,10 @@ defmodule Shoestring.DispatchIntegrationTest do
             purpose: "implement",
             provider: "claude",
             model: "opus",
-            title: "Mark #{file}",
+            title: "Mark #{file || "anything"}",
             brief: @brief,
             repository: source,
-            files: [file]
+            files: List.wrap(file)
           })
 
         dispatch
@@ -938,9 +938,18 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert line =~ "1 IMPLEMENT task is running"
       assert line =~ "name separate files with --file"
 
+      # One that names no files may touch anything, so it waits too.
+      sixth = dispatch.("p6", nil)
+      refute started?.(sixth)
+      assert [%{payload: unnamed} | _] = occupations.(sixth)
+      assert unnamed["extensions"]["shoestring.parallel:wait"]["reason"] == "files_overlap"
+
       finish!.(third)
       assert started?.(fifth)
+      refute started?.(sixth)
       finish!.(fifth)
+      assert started?.(sixth)
+      finish!.(sixth)
       assert Dispatches.usage(grant).running == 0
       assert Shoestring.Cobbler.Reservations.outstanding() == []
     end

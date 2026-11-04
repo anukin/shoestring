@@ -82,10 +82,11 @@ if SCENARIO == "limit":
 
 if SCENARIO == "batch":
     # A batch task changes the first file its task contract names (the
-    # prompt's first line is the task, then its contract as JSON).
+    # prompt's first line is the task, then its contract as JSON); a task
+    # that names none changes calc.py.
     prompt = sys.argv[-1]
     contract, _ = json.JSONDecoder().raw_decode(prompt.split("\n", 1)[1])
-    target = contract["task"]["hints"]["files"][0]
+    target = ((contract["task"].get("hints") or {}).get("files") or ["calc.py"])[0]
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
     with open(target, "a") as handle:
         handle.write("# changed by " + contract["task"]["id"] + "\n")

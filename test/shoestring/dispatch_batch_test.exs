@@ -76,7 +76,7 @@ defmodule Shoestring.DispatchBatchTest do
     reservation
   end
 
-  defp held(dispatch, changes \\ %{}) do
+  defp held(dispatch, changes) do
     {:ok, status} = Shoestring.Cobbler.ExecutionControl.status(dispatch.goal_id)
 
     held =
