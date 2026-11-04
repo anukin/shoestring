@@ -85,8 +85,10 @@ defmodule Shoestring.Cobbler.ParallelDispatchCharacterizationTest do
       )
 
     for type <- @dispatch_types, do: assert(type in types)
+
     assert types |> Enum.filter(&(&1 in @dispatch_types)) |> List.last() ==
              "cobbler.plan.task.dispatched"
+
     refute Enum.any?(types, &String.starts_with?(&1, "cobbler.reservation"))
 
     assert %{status: "resolved", result: %{"kind" => "claimed"}} =
