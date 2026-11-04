@@ -1558,7 +1558,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
          opts,
          ownership \\ :legacy
        ) do
-    opts = Keyword.put(opts, :reserved_sibling, ownership == :sibling)
+    opts = ownership_opts(opts, ownership)
     task_id = task_contract["id"]
 
     with {:ok, traj_task} <- ensure_trajectory_task(repo, goal_id, task_id, task_contract),
@@ -1599,7 +1599,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              |> maybe_put("grant_id", leased.grant_id)
              |> maybe_put(
                "dispatch_mode",
-               if(Keyword.get(opts, :reserved_sibling), do: "fanout_v1")
+               if(Keyword.get(opts, :fanout_sibling), do: "fanout_v1")
              ),
              "plan-task-dispatched:#{task_id}:#{attempt}",
              opts
@@ -1621,14 +1621,35 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     end
   end
 
+  # Two separate questions, once one flag: whose authority the claim uses
+  # (`reservation_owned`: the dispatch's own reservation, never the single
+  # global claim) and whether the run is a fan-out child (`fanout_sibling`:
+  # the `fanout_v1` marker, its extension and the sibling review prompt).
+  # A fan-out child is both. A sequential dispatch at Settings' parallel tasks
+  # 2 or more that holds a reservation is reservation-owned only: it keeps
+  # its own sequential worktree, commit, checks, review, take and `--after`,
+  # and takes no global claim, so a separate dispatch can run beside it.
+  # The choice follows the person's Settings value, not trusted
+  # configuration, so iteration 7's reserved-plus-claim path is unchanged.
+  defp ownership_opts(opts, :sibling),
+    do: Keyword.merge(opts, reservation_owned: true, fanout_sibling: true)
+
+  defp ownership_opts(opts, :legacy) do
+    owned? =
+      Keyword.has_key?(opts, :reservation_id) and
+        Shoestring.Cobbler.Parallelism.tasks() >= 2
+
+    Keyword.merge(opts, reservation_owned: owned?, fanout_sibling: false)
+  end
+
   defp maybe_release_claim(repo, goal_id, task_id, attempt, opts) do
-    if Keyword.get(opts, :reserved_sibling),
+    if Keyword.get(opts, :reservation_owned),
       do: :ok,
       else: release_own_claim(repo, goal_id, task_id, attempt, opts)
   end
 
   defp dispatch_claim(goal_id, attrs, opts) do
-    if Keyword.get(opts, :reserved_sibling),
+    if Keyword.get(opts, :reservation_owned),
       do:
         Dispatcher.claim_reserved_and_gate(
           goal_id,
@@ -1863,7 +1884,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
             }) <>
             finish_instructions() <>
             profile_instructions(execution[:agent_profile]) <>
-            review_prompt(execution, task_id, attempt, Keyword.get(opts, :reserved_sibling)) <>
+            review_prompt(execution, task_id, attempt, Keyword.get(opts, :fanout_sibling)) <>
             (Keyword.get(opts, :replacement_prompt) || ""),
         extensions:
           %{
@@ -1878,7 +1899,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
           |> maybe_put(Shoestring.Cobbler.ExecutionProfile.key(), execution[:agent_profile])
           |> maybe_put(
             "shoestring.fanout:version",
-            if(Keyword.get(opts, :reserved_sibling), do: 1)
+            if(Keyword.get(opts, :fanout_sibling), do: 1)
           )
           |> maybe_put(Shoestring.Cobbler.Reservations.key(), Keyword.get(opts, :reservation_id)),
         workspace_ref: Keyword.get(opts, :workspace_ref, "cobbler/plan-task"),
@@ -1900,7 +1921,13 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
     [grant_lease: lease_opts, repo: repo, now: now, clock: clock]
     |> Keyword.merge(
-      Keyword.take(opts, [:writer_opts, :publish_fun, :reservation_id, :reserved_sibling])
+      Keyword.take(opts, [
+        :writer_opts,
+        :publish_fun,
+        :reservation_id,
+        :reservation_owned,
+        :fanout_sibling
+      ])
     )
   end
 

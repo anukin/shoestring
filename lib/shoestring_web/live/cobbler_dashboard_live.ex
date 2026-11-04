@@ -79,10 +79,11 @@ defmodule ShoestringWeb.CobblerDashboardLive do
   defp load_goals(socket) do
     goals = list_goals(socket.assigns.current_scope)
     claim = safe_active_claim()
+    reservations = safe_outstanding_reservations()
 
     summaries =
       goals
-      |> Enum.map(&goal_summary(&1, claim))
+      |> Enum.map(&goal_summary(&1, claim, reservations))
       |> Enum.sort_by(& &1.title)
 
     socket
@@ -135,7 +136,7 @@ defmodule ShoestringWeb.CobblerDashboardLive do
 
   defp scope_owner_id(_scope), do: :error
 
-  defp goal_summary(%Goal{} = goal, claim) do
+  defp goal_summary(%Goal{} = goal, claim, reservations) do
     events = replay_events(goal.id)
     decision_results = admission_results(events)
     commands = safe_list_commands(goal.id)
@@ -151,7 +152,10 @@ defmodule ShoestringWeb.CobblerDashboardLive do
       latest_result: List.last(decision_results),
       commands_count: length(commands),
       pending_count: Enum.count(commands, &(&1.status == "needs_user")),
-      claim_held?: is_map(claim) and claim.goal_id == goal.id
+      claim_held?: is_map(claim) and claim.goal_id == goal.id,
+      # At Settings' parallel tasks 2 or more a running task holds a
+      # reservation instead of the claim: both say what is running.
+      reservations: reservation_labels(reservations, goal.id)
     }
   end
 
@@ -183,6 +187,18 @@ defmodule ShoestringWeb.CobblerDashboardLive do
     Cobbler.active_claim()
   rescue
     _error -> nil
+  end
+
+  defp safe_outstanding_reservations do
+    Shoestring.Cobbler.Reservations.outstanding()
+  rescue
+    _error -> []
+  end
+
+  defp reservation_labels(reservations, goal_id) do
+    for reservation <- reservations, reservation.goal_id == goal_id do
+      "#{reservation.plan_task_id} (attempt #{reservation.attempt}, #{reservation.provider_id})"
+    end
   end
 
   # Plan-aware presentation (iteration 6 narrow override): an approved

@@ -156,7 +156,7 @@ allowlist still comes from `--models`; choosing a team does not widen it.
 | `--models` | required | the only models it may dispatch to (enabled ones) |
 | `--purposes` | all | `explore`, `implement`, `review` |
 | `--max-dispatches` | 10 | attempts in total, retries included |
-| `--max-parallel` | 3 | dispatches queued or running at once. Separate dispatches still run one after another (the others wait: "another task is running"); only one batch dispatch's tasks run side by side, when Settings' **parallel tasks** is 2 or more (see [Tasks side by side](#tasks-side-by-side-iteration-16-c2)) |
+| `--max-parallel` | 3 | dispatches queued or running at once. At Settings' **parallel tasks** 1 they run one after another (the others wait: "another task is running"). At 2 or more, separate dispatches also run side by side, up to that number, when each names its own separate files with `--file`; a dispatch whose files overlap a running one in the same repository, touch a shared file, or are not named waits for it (see [Tasks side by side](#tasks-side-by-side-iteration-16-c2)) |
 | `--max-hours` | 4 | the time its dispatches may reserve in total |
 | `--max-dispatch-minutes` | 60 | the most one dispatch may reserve |
 | `--unread-usage` | 0 | dispatches it may start when a provider's remaining usage cannot be read |
@@ -323,6 +323,19 @@ coordinator's brief, checks and reviewer are shared.
   reservations; that setting changes only while nothing is running or waiting.
   It also lets a `shoestring do` plan's tasks that change separate files run
   at once.
+- **Separate dispatches side by side** (iteration 18): with that setting at 2
+  or more, separate single-task IMPLEMENT dispatches also run at once, up to
+  the setting, across goals and sessions. Each keeps its own worktree, commit,
+  checks, review, `take` and `after`, and holds one reservation instead of the
+  single task claim. A dispatch waits, and `follow` says why ("N IMPLEMENT
+  tasks are running ..."), while every place is taken, or while another running
+  dispatch in the same repository has files that overlap its own, touches a
+  shared file, or names none: in practice two dispatches run side by side only
+  when both name separate files with `--file`. A waiting dispatch spends no
+  usage confirmation; it retries every minute. Cancelling one stops only its
+  own worker's process group and frees only its own place. The setting cannot
+  change while any task runs, waits for its checks or review, or is due a
+  retry. At 1 nothing changes: one after another, behind the task claim.
 - **The grant**: a batch takes one parallel place per task, its attempts and
   minutes count per task, and it reserves the fan-out's worst-case
   verification time too; only the time actually taken counts afterwards.

@@ -57,7 +57,11 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   when the person's Settings allow more than one task at a time, else one
   after another; each takes one of the grant's parallel places, and its
   attempts and minutes count per task. The result is one commit per task:
-  `runs show` lists them and the commands that take them all.
+  `runs show` lists them and the commands that take them all. When Settings
+  allow more than one task at a time, separate IMPLEMENT dispatches also run
+  side by side, up to that number, if each names its own separate files with
+  `--file`; one whose files overlap a running dispatch in the same
+  repository, touch something shared, or are not named waits for it.
 
   `--after DISPATCH` (IMPLEMENT only) follows another IMPLEMENT of this
   session: the new one is recorded `chained`, its room in the grant

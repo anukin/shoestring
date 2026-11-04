@@ -813,7 +813,7 @@ defmodule Shoestring.DispatchIntegrationTest do
     end
 
     @tag :parallel
-    test "separate dispatches run one after another, at parallel tasks 1 and at 2",
+    test "separate dispatches run one after another at parallel tasks 1 and side by side at 2",
          _ctx do
       System.put_env("FAKE_CLAUDE_SCENARIO", "batch")
       on_exit(fn -> System.delete_env("FAKE_CLAUDE_SCENARIO") end)
@@ -829,10 +829,10 @@ defmodule Shoestring.DispatchIntegrationTest do
 
       grant =
         grant!("s5", facts.root, %{
-          unread_usage: 8,
-          max_parallel: 2,
-          max_dispatches: 4,
-          max_total_seconds: 14_400
+          unread_usage: 10,
+          max_parallel: 3,
+          max_dispatches: 6,
+          max_total_seconds: 18_000
         })
 
       claude_reading!(0.2)
@@ -882,14 +882,17 @@ defmodule Shoestring.DispatchIntegrationTest do
         assert Dispatches.state(dispatch) == "completed"
       end
 
-      occupied? = fn dispatch ->
-        Repo.exists?(
+      occupations = fn dispatch ->
+        Repo.all(
           from e in TrajectoryEvent,
             where:
               e.goal_id == ^dispatch.goal_id and e.type == "admission.decided" and
-                fragment("json_extract(?, '$.reason_code')", e.payload) == "scope_occupied"
+                fragment("json_extract(?, '$.reason_code')", e.payload) == "scope_occupied",
+            order_by: e.sequence
         )
       end
+
+      occupied? = fn dispatch -> occupations.(dispatch) != [] end
 
       # The default of 1: while the first runs, the second waits its turn.
       first = dispatch.("p1", "calc.py")
@@ -901,10 +904,9 @@ defmodule Shoestring.DispatchIntegrationTest do
       assert started?.(second)
       finish!.(second)
 
-      # At 2 it is the same: Settings' parallel tasks lets one batch's tasks
-      # run at once (the batch test above), not two dispatches of one task
-      # each. A single-task plan never takes the fan-out path, so the second
-      # waits for the first's task claim, as `follow` says.
+      # At 2 two dispatches of one task each, on separate files, run side by
+      # side: each claims through its own reservation, and nothing holds the
+      # single task claim.
       {:ok, _} =
         Shoestring.AgentProfiles.save_settings(Shoestring.AgentProfiles.settings(), %{
           "parallel_tasks" => "2"
@@ -914,12 +916,33 @@ defmodule Shoestring.DispatchIntegrationTest do
       fourth = dispatch.("p4", "strings.py")
       assert started?.(third)
       assert Dispatches.usage(grant).running == 2
-      refute started?.(fourth)
-      assert occupied?.(fourth)
-      finish!.(third)
       assert started?.(fourth)
+      assert Enum.all?(runs.(third), &(&1.status not in ~w(completed failed cancelled)))
+      refute occupied?.(fourth)
+      assert Shoestring.Cobbler.Commands.active_claim() == nil
+
+      assert Enum.sort(Enum.map(Shoestring.Cobbler.Reservations.outstanding(), & &1.goal_id)) ==
+               Enum.sort([third.goal_id, fourth.goal_id])
+
+      # Either finishes first; each keeps its own worktree, checks and commit.
       finish!.(fourth)
+
+      # A dispatch whose file overlaps the one still running waits for it,
+      # and `follow` says why.
+      fifth = dispatch.("p5", "calc.py")
+      refute started?.(fifth)
+
+      assert [%{payload: wait} | _] = occupations.(fifth)
+      assert wait["extensions"]["shoestring.parallel:wait"]["reason"] == "files_overlap"
+      line = Shoestring.CLI.Follow.line(%{type: "admission.decided", payload: wait})
+      assert line =~ "1 IMPLEMENT task is running"
+      assert line =~ "name separate files with --file"
+
+      finish!.(third)
+      assert started?.(fifth)
+      finish!.(fifth)
       assert Dispatches.usage(grant).running == 0
+      assert Shoestring.Cobbler.Reservations.outstanding() == []
     end
 
     defp source!(name) do
@@ -1102,13 +1125,13 @@ defmodule Shoestring.DispatchIntegrationTest do
     end
 
     # Its own node: the person's parallel tasks setting changes here.
-    @tag timeout: 120_000
-    test "separate dispatches one after another on an isolated local node" do
-      output = child!(["--only", "parallel"])
+    @tag timeout: 180_000
+    test "separate dispatches in turn at 1 and side by side at 2 on an isolated local node" do
+      output = child!(["--only", "parallel"], 150)
       assert output =~ "1 test, 0 failures (4 excluded)"
     end
 
-    defp child!(filter) do
+    defp child!(filter, seconds \\ 90) do
       root = Path.join(File.cwd!(), ".shoestring/dispatch-e2e-#{Ecto.UUID.generate()}")
 
       {output, status} =
@@ -1116,7 +1139,8 @@ defmodule Shoestring.DispatchIntegrationTest do
           "python3",
           [
             "-c",
-            "import subprocess,sys; result=subprocess.run(['mix','test',sys.argv[1],'--seed','0'] + sys.argv[2:],stdin=subprocess.DEVNULL,timeout=90); sys.exit(result.returncode)",
+            "import subprocess,sys; result=subprocess.run(['mix','test',sys.argv[2],'--seed','0'] + sys.argv[3:],stdin=subprocess.DEVNULL,timeout=int(sys.argv[1])); sys.exit(result.returncode)",
+            Integer.to_string(seconds),
             "test/shoestring/dispatch_integration_test.exs" | filter
           ],
           env: [{"SHOESTRING_DISPATCH_E2E_CHILD", "1"}, {"SHOESTRING_TEST_STATE_DIR", root}],

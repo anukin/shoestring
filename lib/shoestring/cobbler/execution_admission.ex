@@ -4,7 +4,7 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
     AdmissionDecision,
     AdmissionEvaluation,
     AdmissionPolicy,
-    Commands,
+    Parallelism,
     GoalLocalObservation,
     PlanCapacityConfirmation,
     WakeupObserve
@@ -66,8 +66,7 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
                AdmissionPolicy.default()
                | deadline_seconds: min(task["execution"]["max_duration_seconds"], 300)
              },
-             [now: now, occupancy: occupied_by_other_goal?(goal_id)] ++
-               PlanCapacityConfirmation.evaluation_options(confirmation)
+             evaluation_options(now, occupancy(goal_id, execution, task, profile), confirmation)
            ),
          {:ok, event} <-
            Trajectory.append(goal_id, %{
@@ -170,11 +169,31 @@ defmodule Shoestring.Cobbler.ExecutionAdmission do
   defp reason_code({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_code(_reason), do: "admission_unavailable"
 
-  defp occupied_by_other_goal?(goal_id) do
-    case Commands.active_claim() do
-      nil -> false
-      %{goal_id: ^goal_id} -> false
-      _ -> true
+  @wait_key "shoestring.parallel:wait"
+
+  defp occupancy(goal_id, execution, task, profile) do
+    scope = Application.get_env(:shoestring, :run_submission_scope, "subscription")
+    opts = [task: task, repository: execution[:repository_path]]
+    Parallelism.occupancy(goal_id, profile["provider"], scope, opts)
+  end
+
+  @doc false
+  def wait_key, do: @wait_key
+
+  # At Settings' parallel tasks 2 or more an occupied scope also records why
+  # (every place taken, or files overlapping another running dispatch), so
+  # `follow` can say it. At 1 the decision is exactly what it always was.
+  defp evaluation_options(now, occupancy, confirmation) do
+    options = [now: now, occupancy: occupancy != nil]
+    confirmed = PlanCapacityConfirmation.evaluation_options(confirmation)
+
+    case occupancy do
+      %{"limit" => limit} = wait when is_integer(limit) ->
+        extensions = Map.put(Keyword.get(confirmed, :extensions, %{}), @wait_key, wait)
+        options ++ Keyword.put(confirmed, :extensions, extensions)
+
+      _ ->
+        options ++ confirmed
     end
   end
 end

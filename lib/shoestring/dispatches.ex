@@ -1430,7 +1430,9 @@ defmodule Shoestring.Dispatches do
           length(status.execution.ordered_task_ids) > 1 ->
         batch_hold(status, decision, goal_id)
 
-      match?(%{"result" => "require_confirmation"}, decision) and is_nil(status[:active_run_id]) ->
+      # With Settings' parallel tasks at 2 or more, only while a place is
+      # free: a confirmation spent while every slot is taken buys nothing.
+      single_hold?(decision, status) ->
         {:ok,
          %{
            kind: :task,
@@ -1447,14 +1449,26 @@ defmodule Shoestring.Dispatches do
 
   defp hold(_status, _goal_id), do: :none
 
+  defp single_hold?(decision, status) do
+    provider = get_in(decision, ["candidate", "provider_id"])
+
+    match?(%{"result" => "require_confirmation"}, decision) and is_nil(status[:active_run_id]) and
+      not Parallelism.slots_full?(provider, decision["scope"])
+  end
+
   defp batch_hold(status, decision, goal_id) do
     scope = Application.get_env(:shoestring, :run_submission_scope, "subscription")
     accepted = MapSet.new(status.accepted)
     active = MapSet.new(status.active_children, & &1.plan_task_id)
 
-    # Only while the batch has a free place: a confirmation an admission
-    # consumes for a task that then cannot start would be spent for nothing.
-    room? = MapSet.size(active) < Parallelism.tasks()
+    # Only while the batch has a free place, and no other dispatch holds
+    # the rest: a confirmation an admission consumes for a task that then
+    # cannot start would be spent for nothing.
+    tasks = Parallelism.tasks()
+
+    room? =
+      MapSet.size(active) < tasks and
+        (tasks < 2 or length(Shoestring.Cobbler.Reservations.outstanding()) < tasks)
 
     status.execution.ordered_task_ids
     |> Enum.reject(&(not room? or MapSet.member?(accepted, &1) or MapSet.member?(active, &1)))

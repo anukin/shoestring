@@ -41,20 +41,22 @@ defmodule Shoestring.Cobbler.PlanWorkerAdmissionClockRegressionTest do
     %{profile: profile}
   end
 
-  defp execution(profile) do
+  defp execution(profile, overrides \\ []) do
     fixture(
-      independent_only: true,
-      reconciliation_opts: [group_probe: fn _ -> :absent end],
-      request_attrs: %{
-        requested_by: "human:operator",
-        agent_profile: %{
-          "profile_id" => profile["profile_id"],
-          "revision" => 1,
-          "digest" => profile["digest"],
-          "role" => "Worker"
-        }
-      },
-      request_opts: [defer_admission: true]
+      Keyword.merge(overrides,
+        independent_only: true,
+        reconciliation_opts: [group_probe: fn _ -> :absent end],
+        request_attrs: %{
+          requested_by: "human:operator",
+          agent_profile: %{
+            "profile_id" => profile["profile_id"],
+            "revision" => 1,
+            "digest" => profile["digest"],
+            "role" => "Worker"
+          }
+        },
+        request_opts: [defer_admission: true]
+      )
     )
   end
 
@@ -135,5 +137,27 @@ defmodule Shoestring.Cobbler.PlanWorkerAdmissionClockRegressionTest do
              PlanExecutor.status(c.goal.id, c.opts)
 
     assert [%{plan_task_id: "north"}] = Reservations.outstanding()
+  end
+
+  test "at parallel tasks 2 a second goal starts beside the first and a third snoozes",
+       %{profile: profile} do
+    assert {:ok, _} =
+             AgentProfiles.save_settings(AgentProfiles.settings(), %{"parallel_tasks" => "2"})
+
+    [a, b, c] = for _ <- 1..3, do: execution(profile, transform_tasks: &Enum.take(&1, 1))
+    # Admission is injected here, so it does not see the places taken: the
+    # third start races the reservation limit, as two concurrent admissions
+    # can in the service, and is retried rather than discarded.
+    configure_worker!(a)
+
+    assert {:snooze, 5} = perform(a)
+    # The single-claim path refused this with {:reservation_blocked, :legacy_claim}.
+    assert {:snooze, 5} = perform(b)
+    assert {:snooze, 60} = perform(c)
+
+    assert Enum.sort(Enum.map(Reservations.outstanding(), & &1.goal_id)) ==
+             Enum.sort([a.goal.id, b.goal.id])
+
+    assert {:ok, %{total_attempts: 0}} = PlanExecutor.status(c.goal.id, c.opts)
   end
 end

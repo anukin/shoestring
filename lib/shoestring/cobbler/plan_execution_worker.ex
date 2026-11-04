@@ -29,6 +29,14 @@ defmodule Shoestring.Cobbler.PlanExecutionWorker do
       {:error, {:execution_admission_blocked, _}} ->
         {:snooze, 60}
 
+      # Another dispatch took the last place (or the global claim) between
+      # admission and the reservation: the start is retried, nothing else.
+      {:error, {:reservation_blocked, _}} ->
+        {:snooze, 60}
+
+      {:error, :reservation_claim_unavailable} ->
+        {:snooze, 60}
+
       {:error, :execution_request_mismatch} ->
         {:cancel, :execution_request_mismatch}
 

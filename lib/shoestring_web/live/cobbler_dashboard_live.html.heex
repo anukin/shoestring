@@ -136,6 +136,11 @@
           <dd class="font-medium text-zinc-900">
             {if(goal.claim_held?, do: "held by this goal", else: "none")}
           </dd>
+
+          <dt class="text-zinc-500">Reservations</dt>
+          <dd id={"cobbler-goal-reservations-#{goal.id}"} class="font-medium text-zinc-900">
+            {if(goal.reservations == [], do: "none", else: Enum.join(goal.reservations, ", "))}
+          </dd>
         </dl>
 
         <.link

@@ -18,10 +18,10 @@ defmodule Shoestring.CLI.Commands.Grant do
     --team NAME             snapshot this team's agents, limits and switches
     --purposes              what it may dispatch (default: all three)
     --max-dispatches N      attempts in total, retries included (default 10)
-    --max-parallel N        dispatches queued or running at once (default 3);
-                            they still run one after another: only one batch
-                            dispatch's tasks run side by side, when Settings'
-                            parallel tasks is 2 or more
+    --max-parallel N        dispatches queued or running at once (default 3).
+                            At Settings' parallel tasks 1 they run one after
+                            another; at 2 or more, up to that many run side by
+                            side when each names separate files with --file
     --max-hours H           total time its dispatches may use (default 4)
     --max-dispatch-minutes  the most one dispatch may use (default 60)
     --unread-usage N        dispatches it may start when a provider's

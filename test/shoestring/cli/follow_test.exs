@@ -337,6 +337,38 @@ defmodule Shoestring.CLI.FollowTest do
              nil
   end
 
+  test "at parallel tasks 2 or more a wait says how many run and why this one waits" do
+    occupied = %{
+      "result" => "defer_until",
+      "reason_code" => "scope_occupied",
+      "explanation" => "Candidate scope 'subscription' is currently occupied by active execution",
+      "candidate" => %{"provider_id" => "claude"}
+    }
+
+    wait = fn detail ->
+      payload =
+        Map.put(occupied, "extensions", %{
+          "shoestring.parallel:wait" => Map.merge(%{"limit" => 2}, detail)
+        })
+
+      Follow.line(%{type: "admission.decided", payload: payload})
+    end
+
+    full = wait.(%{"reason" => "slots_full", "running" => 2})
+    assert full =~ "Waiting: 2 IMPLEMENT tasks are running"
+    assert full =~ "allows 2 at once, so every place is taken"
+    refute full =~ "dispatches run one at a time"
+
+    overlap = wait.(%{"reason" => "files_overlap", "running" => 1})
+    assert overlap =~ "Waiting: 1 IMPLEMENT task is running"
+    assert overlap =~ "only when both name separate files with --file"
+    refute overlap =~ "dispatches run one at a time"
+
+    # At 1 the decision carries no such detail and the line is unchanged.
+    assert Follow.line(%{type: "admission.decided", payload: occupied}) =~
+             "dispatches run one at a time"
+  end
+
   test "work left uncommitted is named, not reported as a failed check" do
     # As recorded live when a worker stopped without committing.
     dirty = %{

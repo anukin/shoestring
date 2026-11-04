@@ -1496,8 +1496,33 @@ defmodule Shoestring.Cobbler.Wakeups do
   # unleased work.
   defp authorize_claim(goal, opts) do
     case Shoestring.Cobbler.DispatchGate.authorize(goal.id, opts) do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:wakeup_claim_lost, reason}}
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        if reserved_continuation?(goal, opts),
+          do: :ok,
+          else: {:error, {:wakeup_claim_lost, reason}}
+    end
+  end
+
+  # A run that claimed through its own reservation (Settings' parallel tasks
+  # 2 or more) never held the global claim. Its continuation is authorized by
+  # the fresh successor reservation `ReservationContinuation` took in this
+  # same transaction from the settled predecessor, and only while no claim
+  # is held at all: it never borrows another goal's claim or slot.
+  defp reserved_continuation?(goal, opts) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    with id when is_binary(id) <- Keyword.get(opts, :reservation_id),
+         %Shoestring.Cobbler.ReservationRecord{} = owner <-
+           repo.get(Shoestring.Cobbler.ReservationRecord, id),
+         true <- owner.goal_id == goal.id and owner.status == "held" and owner.parent_id != nil,
+         nil <- repo.get(Shoestring.Cobbler.ReservationSettlementRecord, id),
+         nil <- Commands.active_claim(repo: repo) do
+      true
+    else
+      _ -> false
     end
   end
 

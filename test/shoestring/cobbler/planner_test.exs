@@ -1,6 +1,7 @@
 defmodule Shoestring.Cobbler.PlannerTest do
   use Shoestring.DataCase, async: false
-  alias Shoestring.Cobbler.{Commands, Planner, PlannerRequestRecord, Plans}
+  alias Shoestring.Cobbler.{Commands, Parallelism, Planner, PlannerRequestRecord, Plans}
+  alias Shoestring.Cobbler.{ReservationPolicy, Reservations}
   alias Shoestring.Harness.CapacitySnapshot
   alias Shoestring.Trajectory.TrajectoryEvent
   import Shoestring.Test.CobblerHelpers, only: [create_goal!: 0]
@@ -453,6 +454,47 @@ defmodule Shoestring.Cobbler.PlannerTest do
 
     assert_received {:inference_checked, ^checked}
     assert Commands.active_claim() == nil
+  end
+
+  test "at parallel tasks 2 a planner waits while another goal's task holds a reservation",
+       context do
+    {:ok, _} =
+      Shoestring.AgentProfiles.save_settings(Shoestring.AgentProfiles.settings(), %{
+        "parallel_tasks" => "2"
+      })
+
+    # A separate dispatch runs on its own reservation, holding no task claim.
+    other = create_goal!()
+    admission = Shoestring.Test.PlanExecutorHelpers.admit!(other)
+    {:ok, policy} = ReservationPolicy.new(Parallelism.policy(2))
+
+    {:ok, _} =
+      Reservations.hold(
+        %{
+          id: Ecto.UUID.generate(),
+          goal_id: other.id,
+          execution_id: Ecto.UUID.generate(),
+          plan_task_id: "elsewhere",
+          attempt: 1,
+          run_id: Ecto.UUID.generate(),
+          admission_event_id: admission.id
+        },
+        policy,
+        now: Shoestring.Test.PlanExecutorHelpers.now()
+      )
+
+    assert Commands.active_claim() == nil
+    opts = options(context)
+    request!(context, opts)
+
+    # The planner would take the task claim, which that reservation refuses:
+    # it waits instead of being admitted into a claim it cannot get.
+    assert {:ok, %{request: row, outcome: :blocked}} =
+             Planner.generate(context.goal.id, "initial-1", opts)
+
+    assert [%{"code" => "scope_occupied"}] = row.errors["items"]
+    assert Commands.active_claim() == nil
+    refute_receive {:planner_input, _}
   end
 
   test "lost result survives process restart without inference duplication or budget reset",

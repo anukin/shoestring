@@ -308,7 +308,14 @@ defmodule Shoestring.Cobbler.PlanFanoutTest do
     c = unit_fixture()
 
     assert {:ok, result} =
-             PlanExecutor.advance(c.goal.id, Keyword.put(c.opts, :reserved_sibling, true))
+             PlanExecutor.advance(
+               c.goal.id,
+               Keyword.merge(c.opts,
+                 reserved_sibling: true,
+                 reservation_owned: true,
+                 fanout_sibling: true
+               )
+             )
 
     run = Repo.get!(RunRecord, result.run_id)
     refute Map.has_key?(run.extensions, "shoestring.fanout:version")

@@ -202,6 +202,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:checkpoint_text, "")
     |> assign(:claim, nil)
     |> assign(:claim_mine?, false)
+    |> assign(:reservations, [])
     |> assign(:execution, empty_execution())
     |> assign(:worktree, %{state: :no_run, run_id: nil, workspace_ref: nil, record: nil})
     |> assign(:projection, %{status: "not_projected", error_detail: nil})
@@ -248,6 +249,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:checkpoint, checkpoint_display(checkpoint))
     |> assign(:claim, claim)
     |> assign(:claim_mine?, is_map(claim) and claim.goal_id == goal.id)
+    |> assign(:reservations, goal_reservations(goal.id))
     |> assign(:execution, execution)
     |> assign(:worktree, worktree_display(execution.worktree_run))
     |> assign(:projection, projection)
@@ -465,6 +467,14 @@ defmodule ShoestringWeb.CobblerGoalLive do
     Cobbler.active_claim()
   rescue
     _error -> nil
+  end
+
+  # At Settings' parallel tasks 2 or more a running task holds its own
+  # reservation, not the claim; this goal's outstanding ones are listed.
+  defp goal_reservations(goal_id) do
+    Enum.filter(Shoestring.Cobbler.Reservations.outstanding(), &(&1.goal_id == goal_id))
+  rescue
+    _error -> []
   end
 
   # Plan-aware presentation (iteration 6 narrow override): see

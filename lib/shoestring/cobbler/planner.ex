@@ -344,7 +344,7 @@ defmodule Shoestring.Cobbler.Planner do
         snapshot,
         nil,
         now: now,
-        occupancy: Commands.active_claim() != nil
+        occupancy: occupied?(candidate)
       )
 
     admission =
@@ -648,6 +648,14 @@ defmodule Shoestring.Cobbler.Planner do
 
   defp request_key(_), do: {:error, :invalid_planner_request}
   defp claim_id(row), do: "planner-claim:#{row.id}:#{row.attempts}"
+
+  # The planner then takes the global claim itself, which is refused while
+  # any reservation is held, so at parallel tasks 2 or more it waits for
+  # those too. At 1 this is any held claim, as before.
+  defp occupied?(candidate) do
+    opts = [legacy_claim: true]
+    Shoestring.Cobbler.Parallelism.occupied?(nil, candidate.provider_id, candidate.scope, opts)
+  end
 
   defp repair_errors(%{attempts: 2, attempt_history: history}),
     do: history["items"] |> hd() |> Map.get("errors", %{"items" => []}) |> Map.fetch!("items")

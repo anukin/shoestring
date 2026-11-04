@@ -412,7 +412,38 @@ defmodule Shoestring.CLI.Follow do
       "capacity for #{provider} could not be checked (#{reason}); the service retries every minute."
 
   # The admission's own explanation is written for Shoestring's operators;
-  # the two a person meets most often are said plainly.
+  # the two a person meets most often are said plainly. At Settings'
+  # parallel tasks 2 or more the decision records why it waits.
+  defp admission_wait(%{
+         "reason_code" => "scope_occupied",
+         "extensions" => %{"shoestring.parallel:wait" => %{"limit" => limit} = wait}
+       })
+       when is_integer(limit) do
+    running =
+      if wait["running"] == 1,
+        do: "1 IMPLEMENT task is running",
+        else: "#{wait["running"]} IMPLEMENT tasks are running"
+
+    why =
+      case wait["reason"] do
+        "files_overlap" ->
+          "#{running}, and this one's files may overlap one of them in this repository: " <>
+            "separate dispatches run side by side only when both name separate files " <>
+            "with --file and neither touches a shared file (lockfiles, configuration, " <>
+            "migrations)."
+
+        "claim" ->
+          "another task holds the task claim (a planner, or a run started before " <>
+            "Settings allowed #{limit} at once)."
+
+        _ ->
+          "#{running}, and Settings' parallel tasks allows #{limit} at once, so every " <>
+            "place is taken."
+      end
+
+    why <> " This one starts when that changes; it checks every minute."
+  end
+
   defp admission_wait(%{"reason_code" => "scope_occupied"}),
     do:
       "another task is running, and dispatches run one at a time: only the tasks of one " <>

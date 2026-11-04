@@ -52,6 +52,50 @@ defmodule Shoestring.DispatchBatchTest do
 
   defp git!(dir, args), do: {_, 0} = System.cmd("git", ["-C", dir | args], stderr_to_stdout: true)
 
+  # Another goal's task holding one of the places Settings allows.
+  defp hold_place!(n) do
+    goal = Shoestring.Test.CobblerHelpers.create_goal!()
+    admission = Shoestring.Test.PlanExecutorHelpers.admit!(goal)
+    {:ok, policy} = Shoestring.Cobbler.ReservationPolicy.new(Parallelism.policy(n))
+
+    {:ok, reservation} =
+      Shoestring.Cobbler.Reservations.hold(
+        %{
+          id: Ecto.UUID.generate(),
+          goal_id: goal.id,
+          execution_id: Ecto.UUID.generate(),
+          plan_task_id: "elsewhere",
+          attempt: 1,
+          run_id: Ecto.UUID.generate(),
+          admission_event_id: admission.id
+        },
+        policy,
+        now: Shoestring.Test.PlanExecutorHelpers.now()
+      )
+
+    reservation
+  end
+
+  defp held(dispatch, changes \\ %{}) do
+    {:ok, status} = Shoestring.Cobbler.ExecutionControl.status(dispatch.goal_id)
+
+    held =
+      Map.merge(
+        %{
+          status
+          | last_admission: %{
+              "result" => "require_confirmation",
+              "decision_id" => Ecto.UUID.generate(),
+              "candidate" => %{"provider_id" => "codex"},
+              "scope" => "account:codex"
+            }
+        },
+        changes
+      )
+
+    fn _ -> {:ok, held} end
+  end
+
   defp batch(ctx, tasks, overrides \\ %{}) do
     Dispatches.create(
       Map.merge(
@@ -354,6 +398,69 @@ defmodule Shoestring.DispatchBatchTest do
 
     assert confirmation.payload["plan_task_id"] == "dispatch-3"
     assert Dispatches.advance(dispatch, free) == :none
+    assert Shoestring.Grants.get(grant.id).unread_usage_used == 1
+  end
+
+  test "a held single task spends no confirmation while every place is taken", ctx do
+    {:ok, grant} =
+      Shoestring.Grants.extend(ctx.grant, %{add_unread_usage: 2}, "human:operator")
+
+    {:ok, _} = AgentProfiles.save_settings(AgentProfiles.settings(), %{"parallel_tasks" => "2"})
+    {:ok, single, :recorded} = batch(ctx, [], %{files: ["calc.py"]})
+    assert single.task_count in [nil, 1]
+
+    # Two other dispatches hold both places: the confirmation would buy nothing.
+    for _ <- 1..2, do: hold_place!(2)
+    full = held(single, %{active_run_id: nil})
+    assert Dispatches.advance(single, full) == :none
+    assert Dispatches.confirm_hold(single, "human:operator", full) == :none
+    assert Shoestring.Grants.get(grant.id).unread_usage_used == 0
+  end
+
+  test "a held single task at parallel tasks 2 spends its confirmation while a place is free",
+       ctx do
+    {:ok, grant} =
+      Shoestring.Grants.extend(ctx.grant, %{add_unread_usage: 2}, "human:operator")
+
+    {:ok, _} = AgentProfiles.save_settings(AgentProfiles.settings(), %{"parallel_tasks" => "2"})
+    {:ok, single, :recorded} = batch(ctx, [], %{files: ["calc.py"]})
+    hold_place!(2)
+    assert Dispatches.advance(single, held(single, %{active_run_id: nil})) == :confirmed
+    assert Shoestring.Grants.get(grant.id).unread_usage_used == 1
+  end
+
+  test "a batch counts every dispatch's places, not just its own, at 2 and at 3", ctx do
+    {:ok, grant} =
+      Shoestring.Grants.extend(
+        ctx.grant,
+        %{max_parallel: 3, add_unread_usage: 2},
+        "human:operator"
+      )
+
+    {:ok, _} = AgentProfiles.save_settings(AgentProfiles.settings(), %{"parallel_tasks" => "2"})
+    {:ok, dispatch, :recorded} = batch(ctx, @two)
+
+    # Nothing of this batch runs, but two single dispatches hold both places.
+    places = for _ <- 1..2, do: hold_place!(2)
+    full = held(dispatch, %{active_children: []})
+    assert Dispatches.advance(dispatch, full) == :none
+    assert Shoestring.Grants.get(grant.id).unread_usage_used == 0
+
+    # At 3 the same two leave a place free (the setting changes only once
+    # nothing holds one).
+    for place <- places,
+        do:
+          assert(
+            {:ok, _} =
+              Shoestring.Cobbler.Reservations.reconcile(place.id,
+                now: Shoestring.Test.PlanExecutorHelpers.now()
+              )
+          )
+
+    assert Shoestring.Cobbler.Reservations.outstanding() == []
+    {:ok, _} = AgentProfiles.save_settings(AgentProfiles.settings(), %{"parallel_tasks" => "3"})
+    for _ <- 1..2, do: hold_place!(3)
+    assert Dispatches.advance(dispatch, held(dispatch, %{active_children: []})) == :confirmed
     assert Shoestring.Grants.get(grant.id).unread_usage_used == 1
   end
 end
