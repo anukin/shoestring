@@ -22,6 +22,26 @@ saving. Without a terminal, pass `--worker PROVIDER:MODEL --yes`. The
 step-by-step equivalents are `shoestring models refresh` and
 `shoestring agents create`.
 
+REPO-INSPECTION: Interactive setup accepts a short search (model display name,
+agent CLI or opencode provider), then a numbered selection. Enter keeps the
+current suggestion; `/all` clears the search and `none` omits the Reviewer.
+Effort is selected separately where Shoestring has supported effort values.
+Exact `PROVIDER:MODEL` input and noninteractive flags remain supported.
+
+REPO-INSPECTION: `shoestring models enable [PROVIDER]` and
+`shoestring models disable [PROVIDER]` open the same numbered search in a
+terminal. Supplying both provider and model keeps the noninteractive command.
+New opencode routes stay disabled until explicitly enabled; setup asks before
+enabling one. Discovery does not verify entitlement, project access or billing.
+
+REPO-INSPECTION: Web Settings offers model search, refresh, enable/disable and
+manual entry; Agents offers search beside its model selector. Both use the
+CLI's saved catalog and exact identifiers. Open pages check saved data every
+five seconds without contacting a provider, preserving unsaved forms. A stale
+settings save still requires reload. opencode discovery currently uses global
+configuration in a temporary directory and does not populate effort variants;
+its effort control remains at the provider default.
+
 From a source checkout, the wrapper runs the same commands with this
 checkout's code and state:
 

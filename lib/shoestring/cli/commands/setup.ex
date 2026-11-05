@@ -2,7 +2,7 @@ defmodule Shoestring.CLI.Commands.Setup do
   @moduledoc "`shoestring setup`: check the agent CLIs, record their models and save a default agent."
 
   alias Shoestring.{AgentProfiles, Harnesses, ModelCatalog}
-  alias Shoestring.CLI.{Command, Refusal, Terminal}
+  alias Shoestring.CLI.{Command, ModelPicker, Refusal, Terminal}
   alias Shoestring.Release.{Doctor, ProviderProbe}
 
   @help """
@@ -22,7 +22,9 @@ defmodule Shoestring.CLI.Commands.Setup do
   3. Chooses the default agent's Coordinator (plans for `shoestring do`),
      Worker (runs tasks) and Reviewer (reviews them, from another vendor than
      the Worker). It suggests each one, or keeps the agent's current choice;
-     press Enter to accept or type PROVIDER:MODEL. `--reviewer none` leaves
+     press Enter to accept, choose a numbered model or search by name, CLI
+     or provider. Exact PROVIDER:MODEL values still work. Disabled models
+     require an explicit enable confirmation. `--reviewer none` leaves
      the Reviewer out.
   4. Shows what it would save and asks before saving. Running it again with
      the same choices saves nothing.
@@ -109,9 +111,19 @@ defmodule Shoestring.CLI.Commands.Setup do
 
         value =
           cond do
-            flag -> parse!(role, flag)
-            interactive -> ask(role, current[role] || suggest(role, chosen, readiness), context)
-            true -> current[role] || suggest(role, chosen, readiness)
+            flag ->
+              parse!(role, flag)
+
+            interactive ->
+              ModelPicker.choose(
+                role,
+                current[role] || suggest(role, chosen, readiness),
+                context,
+                readiness
+              )
+
+            true ->
+              current[role] || suggest(role, chosen, readiness)
           end
 
         if value, do: Map.put(chosen, role, value), else: chosen
@@ -215,7 +227,7 @@ defmodule Shoestring.CLI.Commands.Setup do
   end
 
   defp candidates(id) do
-    enabled = ModelCatalog.enabled(id) -- ["default"]
+    enabled = Enum.map(ModelCatalog.choices(provider: id, executable: true), & &1.model)
 
     defaults =
       for entry <- ModelCatalog.entries(id),
@@ -224,16 +236,6 @@ defmodule Shoestring.CLI.Commands.Setup do
           do: entry.model
 
     Enum.uniq(defaults ++ Enum.filter(["opus"], &(&1 in enabled)) ++ enabled)
-  end
-
-  defp ask(role, suggestion, context) do
-    shown = if suggestion, do: "#{suggestion["provider"]}:#{suggestion["model"]}", else: "none"
-    answer = context.shell.prompt("#{role} [#{shown}]: ") |> to_string() |> String.trim()
-
-    cond do
-      answer == "" -> suggestion
-      true -> parse!(role, answer)
-    end
   end
 
   defp parse!("Reviewer", "none"), do: nil

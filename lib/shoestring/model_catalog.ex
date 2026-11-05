@@ -17,7 +17,7 @@ defmodule Shoestring.ModelCatalog do
   """
   import Ecto.Query
 
-  alias Shoestring.{AgentProfiles, Repo}
+  alias Shoestring.{AgentProfiles, Harnesses, Repo}
   alias Shoestring.AgentProfiles.{Definition, Settings}
   alias Shoestring.Harnesses.ModelListing
   alias Shoestring.ModelCatalog.Entry
@@ -49,6 +49,102 @@ defmodule Shoestring.ModelCatalog do
   @doc "The models enabled for `provider`."
   def enabled(provider),
     do: Settings.model_ids(Map.get(AgentProfiles.settings(), field!(provider)))
+
+  @doc """
+  Shared picker rows, including legacy identifiers saved before discovery.
+  By default only enabled, currently reported (or manually configured) choices
+  are offered. Management screens opt into disabled and unavailable rows.
+  Search matches the display name, exact identifier, CLI and opencode route.
+  """
+  def choices(opts \\ []) do
+    settings = AgentProfiles.catalog()
+    recorded = Map.new(entries(), &{{&1.provider, &1.model}, &1})
+
+    keys =
+      (Map.keys(recorded) ++
+         for({provider, models} <- settings, model <- models, do: {provider, model}))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    for {provider, model} <- keys,
+        entry <- [recorded[{provider, model}]],
+        row = %{
+          provider: provider,
+          model: model,
+          display_name: (entry && entry.display_name) || model,
+          route: if(provider == "opencode", do: hd(String.split(model, "/"))),
+          enabled: model in Map.get(settings, provider, []),
+          available: is_nil(entry) or entry.available,
+          source: if(entry, do: entry.source, else: "configured"),
+          fetched_at: entry && entry.fetched_at,
+          harness_default: entry && entry.harness_default,
+          efforts: if(entry, do: entry.efforts, else: [])
+        },
+        is_nil(opts[:provider]) or provider == opts[:provider],
+        is_nil(opts[:capability]) or Harnesses.supports?(provider, opts[:capability]),
+        opts[:include_disabled] == true or row.enabled,
+        opts[:include_unavailable] == true or row.available,
+        opts[:executable] != true or model != "default",
+        matches?(row, opts[:query] || ""),
+        do: row
+  end
+
+  def matches?(row, query) do
+    text =
+      [row.display_name, row.model, row.provider, Harnesses.name(row.provider), row.route]
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    query |> String.downcase() |> String.split() |> Enum.all?(&String.contains?(text, &1))
+  end
+
+  def label(row) do
+    route = if row.route, do: " · #{row.route}", else: ""
+    "#{row.display_name} — #{Harnesses.name(row.provider)}#{route}"
+  end
+
+  @doc "Bulk settings edits in model-management interfaces protect current model users."
+  def change_settings(settings, attrs) do
+    AgentProfiles.change_settings(settings, attrs) |> validate_model_removals(settings)
+  end
+
+  def save_settings(settings, attrs) do
+    Repo.transaction(fn ->
+      changeset = change_settings(settings, attrs)
+
+      result =
+        if changeset.valid?,
+          do: AgentProfiles.save_settings(settings, attrs),
+          else: {:error, %{changeset | action: :update}}
+
+      case result do
+        {:ok, saved} -> saved
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  defp validate_model_removals(changeset, settings) do
+    Enum.reduce(
+      [{"claude", :claude_models}, {"codex", :codex_models}, {"opencode", :opencode_models}],
+      changeset,
+      fn {provider, field}, changeset ->
+        Ecto.Changeset.validate_change(changeset, field, fn _, value ->
+          removed = Settings.model_ids(Map.get(settings, field)) -- Settings.model_ids(value)
+          used = Enum.filter(removed, &(Shoestring.ModelCatalog.agents_using(provider, &1) != []))
+
+          if used == [],
+            do: [],
+            else: [{field, "models still used by agents or teams: #{Enum.join(used, ", ")}"}]
+        end)
+      end
+    )
+  end
+
+  @doc "Checks a picker choice again when it is submitted."
+  def selectable?(provider, model, capability \\ nil) do
+    Enum.any?(choices(capability: capability), &(&1.provider == provider and &1.model == model))
+  end
 
   @doc """
   The efforts `model` accepts, as its harness last reported them, or nil
@@ -219,10 +315,20 @@ defmodule Shoestring.ModelCatalog do
     end
   end
 
-  defp agents_using(provider, model) do
-    for agent <- Repo.all(Definition),
-        Enum.any?(agent.roles, &(&1.provider == provider and &1.model == model)),
-        do: agent.slug
+  def agents_using(provider, model) do
+    teams =
+      for agent <- Repo.all(Definition),
+          Enum.any?(agent.roles, &(&1.provider == provider and &1.model == model)),
+          do: agent.slug
+
+    agents =
+      Repo.all(
+        from a in Shoestring.Agents.Agent,
+          where: a.provider == ^provider and a.model == ^model,
+          select: a.slug
+      )
+
+    Enum.uniq(teams ++ agents)
   end
 
   defp enable_all(provider, models) do

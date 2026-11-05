@@ -103,7 +103,8 @@ defmodule Shoestring.ModelCatalogTest do
     ]
 
     {:ok, _} = AgentProfiles.create(ConfigurationFixtures.agent_attrs(%{"roles" => roles}))
-    assert ModelCatalog.disable("claude", "opus") == {:error, {:in_use, ["builder"]}}
+    assert {:error, {:in_use, users}} = ModelCatalog.disable("claude", "opus")
+    assert Enum.sort(users) == ["builder", "coordinator-claude-opus", "implementer-claude-opus"]
     assert "opus" in ModelCatalog.enabled("claude")
   end
 

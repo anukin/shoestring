@@ -17,6 +17,10 @@ shoestring agents create builder --coordinator claude:opus \
   --worker opencode:opencode/glm-5.3-flash-free --default
 ```
 
+REPO-INSPECTION: In a terminal, `shoestring models enable opencode` also lets
+you search and choose a numbered route without typing its full identifier.
+Web Settings exposes the same saved model catalog and explicit enable action.
+
 - A model is `provider/model`, exactly as opencode reports it. Refreshing
   records every model opencode offers (150 on 2026-10-25) but enables none:
   opencode can reach providers that charge per token, so you choose. An

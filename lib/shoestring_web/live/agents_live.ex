@@ -7,13 +7,17 @@ defmodule ShoestringWeb.AgentsLive do
   """
   use ShoestringWeb, :live_view
   on_mount ShoestringWeb.NeedsYou
-  alias Shoestring.{Agents, AgentProfiles, Dispatches, Harnesses}
+  alias Shoestring.{Agents, AgentProfiles, Dispatches, Harnesses, ModelCatalog}
   alias Shoestring.Agents.Agent
 
   @kinds ~w(coordinator explorer implementer reviewer)
 
   def mount(_, _, socket),
-    do: {:ok, assign(socket, current_scope: nil, page_title: "Agents", agent: nil)}
+    do:
+      {:ok,
+       socket
+       |> assign(current_scope: nil, page_title: "Agents", agent: nil)
+       |> ShoestringWeb.ModelCatalogWatch.schedule()}
 
   def handle_params(params, _, socket) do
     case socket.assigns.live_action do
@@ -86,8 +90,18 @@ defmodule ShoestringWeb.AgentsLive do
 
   def handle_event("validate", %{"agent" => attrs} = params, socket) do
     attrs = reset_model(attrs, params["_target"])
-    changeset = Agents.change(socket.assigns.draft, attrs) |> Map.put(:action, :validate)
-    {:noreply, form(socket, changeset)}
+
+    action =
+      if params["_target"] == ["model_query"],
+        do: socket.assigns.form.source.action,
+        else: :validate
+
+    changeset = Agents.change(socket.assigns.draft, attrs) |> Map.put(:action, action)
+
+    {:noreply,
+     socket
+     |> assign(:model_query, Map.get(params, "model_query", socket.assigns.model_query))
+     |> form(changeset)}
   end
 
   def handle_event("save", %{"agent" => attrs}, socket) do
@@ -128,21 +142,83 @@ defmodule ShoestringWeb.AgentsLive do
     {:noreply, configure(socket, agent, agent)}
   end
 
+  def handle_info(:model_catalog_check, socket) do
+    socket = ShoestringWeb.ModelCatalogWatch.schedule(socket)
+
+    if socket.assigns.live_action in [:new, :edit] do
+      rows = ModelCatalog.choices(include_disabled: true, include_unavailable: true)
+      changed? = rows != socket.assigns.catalog_rows
+
+      {:noreply,
+       socket
+       |> assign(catalog_rows: rows, catalog_notice: socket.assigns.catalog_notice or changed?)
+       |> model_options()}
+    else
+      {:noreply, socket}
+    end
+  end
+
   defp configure(socket, draft, agent),
-    do: socket |> assign(agent: agent, draft: draft) |> form(Agents.change(draft))
+    do:
+      socket
+      |> assign(agent: agent, draft: draft, model_query: "", catalog_notice: false)
+      |> form(Agents.change(draft))
 
   defp form(socket, changeset),
     do:
-      assign(socket,
+      socket
+      |> assign(
         form: to_form(changeset, as: :agent),
-        catalog: AgentProfiles.catalog(),
+        catalog_rows: ModelCatalog.choices(include_disabled: true, include_unavailable: true),
         form_errors: if(changeset.action, do: changeset.errors, else: [])
       )
+      |> model_options()
+
+  defp model_options(socket) do
+    form = socket.assigns.form
+    provider = form[:provider].value
+    selected = form[:model].value
+    capability = if form[:kind].value in @kinds, do: Agent.capability(form[:kind].value)
+
+    rows =
+      Enum.filter(
+        socket.assigns.catalog_rows,
+        &(&1.provider == provider and &1.enabled and &1.available and
+            Harnesses.supports?(provider, capability))
+      )
+
+    matches = Enum.filter(rows, &ModelCatalog.matches?(&1, socket.assigns.model_query))
+
+    current =
+      Enum.find(socket.assigns.catalog_rows, &(&1.provider == provider and &1.model == selected))
+
+    offered = if current && current not in matches, do: [current | matches], else: matches
+
+    options =
+      Enum.map(offered, fn row ->
+        state =
+          cond do
+            not row.available -> " (no longer reported)"
+            not row.enabled -> " (disabled)"
+            true -> ""
+          end
+
+        {ModelCatalog.label(row) <> state, row.model}
+      end)
+
+    assign(socket, model_options: options, model_match_count: length(matches))
+  end
 
   defp reset_model(attrs, ["agent", "provider"]) do
-    model = List.first(Map.get(AgentProfiles.catalog(), attrs["provider"], [])) || ""
+    model =
+      ModelCatalog.choices(provider: attrs["provider"])
+      |> List.first()
+      |> then(&if(&1, do: &1.model, else: ""))
+
     attrs |> Map.put("model", model) |> Map.put("effort", "")
   end
+
+  defp reset_model(attrs, ["agent", "model"]), do: Map.put(attrs, "effort", "")
 
   defp reset_model(attrs, _), do: attrs
 
@@ -348,14 +424,44 @@ defmodule ShoestringWeb.AgentsLive do
               <.input
                 field={@form[:provider]}
                 type="select"
-                label="Provider"
+                label="Agent CLI"
                 options={providers()}
                 class="ss-input"
-              /><.input
+              />
+              <.input
+                id="agent-model-search"
+                name="model_query"
+                value={@model_query}
+                type="search"
+                label="Search models"
+                placeholder="Model name or opencode provider"
+                phx-debounce="150"
+                class="ss-input"
+              />
+            </div>
+            <p :if={@catalog_notice} id="agent-catalog-notice" class="ss-notice" role="status">
+              Model choices changed. Your draft has been kept; check the selected model before saving.
+            </p>
+            <p :if={@model_match_count == 0} id="agent-model-empty" class="ss-small" role="status">
+              No matching enabled models. Clear the search or enable a model in <.link navigate={
+                ~p"/settings"
+              }>Settings</.link>.
+            </p>
+            <p
+              :if={@model_query != "" and @model_match_count > 0}
+              id="agent-model-matches"
+              class="ss-small"
+              role="status"
+            >
+              {@model_match_count} matching {if @model_match_count == 1, do: "model", else: "models"}. Open Model to choose; your current selection is kept.
+            </p>
+            <div class="ss-fields">
+              <.input
                 field={@form[:model]}
                 type="select"
                 label="Model"
-                options={Map.get(@catalog, @form[:provider].value, [])}
+                options={@model_options}
+                prompt="Choose a model"
                 class="ss-input"
               />
             </div>
@@ -433,7 +539,12 @@ defmodule ShoestringWeb.AgentsLive do
               rows="3"
               class="ss-input"
             />
-            <p class="ss-footnote">Model choices come from Settings. Saving does not start work.</p>
+            <p class="ss-footnote">
+              Model choices come from Settings. Saving does not start work.
+              <span :if={@form[:provider].value == "opencode"} id="agent-opencode-note">
+                The provider inside opencode is part of the model identifier. Discovery does not verify project access or billing; effort uses opencode's default.
+              </span>
+            </p>
             <div class="ss-form-actions">
               <.link navigate={~p"/agents"}>Cancel</.link><button
                 id="save-agent"

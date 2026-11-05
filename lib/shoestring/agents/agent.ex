@@ -18,7 +18,7 @@ defmodule Shoestring.Agents.Agent do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias Shoestring.{AgentProfiles, Harnesses}
+  alias Shoestring.{AgentProfiles, Harnesses, ModelCatalog}
 
   @kinds ~w(coordinator explorer implementer reviewer)
   @capability %{
@@ -108,6 +108,14 @@ defmodule Shoestring.Agents.Agent do
     )
     |> then(fn changeset ->
       cond do
+        (changed?(changeset, :provider) or changed?(changeset, :model)) and
+            match?(%{available: false}, ModelCatalog.entry(provider, model)) ->
+          add_error(
+            changeset,
+            :model,
+            "this model is no longer reported; refresh or choose another model"
+          )
+
         provider in Map.keys(catalog) and model not in Map.get(catalog, provider, []) ->
           add_error(changeset, :model, "choose a model configured for this provider")
 

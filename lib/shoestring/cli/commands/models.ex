@@ -2,14 +2,14 @@ defmodule Shoestring.CLI.Commands.Models do
   @moduledoc "`shoestring models`: the models each harness offers, and which ones agents may use."
 
   alias Shoestring.{AgentProfiles, Harnesses, ModelCatalog}
-  alias Shoestring.CLI.{Command, Refusal}
+  alias Shoestring.CLI.{Command, ModelPicker, Refusal, Terminal}
 
   @help """
   shoestring models list
   shoestring models show [PROVIDER]
   shoestring models refresh [PROVIDER]
-  shoestring models enable PROVIDER MODEL
-  shoestring models disable PROVIDER MODEL
+  shoestring models enable [PROVIDER [MODEL]]
+  shoestring models disable [PROVIDER [MODEL]]
   shoestring models add PROVIDER MODEL
 
   `list` prints the enabled models per provider, the same lists as Settings in
@@ -31,6 +31,9 @@ defmodule Shoestring.CLI.Commands.Models do
   (`provider/model` for opencode). Only `refresh` starts a harness; the other
   commands start only the repository. Output is JSON on stdout (`--json` is
   accepted and changes nothing); progress goes to stderr.
+
+  In a terminal, omit MODEL (and optionally PROVIDER) from enable/disable to
+  search and choose a numbered model. Without a terminal both are required.
   """
 
   def help, do: @help
@@ -58,6 +61,20 @@ defmodule Shoestring.CLI.Commands.Models do
 
       {_, ["add", provider, model], []} ->
         context.with_repo.(fn _repo -> add(provider!(provider), model, context) end)
+
+      {_, [action | rest], []} when action in ["enable", "disable"] and length(rest) <= 1 ->
+        unless Map.get(context, :interactive?, &Terminal.interactive?/0).(),
+          do: Refusal.refuse!("Without a terminal pass PROVIDER MODEL to models #{action}")
+
+        provider = Enum.map(rest, &provider!/1) |> List.first()
+
+        context.with_repo.(fn _repo ->
+          case ModelPicker.manage(action, provider, context) do
+            nil -> list(context)
+            row when action == "enable" -> enable(row.provider, row.model, context)
+            row -> disable(row.provider, row.model, context)
+          end
+        end)
 
       _ ->
         Refusal.usage!("models")
