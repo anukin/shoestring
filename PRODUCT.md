@@ -1,11 +1,13 @@
 # Shoestring
 
-A local configuration and allowance dashboard for people running agent work
-through a CLI. The UI has three destinations: Usage, Agents and Settings.
-Users save named orchestrators with purpose, instructions and team roles,
-choose configured providers/models, and inspect reported subscription limits.
-Work submission, approval, execution, amendments and diagnostics belong to the
-CLI. Sessions, chat and terminal/test output are outside product navigation.
+A local supervisor for people running agent work through a CLI. The web UI
+has six destinations: Usage, Teams, Agents, Sessions, Lessons and Settings.
+Users save teams that assign an agent (model, limits, sandbox permissions) to
+each role, inspect reported subscription limits, watch coordinator sessions,
+answer workers' asks and decide on lessons. Work submission, plan approval,
+grants, integration and diagnostics belong to the CLI (`shoestring do`,
+`shoestring chat`). Chat itself lives in the terminal chat screen; raw run and
+terminal output pages are diagnostic surfaces outside the main navigation.
 
 Provider/account allowance is shared, never multiplied by the number of agents.
 Unknown and stale readings stay explicit. No inference call is authorized by

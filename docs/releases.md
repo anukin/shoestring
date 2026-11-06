@@ -1,10 +1,16 @@
 # Native releases, installation and upgrades
 
+No release has been published yet; see [install](install.md) for the current
+status and [the release checklist](release-checklist.md) for what must pass
+before one is.
+
 The first release target is macOS arm64 on the macOS major recorded in the
 manifest. The launcher refuses other majors before invoking the runtime.
 Linux sandboxing and other targets
 remain deferred. The release includes ERTS, application/NIF code, static assets,
-migrations and the exact PTY helper. Elixir, system Erlang and Rust are build
+migrations, the exact PTY helper and chat screen, and at its root `LICENSE`
+and `THIRD_PARTY_NOTICES.md` (every bundled component's license; a release
+whose license texts cannot all be found is refused). Elixir, system Erlang and Rust are build
 dependencies, not runtime requirements. Git, Python 3 and Homebrew OpenSSL 3
 remain runtime dependencies. No Developer ID signing or notarization is claimed.
 

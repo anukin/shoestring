@@ -1,324 +1,150 @@
 # Shoestring
 
-Shoestring is a local-first control plane for supervising coding-agent work.
-It gives a goal durable state, bounded execution, recovery, and a history that
-does not depend on any one model conversation.
+Shoestring lets you hand coding work to agent CLIs you already use — Claude
+Code, Codex and opencode — without handing them your repository or your
+usage limits.
 
-The short version:
+You describe the work. Shoestring has an agent plan it, asks you before
+anything runs, runs each task as a sandboxed worker in a private copy of your
+repository, checks the result with the tests you name, optionally has a model
+from another vendor review it, and gives you a verified commit to merge. Your
+checkout is never changed, every step is recorded, and nothing is spent
+beyond the allowance you grant.
 
-> Shoestring is an agent supervisor, not an agent harness.
+It runs on your own machine. It brings no model and no API key of its own: it
+drives the CLIs you have installed and signed in to.
 
-It owns goals, tasks, trajectory events, projections, artifacts, recovery, and
-event-driven UI. Harness adapters are the boundary where it will later launch
-and observe external coding agents such as Claude Code or Codex; opencode can
-also run plan tasks ([opencode worker](docs/opencode-worker.md)). Shoestring
-does not itself provide a model, a coding-agent CLI, or a vendor API.
+![The Sessions page: a coordinator session with a held dispatch waiting for you](docs/images/session.png)
 
-## What is implemented
+> **Status:** pre-release (0.2.0). Built and tested on **macOS on Apple
+> silicon**; no other platform is supported yet. No packaged release has been
+> published, so today you install from source. See
+> [supported platforms and feature status](docs/support.md) and
+> [known limitations](docs/limitations.md).
 
-The current application contains the first durable trajectory slice:
+## Why use it
 
-- Phoenix and LiveView provide a local control-plane UI and health endpoint.
-- SQLite through Ecto stores goals, tasks, canonical trajectory events,
-  artifacts, and projector positions.
-- One registered writer serializes appends for each active goal. Database
-  uniqueness remains the final ordering and idempotency boundary.
-- Events use UUIDv4 binary IDs, UTC microsecond timestamps, and positive
-  per-goal sequence numbers.
-- The versioned event registry currently supports `goal.created`,
-  `task.created`, `decision.recorded`, and `task.completed` at schema version
-  1.
-- Deterministic goal/task projectors can resume from a persisted sequence or
-  rebuild derived state from canonical events.
-- Artifacts are bounded, content-addressed, atomically written, and verified
-  by containment, size, and SHA-256 before reads.
-- JSONL export/decode is versioned, ordered, redacted, and intentionally
-  non-canonical. It can replay fixtures through pure projection transitions.
-- A local timeline route renders replayed events and projection status:
-  `/goals/:goal_id/timeline`.
+- **Your checkout stays yours.** Workers write only to their own Git worktree
+  outside your repository. You take the result with `git fetch` and
+  `git merge`, when you choose.
+- **Workers are sandboxed.** A worker cannot read the rest of your home
+  folder or reach the network unless you allow it, and when it needs to run
+  a command outside its sandbox it asks you first.
+- **Checks decide, not the agent.** A task is accepted only when the checks
+  you named pass on its commit. Optional cross-review sends the diff to a
+  model from another vendor before acceptance.
+- **Shared limits are respected.** Shoestring reads each provider's
+  remaining subscription usage, keeps a reserve, and asks you when it cannot
+  tell. A grant caps how many tasks, how much time and which models a
+  coordinator may use.
+- **Nothing is lost.** Goals, plans, runs, checks and reviews are recorded in
+  a local SQLite database and survive restarts, crashes and provider changes.
 
-The timeline is currently a development/demo surface. The repository does not
-yet contain an authentication plug, authenticated `live_session`, or
-`on_mount` current-scope convention. A nil `current_scope` is therefore the
-explicit single-local-user mode, not an authentication boundary; present scope
-maps must identify the goal owner. Authentication must replace local mode before
-`SHOESTRING_BIND` is used for non-loopback or multi-user exposure. Do not expose
-the timeline to untrusted or shared users until that boundary is established.
+## Two ways to work
 
-## Architecture
+| | `shoestring do` | `shoestring chat` |
+| --- | --- | --- |
+| You give it | one request in plain words | a conversation |
+| Who plans | Claude drafts a plan; you approve it before anything runs | a coordinator agent (Claude Code, Codex or opencode) that splits work into dispatches |
+| What runs | that plan's tasks, one goal at a time | EXPLORE (read-only questions), IMPLEMENT and REVIEW dispatches, within a grant you set |
+| Best for | a single, well-defined change | larger work, investigation, several tasks, mixing vendors |
 
-```text
-Phoenix LiveView timeline
-          │  replay + PubSub hints
-          ▼
-Shoestring trajectory boundary
-          │
-          ├── per-goal append writers
-          ├── canonical SQLite event stream
-          ├── deterministic goal/task projectors
-          ├── bounded artifact store
-          └── ordered, redacted JSONL fixtures
+**Start with `shoestring do`.** It has the fewest moving parts and shows the
+whole loop — plan, approve, run, check, merge — on one change. Move to
+`shoestring chat` when you want an agent to break work down for you.
 
-Future harness adapters
-          │
-          └── Claude Code, Codex, and other external executors
-```
+## Get started
 
-This makes Shoestring closer to a supervisor/control plane than a “meta
-harness.” It may supervise multiple harnesses, but the harnesses remain
-replaceable execution providers. The longer-term product vocabulary is:
+The [getting-started guide](docs/getting-started.md) walks one path from a
+fresh Mac to a merged result:
 
-- **Cobbler**: a per-goal supervisor that plans, dispatches, waits, verifies,
-  and replans.
-- **Elf**: a bounded worker run performed through a harness adapter.
-- **Harness adapter**: the provider-specific launch, observation, cancellation,
-  and resume integration.
-- **Trajectory**: the append-only durable record that survives restarts,
-  provider changes, and model-conversation loss.
+1. Install the prerequisites and build Shoestring from source.
+2. Initialize state and run `shoestring setup` to pick your agents.
+3. Start the service and leave it running.
+4. In a clean Git repository, run your first `shoestring do`.
+5. Watch it, then inspect and merge the verified commit.
 
-## Product interface
-
-REPO-INSPECTION: an Omnigent-style orchestrator is in progress in
-[iteration 14](plans/milestones/14-coordinator-orchestration.md): you chat with
-Claude Code, Codex or opencode as the coordinator, and it dispatches sandboxed
-Elves through Shoestring under an allowance you grant. `shoestring chat`,
-grants, IMPLEMENT dispatches, `wait` and `runs` exist
-([working with a coordinator](docs/coordinator.md)); EXPLORE and REVIEW
-dispatches and advice do not yet. The CLI workflow below handles one request
-at a time.
-
-### One command (iteration 7A)
-
-From any clean Git repository, with the service running (`shoestring start`
-for an installed release, or `mix phx.server` in this checkout with `bin/` on
-your `PATH`):
+The short version, once the prerequisites are installed:
 
 ```sh
-shoestring do "make add() return the sum of its arguments"
-```
-
-Shoestring records a goal at your `HEAD`, has Claude draft a plan (tool-free,
-through your subscription), and shows it. Nothing runs until you answer `y`.
-It then queues the work for the service, which runs sandboxed Elves in private
-copies of the repository, follows progress, asks you when something waits for
-you, and finishes with the verified commit and the `git fetch`/`git merge`
-commands to take it. It never changes your checkout. One-time setup and
-details: [the CLI work loop](docs/cli-work-loop.md).
-
-The installed `shoestring` and the checkout's `bin/shoestring` are the same
-command (iteration 12): data on stdout, messages on stderr, `--json` on every
-command that prints data, one-line refusals. See
-[the CLI output contract](docs/cli-output.md).
-
-### Step by step
-
-The agreed product direction puts work, execution, and approvals in the CLI.
-The web UI provides Usage, Agents and Settings: reported provider/account
-allowances, named orchestrators with configurable team roles, and shared defaults.
-Agent edits create immutable revisions. The CLI reads the same saved configuration:
-
-```sh
-shoestring agents list
-shoestring agents show builder
-shoestring agents show builder --revision 1
-```
-
-Work starts from a goal. `shoestring goals create --title "..."` records
-one and prints its `id`, the GOAL argument of the plan and execution commands;
-`shoestring goals list` shows existing goals. In the checkout each command is
-also a Mix task (`mix shoestring.goals list`).
-
-REPO-INSPECTION: plan review, immutable JSON edits and exact-revision decisions
-are available through `shoestring plans`. It starts only the repository and
-does not dispatch work. See [the CLI plan review workflow](docs/cli-plan-review.md)
-for import/export, approval/rejection and stored planner quota display.
-
-Here `builder` is an example saved agent name. REPO-INSPECTION: sequential executor
-integration, saved-profile execution binding and bounded amendment/replan are
-implemented. Iteration 6 was accepted on 2026-10-13 (its
-[closure packet](plans/evidence/06-cobbler-planning/final-acceptance.md)), and
-iterations 7 and 7A on 2026-10-16. See the
-[configuration and usage UI milestone](plans/milestones/configuration-and-usage-ui.md)
-and [implementation evidence](plans/evidence/06-cobbler-planning/configuration-and-usage.md).
-
-## Local development
-
-### Requirements
-
-The verified development environment is macOS arm64 with Elixir 1.19, Erlang/
-OTP 28, and SQLite 3.43. Other platforms may work, but are not currently a
-release claim. Node.js is not required by the application runtime; the checked
-in asset bundle and JavaScript gate are part of development verification.
-
-`python3` on `PATH` is required by the Elf process runner
-(`Shoestring.Elves.PortRunner`): each harness command is launched through a
-small `python3` wrapper that creates a new process group (`os.setsid()`),
-redirects stdin from `/dev/null`, and `exec`s the target argv, so
-cancellation can reliably terminate the whole owned group. Without it, Elf
-runs fail closed with `error_code: "setsid_unavailable"` in the durable
-`run.failed` event. Iteration 9 (or earlier hardening) is expected to replace
-the wrapper with a small compiled C shim in `c_src/` (or `:erlexec`): the
-interpreter costs roughly 30-50ms per spawn and the host `PYTHONPATH` leaks
-into the launch environment.
-
-Install Elixir and Erlang, then prepare dependencies, the state directory, and
-the SQLite database:
-
-```sh
+git clone https://github.com/anukin/shoestring.git
+cd shoestring
 mix setup
+mix chat_client.check                   # builds the terminal chat screen
+ln -s "$PWD/bin/shoestring" /usr/local/bin/shoestring
+shoestring setup                        # check agent CLIs, choose the default agent
+mix phx.server                          # leave running; UI at http://localhost:4000
 ```
 
-Start the loopback development server:
+Then, in another terminal:
 
 ```sh
-mix phx.server
+cd ~/code/my-project                    # a clean Git repository
+shoestring do "make add() return the sum of its arguments" --test test/test_calc.py
 ```
 
-Open <http://localhost:4000> for Usage, Agents and Settings. The diagnostic
-health screen remains at <http://localhost:4000/status>. The machine-readable
-health endpoint is <http://127.0.0.1:4000/health>; it returns HTTP 503 when a
-required local component is unavailable.
+## The web UI
 
-### Verification
+The service serves a local UI at <http://localhost:4000>:
 
-```sh
-mix format --check-formatted
-mix compile --warnings-as-errors
-mix test
-mix precommit
-```
+| Page | What it shows |
+| --- | --- |
+| **Usage** | each provider account's reported allowance, its reset times, and whether the reading is fresh |
+| **Teams** | named teams that assign an agent to each role (Coordinator, Explorer, Implementer, Reviewer) |
+| **Agents** | each agent's model, time limit, sandbox and extra permissions |
+| **Sessions** | coordinator sessions, what each agent is doing, and anything waiting for you |
+| **Lessons** | per-repository rules agents have proposed, and your decisions on them |
+| **Settings** | shared defaults such as how many tasks may run at once |
 
-Tests use isolated SQLite state and do not require vendor executables,
-provider credentials, or network access.
+| Usage | Teams |
+| --- | --- |
+| ![Usage](docs/images/usage.png) | ![Teams](docs/images/teams.png) |
+| **Agents** | **Lessons** |
+| ![Agents](docs/images/agents.png) | ![Lessons](docs/images/lessons.png) |
 
-`mix precommit` runs the suite as 16 partitions, 8 at a time
-(`mix test.partitioned`). While changing code, run the affected test files
-(`mix test path/to/file_test.exs`) and `mix test --failed` instead;
-`mix test --stale` is not much shorter here, since a change to a widely used
-module marks most of the suite stale. Run `mix precommit` before merging.
+Work itself is started, approved and integrated from the CLI; the UI is for
+configuration, oversight and answering questions. Screenshots show synthetic
+data (see [`tools/screenshots`](tools/screenshots/README.md)).
 
-To recreate the test database explicitly:
+## How it works
 
-```sh
-MIX_ENV=test mix ecto.reset
-```
-
-## Durable state
-
-`Shoestring.State` is the single path resolver. A state root contains:
+Shoestring is a **supervisor**, not an agent. It owns the durable record —
+goals, plans, tasks, runs, checks, reviews — and treats each agent CLI as a
+replaceable worker behind an adapter.
 
 ```text
-<state root>/
-  shoestring.db
-  artifacts/
-  worktrees/
-  logs/
-  run/
+you ── shoestring do / chat ──▶ Shoestring service (local, loopback only)
+                                   │  plans, grants, admission against usage
+                                   │  durable SQLite trajectory
+                                   ▼
+                     sandboxed workers in private worktrees
+                     (Claude Code · Codex · opencode)
+                                   │
+                                   ▼
+                     checks ─▶ optional cross-vendor review ─▶ verified commit
 ```
 
-Defaults are environment-specific:
+The vocabulary you will meet in the CLI and docs — Cobbler, Elf, grant,
+dispatch, trajectory — is explained in [concepts](docs/concepts.md).
 
-- Development: `<repository>/.shoestring/dev`
-- Test: a unique directory under the system temporary directory
-- macOS production: `~/Library/Application Support/Shoestring`
-- Other Unix production: `$XDG_STATE_HOME/shoestring`, or
-  `~/.local/state/shoestring`
+## Documentation
 
-`SHOESTRING_STATE_DIR` overrides development and production. Tests use only
-`SHOESTRING_TEST_STATE_DIR`, so a real development or production state root
-cannot be selected accidentally.
+The [documentation index](docs/README.md) is organised by task: install,
+first run, working with `do` or `chat`, configuring agents and teams,
+upgrading, troubleshooting, and reference material.
 
-Artifact storage uses the configured bounded root and falls back to the
-`artifacts/` directory under this same state root. Provider credentials and
-authentication state are not persisted by Shoestring.
+## Contributing and security
 
-## Durable trajectory boundary
-
-The canonical event stream is `trajectory_events`. It is append-only and
-ordered by a positive sequence unique within each goal; wall-clock order is not
-used for replay. Public appends assign event identity, ownership, relationships,
-and sequence at the domain boundary. Raw callers cannot forge those fields.
-
-The public domain APIs are exposed under `Shoestring.Trajectory`:
-
-- `append/3` validates and commits one event, with bounded retry and
-  idempotency behavior.
-- `replay/2` returns a goal's canonical history in sequence order.
-- `stream/2` returns an ordered replay-backed stream.
-- `Shoestring.Trajectory.Projector` applies or rebuilds derived goal/task
-  state.
-- `Shoestring.Trajectory.ArtifactStore` writes and verifies bounded artifacts.
-- `Shoestring.Trajectory.JSONL` exports, decodes, and replays portable
-  fixtures.
-
-Unknown event types, schema versions, malformed envelopes, incompatible
-projection history, sequence gaps, and artifact integrity failures are visible
-errors. Canonical history is never rewritten to make a projection or export
-appear successful.
-
-## Roadmap
-
-REPO-INSPECTION: durable harness execution, quota-aware admission/continuation,
-approved sequential plans, worktree gates and bounded amendment are implemented.
-The [iteration-6 acceptance packet](plans/evidence/06-cobbler-planning/final-acceptance.md)
-separates deterministic checks, the successful live receipt run and retained limits.
-
-Planned follow-ups are concurrent isolated workers and shared reservations,
-bounded cross-provider review, and installable releases with diagnostics and
-optional forecasting/adapters. Production subscription planning is a separate
-integration gap: importing a saved subscription-model proposal does not establish
-admission/accounting for subscription planner inference. The older browser-terminal
-milestone needs reconciling with the agreed CLI work interface. Authentication
-also remains necessary before shared/non-loopback exposure. See the
-[current milestone record](plans/milestones/06-cobbler-planning.md).
-
-Iteration 10 is in progress. Repository-only [run measurements](docs/measurements.md)
-and [shadow forecast reports](docs/shadow-forecasts.md) expose provenance, missing
-data and fallback without changing admission. Forecast-assisted routing remains
-disabled; adapter, release and diagnostic work is tracked separately in the
-[iteration 10 evidence](plans/evidence/10-forecasting-packaging/README.md).
-The repository-only [diagnostic command](docs/diagnostics.md) previews a bounded
-sanitized bundle and requires its exact digest before creating a private export.
-Optional [local and capped API text adapters](docs/text-adapters.md) use durable
-once-only requests and operator policy. [Release tooling](docs/releases.md)
-provides native packaging, private initialization, backup-before-upgrade,
-doctor checks and a foreground launcher. Real calibration and external
-clean-machine installation remain separate acceptance checks.
-
-## Production release
-
-Build assets and a self-contained release:
-
-```sh
-MIX_ENV=prod mix assets.deploy
-MIX_ENV=prod mix release
-```
-
-Choose a private writable state directory and use the foreground release launcher:
-
-```sh
-export SHOESTRING_STATE_DIR="$PWD/.state"
-_build/prod/rel/shoestring/bin/shoestringctl doctor
-_build/prod/rel/shoestring/bin/shoestringctl start
-```
-
-The launcher initializes a persistent private endpoint secret and migrates
-SQLite before starting the loopback UI. Initialize without the endpoint with:
-
-```sh
-_build/prod/rel/shoestring/bin/shoestringctl init
-```
-
-Check the running endpoint:
-
-```sh
-curl --fail http://127.0.0.1:4000/health
-```
-
-Runtime settings include `PORT`, `PHX_HOST`, `POOL_SIZE`, and
-`DNS_CLUSTER_QUERY`. `SHOESTRING_BIND` can select another bind address; the
-default is loopback. Keep `SECRET_KEY_BASE` outside source control.
+- [CONTRIBUTING.md](CONTRIBUTING.md): development setup (Elixir, Erlang,
+  Rust, Python, Node), the gate (`mix precommit`), hermetic-test rules and
+  how to report bugs.
+- [SECURITY.md](SECURITY.md): how to report a vulnerability privately, and
+  the trust boundary Shoestring is designed for (one local user, loopback
+  only).
+- [CHANGELOG.md](CHANGELOG.md): what has changed.
 
 ## License
 
-Shoestring is released under the [MIT License](LICENSE).
+Shoestring is released under the [MIT License](LICENSE). Release packages
+carry that license and the notices of every bundled third-party component
+(`THIRD_PARTY_NOTICES.md`).

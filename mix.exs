@@ -57,6 +57,11 @@ defmodule Shoestring.MixProject do
     unless File.regular?(chat) and Bitwise.band(File.stat!(chat).mode, 0o111) != 0,
       do: Mix.raise("Release is missing its executable native chat client")
 
+    # LICENSE and THIRD_PARTY_NOTICES.md at the release root, written before
+    # the file hashes below so the sealed archive carries them. Refuses the
+    # release when a bundled component's license text cannot be found.
+    Shoestring.Release.Notices.write!(release.path, version: to_string(release.version))
+
     {os_version, 0} = System.cmd("/usr/bin/sw_vers", ["-productVersion"])
     {revision, status} = System.cmd("git", ["rev-parse", "HEAD"], stderr_to_stdout: true)
 

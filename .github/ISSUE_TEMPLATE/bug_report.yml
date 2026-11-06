@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in Shoestring does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Security problems go to SECURITY.md instead.
+        **Never paste tokens, credentials, state-directory files or private
+        repository contents.** Redact paths and identifiers you do not want public.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands (`shoestring do ...`, `shoestring chat ...`) or UI steps.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Shoestring version or commit
+      description: Release version, or `git rev-parse HEAD` in your checkout.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run Shoestring
+      options:
+        - Source checkout (bin/shoestring, mix phx.server)
+        - Locally built release
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: macOS version and chip
+      placeholder: macOS 26.1, Apple M3
+    validations:
+      required: true
+  - type: textarea
+    id: agents
+    attributes:
+      label: Agent CLIs involved
+      description: Which of Claude Code, Codex, opencode, and their versions.
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`shoestring doctor --json` output"
+      description: It contains no credentials. Plain `doctor` does not contact providers.
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: "`shoestring follow`, `runs show` or `runs log` lines, the goal or dispatch id, error messages."
+      render: text
