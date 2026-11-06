@@ -22,6 +22,8 @@ def package(source, destination, allow_dirty=False):
     helper = source / f"lib/shoestring-{version}/priv/bin/shoestring-terminal"
     assert hashlib.sha256(helper.read_bytes()).hexdigest() == manifest["helper_sha256"]
     assert (source / "bin/shoestringctl").is_file()
+    assert (source / "LICENSE").is_file(), "Release is missing its LICENSE"
+    assert (source / "THIRD_PARTY_NOTICES.md").is_file(), "Release is missing THIRD_PARTY_NOTICES.md"
     entries = sorted(source.rglob("*"))
     for path in entries:
         assert path.resolve().is_relative_to(source), "External release symlink refused"

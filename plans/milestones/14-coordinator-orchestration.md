@@ -1,6 +1,8 @@
 # Iteration 14: coordinator-driven orchestration
 
-**Status:** proposed — next planned iteration; not implemented or accepted.
+**Status:** implemented and extended by iterations 15–18; see
+[working with a coordinator](../../docs/coordinator.md). This plan is kept as
+written when proposed (2026-10-25).
 **Hard dependencies:** iterations 6, 7, 7A, 8, 12 and 13 (durable plans,
 fan-out, CLI work loop, verification/review, installed CLI and the opencode
 adapter).
