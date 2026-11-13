@@ -554,6 +554,7 @@ defmodule ShoestringWeb.CobblerGoalLive do
       _authority ->
         case Cobbler.plan_execution_status(goal_id) do
           {:ok, %{planned?: true, completed?: true}} -> :planned_complete
+          {:ok, %{planned?: true, needs_user?: true}} -> :planned_needs_user
           {:ok, %{planned?: true}} -> :planned_incomplete
           _other -> :unplanned
         end

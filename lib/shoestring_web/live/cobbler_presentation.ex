@@ -61,12 +61,17 @@ defmodule ShoestringWeb.CobblerPresentation do
   function never raises.
   """
   @spec derive_goal_state([term()]) :: atom()
-  def derive_goal_state(timeline) when is_list(timeline) do
+  def derive_goal_state(timeline) when is_list(timeline),
+    do: fold_timeline(timeline, &timeline_step/2)
+
+  def derive_goal_state(_timeline), do: :unknown
+
+  defp fold_timeline(timeline, step) do
     timeline
     |> with_order()
     |> Enum.sort_by(fn {sequence, _entry, index} -> {sequence, index} end)
     |> Enum.reduce_while(GoalLifecycle.initial(), fn {_sequence, entry, _index}, state ->
-      case timeline_step(state, entry) do
+      case step.(state, entry) do
         {:ok, next} -> {:cont, next}
         :skip -> {:cont, state}
         :unknown -> {:halt, :unknown}
@@ -75,8 +80,6 @@ defmodule ShoestringWeb.CobblerPresentation do
   rescue
     _error -> :unknown
   end
-
-  def derive_goal_state(_timeline), do: :unknown
 
   @doc """
   Derives a presentational goal lifecycle state from ordered admission
@@ -120,10 +123,22 @@ defmodule ShoestringWeb.CobblerPresentation do
   `:working` instead. Every other status — including `:planned_complete`
   and `:unplanned` — folds exactly as `derive_goal_state/1`, so ordinary
   unplanned-goal behavior is preserved byte for byte.
+
+  A plan runs task after task, so one task's run ending is not the goal's:
+  for a planned goal the fold skips the plan executor's own events and,
+  where an event cannot follow a task's terminal (its claim released, the
+  next task admitted), starts the next task's cycle from `:evaluating`
+  (iteration 19: every planned goal used to show "Unknown goal state.").
+  `:planned_complete` now shows `:completed`; `:planned_needs_user` (the
+  executor stopped for a person: a decision, an escalation) shows
+  `:plan_needs_user`.
   """
   @spec derive_goal_state_for_plan([term()], atom()) :: atom()
-  def derive_goal_state_for_plan(timeline, :planned_incomplete) do
-    case derive_goal_state(timeline) do
+  def derive_goal_state_for_plan(_timeline, :planned_complete), do: :completed
+  def derive_goal_state_for_plan(_timeline, :planned_needs_user), do: :plan_needs_user
+
+  def derive_goal_state_for_plan(timeline, :planned_incomplete) when is_list(timeline) do
+    case fold_timeline(timeline, &plan_step/2) do
       :completed -> :working
       :failed -> :working
       other -> other
@@ -131,6 +146,22 @@ defmodule ShoestringWeb.CobblerPresentation do
   end
 
   def derive_goal_state_for_plan(timeline, _plan_status), do: derive_goal_state(timeline)
+
+  @task_terminals [:completed, :failed, :needs_user]
+
+  defp plan_step(state, entry) do
+    case timeline_step(state, entry) do
+      :unknown when state in @task_terminals ->
+        case timeline_step(:evaluating, entry) do
+          {:ok, next} -> {:ok, next}
+          :skip -> {:ok, :evaluating}
+          :unknown -> :unknown
+        end
+
+      other ->
+        other
+    end
+  end
 
   @doc """
   Visual presentation (label, dot, badge, icon) for a goal lifecycle state.
@@ -243,6 +274,19 @@ defmodule ShoestringWeb.CobblerPresentation do
       badge_class: "bg-red-100 text-red-900",
       icon: "hero-x-circle",
       status: "failed"
+    }
+  end
+
+  def lifecycle_presentation(:plan_needs_user) do
+    %{
+      label: "Needs you.",
+      detail:
+        "The plan stopped for a person: a choice to make, or a task that stopped. " <>
+          "The choice or the stop and its commands are below; nothing goes on until you decide.",
+      dot_class: "bg-purple-500",
+      badge_class: "bg-purple-100 text-purple-900",
+      icon: "hero-hand-raised",
+      status: "plan-needs-user"
     }
   end
 
@@ -844,7 +888,11 @@ defmodule ShoestringWeb.CobblerPresentation do
     "dispatch.",
     "harness.",
     "elf.",
-    "decision."
+    "decision.",
+    # The plan executor's own record (revisions, task acceptance, gates,
+    # decision points): the lifecycle follows admission, claims and runs,
+    # and a planned goal's whole-plan state comes from the executor.
+    "cobbler.plan."
   ]
 
   defp with_order(timeline) do
@@ -939,9 +987,13 @@ defmodule ShoestringWeb.CobblerPresentation do
         {:ok, next}
 
       :unknown ->
-        case {state, event} do
-          {:dispatching, {:command_outcome, :claimed}} -> {:ok, :dispatching}
-          {:evaluating, {:command_outcome, :released}} -> {:ok, :evaluating}
+        # Compare the normalized kind: a release recorded on the command's
+        # accepted event carries the string "released", not the atom.
+        {:command_outcome, kind} = event
+
+        case {state, normalize_command_outcome(kind)} do
+          {:dispatching, {:ok, :claimed}} -> {:ok, :dispatching}
+          {:evaluating, {:ok, :released}} -> {:ok, :evaluating}
           _other -> :unknown
         end
     end

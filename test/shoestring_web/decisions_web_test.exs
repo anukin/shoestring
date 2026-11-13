@@ -294,6 +294,9 @@ defmodule ShoestringWeb.DecisionsWebTest do
       card = "#decision-#{ctx.decision.id}"
       assert has_element?(view, "#cobbler-plan-decisions #{card}")
 
+      # The header says the plan waits for a person, not "Unknown goal state."
+      assert has_element?(view, "#cobbler-goal-status[data-status='plan-needs-user']")
+
       view |> element("#{card}-choose-blue") |> render_click()
 
       assert has_element?(
