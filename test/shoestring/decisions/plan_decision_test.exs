@@ -193,6 +193,23 @@ defmodule Shoestring.Decisions.PlanDecisionTest do
     assert is_nil(Shoestring.Cobbler.Commands.active_claim())
   end
 
+  test "two goals running the same plan each get their own decision",
+       %{goal: goal, worktree: worktree} do
+    write_candidates!(worktree)
+    other = CobblerHelpers.create_goal!()
+
+    assert %{disposition: :accepted} = run_sheets!(goal, worktree)
+    assert %{disposition: :accepted} = run_sheets!(other, worktree)
+
+    mine = pending!(goal)
+    theirs = pending!(other)
+    assert mine.id != theirs.id
+    assert mine.execution_id == theirs.execution_id
+
+    assert {:ok, _} = Decisions.answer(theirs.id, "red", nil, "human:test", no_resume())
+    assert %Decision{state: "pending"} = Decisions.get(mine.id)
+  end
+
   # --------------------------------------------------------------------------
   # "None of these"
   # --------------------------------------------------------------------------

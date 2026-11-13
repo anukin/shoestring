@@ -59,6 +59,36 @@ pub struct Ask {
     pub kind: String,
 }
 
+/// A decision a plan waits on (iteration 19): a task produced candidates and
+/// the person chooses one. The candidates themselves are on the web page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Decision {
+    pub id: String,
+    pub dispatch: String,
+    pub task: String,
+    pub question: String,
+    pub note: String,
+    pub allow_reject: bool,
+    /// Each option's key and label, in the plan's order.
+    pub options: Vec<(String, String)>,
+    /// The goal page where the candidates can be seen.
+    pub page_url: String,
+}
+
+/// The key that picks the `index`th option: 1-9, then a, b, c (at most 12).
+pub fn option_key(index: usize) -> Option<char> {
+    match index {
+        0..=8 => char::from_digit(index as u32 + 1, 10),
+        9..=11 => Some((b'a' + (index - 9) as u8) as char),
+        _ => None,
+    }
+}
+
+/// The option a key picks, if any.
+pub fn option_index(key: char, options: usize) -> Option<usize> {
+    (0..options).find(|&i| option_key(i) == Some(key))
+}
+
 /// A lesson approved in the session's repository (`docs/chat-channel.md`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lesson {
@@ -127,6 +157,14 @@ pub struct Model {
     pub asks_later: std::collections::HashSet<String>,
     /// A denial whose reason is being typed.
     pub deny_reason: Option<(Ask, String)>,
+    /// What the session's plans wait on the person to choose, oldest first.
+    pub decisions: Vec<Decision>,
+    pub decisions_answered: std::collections::HashSet<String>,
+    pub decisions_later: std::collections::HashSet<String>,
+    /// An option picked and waiting for its confirmation.
+    pub decision_pick: Option<(Decision, usize)>,
+    /// A "none of these" whose note is being typed.
+    pub decision_reject: Option<(Decision, String)>,
     pub lessons_seen: std::collections::HashSet<String>,
     pub lessons_loaded: bool,
     /// A lesson the person is asked to confirm retiring.
@@ -363,6 +401,7 @@ impl Model {
         self.web_url = state["web_url"].as_str().map(clean_line);
         self.apply_lessons(&state["lessons"]);
         self.apply_asks(&state["asks"]);
+        self.apply_decisions(&state["decisions"]);
         self.capacity = state["capacity"]["providers"]
             .as_array()
             .into_iter()
@@ -398,6 +437,51 @@ impl Model {
             self.asks.iter().map(|a| a.id.clone()).collect();
         self.asks_answered.retain(|id| listed.contains(id));
         self.asks_later.retain(|id| listed.contains(id));
+    }
+
+    /// The decisions the service lists; an answer sent hides its decision at once.
+    fn apply_decisions(&mut self, decisions: &Value) {
+        let Some(decisions) = decisions.as_array() else {
+            return;
+        };
+        let text = |d: &Value, k: &str| clean(d[k].as_str().unwrap_or_default());
+        self.decisions = decisions
+            .iter()
+            .filter_map(|d| {
+                Some(Decision {
+                    id: clean_line(d["decision_id"].as_str()?),
+                    dispatch: clean_line(d["dispatch_id"].as_str().unwrap_or_default()),
+                    task: clean_line(d["task"].as_str().unwrap_or_default()),
+                    question: text(d, "question"),
+                    note: text(d, "note"),
+                    allow_reject: d["allow_reject"].as_bool() == Some(true),
+                    options: d["options"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .take(12)
+                        .filter_map(|o| {
+                            Some((
+                                clean_line(o["key"].as_str()?),
+                                clean_line(o["label"].as_str()?),
+                            ))
+                        })
+                        .collect(),
+                    page_url: clean_line(d["page_url"].as_str().unwrap_or_default()),
+                })
+            })
+            .collect();
+        let listed: std::collections::HashSet<String> =
+            self.decisions.iter().map(|d| d.id.clone()).collect();
+        self.decisions_answered.retain(|id| listed.contains(id));
+        self.decisions_later.retain(|id| listed.contains(id));
+    }
+
+    /// The decision to show now: the oldest neither answered nor put off.
+    pub fn current_decision(&self) -> Option<&Decision> {
+        self.decisions.iter().find(|d| {
+            !self.decisions_answered.contains(&d.id) && !self.decisions_later.contains(&d.id)
+        })
     }
 
     /// The ask to show now: the oldest neither answered nor put off.

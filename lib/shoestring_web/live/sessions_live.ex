@@ -161,6 +161,19 @@ defmodule ShoestringWeb.SessionsLive do
     end
   end
 
+  # A decision a plan waits on (iteration 19): choose a candidate, or
+  # "none of these" with the note it needs. The first answer wins.
+  def handle_event("choose", %{"decision" => id, "choice" => choice}, socket),
+    do: {:noreply, decided(socket, id, choice, nil)}
+
+  def handle_event("reject_decision", %{"decision" => id, "note" => note}, socket) do
+    if String.trim(to_string(note)) == "" do
+      {:noreply, assign(socket, reason_error: "Say why none of these will do.")}
+    else
+      {:noreply, decided(socket, id, "reject", note)}
+    end
+  end
+
   def handle_event("start_held", %{"dispatch" => id}, socket) do
     socket =
       case Attention.start_held(socket.assigns.session_id, id, WorkLoop.default_human()) do
@@ -184,6 +197,28 @@ defmodule ShoestringWeb.SessionsLive do
       case Attention.answer(session, id, decision, WorkLoop.default_human(), note) do
         {:ok, ask} -> put_flash(socket, :info, answer_text(ask, decision, note))
         {:error, reason} -> put_flash(socket, :error, refusal(reason))
+      end
+
+    socket |> assign(reason_for: nil, reason_error: nil) |> refresh()
+  end
+
+  defp decided(socket, id, choice, note) do
+    socket =
+      case Attention.answer_decision(
+             socket.assigns.session_id,
+             id,
+             choice,
+             WorkLoop.default_human(),
+             note
+           ) do
+        {:ok, %{state: "rejected"}} ->
+          put_flash(socket, :info, "None of these: the task waits for you to decide what next.")
+
+        {:ok, _decision} ->
+          put_flash(socket, :info, "Chosen. The next tasks start with it.")
+
+        {:error, reason} ->
+          put_flash(socket, :error, ShoestringWeb.DecisionText.refusal(reason))
       end
 
     socket |> assign(reason_for: nil, reason_error: nil) |> refresh()

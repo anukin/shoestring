@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 
 use shoestring_chat::connection::{self, Config, Outgoing, Shared, lock};
 use shoestring_chat::editor::Command;
-use shoestring_chat::model::{Ask, Connection, Detail, Model};
+use shoestring_chat::model::{Ask, Connection, Decision, Detail, Model, option_index};
 use shoestring_chat::ui;
 
 const FRAME: Duration = Duration::from_millis(33);
@@ -234,6 +234,96 @@ fn send_answer(
     });
 }
 
+/// Sends the person's answer to a decision and hides it until the service drops it.
+fn send_choice(
+    model: &mut Model,
+    outbox: &mpsc::UnboundedSender<Outgoing>,
+    decision: &Decision,
+    choice: &str,
+    note: Option<String>,
+) {
+    if model.connection != Connection::Live {
+        model.note("Disconnected; the choice was not sent");
+        return;
+    }
+    let _ = outbox.send(Outgoing::DecideDecision {
+        id: decision.id.clone(),
+        choice: choice.into(),
+        note: note.filter(|n| !n.is_empty()),
+    });
+    model.decisions_answered.insert(decision.id.clone());
+    model.note(if choice == "reject" {
+        "None of these: the task waits for you to decide what next"
+    } else {
+        "Chosen; the next tasks start with it"
+    });
+}
+
+/// A decision's keys, when one is shown; true when the key was its.
+fn decision_key(
+    model: &mut Model,
+    key: KeyEvent,
+    outbox: &mpsc::UnboundedSender<Outgoing>,
+) -> bool {
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    // "None of these" takes a note, typed until sent or dropped.
+    if let Some((decision, mut note)) = model.decision_reject.take() {
+        match key.code {
+            KeyCode::Enter if !note.trim().is_empty() => send_choice(
+                model,
+                outbox,
+                &decision,
+                "reject",
+                Some(note.trim().to_string()),
+            ),
+            KeyCode::Enter => {
+                model.note("Say why none of these will do");
+                model.decision_reject = Some((decision, note));
+            }
+            KeyCode::Esc => {}
+            KeyCode::Backspace => {
+                note.pop();
+                model.decision_reject = Some((decision, note));
+            }
+            KeyCode::Char(c) if !control && note.chars().count() < 2000 => {
+                note.push(c);
+                model.decision_reject = Some((decision, note));
+            }
+            _ => model.decision_reject = Some((decision, note)),
+        }
+        return true;
+    }
+    // A picked option is sent only once confirmed: a choice cannot be undone.
+    if let Some((decision, index)) = model.decision_pick.take() {
+        if key.code == KeyCode::Char('y') {
+            let choice = decision.options[index].0.clone();
+            send_choice(model, outbox, &decision, &choice, None);
+        }
+        return true;
+    }
+    let Some(decision) = model.current_decision().cloned() else {
+        return false;
+    };
+    match key.code {
+        KeyCode::Char(c) if option_index(c, decision.options.len()).is_some() => {
+            let index = option_index(c, decision.options.len()).unwrap_or(0);
+            model.decision_pick = Some((decision, index));
+        }
+        KeyCode::Char('x') if decision.allow_reject => {
+            model.decision_reject = Some((decision, String::new()))
+        }
+        KeyCode::Char('o') if !decision.page_url.is_empty() => {
+            model.open = Some(decision.page_url.clone())
+        }
+        KeyCode::Esc => {
+            model.decisions_later.insert(decision.id.clone());
+            model.note("The plan keeps waiting; press A to choose");
+        }
+        _ => {}
+    }
+    true
+}
+
 /// Applies one key; true when the person is leaving.
 fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<Outgoing>) -> bool {
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -281,8 +371,14 @@ fn key_pressed(model: &mut Model, key: KeyEvent, outbox: &mpsc::UnboundedSender<
         }
         return false;
     }
-    if key.code == KeyCode::Char('A') && !model.asks_later.is_empty() {
+    if decision_key(model, key, outbox) {
+        return false;
+    }
+    if key.code == KeyCode::Char('A')
+        && !(model.asks_later.is_empty() && model.decisions_later.is_empty())
+    {
         model.asks_later.clear();
+        model.decisions_later.clear();
         return false;
     }
     if let Some(lesson) = model.retire.take() {
@@ -615,6 +711,87 @@ mod tests {
         key(&mut model, KeyCode::Char('y'), &tx);
         assert!(rx.try_recv().is_err());
         assert_eq!(model.current_ask().unwrap().id, "a4");
+    }
+
+    #[test]
+    fn a_decision_is_chosen_by_key_after_a_confirmation_or_refused_with_a_note() {
+        let mut model = Model::new("s1");
+        model.connection = Connection::Live;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let decision = |id: &str, allow_reject: bool| {
+            json!({"decision_id": id, "dispatch_id": "d1", "task": "sheets",
+                   "question": "Which sheet?", "note": "Three takes.",
+                   "allow_reject": allow_reject,
+                   "page_url": "http://localhost:4000/cobbler/goals/g1",
+                   "options": [{"key": "red", "label": "Red"}, {"key": "green", "label": "Green"},
+                               {"key": "blue", "label": "Blue"}]})
+        };
+        model.apply_state(&json!({"decisions": [decision("x1", true), decision("x2", false)]}));
+        assert_eq!(model.current_decision().unwrap().id, "x1");
+
+        // A key past the options, and the composer, get nothing.
+        key(&mut model, KeyCode::Char('4'), &tx);
+        key(&mut model, KeyCode::Char('q'), &tx);
+        assert!(rx.try_recv().is_err());
+        assert!(model.editor.text().is_empty());
+
+        // 2 picks green; any key but y goes back without sending.
+        key(&mut model, KeyCode::Char('2'), &tx);
+        assert_eq!(model.decision_pick.as_ref().map(|(_, i)| *i), Some(1));
+        key(&mut model, KeyCode::Char('n'), &tx);
+        assert!(rx.try_recv().is_err());
+        assert!(model.decision_pick.is_none());
+        key(&mut model, KeyCode::Char('2'), &tx);
+        key(&mut model, KeyCode::Char('y'), &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Outgoing::DecideDecision {
+                id: "x1".into(),
+                choice: "green".into(),
+                note: None
+            }
+        );
+        // Hidden at once; the next one does not offer none of these.
+        assert_eq!(model.current_decision().unwrap().id, "x2");
+        key(&mut model, KeyCode::Char('x'), &tx);
+        assert!(model.decision_reject.is_none());
+
+        // o opens its page; Esc puts it off, A brings it back.
+        key(&mut model, KeyCode::Char('o'), &tx);
+        assert_eq!(
+            model.open.take().unwrap(),
+            "http://localhost:4000/cobbler/goals/g1"
+        );
+        key(&mut model, KeyCode::Esc, &tx);
+        assert!(model.current_decision().is_none());
+        key(&mut model, KeyCode::Char('A'), &tx);
+        assert_eq!(model.current_decision().unwrap().id, "x2");
+
+        // None of these needs its note: Enter on an empty one sends nothing.
+        model.apply_state(&json!({"decisions": [decision("x3", true)]}));
+        key(&mut model, KeyCode::Char('x'), &tx);
+        key(&mut model, KeyCode::Enter, &tx);
+        assert!(rx.try_recv().is_err());
+        for c in "none fit".chars() {
+            key(&mut model, KeyCode::Char(c), &tx);
+        }
+        key(&mut model, KeyCode::Enter, &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Outgoing::DecideDecision {
+                id: "x3".into(),
+                choice: "reject".into(),
+                note: Some("none fit".into())
+            }
+        );
+
+        // Disconnected, nothing is sent and the decision stays.
+        model.apply_state(&json!({"decisions": [decision("x4", true)]}));
+        model.connection = Connection::Reconnecting("lost".into());
+        key(&mut model, KeyCode::Char('1'), &tx);
+        key(&mut model, KeyCode::Char('y'), &tx);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(model.current_decision().unwrap().id, "x4");
     }
 
     #[test]

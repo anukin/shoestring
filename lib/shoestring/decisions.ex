@@ -141,7 +141,8 @@ defmodule Shoestring.Decisions do
   append in the same transaction. `attrs`: `:id`, `:goal_id`,
   `:execution_id`, `:revision_number`, `:plan_digest`, `:plan_task_id`,
   `:attempt`, `:run_id`, `:decision` (the plan's decision map) and
-  `:prepared` (from `prepare/5`). A replay finds the existing row.
+  `:prepared` (from `prepare/5`). The executor calls this only for an
+  attempt not yet resolved, so an existing row is an error, never skipped.
   """
   @spec insert_request(module(), map()) :: {:ok, map()} | {:error, term()}
   def insert_request(repo, attrs) do
@@ -165,7 +166,7 @@ defmodule Shoestring.Decisions do
       updated_at: now
     }
 
-    with {:ok, _} <- repo.insert(row, on_conflict: :nothing, conflict_target: [:id]) do
+    with {:ok, _} <- repo.insert(row) do
       {:ok,
        %{
          "decision_id" => attrs.id,

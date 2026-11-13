@@ -6,6 +6,9 @@ defmodule Shoestring.Attention do
 
     * an ask a worker is waiting on (`Shoestring.PermissionAsks`), answered
       with `answer/5`;
+    * a decision a plan waits on (`Shoestring.Decisions`, iteration 19): a
+      task produced candidates and a person chooses one, answered with
+      `answer_decision/5`. It replaces the dispatch's stopped item;
     * a held dispatch, one whose provider's remaining usage could not be
       confirmed (`Shoestring.Dispatches.confirm_hold/3`), started with
       `start_held/3`;
@@ -26,7 +29,7 @@ defmodule Shoestring.Attention do
   broadcasts, so a screen that shows the count also re-reads it on a timer.
   """
 
-  alias Shoestring.{AgentProfiles, Dispatches, PermissionAsks, Repo, Sessions}
+  alias Shoestring.{AgentProfiles, Decisions, Dispatches, PermissionAsks, Repo, Sessions}
   alias Shoestring.CLI.Commands.Runs
   alias Shoestring.Cobbler.{ExecutionControl, PlanMerge}
   alias Shoestring.Cobbler.Review.Findings
@@ -49,21 +52,42 @@ defmodule Shoestring.Attention do
   one; `Shoestring.Cobbler.ExecutionControl.status/1` otherwise).
   """
   def items(session_id, states \\ %{}, opts \\ []) do
-    dispatches = waiting(session_id, states)
+    decisions = decisions(session_id)
+    deciding = MapSet.new(decisions, & &1.decision.goal_id)
+    dispatches = waiting(session_id, states, deciding)
     status = Keyword.get(opts, :status, &ExecutionControl.status/1)
 
     asks(session_id) ++
+      decisions ++
       for({dispatch, "held"} <- dispatches, do: held_item(dispatch)) ++
       for({dispatch, "needs_you"} <- dispatches, do: stopped_item(dispatch, status))
   end
 
-  # The session's dispatches that wait for the person, with their state.
-  defp waiting(session_id, states) do
+  # The session's dispatches that wait for the person, with their state. A
+  # dispatch whose goal waits on a decision is shown by that decision.
+  defp waiting(session_id, states, deciding) do
     for dispatch <- Dispatches.list(session_id),
         dispatch.state == "started",
+        not MapSet.member?(deciding, dispatch.goal_id),
         state = states[dispatch.id] || Dispatches.state(dispatch),
         state in ~w(held needs_you),
         do: {dispatch, state}
+  end
+
+  @doc "The decisions `session_id`'s dispatches wait on, as items, oldest first."
+  def decisions(session_id) do
+    dispatches = Dispatches.list(session_id)
+    by_goal = Map.new(dispatches, &{&1.goal_id, &1})
+
+    case Map.keys(by_goal) do
+      [] ->
+        []
+
+      goal_ids ->
+        Decisions.list(goal_ids: goal_ids, states: ["pending"])
+        |> Enum.reverse()
+        |> Enum.map(&decision_item(&1, by_goal[&1.goal_id]))
+    end
   end
 
   @doc "The asks `session_id`'s workers are waiting on, as items."
@@ -84,11 +108,14 @@ defmodule Shoestring.Attention do
   """
   def count do
     asks = PermissionAsks.pending()
+    decisions = Decisions.list(states: ["pending"], limit: 1_000)
+    deciding = MapSet.new(decisions, & &1.goal_id)
 
     sessions =
       Sessions.recent(AgentProfiles.settings().session_days, DateTime.utc_now(), counts: false).sessions
 
-    length(asks) + Enum.sum_by(sessions, &length(waiting(&1.session_id, %{})))
+    length(asks) + length(decisions) +
+      Enum.sum_by(sessions, &length(waiting(&1.session_id, %{}, deciding)))
   end
 
   # -- Answering -----------------------------------------------------------------
@@ -118,6 +145,45 @@ defmodule Shoestring.Attention do
   end
 
   def answer(_session_id, _ask_id, _decision, _by, _note), do: {:error, :ask_not_found}
+
+  @doc """
+  The person's answer to a decision a plan of `session_id` waits on: one
+  option's key, or `"reject"` ("none of these", with a note). `session_id`
+  nil answers a decision of a goal no coordinator session owns (the goal
+  page). The first answer wins, from whichever screen (see
+  `Shoestring.Decisions.answer/5`); `{:error, :decision_not_found}` for a
+  decision of another session.
+  """
+  def answer_decision(session_id, decision_id, choice, by, note \\ nil) do
+    with %Decisions.Decision{} = decision <- Decisions.get(decision_id),
+         true <- owned?(session_id, decision) do
+      result = Decisions.answer(decision.id, choice, clip_decision_note(note), by)
+      notify(decision.goal_id)
+      result
+    else
+      _ -> {:error, :decision_not_found}
+    end
+  end
+
+  defp owned?(nil, _decision), do: true
+
+  defp owned?(session_id, decision),
+    do: Enum.any?(Dispatches.list(session_id), &(&1.goal_id == decision.goal_id))
+
+  @doc "Tells the screens of every session whose dispatch runs `goal_id` to re-read."
+  def notify(goal_id) do
+    import Ecto.Query
+
+    Repo.all(
+      from d in Dispatches.Dispatch,
+        where: d.goal_id == ^goal_id and not is_nil(d.session_id),
+        select: d.session_id,
+        distinct: true
+    )
+    |> Enum.each(&changed/1)
+
+    changed(nil)
+  end
 
   @doc """
   The person starts a held dispatch of `session_id`: their confirmation,
@@ -194,6 +260,33 @@ defmodule Shoestring.Attention do
     [{"allow", "Allow once"}] ++
       if(for_agent?(ask), do: [{"allow_agent", "Allow for this agent"}], else: []) ++
       [{"deny", "Deny"}, {"deny_reason", "Deny with a reason"}]
+  end
+
+  @doc "One decision as an item; `dispatch` is the one running its goal, when there is one."
+  def decision_item(decision, dispatch \\ nil) do
+    %{
+      id: "decision-" <> decision.id,
+      kind: :decision,
+      decision: decision,
+      dispatch: dispatch,
+      dispatch_id: dispatch && dispatch.id,
+      agent: dispatch && dispatch.agent,
+      at: decision.inserted_at,
+      title: "A plan waits for you to choose",
+      summary: "Choose: " <> decision.question,
+      subject: decision.question,
+      why: decision.note,
+      note:
+        "Its next tasks start with what you choose. It waits for you: nothing decides " <>
+          "this on a timer." <>
+          if(decision.allow_reject,
+            do: " None of these stops the task for you to decide what next.",
+            else: ""
+          ),
+      choices:
+        Enum.map(decision.options, &{&1["key"], &1["label"]}) ++
+          if(decision.allow_reject, do: [{"reject", "None of these"}], else: [])
+    }
   end
 
   defp held_item(dispatch) do
@@ -390,6 +483,16 @@ defmodule Shoestring.Attention do
             fragment("json_extract(?, '$.error_code')", e.payload) == "supervisor_crash"
     )
   end
+
+  # A decision's note is bounded by `Shoestring.Decisions` (2000).
+  defp clip_decision_note(note) when is_binary(note) do
+    case String.trim(note) do
+      "" -> nil
+      text -> text
+    end
+  end
+
+  defp clip_decision_note(_note), do: nil
 
   defp clip(note) when is_binary(note) do
     case String.trim(note) do

@@ -86,6 +86,7 @@ Sent by the client, each answered with `ok` or `error` and a `reason`:
 | `cancel_dispatch` | `dispatch_id`, `reason` | Cancels one dispatch of this session, recorded as the person's request. The client confirms with the person first. |
 | `confirm_dispatch` | `dispatch_id` | Starts one held dispatch of this session: the person confirms its usage hold themselves, spending none of the grant's pre-approvals (`not_held` when it is not held). The client asks first. |
 | `retire_lesson` | `code` | The person retires an approved lesson of this session's repository (`lesson_not_found`, `lesson_not_approved`). The client asks first. |
+| `decide_decision` | `decision_id`, `choice` (an option's `key`, or `reject`), `note` (required with `reject`) | The person answers a decision one of this session's plans waits on (iteration 19): `decision_not_found` for another session's, `already_answered` once anyone answered it, `decision_withdrawn` when its goal was cancelled, `unknown_option`, `reject_not_allowed`, `note_required`, `note_too_long`. Only a person answers, the first answer wins (the Sessions page and the goal page answer the same decisions), and the plan's next tasks then start with the choice. |
 | `decide_ask` | `ask_id`, `decision` (`allow`, `allow_agent` or `deny`), `note` (optional) | The person answers one of this session's workers' asks (`ask_not_found`, `not_pending` once answered or ended, `ask_gone` when its worker stopped). A denial's `note`, at most 500 bytes, is the reason the worker is told. `allow_agent` also lets the ask's agent run exactly that command again without asking (`not_ruleable` unless the ask's `for_agent` is true, `agent_gone`, `too_many_rules`, `agent_changed`); nothing is decided on an error. The web UI's Sessions page answers the same asks through the same code: the first answer wins, from either screen, and a later one is `not_pending`. |
 | `handoff` | `note` (boolean, default true) | Continues the session in a fresh conversation (see Handoff). Refused with `turn_running` during a turn and `handoff_in_progress` while one is under way, except that `note: false` skips a note turn that is held. |
 
@@ -195,7 +196,16 @@ with it, and Esc puts it off until `A`. A `network` ask (a Claude worker
 reaching a host not on its agent's list) says instead that allowing lets
 its commands reach that host for the rest of the run, and offers only `y`,
 `n` and Esc. The
-worker keeps waiting; nothing answers it on a timer. `/web` opens the web UI. Every popup that needs the person is drawn
+worker keeps waiting; nothing answers it on a timer. `state` also carries
+`decisions`, what the session's plans wait on the person to choose
+(`decision_id`, `dispatch_id`, `goal_id`, `task`, `question`, `note`,
+`allow_reject`, `options` with each `key`, `label`, `media_type` and the
+candidate's `url`, `page_url`, `asked_at`; worker text is redacted). After
+any asks, the oldest is a yellow popup listing each option's label by key
+(1-9, then a-c): a key picks one and only `y` sends it, `x` (when allowed)
+types why none of these will do and Enter sends it, `o` opens the goal
+page where the candidates can be seen, and Esc puts it off until `A`.
+Pictures are shown on the web only. `/web` opens the web UI. Every popup that needs the person is drawn
 the same way: a centred box with a thick border and title in its tone's
 colour (green for news, yellow for a question, red for an action that cannot be undone),
 what it is about, and the answering keys highlighted on their own line. It

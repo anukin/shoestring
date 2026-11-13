@@ -76,6 +76,46 @@
         </div>
       <% end %>
 
+      <%!-- Decisions the plan waits on, or that a person answered (iteration 19) --%>
+      <div
+        :if={@plan_decisions != []}
+        id="cobbler-plan-decisions"
+        class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4"
+      >
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
+          <.icon name="hero-hand-raised" class="w-4 h-4 text-zinc-500" /> Choices
+        </h3>
+        <%= for decision <- @plan_decisions do %>
+          <%= if decision.state == "pending" do %>
+            <ShoestringWeb.AttentionComponents.card
+              item={Shoestring.Attention.decision_item(decision)}
+              reason_for={@reason_for}
+              reason_error={@reason_error}
+            />
+          <% else %>
+            <div id={"plan-decision-#{decision.id}"} class="text-sm text-zinc-700 space-y-1">
+              <p class="font-medium text-zinc-900">
+                {decision.plan_task_id}: {ShoestringWeb.RunPresentation.redact_text(
+                  decision.question
+                )}
+              </p>
+              <p id={"plan-decision-#{decision.id}-state"} data-state={decision.state}>
+                <%= case decision.state do %>
+                  <% "answered" -> %>
+                    Chosen: {decision.answer_key} by {decision.decided_by}
+                  <% "rejected" -> %>
+                    None of these, by {decision.decided_by}: {ShoestringWeb.RunPresentation.redact_text(
+                      decision.answer_note || ""
+                    )}
+                  <% _ -> %>
+                    Withdrawn: the goal was cancelled.
+                <% end %>
+              </p>
+            </div>
+          <% end %>
+        <% end %>
+      </div>
+
       <%!-- Admission decision --%>
       <div
         id="cobbler-admission"

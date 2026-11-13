@@ -526,6 +526,84 @@ defmodule ShoestringWeb.ChatChannelTest do
     assert_push "state", %{"asks" => []}, 5_000
   end
 
+  test "decisions this session's plans wait on are in the state and answered with decide_decision",
+       ctx do
+    import Shoestring.Test.DecisionHelpers
+
+    {:ok, dispatch, :recorded} =
+      Shoestring.Dispatches.create(%{
+        session_id: ctx.session,
+        request_id: "decide",
+        purpose: "implement",
+        provider: "codex",
+        model: "gpt-6-luna",
+        title: "Draw the sheets",
+        brief: @brief,
+        repository: ctx.repo
+      })
+
+    # The dispatch's goal runs a plan with a decision (its fixture goal
+    # already carries a one-task plan).
+    goal = Shoestring.Test.CobblerHelpers.create_goal!()
+
+    Repo.update_all(from(d in Shoestring.Dispatches.Dispatch, where: d.id == ^dispatch.id),
+      set: [goal_id: goal.id]
+    )
+
+    worktree = Path.join(System.tmp_dir!(), "decide-#{Ecto.UUID.generate()}")
+    File.mkdir_p!(worktree)
+    on_exit(fn -> File.rm_rf!(worktree) end)
+    write_candidates!(worktree)
+    run_sheets!(goal, worktree)
+    [decision] = Shoestring.Decisions.list(goal_ids: [goal.id])
+
+    # Another goal's decision, which this session does not own.
+    loose = Shoestring.Test.CobblerHelpers.create_goal!()
+    run_sheets!(loose, worktree)
+    [foreign] = Shoestring.Decisions.list(goal_ids: [loose.id])
+
+    {:ok, _, socket} =
+      subscribe_and_join(ctx.socket, ChatChannel, "conversation:#{ctx.session}", %{})
+
+    assert_push "state",
+                %{
+                  "decisions" => [
+                    %{
+                      "decision_id" => id,
+                      "dispatch_id" => dispatch_id,
+                      "allow_reject" => true,
+                      "options" => options,
+                      "page_url" => page_url
+                    }
+                  ]
+                },
+                5_000
+
+    assert id == decision.id
+    assert dispatch_id == dispatch.id
+    assert Enum.map(options, & &1["key"]) == ["red", "green", "blue"]
+    assert page_url =~ "/cobbler/goals/#{goal.id}"
+
+    for option <- options,
+        do: assert(option["url"] =~ ~r"/goals/#{goal.id}/artifacts/[0-9a-f-]{36}\z")
+
+    ref = push(socket, "decide_decision", %{"decision_id" => foreign.id, "choice" => "red"})
+    assert_reply ref, :error, %{"reason" => "decision_not_found"}, 5_000
+
+    ref = push(socket, "decide_decision", %{"decision_id" => id, "choice" => "reject"})
+    assert_reply ref, :error, %{"reason" => "note_required"}, 5_000
+
+    ref = push(socket, "decide_decision", %{"decision_id" => id, "choice" => "green"})
+    assert_reply ref, :ok, %{}, 5_000
+
+    assert %{state: "answered", answer_key: "green", decided_by: "human:" <> _} =
+             Shoestring.Decisions.get(id)
+
+    ref = push(socket, "decide_decision", %{"decision_id" => id, "choice" => "blue"})
+    assert_reply ref, :error, %{"reason" => "already_answered"}, 5_000
+    assert_push "state", %{"decisions" => []}, 5_000
+  end
+
   test "allow for this agent is offered for one plain command and adds its rule", ctx do
     {:ok, _, socket} =
       subscribe_and_join(ctx.socket, ChatChannel, "conversation:#{ctx.session}", %{})

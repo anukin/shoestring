@@ -32,7 +32,7 @@ defmodule Shoestring.Repo.Migrations.CreatePlanDecisions do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create unique_index(:plan_decisions, [:execution_id, :plan_task_id, :attempt])
+    create unique_index(:plan_decisions, [:goal_id, :execution_id, :plan_task_id, :attempt])
     create index(:plan_decisions, [:goal_id, :state])
     create index(:plan_decisions, [:state])
   end

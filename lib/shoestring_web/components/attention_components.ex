@@ -65,6 +65,86 @@ defmodule ShoestringWeb.AttentionComponents do
     """
   end
 
+  # A decision (iteration 19): the question, each candidate with what it
+  # looks like and a button, and "None of these" with the note it needs.
+  # Candidate bytes come from the loopback-only artifact route; text a
+  # worker wrote (labels, note) is redacted before it is drawn.
+  def card(%{item: %{kind: :decision}} = assigns) do
+    assigns =
+      assign(assigns,
+        decision: assigns.item.decision,
+        reject?: assigns.reason_for == assigns.item.decision.id
+      )
+
+    ~H"""
+    <div id={@item.id} class="ss-attention ss-decision" role="group" aria-label={@item.title}>
+      <h3>{@item.title}</h3>
+      <p class="ss-attention-subject">{RunPresentation.redact_text(@item.subject)}</p>
+      <p :if={@item.why}>{RunPresentation.redact_text(@item.why)}</p>
+      <p>{@item.note}</p>
+      <ul id={"#{@item.id}-options"} class="ss-decision-options">
+        <li
+          :for={option <- @decision.options}
+          id={"#{@item.id}-option-#{option["key"]}"}
+          class="ss-decision-option"
+        >
+          <.candidate goal_id={@decision.goal_id} option={option} />
+          <span class="ss-decision-label">{RunPresentation.redact_text(option["label"])}</span>
+          <span :if={option["source"]} class="ss-small ss-mono">
+            Full file: {option["source"]}
+          </span>
+          <button
+            :if={not @reject?}
+            id={"#{@item.id}-choose-#{option["key"]}"}
+            type="button"
+            class="ss-button ss-primary"
+            phx-click="choose"
+            phx-value-decision={@decision.id}
+            phx-value-choice={option["key"]}
+          >
+            Choose this
+          </button>
+        </li>
+      </ul>
+      <%= if @reject? do %>
+        <form id={"#{@item.id}-reject-form"} class="ss-attention-reason" phx-submit="reject_decision">
+          <input type="hidden" name="decision" value={@decision.id} />
+          <label for={"#{@item.id}-reject-note"}>Why none of these (required)</label>
+          <textarea
+            id={"#{@item.id}-reject-note"}
+            name="note"
+            class="ss-input"
+            rows="2"
+            maxlength="2000"
+            phx-mounted={JS.focus()}
+          ></textarea>
+          <p :if={@reason_error} id={"#{@item.id}-reject-error"} class="ss-notice">
+            {@reason_error}
+          </p>
+          <div class="ss-attention-choices">
+            <button id={"#{@item.id}-reject-submit"} type="submit" class="ss-button ss-primary">
+              None of these
+            </button>
+            <button type="button" class="ss-button" phx-click="reason_back">Back</button>
+          </div>
+        </form>
+      <% else %>
+        <div :if={@decision.allow_reject} class="ss-attention-choices">
+          <button
+            id={"#{@item.id}-reject"}
+            type="button"
+            class="ss-button"
+            phx-click="reason"
+            phx-value-ask={@decision.id}
+          >
+            None of these…
+          </button>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
   def card(%{item: %{kind: :ask}} = assigns) do
     assigns = assign(assigns, :ask_id, assigns.item.ask.id)
 
@@ -120,5 +200,64 @@ defmodule ShoestringWeb.AttentionComponents do
       <% end %>
     </div>
     """
+  end
+
+  attr :goal_id, :string, required: true
+  attr :option, :map, required: true
+
+  @doc "How one candidate looks: a picture, a player, or a link to its bytes."
+  def candidate(assigns) do
+    assigns =
+      assign(assigns,
+        url: ~p"/goals/#{assigns.goal_id}/artifacts/#{assigns.option["artifact_id"]}",
+        kind: candidate_kind(assigns.option["media_type"])
+      )
+
+    assigns = assign(assigns, :excerpt, if(assigns.kind == :text, do: excerpt(assigns.option)))
+
+    ~H"""
+    <%= case @kind do %>
+      <% :image -> %>
+        <a href={@url} target="_blank" rel="noopener">
+          <img
+            src={@url}
+            alt={RunPresentation.redact_text(@option["label"])}
+            class="ss-decision-image"
+            loading="lazy"
+          />
+        </a>
+      <% :video -> %>
+        <video src={@url} controls preload="metadata" class="ss-decision-image"></video>
+      <% :audio -> %>
+        <audio src={@url} controls preload="metadata"></audio>
+      <% :text -> %>
+        <pre :if={@excerpt} class="ss-decision-text" phx-no-format>{@excerpt}</pre>
+        <a href={@url} target="_blank" rel="noopener" class="ss-small">Open the whole text</a>
+      <% _ -> %>
+        <a href={@url} target="_blank" rel="noopener" class="ss-small">
+          Open {@option["media_type"]}
+        </a>
+    <% end %>
+    """
+  end
+
+  defp candidate_kind("image/svg+xml"), do: :file
+  defp candidate_kind("image/" <> _), do: :image
+  defp candidate_kind("video/" <> _), do: :video
+  defp candidate_kind("audio/" <> _), do: :audio
+  defp candidate_kind("text/plain"), do: :text
+  defp candidate_kind(_), do: :file
+
+  # The start of a small text candidate, redacted like any worker text.
+  defp excerpt(option) do
+    case Shoestring.Trajectory.ArtifactStore.read(option["artifact_id"]) do
+      {:ok, %{bytes: bytes}} when byte_size(bytes) <= 65_536 ->
+        if String.valid?(bytes),
+          do: bytes |> String.slice(0, 600) |> RunPresentation.redact_text(),
+          else: nil
+
+      _ ->
+        nil
+    end
   end
 end

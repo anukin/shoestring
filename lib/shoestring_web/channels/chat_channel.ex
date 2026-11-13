@@ -209,6 +209,7 @@ defmodule ShoestringWeb.ChatChannel do
       "capacity" => Capacity.report(),
       "lessons" => lessons(conversation, grant),
       "asks" => asks(conversation),
+      "decisions" => decisions(conversation),
       "web_url" => ShoestringWeb.Endpoint.url()
     }
   end
@@ -229,6 +230,38 @@ defmodule ShoestringWeb.ChatChannel do
         # Whether "allow for this agent" is offered: one plain command.
         "for_agent" => {"allow_agent", "Allow for this agent"} in item.choices,
         "asked_at" => ask.inserted_at
+      }
+    end
+  end
+
+  # The decisions this session's plans wait on (iteration 19): the client
+  # shows each as an attention item with its options' keys and labels, and
+  # the web page where the candidates can be seen. Text a worker wrote is
+  # redacted here, as the web cards redact it.
+  defp decisions(conversation) do
+    base = ShoestringWeb.Endpoint.url()
+    redact = &ShoestringWeb.RunPresentation.redact_text/1
+
+    for %{decision: decision} = item <- Shoestring.Attention.decisions(conversation.session_id) do
+      %{
+        "decision_id" => decision.id,
+        "dispatch_id" => item.dispatch_id,
+        "goal_id" => decision.goal_id,
+        "task" => decision.plan_task_id,
+        "question" => redact.(decision.question),
+        "note" => decision.note && redact.(decision.note),
+        "allow_reject" => decision.allow_reject,
+        "options" =>
+          Enum.map(decision.options, fn option ->
+            %{
+              "key" => option["key"],
+              "label" => redact.(option["label"]),
+              "media_type" => option["media_type"],
+              "url" => "#{base}/goals/#{decision.goal_id}/artifacts/#{option["artifact_id"]}"
+            }
+          end),
+        "page_url" => "#{base}/cobbler/goals/#{decision.goal_id}",
+        "asked_at" => decision.inserted_at
       }
     end
   end
@@ -348,6 +381,26 @@ defmodule ShoestringWeb.ChatChannel do
     end
   end
 
+  # The person answers a decision a plan of this session waits on: one
+  # option's key, or "reject" with the note it needs. The Sessions page and
+  # the goal page answer through the same `Attention.answer_decision/5`;
+  # the first answer wins.
+  def handle_in("decide_decision", %{"decision_id" => id, "choice" => choice} = payload, socket)
+      when is_binary(id) and is_binary(choice) do
+    session = socket.assigns.conversation.session_id
+
+    case Shoestring.Attention.answer_decision(
+           session,
+           id,
+           choice,
+           WorkLoop.default_human(),
+           payload["note"]
+         ) do
+      {:ok, _} -> {:reply, :ok, socket}
+      {:error, reason} -> {:reply, {:error, %{"reason" => code(reason)}}, socket}
+    end
+  end
+
   # The person retires a lesson of this session's repository from its popup.
   def handle_in("retire_lesson", %{"code" => lesson}, socket) when is_binary(lesson) do
     root = socket.assigns.conversation.repository_root
@@ -441,7 +494,7 @@ defmodule ShoestringWeb.ChatChannel do
   end
 
   # Reasons the client can act on; anything else is logged, not echoed.
-  @codes ~w(message_too_large pending_input_too_large context_limit_reached empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity turn_running handoff_in_progress lesson_not_found lesson_changed ask_not_found not_pending ask_gone not_ruleable agent_gone too_many_rules agent_changed)a
+  @codes ~w(message_too_large pending_input_too_large context_limit_reached empty_message no_turn invalid_reason dispatch_not_found not_started non_human_identity turn_running handoff_in_progress lesson_not_found lesson_changed ask_not_found not_pending ask_gone not_ruleable agent_gone too_many_rules agent_changed decision_not_found already_answered decision_withdrawn unknown_option reject_not_allowed note_required note_too_long)a
 
   defp code(reason) when reason in @codes, do: Atom.to_string(reason)
   defp code({:invalid_payload, _type, _version, _changeset}), do: "invalid_message"

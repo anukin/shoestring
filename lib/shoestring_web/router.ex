@@ -48,6 +48,13 @@ defmodule ShoestringWeb.Router do
     get "/health", HealthController, :show
   end
 
+  # A decision candidate's bytes (iteration 19): loopback only, and only an
+  # artifact one of the goal's decisions offers. No pipeline: nothing here
+  # reads a session or a form.
+  scope "/", ShoestringWeb do
+    get "/goals/:goal_id/artifacts/:artifact_id", ArtifactController, :show
+  end
+
   # The coordinator's MCP tool endpoint (iteration 15, package B). No
   # `accepts`: Claude Code probes `GET /mcp` with `Accept: text/event-stream`,
   # and the MCP spec answers 405 when no event stream is offered, where

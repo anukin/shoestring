@@ -328,6 +328,17 @@ what the candidates mean: they are bytes with a media type.
   A chosen file under `.shoestring/` is copied into the dependent's new
   worktree from the verified artifact store; any other path was committed,
   so it is already there.
+- **Where a person answers.** A pending decision is an attention item: on
+  the Sessions page under its dispatch (in place of the dispatch's stopped
+  card), on the goal page (`/cobbler/goals/:id`, also for a goal no
+  coordinator session owns), and as a popup on the chat screen
+  (`decide_decision`, see [chat channel](chat-channel.md)). The nav's
+  needs-you count includes every pending decision. Candidates are served
+  by `GET /goals/:goal_id/artifacts/:artifact_id`: loopback only, to a
+  local host name, only an artifact one of that goal's decisions offers,
+  never a redacted one, raster images, video, audio and plain text inline
+  and anything else (HTML, SVG) as a download, always with
+  `Content-Security-Policy: sandbox`.
 - **"None of these".** `reject`, only when `allow_reject` is true, needs a
   note. It fails the task's attempt with retry state `needs_user`: nothing
   retries it automatically, and the coordinator may propose a new dispatch.

@@ -114,9 +114,11 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     do: deterministic_uuid("plan-merge:#{execution_id}:#{base}")
 
   @doc false
-  # One decision point per task attempt (iteration 19).
-  def decision_id(execution_id, task_id, attempt),
-    do: deterministic_uuid("plan-decision:#{execution_id}:#{task_id}:#{attempt}")
+  # One decision point per task attempt of one goal (iteration 19). The
+  # execution id alone is not enough: it follows from the plan's content, so
+  # two goals running the same plan share it.
+  def decision_id(goal_id, execution_id, task_id, attempt),
+    do: deterministic_uuid("plan-decision:#{goal_id}:#{execution_id}:#{task_id}:#{attempt}")
 
   @doc false
   def task_reservation_id(goal_id, task_id, attempt),
@@ -830,7 +832,8 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
   defp request_decision(repo, goal_id, execution, dispatched, {decision, prepared}, opts) do
     attrs = %{
-      id: decision_id(execution.execution_id, dispatched.plan_task_id, dispatched.attempt),
+      id:
+        decision_id(goal_id, execution.execution_id, dispatched.plan_task_id, dispatched.attempt),
       goal_id: goal_id,
       execution_id: execution.execution_id,
       revision_number: execution.revision_number,
@@ -2730,12 +2733,25 @@ defmodule Shoestring.Cobbler.PlanExecutor do
 
     case result do
       {:ok, %{event_id: event_id}} ->
-        unless nested?, do: publish_completion(repo.get!(TrajectoryEvent, event_id), opts)
+        unless nested? do
+          publish_completion(repo.get!(TrajectoryEvent, event_id), opts)
+          notify_attention(goal_id)
+        end
+
         result
 
       _ ->
         result
     end
+  end
+
+  # Evidence only: a screen that misses this re-reads on its timer.
+  defp notify_attention(goal_id) do
+    Shoestring.Attention.notify(goal_id)
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
   end
 
   defp with_review(_type, payload, nil), do: payload

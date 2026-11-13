@@ -54,6 +54,12 @@ pub enum Outgoing {
         decision: String,
         note: Option<String>,
     },
+    /// The person's answer to a decision: an option's key, or `reject`.
+    DecideDecision {
+        id: String,
+        choice: String,
+        note: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -314,6 +320,10 @@ where
             "decide_ask",
             json!({"ask_id": id, "decision": decision, "note": note}),
         ),
+        Outgoing::DecideDecision { id, choice, note } => (
+            "decide_decision",
+            json!({"decision_id": id, "choice": choice, "note": note}),
+        ),
     };
     let reference = refs.next();
     let frame = Frame {
@@ -358,6 +368,7 @@ fn reply(
             Outgoing::Watch { .. } | Outgoing::Unwatch => "Dispatch unavailable",
             Outgoing::Handoff { .. } => "No handoff",
             Outgoing::DecideAsk { .. } => "Not answered",
+            Outgoing::DecideDecision { .. } => "Not chosen",
         };
         lock(model).note(format!("{what}: {}", describe(reason)));
     }
@@ -377,6 +388,9 @@ fn describe(reason: &str) -> String {
         "no_turn" => "the coordinator is not in a turn".into(),
         "turn_running" => "the coordinator is in a turn; wait for it or /cancel it first".into(),
         "handoff_in_progress" => "a handoff is under way; /handoff facts skips a held note".into(),
+        "already_answered" => "someone already answered this decision".into(),
+        "decision_withdrawn" => "the decision was withdrawn: its goal was cancelled".into(),
+        "note_required" => "none of these needs a note saying why".into(),
         other => other.to_string(),
     }
 }

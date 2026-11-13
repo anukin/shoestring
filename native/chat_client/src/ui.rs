@@ -17,7 +17,7 @@ const MAX_INPUT: usize = 6;
 pub const HELP: &str = "\
 Tab          focus dispatches; Up/Down select; Enter opens; c cancels and
              s starts a held one (each asks first)
-Esc          close detail; Up/Down scroll detail
+Esc          close detail; Up/Down scroll detail; put a popup off (A again)
 PgUp/PgDn    scroll the conversation back and forward
 Enter        send the message (the coordinator gets it when it is idle)
 Alt+Enter    new line (Ctrl+J too); paste keeps line breaks
@@ -271,8 +271,90 @@ pub fn draw(frame: &mut Frame, model: &Model) -> ConversationView {
                 },
             },
         );
+    } else {
+        draw_decision(frame, model);
     }
     view
+}
+
+/// A decision a plan waits on (iteration 19): the question and each option's
+/// key and label; the candidates themselves are on the web page.
+fn draw_decision(frame: &mut Frame, model: &Model) {
+    if let Some((decision, note)) = &model.decision_reject {
+        draw_attention(
+            frame,
+            &Attention {
+                title: "None of these",
+                tone: Tone::Question,
+                body: vec![
+                    decision.question.clone(),
+                    "The task stops for you to decide what next. Say why none will do:".into(),
+                    format!("{note}_"),
+                ],
+                keys: &[("Enter", "send"), ("Esc", "back")],
+            },
+        );
+    } else if let Some((decision, index)) = &model.decision_pick {
+        let (key, label) = &decision.options[*index];
+        draw_attention(
+            frame,
+            &Attention {
+                title: "Choose this one?",
+                tone: Tone::Question,
+                body: vec![
+                    decision.question.clone(),
+                    format!("{key} · {label}"),
+                    "The next tasks start with it; it cannot be changed afterwards.".into(),
+                ],
+                keys: &[("y", "choose it"), ("any other key", "back")],
+            },
+        );
+    } else if let Some(decision) = model.current_decision() {
+        let mut body = vec![
+            format!("{} · {}", short(&decision.dispatch), decision.task),
+            decision.question.clone(),
+        ];
+        if !decision.note.is_empty() {
+            body.push(decision.note.clone());
+        }
+        for (i, (_key, label)) in decision.options.iter().enumerate() {
+            if let Some(k) = crate::model::option_key(i) {
+                body.push(format!("  {k}  {label}"));
+            }
+        }
+        if !decision.page_url.is_empty() {
+            body.push(format!("See the candidates: {}", decision.page_url));
+        }
+        body.push("It waits for you: nothing decides this on a timer.".into());
+        let last = decision
+            .options
+            .len()
+            .checked_sub(1)
+            .and_then(crate::model::option_key)
+            .unwrap_or('1');
+        let range = if last == '1' {
+            "1".to_string()
+        } else {
+            format!("1-{last}")
+        };
+        let mut keys: Vec<(&str, &str)> = vec![(range.as_str(), "choose")];
+        if decision.allow_reject {
+            keys.push(("x", "none of these"));
+        }
+        if !decision.page_url.is_empty() {
+            keys.push(("o", "open the page"));
+        }
+        keys.push(("Esc", "later"));
+        draw_attention(
+            frame,
+            &Attention {
+                title: "A plan waits for you to choose",
+                tone: Tone::Question,
+                body,
+                keys: &keys,
+            },
+        );
+    }
 }
 
 /// How an attention popup reads: news to acknowledge, a question to
