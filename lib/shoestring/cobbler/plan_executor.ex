@@ -817,7 +817,10 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   end
 
   # A task that ends in a decision is told Shoestring's file format: the
-  # plan says that a person chooses, not how to lay out the candidates.
+  # plan says that a person chooses, not how to lay out the candidates. The
+  # heredoc warning is from the iteration 19 live run: Claude Code 2.1.322,
+  # sandboxed in don't-ask mode, denies any Bash command containing `<<`
+  # (VERIFIED by probe), while printf to the same path is allowed.
   defp decision_file_prompt(nil), do: ""
 
   defp decision_file_prompt(decision) do
@@ -831,7 +834,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       ~s("label": "at most 200 characters", "file": "#{dir}/a.png", "media_type": "image/png"}]}. ) <>
       "Paths are relative to the worktree, with no symlinks; each file is at most " <>
       "#{max_mib} MiB (for a larger candidate, give a smaller preview as file and its path " <>
-      "as \"source\"); keys are lowercase slugs, never \"reject\". #{dir}/ is not committed: " <>
+      "as \"source\"); keys are lowercase slugs, never \"reject\". Write the files with " <>
+      "printf, echo or python3 -c, not a shell heredoc (<<): a worker's sandbox may refuse a " <>
+      "command that contains one. #{dir}/ is not committed: " <>
       "commit your other changes as usual. Do not choose: the person does.\n"
   end
 

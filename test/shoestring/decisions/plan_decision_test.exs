@@ -97,6 +97,7 @@ defmodule Shoestring.Decisions.PlanDecisionTest do
     assert run.prompt =~ ".shoestring/decisions/sheet/decision.json"
     assert run.prompt =~ "2 to 12 candidates"
     assert run.prompt =~ ~s(never "reject")
+    assert run.prompt =~ "not a shell heredoc"
   end
 
   test "a pending decision is held by no process: answering later, from another process, resumes the plan",
