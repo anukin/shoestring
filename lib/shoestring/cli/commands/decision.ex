@@ -22,7 +22,10 @@ defmodule Shoestring.CLI.Commands.Decision do
   `answer --choose KEY` picks one; the next tasks start with it. `answer
   --reject` ("none of these", when the decision allows it) needs --note
   saying why, and stops the task for you to decide what next. The first
-  answer wins, from here or the web or the chat screen. Nothing decides a
+  answer wins, from here or the web or the chat screen; `answer` queues the
+  plan again for the running service and prints whether it did ("plan").
+  Open the web page at the address `show` prints (its host name matters:
+  the page's buttons work only there). Nothing decides a
   decision on a timer. DECISION is its id or the first 8 characters of it.
   `answer` refuses without a terminal, so an agent cannot answer as you.
   """
@@ -73,19 +76,25 @@ defmodule Shoestring.CLI.Commands.Decision do
         by = opts[:by] || WorkLoop.default_human()
 
         context.with_repo.(fn _repo ->
-          case Decisions.answer(find!(decision).id, choice, opts[:note], by) do
-            {:ok, decision} ->
-              Shoestring.Attention.notify(decision.goal_id)
+          # The service is another process: the plan is queued again through
+          # the command line's job client, as `execution continue` does, and
+          # the outcome is reported, never assumed.
+          Map.get(context, :jobs, &Shoestring.CLI.Jobs.with_client/1).(fn client ->
+            case Decisions.answer(find!(decision).id, choice, opts[:note], by,
+                   resume_fun: fn _goal, _execution -> :ok end
+                 ) do
+              {:ok, decision} ->
+                Command.json(context, %{
+                  decision: decision.id,
+                  state: decision.state,
+                  answer: decision.answer_key,
+                  plan: resume(decision, client)
+                })
 
-              Command.json(context, %{
-                decision: decision.id,
-                state: decision.state,
-                answer: decision.answer_key
-              })
-
-            {:error, reason} ->
-              Refusal.refuse!(message(reason))
-          end
+              {:error, reason} ->
+                Refusal.refuse!(message(reason))
+            end
+          end)
         end)
 
       _ ->
@@ -188,10 +197,28 @@ defmodule Shoestring.CLI.Commands.Decision do
 
   defp state_text(%Decision{state: "withdrawn"}), do: "withdrawn: the goal was cancelled"
 
-  @doc "The goal page where a decision's candidates can be seen."
+  # Whether the plan was queued again: "queued", or why not ("needs_user"
+  # while another decision or a stop waits; a refusal for an execution the
+  # command line cannot queue).
+  defp resume(decision, client) do
+    case Shoestring.Cobbler.ExecutionControl.continue(decision.goal_id, decision.execution_id,
+           oban: client
+         ) do
+      {:ok, %{outcome: outcome}} -> Atom.to_string(outcome)
+      {:error, reason} -> "not queued (#{inspect(reason)}): shoestring execution continue"
+    end
+  end
+
+  @doc """
+  The goal page where a decision's candidates can be seen, at the web UI's
+  configured host and port: the page's live connection accepts only that
+  origin, so a page opened at another host name shows but cannot be answered.
+  """
   def page_url(decision) do
-    http = Application.get_env(:shoestring, ShoestringWeb.Endpoint, [])[:http] || []
-    "http://127.0.0.1:#{Keyword.get(http, :port, 4000)}/cobbler/goals/#{decision.goal_id}"
+    endpoint = Application.get_env(:shoestring, ShoestringWeb.Endpoint, [])
+    url = endpoint[:url] || []
+    port = url[:port] || get_in(endpoint, [:http, :port]) || 4000
+    "http://#{url[:host] || "localhost"}:#{port}/cobbler/goals/#{decision.goal_id}"
   end
 
   defp row(decision),

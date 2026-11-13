@@ -29,7 +29,10 @@ defmodule Shoestring.CLI.DecisionTest do
     )
 
     write_candidates!(worktree)
-    assert %{disposition: :accepted} = run_sheets!(goal, worktree)
+
+    assert %{disposition: :accepted} =
+             run_sheets!(goal, worktree, decision_plan(), repository_path: worktree)
+
     [decision] = Decisions.list(goal_ids: [goal.id])
 
     Map.merge(ctx, %{
@@ -46,7 +49,12 @@ defmodule Shoestring.CLI.DecisionTest do
       with_repo: fn fun -> fun.(Repo) end,
       cwd: File.cwd!(),
       interactive?: fn -> Keyword.get(opts, :interactive, true) end,
-      env: fn _ -> nil end
+      env: fn _ -> nil end,
+      # The command line's job client; the test's manual Oban stands in.
+      jobs: fn fun ->
+        send(self(), :jobs_client)
+        fun.(Oban)
+      end
     }
   end
 
@@ -85,6 +93,9 @@ defmodule Shoestring.CLI.DecisionTest do
         assert text =~ "file: #{Path.join(root, artifact.location)}"
       end
 
+      # At the web UI's own host name: its live connection refuses another origin.
+      assert text =~ "http://localhost:"
+      refute text =~ "127.0.0.1"
       assert text =~ "/cobbler/goals/#{ctx.goal.id}"
       assert text =~ "nothing decides this on a timer"
     end
@@ -113,7 +124,20 @@ defmodule Shoestring.CLI.DecisionTest do
       assert Decisions.get(ctx.decision.id).state == "pending"
 
       Decision.run(["answer", ctx.short, "--choose", "green", "--by", "human:pat"], context())
-      assert %{"state" => "answered", "answer" => "green"} = Jason.decode!(output())
+
+      # The plan is queued again through the command line's job client, and
+      # the command says so.
+      assert %{"state" => "answered", "answer" => "green", "plan" => "queued"} =
+               Jason.decode!(output())
+
+      assert_received :jobs_client
+
+      assert Repo.exists?(
+               from j in Oban.Job,
+                 where:
+                   j.worker == "Shoestring.Cobbler.PlanExecutionWorker" and j.state == "available" and
+                     fragment("json_extract(?, '$.goal_id')", j.args) == ^ctx.goal.id
+             )
 
       assert_raise Refusal, ~r/already answered/, fn ->
         Decision.run(["answer", ctx.short, "--reject", "--note", "No."], context())

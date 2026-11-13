@@ -28,6 +28,7 @@ defmodule Shoestring.Decisions do
   """
 
   import Ecto.Query
+  require Logger
 
   alias Shoestring.Cobbler.ReservationWriter
   alias Shoestring.Decisions.{Decision, DecisionFile}
@@ -317,12 +318,19 @@ defmodule Shoestring.Decisions do
         Shoestring.Cobbler.ExecutionControl.continue(goal_id, execution_id)
       end)
 
+    # The answer is recorded either way; a plan not queued again stays
+    # answerable from `shoestring execution continue`, so the failure is
+    # logged, never swallowed.
     try do
       resume.(decision.goal_id, decision.execution_id)
     rescue
-      _ -> :ok
+      error ->
+        Logger.warning("decision #{decision.id} answered; plan not queued: #{inspect(error)}")
     catch
-      _, _ -> :ok
+      kind, reason ->
+        Logger.warning(
+          "decision #{decision.id} answered; plan not queued: #{inspect({kind, reason})}"
+        )
     end
   end
 
