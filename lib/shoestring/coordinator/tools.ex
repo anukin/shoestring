@@ -10,6 +10,9 @@ defmodule Shoestring.Coordinator.Tools do
     * `advice` — `shoestring advice`.
     * `read_inbox` — the session's inbox (`Shoestring.Conversations.inbox/1`),
       which has no command.
+    * `decisions_list`, `decisions_show` — `shoestring decision list|show`
+      for this session's plans (iteration 19). Read-only: there is no tool
+      that answers a decision; only the person chooses.
 
   The session and repository come from the caller's token binding
   (`Shoestring.Coordinator.ToolTokens`), never from arguments, so a
@@ -120,6 +123,30 @@ defmodule Shoestring.Coordinator.Tools do
           "dry_run" => %{"type" => "boolean"}
         },
         "required" => ["purpose", "title", "brief"]
+      }
+    },
+    %{
+      "name" => "decisions_list",
+      "description" =>
+        "The decisions this session's plans wait on the person to choose among a task's " <>
+          "candidates, and recent answers: question, each option's key and label, state. " <>
+          "Read-only: only the person answers a decision; tell them.",
+      "inputSchema" => %{"type" => "object", "properties" => %{}}
+    },
+    %{
+      "name" => "decisions_show",
+      "description" =>
+        "One decision of this session's plans: its question, options, state, who answered " <>
+          "and the web page where the person sees the candidates. Read-only.",
+      "inputSchema" => %{
+        "type" => "object",
+        "properties" => %{
+          "decision" => %{
+            "type" => "string",
+            "description" => "A decision id from decisions_list"
+          }
+        },
+        "required" => ["decision"]
       }
     },
     %{
@@ -361,7 +388,46 @@ defmodule Shoestring.Coordinator.Tools do
     end
   end
 
+  def call("decisions_list", _args, binding),
+    do: {:ok, Enum.map(session_decisions(binding), &decision_view/1)}
+
+  def call("decisions_show", args, binding) do
+    with {:ok, id} <- required_string(args, "decision") do
+      case Enum.find(session_decisions(binding), &(&1.id == id)) do
+        nil -> {:error, "No such decision in this session."}
+        decision -> {:ok, decision_view(decision)}
+      end
+    end
+  end
+
   def call(name, _args, _binding), do: {:error, "Unknown tool: #{name}"}
+
+  # The decisions of the goals this session's dispatches run, newest first.
+  defp session_decisions(binding) do
+    case binding.session_id |> Dispatches.list() |> Enum.map(& &1.goal_id) |> Enum.uniq() do
+      [] -> []
+      goal_ids -> Shoestring.Decisions.list(goal_ids: goal_ids, limit: 50)
+    end
+  end
+
+  defp decision_view(decision) do
+    %{
+      "decision_id" => decision.id,
+      "goal_id" => decision.goal_id,
+      "task" => decision.plan_task_id,
+      "question" => decision.question,
+      "note" => decision.note,
+      "options" => Enum.map(decision.options, &Map.take(&1, ~w(key label media_type))),
+      "allow_reject" => decision.allow_reject,
+      "state" => decision.state,
+      "answer" => decision.answer_key,
+      "answer_note" => decision.answer_note,
+      "decided_by" => decision.decided_by,
+      "page_url" => Shoestring.CLI.Commands.Decision.page_url(decision),
+      "who_answers" =>
+        "the person: on the web goal page, the chat screen, or shoestring decision answer"
+    }
+  end
 
   defp dry_run(request) do
     case Dispatches.dry_run(request) do

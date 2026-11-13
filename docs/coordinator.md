@@ -225,6 +225,19 @@ run you add it to the agent's hosts. A denial's reason is not passed on for
 a host; the worker sees the refused connection, so the popup offers no `r`
 there. opencode workers do not ask. An ask whose worker stops (a cancel, a restart) ends unanswered.
 
+**Decisions.** A plan task can produce candidates and wait, before the
+tasks that depend on it, for you to choose one (see
+[decision points](plan-contract.md#decision-points-iteration-19)). You see
+the candidates and choose on the Sessions page or the goal page, in the
+chat screen's popup (a key per option, `y` to confirm, `x` for none of
+these with a note, `o` to open the page with the pictures), or in a
+terminal: `shoestring decision list`, `shoestring decision show DECISION`
+and `shoestring decision answer DECISION --choose KEY` (or `--reject
+--note "..."`). The first answer wins and nothing decides on a timer. The
+coordinator can list and describe decisions (`decisions_list`,
+`decisions_show`; `runs show` names a pending one and the command), but no
+tool answers one: the choice is yours.
+
 **Allow for this agent.** For one plain command, `a` in the popup (or
 `shoestring asks allow ASK --for-agent`) allows it and lets that agent's
 workers run exactly the same command again without asking; the ask is

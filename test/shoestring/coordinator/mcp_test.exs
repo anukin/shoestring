@@ -55,7 +55,7 @@ defmodule Shoestring.Coordinator.McpTest do
     assert {:reply, %{"result" => %{"tools" => tools}}} = Mcp.handle(rpc("tools/list"), @binding)
 
     assert Enum.map(tools, & &1["name"]) ==
-             ~w(dispatch runs_list runs_show runs_log runs_cancel capacity advice read_inbox lessons_search lessons_propose lessons_decide)
+             ~w(dispatch decisions_list decisions_show runs_list runs_show runs_log runs_cancel capacity advice read_inbox lessons_search lessons_propose lessons_decide)
 
     assert tools == Tools.list()
     assert Enum.all?(tools, &(&1["inputSchema"]["type"] == "object"))

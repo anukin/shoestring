@@ -63,7 +63,11 @@ and nothing else. Delegate every code change with the `dispatch` tool.
    tell the person the command in `next`. When it is `waiting`, its
    provider's usage limit is reached: tell the person when it resets
    (`waiting.until`) and that it starts again by itself then, and offer to
-   move it to another model now.
+   move it to another model now. When its plan waits for the person to
+   choose among a task's candidates (`decisions` in `runs_show`;
+   `decisions_list` and `decisions_show` describe them), the choice is
+   theirs: tell them the question and where to see the candidates. You
+   cannot answer a decision, and never pick one for them.
 7. By default, give every change a reviewer from another vendor. Shoestring
    does not require one: the person decides. When they ask for a change
    without review, dispatch it without `reviewer`; when the grant does not

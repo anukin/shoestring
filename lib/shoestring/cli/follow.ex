@@ -243,6 +243,18 @@ defmodule Shoestring.CLI.Follow do
       )
     end
 
+    for decision <- Shoestring.Decisions.list(goal_ids: [state.goal_id], states: ["pending"]) do
+      short = String.slice(decision.id, 0, 8)
+
+      state.shell.error(
+        "  Task #{decision.plan_task_id} waits for you to choose: #{decision.question} " <>
+          "See the candidates with `shoestring decision show #{short}` or on " <>
+          "#{Shoestring.CLI.Commands.Decision.page_url(decision)}; answer with " <>
+          "`shoestring decision answer #{short} --choose KEY`" <>
+          if(decision.allow_reject, do: " or `--reject --note \"...\"`.", else: ".")
+      )
+    end
+
     for blocker <- status[:scope_blockers] || [] do
       state.shell.error(
         "  Scope blocker on #{blocker["plan_task_id"] || inspect(blocker, limit: 6)}"
@@ -328,6 +340,18 @@ defmodule Shoestring.CLI.Follow do
 
       "cobbler.plan.task.accepted" ->
         "Task #{task}: accepted at #{short(p["commit"])}."
+
+      "cobbler.plan.decision.requested" ->
+        "Task #{task}: waits for you to choose among #{length(p["options"] || [])} candidates: " <>
+          "#{p["question"]} (shoestring decision show #{String.slice(p["decision_id"], 0, 8)})"
+
+      "cobbler.plan.decision.answered" ->
+        if p["answer"] == "reject",
+          do: "Task #{task}: none of these, by #{p["decided_by"]}; it waits for your next step.",
+          else: "Task #{task}: #{p["decided_by"]} chose #{p["option_key"]}."
+
+      "cobbler.plan.decision.withdrawn" ->
+        "Task #{task}: its decision was withdrawn (the goal was cancelled)."
 
       "cobbler.plan.task.gate_failed" ->
         case Regex.run(~r/\A\{:gate_unavailable, %\{reason: :(\w+)\}\}\z/, p["reason"] || "") do

@@ -104,6 +104,7 @@ defmodule Shoestring.CLI.Commands.Runs do
 
     batch = batch(dispatch)
     asks = asks(dispatch)
+    decisions = decisions(dispatch)
 
     summary
     |> Map.merge(status)
@@ -112,15 +113,23 @@ defmodule Shoestring.CLI.Commands.Runs do
     |> Map.merge(call_detail(call))
     |> Map.put("result", result)
     |> Map.put("asks", asks)
+    |> Map.put("decisions", decisions)
     |> Map.put(
       "next",
-      case asks do
-        [ask | _] ->
+      case {asks, decisions} do
+        {[ask | _], _} ->
           "Its worker is waiting for the person to allow or deny one command outside its " <>
             "sandbox: #{ask["command"]}. Tell them; they answer in the chat screen's popup " <>
             "or with `shoestring asks`. You cannot answer for them."
 
-        [] ->
+        {[], [decision | _]} ->
+          "Its plan waits for the person to choose among the candidates task " <>
+            "#{decision["task"]} produced: #{decision["question"]} The choice is theirs: " <>
+            "tell them; they answer on the web goal page, in the chat screen's popup, or with " <>
+            "`shoestring decision answer #{String.slice(decision["decision_id"], 0, 8)} " <>
+            "--choose KEY`. You cannot answer for them."
+
+        {[], []} ->
           next(
             summary["state"],
             dispatch,
@@ -130,6 +139,23 @@ defmodule Shoestring.CLI.Commands.Runs do
       end
     )
   end
+
+  # What the dispatch's plan waits on the person to choose now
+  # (`Shoestring.Decisions`): the options' keys and labels, never the bytes.
+  defp decisions(%{goal_id: goal_id}) when is_binary(goal_id) do
+    for decision <- Shoestring.Decisions.list(goal_ids: [goal_id], states: ["pending"]) do
+      %{
+        "decision_id" => decision.id,
+        "task" => decision.plan_task_id,
+        "question" => decision.question,
+        "options" => Enum.map(decision.options, &Map.take(&1, ~w(key label media_type))),
+        "allow_reject" => decision.allow_reject,
+        "asked_at" => decision.inserted_at
+      }
+    end
+  end
+
+  defp decisions(_dispatch), do: []
 
   # What the dispatch's worker is waiting on the person for now
   # (`Shoestring.PermissionAsks`).
