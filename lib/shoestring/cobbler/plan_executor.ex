@@ -834,9 +834,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       ~s("label": "at most 200 characters", "file": "#{dir}/a.png", "media_type": "image/png"}]}. ) <>
       "Paths are relative to the worktree, with no symlinks; each file is at most " <>
       "#{max_mib} MiB (for a larger candidate, give a smaller preview as file and its path " <>
-      "as \"source\"); keys are lowercase slugs, never \"reject\". Write the files with " <>
-      "printf, echo or python3 -c, not a shell heredoc (<<): a worker's sandbox may refuse a " <>
-      "command that contains one. #{dir}/ is not committed: " <>
+      "as \"source\"); keys are lowercase slugs, never \"reject\". Write each file with its " <>
+      "own simple command and its literal path (no shell variables, no heredocs). " <>
+      "#{dir}/ is not committed: " <>
       "commit your other changes as usual. Do not choose: the person does.\n"
   end
 
@@ -2258,9 +2258,19 @@ defmodule Shoestring.Cobbler.PlanExecutor do
   # The checks run on the worker's last commit and refuse a worktree with
   # uncommitted changes, so a worker that stops before committing fails them
   # with its work done (seen live with Claude Code, 2026-11-02).
+  # The file-writing advice is from the iteration 19 live runs: Claude Code
+  # 2.1.322, sandboxed in don't-ask mode, refused a worker's compound command
+  # that wrote through a shell variable or a heredoc (VERIFIED by probe, 2 of
+  # 2 each), allowed the same writes with literal paths, and the worker
+  # stopped at the first refusal instead of trying a simpler command.
   defp finish_instructions,
     do:
-      "\nWhen your change is done, commit it in this worktree (git add, then git commit) " <>
+      "\nWrite files with simple commands that name each path literally (printf '...' > " <>
+        "path/to/file, or python3 -c with the path written out), one file per command. A " <>
+        "worker's sandbox may refuse a command that writes through a shell variable or a " <>
+        "heredoc; if a command is refused, split it into simpler ones with literal paths and " <>
+        "run them again rather than stopping." <>
+        "\nWhen your change is done, commit it in this worktree (git add, then git commit) " <>
         "and leave the worktree clean: Shoestring runs the task's checks on your last commit " <>
         "and refuses a worktree with uncommitted changes.\n"
 
