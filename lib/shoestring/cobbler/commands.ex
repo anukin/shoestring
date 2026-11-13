@@ -1017,7 +1017,9 @@ defmodule Shoestring.Cobbler.Commands do
   defp fold_event(state, %TrajectoryEvent{type: "cobbler.claim.acquired"} = event) do
     payload = event.payload
 
-    if state.claim do
+    # Only an active claim conflicts: a goal whose plan runs tasks one after
+    # another takes a new claim after releasing the previous one.
+    if match?(%{"status" => "active"}, state.claim) do
       {:error, {:rebuild_claim_conflict, event.sequence, payload["claim_id"]}}
     else
       {:ok,
