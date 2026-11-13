@@ -65,6 +65,31 @@ defmodule ShoestringWeb.AttentionComponents do
     """
   end
 
+  # An EXTERNAL (iteration 20): where to work and the commands that complete
+  # or abandon it in a terminal; nothing on the page acts for the person.
+  def card(%{item: %{kind: :external}} = assigns) do
+    ~H"""
+    <div id={@item.id} class="ss-attention" role="group" aria-label={@item.title}>
+      <h3>{@item.title}</h3>
+      <p class="ss-attention-subject">{RunPresentation.redact_text(@item.subject)}</p>
+      <p :if={@item.why} class="ss-notice">{@item.why}</p>
+      <p>{RunPresentation.redact_text(@item.note)}</p>
+      <ul :if={@item.lines != []} id={"#{@item.id}-lines"} class="ss-attention-lines">
+        <li :for={line <- @item.lines}>{RunPresentation.redact_text(line)}</li>
+      </ul>
+      <div :if={@item.commands != []}>
+        <p class="ss-small">In a terminal:</p>
+        <pre id={"#{@item.id}-commands"} class="ss-attention-commands" phx-no-format><code>{Enum.join(@item.commands, "\n")}</code></pre>
+      </div>
+      <div :if={@item.run_id} class="ss-attention-choices">
+        <.link id={"#{@item.id}-run"} navigate={~p"/runs/#{@item.run_id}"} class="ss-button">
+          Raw events
+        </.link>
+      </div>
+    </div>
+    """
+  end
+
   # A decision (iteration 19): the question, each candidate with what it
   # looks like and a button, and "None of these" with the note it needs.
   # Candidate bytes come from the loopback-only artifact route; text a

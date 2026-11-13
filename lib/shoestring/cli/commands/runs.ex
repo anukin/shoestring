@@ -61,6 +61,28 @@ defmodule Shoestring.CLI.Commands.Runs do
   end
 
   @doc "`runs show`'s data for `dispatch` (also the coordinator's `runs_show` tool)."
+  # An EXTERNAL (iteration 20) has no execution: its lifecycle, worktree,
+  # units and checks, and the person's commands.
+  def detail(%{purpose: "external"} = dispatch) do
+    summary = Dispatch.summary(dispatch)
+
+    case Shoestring.Dispatches.Externals.get(dispatch.id) do
+      nil ->
+        Map.put(summary, "next", nil)
+
+      external ->
+        view = Shoestring.CLI.Commands.External.view(dispatch, external)
+
+        summary
+        |> Map.put("external", view)
+        |> Map.put(
+          "result",
+          if(view["commit"], do: %{"commit" => view["commit"], "take" => view["take"]})
+        )
+        |> Map.put("next", external_next(view))
+    end
+  end
+
   def detail(dispatch) do
     summary = Dispatch.summary(dispatch)
 
@@ -139,6 +161,33 @@ defmodule Shoestring.CLI.Commands.Runs do
       end
     )
   end
+
+  # Work outside Shoestring's guarantee: the coordinator tells the person,
+  # who confirms, completes or abandons it; it cannot do any of these itself.
+  defp external_next(%{"state" => "held"} = view),
+    do:
+      "An EXTERNAL waits for the person to start it (outside Shoestring's guarantee: the work " <>
+        "is not sandboxed). Tell them; they press Start on the Sessions page or run " <>
+        "`#{hd(view["next"]) |> String.split("   ") |> hd()}`. You cannot start it."
+
+  defp external_next(%{"state" => "awaiting"} = view),
+    do:
+      "Waiting for the person's outside work in #{view["worktree"]}" <>
+        if(view["expired"], do: " (past its deadline; still open)", else: "") <>
+        ". When it is committed there, they run `#{Enum.at(view["next"], 0)}`; or " <>
+        "`#{Enum.at(view["next"], 1)}`. You cannot complete it."
+
+  defp external_next(%{"state" => "needs_you"} = view),
+    do:
+      "The person's completion was not accepted: " <>
+        Shoestring.CLI.Commands.External.failure_text(view["failure"]) <>
+        " They fix it in #{view["worktree"]} and complete again: `#{Enum.at(view["next"], 0)}`."
+
+  defp external_next(%{"state" => "completed"}),
+    do: "Its checks passed: take the commit with the commands in result.take"
+
+  defp external_next(%{"state" => "abandoned"}),
+    do: "The person abandoned it; its worktree is kept. Its reserved units stay counted"
 
   # What the dispatch's plan waits on the person to choose now
   # (`Shoestring.Decisions`): the options' keys and labels, never the bytes.

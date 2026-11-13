@@ -27,6 +27,11 @@ checks, review, acceptance, and the final verified commit.
 under a sandbox, with a time limit. Cancelling an Elf terminates its whole
 process group.
 
+**EXTERNAL** — a dispatch whose work is done outside Shoestring's guarantee,
+by a person or a program Shoestring does not run, in a private Git worktree
+Shoestring makes. It always waits for the person to start it; only a person
+completes or abandons it, and its checks decide acceptance, as for an Elf.
+
 **Harness adapter** — the provider-specific code that launches, observes,
 cancels and resumes an agent CLI (Claude Code, Codex, opencode) and
 normalizes its output into events.

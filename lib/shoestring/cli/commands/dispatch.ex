@@ -16,6 +16,10 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       --brief FILE [--effort LEVEL] [common options]
   shoestring dispatch --purpose review --of DISPATCH --worker PROVIDER:MODEL
       --title TEXT --brief FILE [common options]
+  shoestring dispatch --purpose external --title TEXT --brief FILE
+      [--units NAME=N]... [--gate NAME]... [--test PATH]... [--minutes N]
+      [--after DISPATCH] [common options]
+      work done outside Shoestring in a worktree it makes (see shoestring external)
 
   For a coordinator (Claude Code, Codex or opencode) acting under the grant
   a person gave its session (`shoestring grant`). The task runs as a
@@ -109,6 +113,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     batch_size: :integer,
     after: :string,
     tasks: :string,
+    units: :keep,
     session: :string,
     request_id: :string,
     repo: :string,
@@ -208,7 +213,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         is_nil(opts[key]),
         do: Refusal.refuse!("dispatch needs --#{key}")
 
-    if is_nil(opts[:worker]) and is_nil(opts[:agent]),
+    if is_nil(opts[:worker]) and is_nil(opts[:agent]) and opts[:purpose] != "external",
       do: Refusal.refuse!("dispatch needs --agent NAME or --worker PROVIDER:MODEL")
 
     session =
@@ -229,7 +234,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       tasks: opts[:tasks] && read_tasks!(Command.expand(opts[:tasks], context)),
       accept: Keyword.get_values(opts, :accept),
       gates: Keyword.get_values(opts, :gate),
-      tests: Keyword.get_values(opts, :test)
+      tests: Keyword.get_values(opts, :test),
+      units: Keyword.get_values(opts, :units)
     })
   end
 
@@ -249,6 +255,42 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   `:accept`, `:gates` and `:tests` as lists.
   """
   @spec build_request(map()) :: {:ok, map()} | {:error, String.t()}
+  # An EXTERNAL has no worker (iteration 20): its provider and model are
+  # the fixed `Dispatches.external_worker/0`, and an agent or worker named
+  # with it is refused.
+  def build_request(%{purpose: "external"} = fields) do
+    {provider, model} = Dispatches.external_worker()
+
+    cond do
+      fields[:worker] || fields[:agent] ->
+        {:error, "An EXTERNAL has no worker: drop --worker and --agent"}
+
+      fields[:reviewer] || fields[:of] || fields[:tasks] not in [nil, []] ->
+        {:error, "An EXTERNAL takes no --reviewer, --of or --tasks"}
+
+      true ->
+        request = %{
+          session_id: fields.session_id,
+          purpose: "external",
+          provider: provider,
+          model: model,
+          title: fields[:title],
+          brief: fields.brief,
+          repository: fields.repository,
+          gates: Map.get(fields, :gates, []),
+          tests: Map.get(fields, :tests, []),
+          seconds: fields[:minutes] && fields[:minutes] * 60,
+          after_dispatch: fields[:after],
+          units: Map.get(fields, :units, []),
+          target: nil,
+          lessons: [],
+          tasks: []
+        }
+
+        {:ok, Map.put(request, :request_id, fields[:request_id] || derived_request_id(request))}
+    end
+  end
+
   def build_request(fields) do
     with {:ok, fields} <- named_agent(fields),
          {:ok, {provider, model}} <-
@@ -346,8 +388,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       fields[:purpose] in ["explore", "review"] and fields[:reviewer] ->
         {:error, "--reviewer is only for --purpose implement"}
 
-      fields[:purpose] != "implement" and fields[:after] ->
-        {:error, "--after is only for --purpose implement"}
+      fields[:purpose] not in ["implement", "external"] and fields[:after] ->
+        {:error, "--after is only for --purpose implement or external"}
 
       fields[:purpose] != "implement" and fields[:tasks] not in [nil, []] ->
         {:error, "--tasks is only for --purpose implement"}
@@ -399,7 +441,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
              if(request.target, do: [request.target], else: []) ++
              if(request.after_dispatch, do: ["after", request.after_dispatch], else: []) ++
              if(request.lessons != [], do: ["lessons" | request.lessons], else: []) ++
-             if(request.tasks != [], do: ["tasks", Jason.encode!(request.tasks)], else: []),
+             if(request.tasks != [], do: ["tasks", Jason.encode!(request.tasks)], else: []) ++
+             if(Map.get(request, :units, []) != [], do: ["units" | request.units], else: []),
            <<0>>
          )
        )

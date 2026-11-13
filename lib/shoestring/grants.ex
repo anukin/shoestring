@@ -22,7 +22,16 @@ defmodule Shoestring.Grants do
   alias Shoestring.Grants.{Event, Grant}
 
   @purposes ~w(explore implement review)
-  @purpose_capability %{"explore" => :implement, "implement" => :implement, "review" => :review}
+  # EXTERNAL (iteration 20) is never granted by default: the person adds it.
+  @all_purposes @purposes ++ ~w(external)
+  @purpose_capability %{
+    "explore" => :implement,
+    "implement" => :implement,
+    "review" => :review,
+    "external" => :implement
+  }
+  @unit_name ~r/\A[a-z][a-z0-9_]{0,39}\z/
+  @max_units 4
   @session ~r/\A[a-z0-9][a-z0-9_-]{0,62}\z/
 
   @limits [
@@ -35,6 +44,9 @@ defmodule Shoestring.Grants do
   ]
 
   def purposes, do: @purposes
+
+  @doc "Every purpose a grant may name, EXTERNAL included."
+  def all_purposes, do: @all_purposes
 
   @doc "A new session id for a grant made without one."
   def new_session_id,
@@ -102,7 +114,8 @@ defmodule Shoestring.Grants do
       max_dispatch_seconds: grant.max_dispatch_seconds,
       unread_usage: grant.unread_usage + Map.get(changes, :add_unread_usage, 0),
       max_turns: grant.max_turns + Map.get(changes, :add_turns, 0),
-      team: grant.team
+      team: grant.team,
+      units: Map.get(changes, :units, grant.units || [])
     }
 
     with :ok <- human(by),
@@ -260,6 +273,10 @@ defmodule Shoestring.Grants do
       request.purpose not in grant.purposes ->
         {:error, {:outside_grant, :purpose}}
 
+      # An EXTERNAL has no model; its units must be the grant's and fit.
+      request.purpose == "external" ->
+        external_check(grant, request, usage)
+
       model not in grant.models ->
         {:error, {:outside_grant, :model}}
 
@@ -289,20 +306,52 @@ defmodule Shoestring.Grants do
     end
   end
 
+  defp external_check(grant, request, usage) do
+    units = request[:units] || %{}
+
+    cond do
+      Enum.any?(Map.keys(units), &is_nil(unit(grant, &1))) ->
+        {:error, {:outside_grant, :units}}
+
+      Enum.any?(units, fn {name, amount} ->
+        Map.get(usage[:units] || %{}, name, 0) + amount > unit(grant, name)["cap"]
+      end) ->
+        {:error, {:outside_grant, :units}}
+
+      usage.attempts + request.attempts > grant.max_dispatches ->
+        {:error, {:outside_grant, :dispatches}}
+
+      not request[:chained] and usage.running + 1 > grant.max_parallel ->
+        {:error, {:outside_grant, :parallel}}
+
+      request.seconds > grant.max_dispatch_seconds ->
+        {:error, {:outside_grant, :dispatch_duration}}
+
+      usage.seconds + request.seconds > grant.max_total_seconds ->
+        {:error, {:outside_grant, :total_duration}}
+
+      true ->
+        :ok
+    end
+  end
+
   defp validate(attrs) do
     with :ok <- session(attrs[:session_id]),
          :ok <- root(attrs[:repository_root]),
          :ok <- purposes(attrs[:purposes]),
          :ok <- models(attrs[:models], attrs[:purposes]),
-         :ok <- limits(attrs) do
+         :ok <- limits(attrs),
+         {:ok, units} <- units(Map.get(attrs, :units, [])) do
       fields =
-        Map.take(attrs, [
+        attrs
+        |> Map.take([
           :session_id,
           :repository_root,
           :models,
           :team,
           :purposes | Keyword.keys(@limits)
         ])
+        |> Map.put(:units, units)
 
       if fields.max_parallel > fields.max_dispatches or
            fields.max_dispatch_seconds > fields.max_total_seconds,
@@ -312,6 +361,38 @@ defmodule Shoestring.Grants do
   end
 
   defp human(by), do: if(Authority.human?(by), do: :ok, else: {:error, :non_human_identity})
+
+  # Named budgets for EXTERNAL work: at most #{@max_units}, each a lowercase
+  # name, a cap and a per-dispatch reserve no larger than the cap.
+  defp units(units) when is_list(units) and length(units) <= @max_units do
+    units
+    |> Enum.reduce_while({:ok, []}, fn unit, {:ok, acc} ->
+      name = unit["name"] || unit[:name]
+      cap = unit["cap"] || unit[:cap]
+      reserve = unit["reserve"] || unit[:reserve]
+
+      if is_binary(name) and Regex.match?(@unit_name, name) and is_integer(cap) and
+           cap in 1..1_000_000 and is_integer(reserve) and reserve in 1..cap,
+         do: {:cont, {:ok, [%{"name" => name, "cap" => cap, "reserve" => reserve} | acc]}},
+         else: {:halt, {:error, {:invalid_grant, :units}}}
+    end)
+    |> case do
+      {:ok, list} ->
+        names = Enum.map(list, & &1["name"])
+
+        if length(names) == length(Enum.uniq(names)),
+          do: {:ok, Enum.reverse(list)},
+          else: {:error, {:invalid_grant, :units}}
+
+      error ->
+        error
+    end
+  end
+
+  defp units(_units), do: {:error, {:invalid_grant, :units}}
+
+  @doc "A grant's unit named `name`, or nil."
+  def unit(%Grant{units: units}, name), do: Enum.find(units || [], &(&1["name"] == name))
 
   defp session(id) when is_binary(id),
     do: if(Regex.match?(@session, id), do: :ok, else: {:error, {:invalid_grant, :session}})
@@ -325,7 +406,7 @@ defmodule Shoestring.Grants do
 
   defp purposes([_ | _] = purposes),
     do:
-      if(Enum.all?(purposes, &(&1 in @purposes)),
+      if(Enum.all?(purposes, &(&1 in @all_purposes)),
         do: :ok,
         else: {:error, {:invalid_grant, :purposes}}
       )
@@ -366,6 +447,7 @@ defmodule Shoestring.Grants do
       :models,
       :purposes,
       :team,
+      :units,
       :limits_revision | Keyword.keys(@limits)
     ])
     |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)

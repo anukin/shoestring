@@ -39,11 +39,19 @@ defmodule Shoestring.Coordinator.Tools do
           "changed). EXPLORE answers the brief read-only in one call; REVIEW has a model of " <>
           "another vendor review a completed IMPLEMENT (`of`). A retry with the same " <>
           "request_id returns the same dispatch. `dry_run` checks the grant and plan and " <>
-          "records nothing. A dispatch the grant does not cover is refused; nothing is queued.",
+          "records nothing. A dispatch the grant does not cover is refused; nothing is queued. " <>
+          "EXTERNAL (only when the grant allows it; no agent or worker) is work a person or a " <>
+          "program does outside Shoestring's guarantee, in a worktree Shoestring makes, accepted " <>
+          "by the checks: propose it only when the work cannot run as a sandboxed worker (a " <>
+          "desktop app, a signed-in browser). It always waits for the person to start it, and " <>
+          "only the person completes or abandons it; tell them the brief and the budget.",
       "inputSchema" => %{
         "type" => "object",
         "properties" => %{
-          "purpose" => %{"type" => "string", "enum" => ["implement", "explore", "review"]},
+          "purpose" => %{
+            "type" => "string",
+            "enum" => ["implement", "explore", "review", "external"]
+          },
           "agent" => %{
             "type" => "string",
             "description" =>
@@ -112,11 +120,18 @@ defmodule Shoestring.Coordinator.Tools do
           "after" => %{
             "type" => "string",
             "description" =>
-              "IMPLEMENT only: another IMPLEMENT dispatch of this session to follow. This one " <>
+              "IMPLEMENT and EXTERNAL: another IMPLEMENT or EXTERNAL dispatch of this session to follow. This one " <>
                 "waits (state `chained`, its room reserved) and starts from that one's " <>
                 "verified commit once it completes, instead of HEAD; taking its commit takes " <>
                 "both. Called off if that one is cancelled."
           },
+          "units" =>
+            Map.put(
+              @list,
+              "description",
+              "EXTERNAL only: NAME=N for each grant unit to reserve (default: each unit's " <>
+                "per-dispatch reserve)"
+            ),
           "batch" => %{"type" => "string"},
           "batch_size" => %{"type" => "integer", "minimum" => 1},
           "request_id" => %{"type" => "string"},
@@ -264,7 +279,7 @@ defmodule Shoestring.Coordinator.Tools do
   ]
 
   @strings ~w(purpose agent worker title brief effort reviewer of after batch request_id)
-  @lists ~w(files stay_out accept gates tests lessons)
+  @lists ~w(files stay_out accept gates tests lessons units)
   @integers ~w(attempts minutes batch_size)
 
   @doc "The tool definitions, as MCP `tools/list` returns them."
@@ -473,6 +488,8 @@ defmodule Shoestring.Coordinator.Tools do
       {:ok, Map.merge(fields, %{session_id: binding.session_id, repository: binding.repository})}
     end
   end
+
+  defp agent_or_worker(%{"purpose" => "external"}), do: :ok
 
   defp agent_or_worker(args) do
     if is_binary(args["agent"]) or is_binary(args["worker"]),

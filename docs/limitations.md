@@ -22,6 +22,13 @@ with the details.
   `shoestring chat --external` the coordinator is your own CLI session under
   its own permission prompts. Shoestring's guarantee that your checkout is
   never changed covers Shoestring and its workers, not that CLI.
+- **EXTERNAL work is not sandboxed by Shoestring.** An EXTERNAL dispatch's
+  work happens outside Shoestring, done by you or a program you drive (a
+  desktop app, a signed-in browser). The worktree, the checks, the clock and
+  the grant's units are Shoestring's; what happens in the worktree is the
+  operator's. Shoestring records your checkout's `HEAD` and status before and
+  after and reports a change, but it cannot prevent one. See
+  [EXTERNAL dispatches](coordinator.md#external-dispatches-iteration-20).
 - **Allowing an ask grants real access.** "Allow once" runs that one command
   outside the sandbox with your full file access (a Claude command also
   gets the network). See [asks](coordinator.md#teams-and-agents-iteration-16).

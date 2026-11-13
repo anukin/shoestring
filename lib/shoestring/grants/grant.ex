@@ -18,6 +18,9 @@ defmodule Shoestring.Grants.Grant do
     field :max_turns, :integer, default: 0
     # The team the session started with (`Shoestring.Agents.snapshot/1`), or nil.
     field :team, :map
+    # Named non-token budgets for EXTERNAL dispatches (iteration 20): each
+    # %{"name", "cap", "reserve"}; see `Shoestring.Dispatches.Externals`.
+    field :units, {:array, :map}, default: []
     field :turns_used, :integer, default: 0
     field :limits_revision, :integer, default: 1
     field :revoked_at, :utc_datetime_usec

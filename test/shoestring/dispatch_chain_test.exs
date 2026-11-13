@@ -222,7 +222,7 @@ defmodule Shoestring.DispatchChainTest do
              "no commit to start from"
   end
 
-  test "--after and `after` reach the request, for IMPLEMENT only", ctx do
+  test "--after and `after` reach the request, for IMPLEMENT and EXTERNAL only", ctx do
     fields = %{
       session_id: "s1",
       repository: ctx.repo,
@@ -238,7 +238,7 @@ defmodule Shoestring.DispatchChainTest do
     # Following another is another request.
     assert chained.request_id != plain.request_id
 
-    assert {:error, "--after is only for --purpose implement"} =
+    assert {:error, "--after is only for --purpose implement or external"} =
              Dispatch.build_request(%{fields | purpose: "explore"} |> Map.put(:after, "x"))
 
     assert {:ok, %{"dispatch_id" => id, "state" => "chained", "after" => after_id}} =

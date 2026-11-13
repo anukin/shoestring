@@ -440,6 +440,45 @@ Storage and retrieval sit behind `Shoestring.Lessons.Store` (default: this
 database, matching by shared words), so a semantic or shared memory store can
 replace it by configuration without changing these rules.
 
+### EXTERNAL dispatches (iteration 20)
+
+Some work cannot run as a sandboxed worker: a desktop app driven with
+computer use, a browser session that must be signed in, a tool with only a
+GUI. An EXTERNAL dispatch keeps Shoestring's brief, worktree, clock, checks
+and record around that work, while the work itself happens outside
+Shoestring's guarantee: Shoestring never runs, watches or sandboxes it.
+
+1. The grant must allow it: `shoestring grant --purposes
+   implement,external --units flow_credits=200/40` (units are optional named
+   budgets: `CAP` in total, `RESERVE` held per EXTERNAL until it settles).
+2. The coordinator dispatches `purpose: external` (no agent or worker), or a
+   person runs `shoestring external start --title T --brief FILE
+   [--units NAME=N] [--test PATH]... [--after DISPATCH]`. It is recorded
+   **held**: a grant's pre-approval never starts it.
+3. The person starts it (Start on the Sessions page, `s` in the chat screen,
+   or `shoestring external confirm DISPATCH`). Shoestring makes a private
+   worktree from `HEAD` (or from the verified commit of the dispatch it
+   follows), writes the brief to `.shoestring/brief.md` there and starts the
+   clock (the dispatch's minutes). Work in that directory only and commit
+   there.
+4. The person completes it: `shoestring external complete DISPATCH
+   [--units NAME=N]`. Shoestring checks the worktree is clean and holds a
+   commit beyond its base, runs the checks under its gate sandbox, and on
+   success prints the commands that take the commit (as for IMPLEMENT).
+   Otherwise it says why and stays open to complete again. `--units`
+   reports what the work used; without it, the whole reserve stays counted.
+5. Past its deadline it is reported expired and can still be completed:
+   nothing is stopped or deleted. `shoestring external abandon DISPATCH
+   --reason TEXT` ends it, keeps the worktree, and keeps its reserve counted.
+
+Only a person starts, completes or abandons one: the commands refuse
+without a terminal, and the coordinator's `runs_cancel` cannot abandon it.
+`runs show` gives the coordinator the person's next step for each state.
+An EXTERNAL may follow, or be followed by, an IMPLEMENT or another
+EXTERNAL (`after`); it is never part of a batch. Shoestring records your
+checkout's `HEAD` and status before the work starts and at completion, and
+reports a change: it cannot prevent an outside program from touching it.
+
 ## 3. Wait and inspect
 
 ```sh

@@ -45,7 +45,7 @@ defmodule Shoestring.Dispatches do
   alias Shoestring.Cobbler.{ExecutionControl, ExecutionProfile, Intake, PlanContract, Plans}
   alias Shoestring.Cobbler.{Parallelism, PlanIndependence}
   alias Shoestring.CLI.Result
-  alias Shoestring.Dispatches.{Call, Calls, ChainWorker, Dispatch}
+  alias Shoestring.Dispatches.{Call, Calls, ChainWorker, Dispatch, External, Externals}
   alias Shoestring.Grants.Grant
   alias Shoestring.Harness.{RunRecord, Security}
   alias Shoestring.Trajectory.Goal
@@ -53,9 +53,14 @@ defmodule Shoestring.Dispatches do
   @task_id "dispatch"
   @max_brief 16_000
   @request_id ~r/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,99}\z/
-  @available ~w(implement explore review)
+  @available ~w(implement explore review external)
   @calls ~w(explore review)
   @capability %{"implement" => :implement, "explore" => :explore, "review" => :review}
+  # EXTERNAL (iteration 20, `Shoestring.Dispatches.Externals`): no worker.
+  @external_worker {"external", "operator"}
+
+  @doc "The provider and model an EXTERNAL dispatch records in place of a worker."
+  def external_worker, do: @external_worker
 
   @type request :: %{
           required(:session_id) => String.t(),
@@ -188,7 +193,14 @@ defmodule Shoestring.Dispatches do
 
   defp existing(_request), do: {:error, :invalid_request_id}
 
-  @worker_role %{"implement" => "implementer", "explore" => "explorer", "review" => "reviewer"}
+  @worker_role %{
+    "implement" => "implementer",
+    "explore" => "explorer",
+    "review" => "reviewer",
+    "external" => "external"
+  }
+
+  defp proposes_lessons?(%{purpose: "external"}), do: false
 
   defp proposes_lessons?(request) do
     case Grants.active(request.session_id) do
@@ -261,6 +273,7 @@ defmodule Shoestring.Dispatches do
   # untracked files never reach a copy. EXPLORE and REVIEW only read, and
   # name what they left out.
   defp uncommitted("implement"), do: :untracked
+  defp uncommitted("external"), do: :untracked
   defp uncommitted(_purpose), do: :allow
 
   @doc """
@@ -313,6 +326,40 @@ defmodule Shoestring.Dispatches do
     end
   end
 
+  # EXTERNAL (iteration 20): work outside Shoestring in a run worktree of its
+  # own, accepted by checks named like IMPLEMENT's. Its record is a contract
+  # (gates, seconds, units), not a plan: nothing runs it.
+  defp prepare("external", %{request: request} = prepared, facts) do
+    with :ok <- no_batch(request),
+         {:ok, after_id} <- after_dispatch(request, prepared),
+         {:ok, seconds} <- call_seconds(request),
+         {:ok, units} <- external_units(request),
+         {:ok, gates} <-
+           Intake.gates(facts,
+             gates: Map.get(request, :gates, []),
+             tests: Map.get(request, :tests, [])
+           ) do
+      content = %{
+        "kind" => "external",
+        "version" => 1,
+        "title" => prepared.title,
+        "gates" => gates,
+        "seconds" => seconds,
+        "units" => units,
+        "base_revision" => prepared.head
+      }
+
+      {:ok,
+       Map.merge(prepared, %{
+         contract: %{content: content, digest: PlanContract.digest(content)},
+         attempts: 1,
+         seconds: seconds,
+         after: after_id,
+         units: units
+       })}
+    end
+  end
+
   # EXPLORE and REVIEW are one model call each (`Shoestring.Dispatches.Calls`):
   # the dispatch records the call's contract instead of a plan.
   # Its time is what the coordinator asked for, else the grant's per-dispatch
@@ -348,10 +395,29 @@ defmodule Shoestring.Dispatches do
   # An IMPLEMENT may follow another IMPLEMENT of its session and repository
   # (C1): it starts from that one's verified commit once it completes. One
   # already cancelled, or that never started, has no commit to follow.
+  defp no_batch(request) do
+    if Map.get(request, :tasks, []) == [] and is_nil(Map.get(request, :batch_label)),
+      do: :ok,
+      else: {:error, :external_not_in_batch}
+  end
+
+  # What it reserves: the units it names, else every unit of the grant at its
+  # per-dispatch reserve.
+  defp external_units(request) do
+    grant = Grants.active(request.session_id)
+
+    with {:ok, asked} <- Externals.parse_units(Map.get(request, :units, [])) do
+      case grant do
+        %Grant{} -> {:ok, Externals.units_for(grant, asked)}
+        nil -> {:ok, asked}
+      end
+    end
+  end
+
   defp after_dispatch(%{after_dispatch: id} = request, prepared) when is_binary(id) do
     with %Dispatch{} = before <- get(id) || {:error, :after_not_found},
          true <- before.session_id == request.session_id || {:error, :after_not_found},
-         true <- before.purpose == "implement" || {:error, :after_not_implement},
+         true <- before.purpose in ~w(implement external) || {:error, :after_not_implement},
          true <- before.repository_root == prepared.root || {:error, :after_other_repository},
          state when state not in ~w(cancelled failed_to_start) <- state(before) do
       {:ok, before.id}
@@ -403,6 +469,9 @@ defmodule Shoestring.Dispatches do
   # The session agent this dispatch is for: the one it names (`agent`), else
   # the one of its job on its model. Its limit then bounds the dispatch,
   # however it was named.
+  defp session_agent(%{purpose: "external"} = request),
+    do: {:ok, Map.merge(request, %{agent: nil, agent_entry: nil})}
+
   defp session_agent(request) do
     team =
       case Grants.active(request.session_id) do
@@ -507,6 +576,12 @@ defmodule Shoestring.Dispatches do
 
   # The worker must be an enabled model the harness still offers, on a
   # harness that can do the purpose, with an effort the model accepts.
+  defp worker(%{purpose: "external"} = request) do
+    if {request.provider, request.model} == @external_worker,
+      do: :ok,
+      else: {:error, {:invalid_dispatch, :worker}}
+  end
+
   defp worker(%{provider: provider, model: model} = request) do
     effort = Map.get(request, :effort)
 
@@ -792,7 +867,7 @@ defmodule Shoestring.Dispatches do
                 ),
               batch_label: Map.get(request, :batch_label),
               batch_size: Map.get(request, :batch_size),
-              goal_id: if(request.purpose == "implement", do: Ecto.UUID.generate()),
+              goal_id: if(request.purpose in ~w(implement external), do: Ecto.UUID.generate()),
               plan: prepared.contract.content,
               plan_digest: prepared.contract.digest,
               after_dispatch_id: prepared[:after],
@@ -802,6 +877,9 @@ defmodule Shoestring.Dispatches do
             })
 
           :ok = Lessons.cite(prepared.lesson_codes, now)
+
+          # An EXTERNAL's units are reserved with it, in this transaction.
+          if request.purpose == "external", do: Externals.insert!(dispatch, prepared.units)
 
           # A dispatch that follows another has its job recorded with it, so
           # it is followed after a restart as well.
@@ -882,12 +960,9 @@ defmodule Shoestring.Dispatches do
   # The plan granted with the dispatch, based on the commit it follows. A
   # compare-and-set from `chained`, so two steps never both start it.
   defp start_after(dispatch, before, opts) do
-    case Result.fetch(before.goal_id) do
-      {:ok, %{commit: commit}} ->
-        with {:ok, contract} <-
-               PlanContract.new(
-                 put_in(dispatch.plan, ["goal", "repository", "base_revision"], commit)
-               ) do
+    case verified(before) do
+      {:ok, %{commit: commit, worktree: worktree}} ->
+        with {:ok, contract} <- rebased(dispatch, commit, worktree) do
           {count, _} =
             from(d in Dispatch, where: d.id == ^dispatch.id and d.state == "chained")
             |> Repo.update_all(
@@ -919,13 +994,47 @@ defmodule Shoestring.Dispatches do
     if count == 1, do: {:called_off, code}, else: :none
   end
 
+  # The verified commit a completed IMPLEMENT or EXTERNAL produced, and the
+  # Shoestring worktree that holds it: what a dispatch following it starts
+  # from (C1, iteration 20).
+  @doc false
+  def verified(%Dispatch{purpose: "external"} = dispatch) do
+    case Externals.get(dispatch.id) do
+      %External{state: "completed", commit: commit, worktree_path: path} ->
+        {:ok, %{commit: commit, worktree: path}}
+
+      %External{state: state} when state in ~w(held awaiting needs_you) ->
+        {:error, :not_completed}
+
+      _ ->
+        {:error, :after_result_unavailable}
+    end
+  end
+
+  def verified(%Dispatch{goal_id: goal_id}) do
+    case Result.fetch(goal_id) do
+      {:ok, %{commit: commit, worktree: worktree}} -> {:ok, %{commit: commit, worktree: worktree}}
+      error -> error
+    end
+  end
+
+  # A following dispatch's contract, rebased on the commit it follows. An
+  # EXTERNAL records where that commit lives, to make its worktree from it.
+  defp rebased(%Dispatch{purpose: "external", plan: plan}, commit, worktree) do
+    content = Map.merge(plan, %{"base_revision" => commit, "base_source" => worktree})
+    {:ok, %{content: content, digest: PlanContract.digest(content)}}
+  end
+
+  defp rebased(dispatch, commit, _worktree),
+    do: PlanContract.new(put_in(dispatch.plan, ["goal", "repository", "base_revision"], commit))
+
   # Where a dispatch that follows another gets its base commit: the worktree
   # holding the verified commit it follows. Nil for every other dispatch.
   defp base_source(%Dispatch{after_dispatch_id: nil}), do: {:ok, nil}
 
   defp base_source(dispatch) do
     with %Dispatch{} = before <- get(dispatch.after_dispatch_id) || {:error, :after_not_found},
-         {:ok, %{commit: commit, worktree: worktree}} <- Result.fetch(before.goal_id),
+         {:ok, %{commit: commit, worktree: worktree}} <- verified(before),
          true <- commit == dispatch.base_revision || {:error, :after_commit_changed} do
       {:ok, worktree}
     end
@@ -965,6 +1074,22 @@ defmodule Shoestring.Dispatches do
       dispatch = dispatch |> Ecto.Changeset.change(state: "started") |> Repo.update!()
       {:ok, dispatch, outcome}
     else
+      {:error, reason} ->
+        dispatch
+        |> Ecto.Changeset.change(state: "failed", error: error_code(reason))
+        |> Repo.update!()
+
+        {:error, reason}
+    end
+  end
+
+  # An EXTERNAL starts held: nothing runs until the person confirms it.
+  defp start(%Dispatch{purpose: "external"} = dispatch, _opts, outcome) do
+    case ensure_goal(dispatch) do
+      :ok ->
+        dispatch = dispatch |> Ecto.Changeset.change(state: "started") |> Repo.update!()
+        {:ok, dispatch, outcome}
+
       {:error, reason} ->
         dispatch
         |> Ecto.Changeset.change(state: "failed", error: error_code(reason))
@@ -1061,7 +1186,8 @@ defmodule Shoestring.Dispatches do
       seconds: prepared.seconds,
       total_seconds: Map.get(prepared, :total_seconds, prepared.seconds),
       width: Map.get(prepared, :task_count, 1),
-      chained: prepared[:after] != nil
+      chained: prepared[:after] != nil,
+      units: Map.get(prepared, :units)
     }
   end
 
@@ -1080,6 +1206,7 @@ defmodule Shoestring.Dispatches do
       |> Enum.map(&{&1, state(&1)})
 
     %{
+      units: Externals.units_used(grant),
       attempts: Enum.sum_by(dispatches, fn {dispatch, _} -> dispatch.max_attempts end),
       seconds: Enum.sum_by(dispatches, fn {dispatch, state} -> used_seconds(dispatch, state) end),
       # A batch takes one parallel place per task.
@@ -1112,6 +1239,13 @@ defmodule Shoestring.Dispatches do
 
       _ ->
         nil
+    end
+  end
+
+  def took(%Dispatch{purpose: "external"} = dispatch) do
+    case Externals.get(dispatch.id) do
+      %External{} = external -> Externals.took(external)
+      nil -> nil
     end
   end
 
@@ -1177,6 +1311,13 @@ defmodule Shoestring.Dispatches do
   def state(%Dispatch{state: "failed"}, _status), do: "failed_to_start"
   def state(%Dispatch{state: "chained"}, _status), do: "chained"
   def state(%Dispatch{state: "cancelled"}, _status), do: "cancelled"
+
+  def state(%Dispatch{state: "started", purpose: "external"} = dispatch, _status) do
+    case Externals.get(dispatch.id) do
+      %External{} = external -> Externals.dispatch_state(external)
+      nil -> "starting"
+    end
+  end
 
   def state(%Dispatch{state: "started", purpose: purpose} = dispatch, _status)
       when purpose in @calls do
@@ -1249,6 +1390,17 @@ defmodule Shoestring.Dispatches do
   @doc "A dispatch's state and stable identity of the decision or review it waits on."
   def inbox_state(%Dispatch{state: state} = dispatch) when state != "started",
     do: {state(dispatch), "0:#{state}"}
+
+  def inbox_state(%Dispatch{purpose: "external"} = dispatch) do
+    case Externals.get(dispatch.id) do
+      %External{} = external ->
+        {Externals.dispatch_state(external),
+         "external:#{external.state}:#{external.attempts}:#{DateTime.to_unix(external.updated_at, :microsecond)}"}
+
+      nil ->
+        {state(dispatch), "starting"}
+    end
+  end
 
   def inbox_state(%Dispatch{purpose: purpose} = dispatch) when purpose in @calls do
     case Calls.get(dispatch.id) do
@@ -1342,6 +1494,8 @@ defmodule Shoestring.Dispatches do
   """
   def advance(dispatch, status \\ &ExecutionControl.status/1)
 
+  def advance(%Dispatch{purpose: "external"}, _status), do: :none
+
   def advance(%Dispatch{state: "started", purpose: purpose} = dispatch, _status)
       when purpose in @calls do
     with %Call{state: "held", confirmed_by: nil} = call <- Calls.get(dispatch.id),
@@ -1375,6 +1529,9 @@ defmodule Shoestring.Dispatches do
   or `{:error, reason}`.
   """
   def confirm_hold(dispatch, by, status \\ &ExecutionControl.status/1)
+
+  def confirm_hold(%Dispatch{state: "started", purpose: "external"} = dispatch, by, _status),
+    do: Externals.confirm(dispatch, by)
 
   def confirm_hold(%Dispatch{state: "started", purpose: purpose} = dispatch, by, _status)
       when purpose in @calls do
@@ -1631,6 +1788,15 @@ defmodule Shoestring.Dispatches do
       :error ->
         do_cancel(dispatch, reason, opts)
     end
+  end
+
+  defp do_cancel(%Dispatch{state: "started", purpose: "external"} = dispatch, reason, opts) do
+    by =
+      Keyword.get_lazy(opts, :requested_by, fn -> Authority.grant_identity(dispatch.grant_id) end)
+
+    # Abandoning is a person's; a coordinator's cancel records its grant's
+    # identity, which `abandon` refuses: the coordinator asks the person.
+    Externals.abandon(dispatch, by, redact(reason))
   end
 
   defp do_cancel(%Dispatch{state: "started", purpose: purpose} = dispatch, _reason, _opts)

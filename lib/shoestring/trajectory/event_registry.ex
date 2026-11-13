@@ -1030,6 +1030,40 @@ defmodule Shoestring.Trajectory.EventRegistry do
         types: %{revision_number: :integer, attempt: :integer}
       }
     },
+    # EXTERNAL dispatches (iteration 20): work outside Shoestring in its run
+    # worktree, accepted by its checks; a person confirms, completes or abandons.
+    "dispatch.external.started" => %{
+      1 => %{
+        required: [:dispatch_id, :confirmed_by, :worktree, :base_commit, :deadline_at],
+        optional: [],
+        uuid_fields: [:dispatch_id],
+        types: %{}
+      }
+    },
+    "dispatch.external.completed" => %{
+      1 => %{
+        required: [:dispatch_id, :attempt, :commit, :completed_by, :expired],
+        optional: [:units_actual],
+        uuid_fields: [:dispatch_id],
+        types: %{attempt: :integer, expired: :boolean, units_actual: :map}
+      }
+    },
+    "dispatch.external.completion_failed" => %{
+      1 => %{
+        required: [:dispatch_id, :attempt, :reason, :completed_by, :expired],
+        optional: [],
+        uuid_fields: [:dispatch_id],
+        types: %{attempt: :integer, expired: :boolean}
+      }
+    },
+    "dispatch.external.abandoned" => %{
+      1 => %{
+        required: [:dispatch_id, :by, :reason],
+        optional: [],
+        uuid_fields: [:dispatch_id],
+        types: %{}
+      }
+    },
     # Decision points (iteration 19): a task's candidates wait for a person.
     "cobbler.plan.decision.requested" => %{
       1 => %{
@@ -2127,6 +2161,21 @@ defmodule Shoestring.Trajectory.EventRegistry do
          :ok <- plan_execution_task_id(payload),
          {:ok, _} <- Contract.text(payload["reason"], :reason, max: 2000),
          do: :ok
+  end
+
+  # Only a person confirms, completes or abandons an EXTERNAL.
+  defp validate_plan_execution(type, 1, payload, _opts)
+       when type in [
+              "dispatch.external.started",
+              "dispatch.external.completed",
+              "dispatch.external.completion_failed",
+              "dispatch.external.abandoned"
+            ] do
+    who = payload["confirmed_by"] || payload["completed_by"] || payload["by"]
+
+    if human_identity?(who),
+      do: :ok,
+      else: Contract.invalid(:by, "must be a human: identity")
   end
 
   defp validate_plan_execution(_type, _version, _payload, _opts), do: :ok

@@ -59,19 +59,35 @@ defmodule Shoestring.Attention do
 
     asks(session_id) ++
       decisions ++
+      externals(session_id) ++
       for({dispatch, "held"} <- dispatches, do: held_item(dispatch)) ++
       for({dispatch, "needs_you"} <- dispatches, do: stopped_item(dispatch, status))
   end
 
   # The session's dispatches that wait for the person, with their state. A
-  # dispatch whose goal waits on a decision is shown by that decision.
+  # dispatch whose goal waits on a decision is shown by that decision; an
+  # EXTERNAL that started is shown by its own item (`externals/1`).
   defp waiting(session_id, states, deciding) do
     for dispatch <- Dispatches.list(session_id),
         dispatch.state == "started",
         not MapSet.member?(deciding, dispatch.goal_id),
         state = states[dispatch.id] || Dispatches.state(dispatch),
         state in ~w(held needs_you),
+        not (dispatch.purpose == "external" and state == "needs_you"),
         do: {dispatch, state}
+  end
+
+  @doc """
+  `session_id`'s EXTERNAL dispatches that wait for the person's outside work
+  or a new completion (iteration 20), as items.
+  """
+  def externals(session_id) do
+    for dispatch <- Dispatches.list(session_id),
+        dispatch.purpose == "external" and dispatch.state == "started",
+        %Shoestring.Dispatches.External{state: state} = external <-
+          [Shoestring.Dispatches.Externals.get(dispatch.id)],
+        state in ~w(awaiting needs_you),
+        do: external_item(dispatch, external)
   end
 
   @doc "The decisions `session_id`'s dispatches wait on, as items, oldest first."
@@ -115,7 +131,9 @@ defmodule Shoestring.Attention do
       Sessions.recent(AgentProfiles.settings().session_days, DateTime.utc_now(), counts: false).sessions
 
     length(asks) + length(decisions) +
-      Enum.sum_by(sessions, &length(waiting(&1.session_id, %{}, deciding)))
+      Enum.sum_by(sessions, fn session ->
+        length(waiting(session.session_id, %{}, deciding)) + length(externals(session.session_id))
+      end)
   end
 
   # -- Answering -----------------------------------------------------------------
@@ -286,6 +304,65 @@ defmodule Shoestring.Attention do
       choices:
         Enum.map(decision.options, &{&1["key"], &1["label"]}) ++
           if(decision.allow_reject, do: [{"reject", "None of these"}], else: [])
+    }
+  end
+
+  defp external_item(dispatch, external) do
+    view = Shoestring.CLI.Commands.External.view(dispatch, external)
+    needs_you? = external.state == "needs_you"
+
+    %{
+      id: "external-" <> dispatch.id,
+      kind: :external,
+      dispatch: dispatch,
+      dispatch_id: dispatch.id,
+      agent: nil,
+      at: external.updated_at,
+      title:
+        if(needs_you?,
+          do: "This EXTERNAL's result was not accepted",
+          else: "EXTERNAL work waits for you"
+        ),
+      summary: "EXTERNAL: " <> dispatch.title,
+      subject: dispatch.title,
+      why: needs_you? && Shoestring.CLI.Commands.External.failure_text(external.failure),
+      note:
+        "Done outside Shoestring's guarantee: Shoestring does not run or sandbox it. Work in " <>
+          "its worktree, commit there, then complete it in a terminal; its checks decide." <>
+          if(view["expired"], do: " It is past its deadline and still open.", else: ""),
+      lines:
+        [
+          "Worktree: #{external.worktree_path}",
+          "Brief: #{view["brief"]}",
+          "Deadline: #{external.deadline_at}"
+        ] ++
+          for({name, n} <- external.units_reserved || %{}, do: "Units: #{name} #{n} reserved") ++
+          if(view["source_changed"],
+            do: ["Your checkout changed while it worked: Shoestring did not change it."],
+            else: []
+          ),
+      commands: view["next"],
+      run_id: nil,
+      choices: []
+    }
+  end
+
+  defp held_item(%{purpose: "external"} = dispatch) do
+    %{
+      id: "held-" <> dispatch.id,
+      kind: :held,
+      dispatch: dispatch,
+      dispatch_id: dispatch.id,
+      agent: nil,
+      at: dispatch.inserted_at,
+      title: "Start this EXTERNAL work?",
+      summary: "Start EXTERNAL: " <> dispatch.title,
+      subject: dispatch.title,
+      why: nil,
+      note:
+        "It is done outside Shoestring's guarantee: Shoestring does not run or sandbox it. " <>
+          "Starting makes its worktree from HEAD, writes the brief there and starts its clock.",
+      choices: [{"start", "Start it"}]
     }
   end
 

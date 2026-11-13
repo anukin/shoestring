@@ -44,6 +44,7 @@ defmodule Shoestring.CLI.Main do
     {"lessons", Commands.Lessons},
     {"asks", Commands.Asks},
     {"decision", Commands.Decision},
+    {"external", Commands.External},
     {"capacity", Commands.Capacity}
   ]
 
@@ -82,6 +83,8 @@ defmodule Shoestring.CLI.Main do
                 what workers are waiting on you to allow or deny, and your answers
     decision list | show | answer DECISION
                 what plans wait on you to choose among their candidates, and your answers
+    external start | list | show | confirm | complete | abandon
+                work done outside Shoestring in a worktree it makes, accepted by its checks
     capacity    each provider's latest usage reading and what admission is likely to do
 
   `shoestring COMMAND --help` describes a command. Commands that print data

@@ -13,6 +13,16 @@ is summarised by iteration in [docs/history.md](docs/history.md).
 
 ### Added
 
+- EXTERNAL dispatches: work done outside Shoestring (a desktop app, a
+  signed-in browser) in a private worktree Shoestring makes, accepted only
+  by its checks. Always held for the person's start; only a person completes
+  (`shoestring external complete`) or abandons it. Grants may carry named
+  units (`shoestring grant --units NAME=CAP/RESERVE`), reserved per EXTERNAL
+  and settled from the reported actual. The person's checkout is recorded
+  before and after, and a change is reported.
+- Every plan worker is told to write files with literal-path commands and to
+  retry a refused command more simply (Claude Code's don't-ask sandbox
+  refuses some compound writes).
 - Decision points: a plan task can declare a `decision` and write N
   candidates under `.shoestring/decisions/<id>/`. After its gates pass,
   the plan waits for a person (`human:` only, first answer wins, no

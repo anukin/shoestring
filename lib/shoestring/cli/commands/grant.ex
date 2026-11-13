@@ -8,7 +8,8 @@ defmodule Shoestring.CLI.Commands.Grant do
   shoestring grant --models PROVIDER:MODEL[,PROVIDER:MODEL...]
       [--purposes explore,implement,review] [--max-dispatches N]
       [--max-parallel N] [--max-hours H] [--max-dispatch-minutes M]
-      [--unread-usage N] [--max-turns N] [--session ID] [--repo PATH]
+      [--unread-usage N] [--max-turns N] [--units NAME=CAP/RESERVE]...
+      [--session ID] [--repo PATH]
       [--team NAME] [--by human:NAME] [--json]
 
   Lets a coordinator (Claude Code, Codex or opencode in a chat session) hand
@@ -16,7 +17,12 @@ defmodule Shoestring.CLI.Commands.Grant do
 
     --models                the only models it may dispatch to (enabled ones)
     --team NAME             snapshot this team's agents, limits and switches
-    --purposes              what it may dispatch (default: all three)
+    --purposes              what it may dispatch (default: explore,implement,review;
+                            add external for work done outside Shoestring)
+    --units NAME=CAP/RESERVE
+                            a named budget for EXTERNAL work, for example
+                            flow_credits=200/40: at most CAP in total, RESERVE
+                            held per EXTERNAL until it settles (at most 4)
     --max-dispatches N      attempts in total, retries included (default 10)
     --max-parallel N        dispatches queued or running at once (default 3).
                             At Settings' parallel tasks 1 they run one after
@@ -48,6 +54,7 @@ defmodule Shoestring.CLI.Commands.Grant do
     max_dispatch_minutes: :integer,
     unread_usage: :integer,
     max_turns: :integer,
+    units: :keep,
     session: :string,
     repo: :string,
     by: :string,
@@ -78,6 +85,19 @@ defmodule Shoestring.CLI.Commands.Grant do
         )
   end
 
+  defp units!(values) do
+    Enum.map(values, fn value ->
+      with [name, rest] <- String.split(value, "=", parts: 2),
+           [cap, reserve] <- String.split(rest, "/", parts: 2),
+           {cap, ""} <- Integer.parse(cap),
+           {reserve, ""} <- Integer.parse(reserve) do
+        %{"name" => name, "cap" => cap, "reserve" => reserve}
+      else
+        _ -> Refusal.refuse!("Use NAME=CAP/RESERVE for --units, for example flow_credits=200/40")
+      end
+    end)
+  end
+
   defp grant(opts, context) do
     attrs = %{
       session_id: opts[:session] || Grants.new_session_id(),
@@ -90,7 +110,8 @@ defmodule Shoestring.CLI.Commands.Grant do
       max_dispatch_seconds: Keyword.get(opts, :max_dispatch_minutes, 60) * 60,
       unread_usage: Keyword.get(opts, :unread_usage, 0),
       max_turns: Keyword.get(opts, :max_turns, 20),
-      team: team!(opts[:team])
+      team: team!(opts[:team]),
+      units: units!(Keyword.get_values(opts, :units))
     }
 
     describe(attrs, context)
@@ -134,6 +155,12 @@ defmodule Shoestring.CLI.Commands.Grant do
 
     shell.error("  Dispatches started with unreadable usage: #{attrs.unread_usage}")
     shell.error("  Coordinator turns: #{attrs.max_turns}")
+
+    for unit <- Map.get(attrs, :units) || [] do
+      shell.error(
+        "  EXTERNAL units #{unit["name"]}: #{unit["cap"]} in total, #{unit["reserve"]} held per dispatch"
+      )
+    end
 
     case Map.get(attrs, :team) do
       %{"agents" => [_ | _] = agents} = team ->
