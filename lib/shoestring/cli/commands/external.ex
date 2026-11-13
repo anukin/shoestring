@@ -201,6 +201,7 @@ defmodule Shoestring.CLI.Commands.External do
       "title" => dispatch.title,
       "state" => external.state,
       "expired" => Externals.expired?(external),
+      "remaining" => remaining(external),
       "worktree" => external.worktree_path,
       "brief" =>
         external.worktree_path && Path.join(external.worktree_path, Externals.brief_path()),
@@ -229,6 +230,20 @@ defmodule Shoestring.CLI.Commands.External do
     ]
 
   def next(_state, _short), do: []
+
+  @doc "The time left to an EXTERNAL's deadline, human; nil without one."
+  def remaining(external, now \\ DateTime.utc_now())
+
+  def remaining(%External{deadline_at: %DateTime{} = deadline, state: state}, now)
+      when state in ~w(awaiting needs_you) do
+    case DateTime.diff(deadline, now, :second) do
+      secs when secs <= 0 -> "past due"
+      secs when secs >= 3600 -> "#{div(secs, 3600)}h #{div(rem(secs, 3600), 60)}m"
+      secs -> "#{div(secs, 60)}m"
+    end
+  end
+
+  def remaining(_external, _now), do: nil
 
   def failure_text("no_commit"), do: "nothing was committed in its worktree."
   def failure_text("gate_worktree_dirty"), do: "its worktree has uncommitted or untracked files."

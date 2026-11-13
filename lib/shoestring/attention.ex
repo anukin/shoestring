@@ -334,7 +334,7 @@ defmodule Shoestring.Attention do
         [
           "Worktree: #{external.worktree_path}",
           "Brief: #{view["brief"]}",
-          "Deadline: #{external.deadline_at}"
+          "Time left: #{view["remaining"]} (deadline #{external.deadline_at})"
         ] ++
           for({name, n} <- external.units_reserved || %{}, do: "Units: #{name} #{n} reserved") ++
           if(view["source_changed"],

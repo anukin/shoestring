@@ -8,7 +8,7 @@ defmodule Shoestring.Dispatches.ExternalsTest do
   """
   use Shoestring.DataCase, async: false
 
-  alias Shoestring.{Dispatches, Grants, ModelCatalog}
+  alias Shoestring.{Dispatches, Grants, ModelCatalog, Repo}
   alias Shoestring.Dispatches.{External, Externals}
 
   @moduletag :tmp_dir
@@ -155,6 +155,49 @@ defmodule Shoestring.Dispatches.ExternalsTest do
     test "an EXTERNAL is never a batch member", ctx do
       assert {:error, :external_not_in_batch} =
                Dispatches.create(request(ctx, %{tasks: [%{"title" => "one", "files" => ["a"]}]}))
+    end
+
+    test "a reservation survives a restart: read fresh, replayed once, never duplicated", ctx do
+      # One request id, exactly as the coordinator's client would resend it
+      # after a restart between the reserve and the start.
+      req = %{request(ctx) | request_id: "restart-once"}
+      assert {:ok, dispatch, :recorded} = fresh!(ctx, fn -> Dispatches.create(req) end)
+
+      # Every step below runs in a fresh process with its own connection to
+      # the same rows: the closest hermetic analogue of a restart between
+      # the reserve and the start.
+      assert fresh!(ctx, fn -> Dispatches.usage(fresh_grant(ctx)).units end) ==
+               %{"flow_credits" => 40}
+
+      assert {:ok, replayed, :replayed} = fresh!(ctx, fn -> Dispatches.create(req) end)
+      assert replayed.id == dispatch.id
+
+      # The replay reserved nothing more: one row, one reserve.
+      assert [%External{}] = fresh!(ctx, fn -> Repo.all(External) end)
+
+      assert fresh!(ctx, fn -> Dispatches.usage(fresh_grant(ctx)).units end) == %{
+               "flow_credits" => 40
+             }
+
+      assert :confirmed =
+               fresh!(ctx, fn ->
+                 Externals.confirm(dispatch, @by, worktrees_dir: ctx.worktrees)
+               end)
+
+      assert fresh!(ctx, fn -> Dispatches.usage(fresh_grant(ctx)).units end) == %{
+               "flow_credits" => 40
+             }
+
+      %{worktree_path: path} = Externals.get(dispatch.id)
+      commit_in!(path)
+
+      assert {:ok, %External{state: "completed"}} =
+               fresh!(ctx, fn -> Externals.complete(dispatch, @by, %{}, passing()) end)
+
+      # Settled with no reported actual: the reserve is kept, exactly once.
+      assert fresh!(ctx, fn -> Dispatches.usage(fresh_grant(ctx)).units end) == %{
+               "flow_credits" => 40
+             }
     end
   end
 
@@ -326,5 +369,26 @@ defmodule Shoestring.Dispatches.ExternalsTest do
       %External{worktree_path: path, base_commit: ^sha} = Externals.get(second.id)
       assert File.read!(Path.join(path, "sheet.txt")) == "a sheet\n"
     end
+  end
+
+  defp fresh_grant(ctx), do: Repo.get!(Grants.Grant, ctx.grant.id)
+
+  # Runs `fun` in a fresh process with its own connection to the same rows.
+  defp fresh!(ctx, fun) do
+    parent = self()
+    ref = make_ref()
+
+    pid =
+      spawn(fn ->
+        receive do
+          :go ->
+            Ecto.Adapters.SQL.Sandbox.allow(Shoestring.Repo, parent, self())
+            send(parent, {ref, fun.()})
+        end
+      end)
+
+    send(pid, :go)
+    assert_receive {^ref, result}, 15_000
+    result
   end
 end

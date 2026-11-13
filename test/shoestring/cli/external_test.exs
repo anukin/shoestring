@@ -8,8 +8,8 @@ defmodule Shoestring.CLI.ExternalTest do
 
   import Shoestring.Test.ExternalHelpers
 
-  alias Shoestring.{Attention, Dispatches}
-  alias Shoestring.CLI.Commands.{External, Runs}
+  alias Shoestring.{Attention, Dispatches, Grants}
+  alias Shoestring.CLI.Commands.{External, Grant, Runs}
   alias Shoestring.CLI.Refusal
   alias Shoestring.Coordinator.Tools
   alias Shoestring.Dispatches.Externals
@@ -194,6 +194,7 @@ defmodule Shoestring.CLI.ExternalTest do
     assert [%{kind: :external} = item] = Attention.items(ctx.session)
     assert item.title == "EXTERNAL work waits for you"
     assert Enum.any?(item.lines, &String.starts_with?(&1, "Worktree: "))
+    assert Enum.any?(item.lines, &(&1 =~ ~r/Time left: \d+m \(deadline /))
     assert Enum.any?(item.commands, &(&1 =~ "shoestring external complete"))
     assert Attention.count() == before
 
@@ -203,5 +204,54 @@ defmodule Shoestring.CLI.ExternalTest do
              Attention.items(ctx.session)
 
     assert failed.why =~ "nothing was committed"
+  end
+
+  describe "grant --units" do
+    test "NAME=CAP/RESERVE grants units an EXTERNAL then reserves", ctx do
+      session = "g-#{System.unique_integer([:positive])}"
+      send(self(), {:mix_shell_input, :prompt, "y"})
+
+      Grant.run(
+        [
+          "--models",
+          "codex:gpt-6-luna",
+          "--purposes",
+          "external",
+          "--units",
+          "flow_credits=200/40",
+          "--session",
+          session
+        ],
+        context(ctx)
+      )
+
+      %{"grant_id" => _} = json()
+      drain()
+
+      assert %Grants.Grant{units: [%{"name" => "flow_credits", "cap" => 200, "reserve" => 40}]} =
+               Grants.active(session)
+
+      # The granted units are exactly what an EXTERNAL under it reserves.
+      assert {:ok, dispatch, :recorded} =
+               Dispatches.create(request(%{ctx | session: session}))
+
+      assert Externals.get(dispatch.id).units_reserved == %{"flow_credits" => 40}
+    end
+
+    test "a malformed --units value is refused before anything is asked", ctx do
+      assert_raise Refusal, ~r/NAME=CAP\/RESERVE/, fn ->
+        Grant.run(
+          [
+            "--models",
+            "codex:gpt-6-luna",
+            "--purposes",
+            "external",
+            "--units",
+            "flow_credits=200"
+          ],
+          context(ctx)
+        )
+      end
+    end
   end
 end
