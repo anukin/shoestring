@@ -67,7 +67,17 @@ checkpoint.evidence                    1..8 bounded texts
 risks                                  <= 8 bounded texts
 execution.max_attempts                 1..20
 execution.max_duration_seconds         1..14400
+decision                               optional; see "Decision points"
+decision.id                            slug, unique within the plan
+decision.question                      bounded text, <= 2000
+decision.min_options / .max_options    1..12, min <= max
+decision.allow_reject                  true or false
 ```
+
+A task that declares a `decision` must list
+`.shoestring/decisions/<id>/decision.json` in `expected_artifacts`. A task
+without one has no `decision` key at all, so existing plans keep their
+digest.
 
 The whole canonical document is capped at 65 536 bytes.
 `budget.max_total_attempts` must cover the sum of the tasks' attempts and
@@ -274,6 +284,62 @@ New trajectory events (all v1, all validated at the registry boundary):
 `cobbler.plan.execution.requested`, `cobbler.plan.task.dispatched`,
 `cobbler.plan.task.accepted`, `cobbler.plan.task.gate_failed`,
 `cobbler.plan.execution.completed`.
+
+## Decision points (iteration 19)
+
+A task can produce N candidates and declare that a person must choose one
+before its dependents run. Shoestring stores the candidates, waits for a
+person's answer, and gives the answer to the dependents. It never learns
+what the candidates mean: they are bytes with a media type.
+
+- **The decision file.** The task (its worker, or a gate script) writes
+  `.shoestring/decisions/<id>/decision.json` in its worktree:
+  `{"id", "question"?, "note"?, "options": [{"key", "label", "file",
+  "media_type", "source"?}]}`. `/.shoestring/` is excluded from Git in
+  Shoestring's run worktrees, so candidates are never committed and the
+  clean-worktree check stays green. Every path is worktree-relative, with no
+  `..` and no symlinked component. `file` is stored as an artifact, so it
+  must fit the artifact cap (10 MiB). For a larger candidate, give a poster
+  or thumbnail as `file` and the full file's path as `source`, which is
+  recorded but never stored. Option keys are slugs, and `reject` is
+  reserved. At most 12 options; the plan's `min_options` and
+  `max_options` apply.
+- **Ingestion.** `Shoestring.Decisions.DecisionFile` checks the file after
+  the task's gates pass, before any cross-review. A malformed file fails
+  the attempt as gate `decision`, with the reason, like any other gate.
+  On acceptance, every `file` is stored with `ArtifactStore.put`, and the
+  acceptance, the `plan_decisions` row and
+  `cobbler.plan.decision.requested` are written in one immediate
+  transaction, so no crash leaves the task accepted without its decision.
+- **The pause.** While a decision is pending, the task does not count as
+  accepted: its dependents do not start, the plan cannot complete, status
+  reports `awaiting_decision` and `needs_user?`, and the execution job
+  stops. Independent tasks may still run. The waiting attempt releases
+  the sequential task claim, so other work can run meanwhile. Nothing
+  holds a process, and nothing decides it by a timer. It survives a
+  restart (VERIFIED by `decision_restart_node_test.exs`).
+- **The answer.** `Shoestring.Decisions.answer(id, key | "reject", note,
+  "human:NAME")`: `human:` identities only, and the first answer wins (a
+  conditional update on `state = 'pending'` in the same transaction as
+  `cobbler.plan.decision.answered`). The plan is then queued again
+  (`ExecutionControl.continue/2`). The dependent task's prompt carries
+  each dependency's decision as an input: decision id, chosen key and
+  label, artifact id, the file's path, `source` and the person's note.
+  A chosen file under `.shoestring/` is copied into the dependent's new
+  worktree from the verified artifact store; any other path was committed,
+  so it is already there.
+- **"None of these".** `reject`, only when `allow_reject` is true, needs a
+  note. It fails the task's attempt with retry state `needs_user`: nothing
+  retries it automatically, and the coordinator may propose a new dispatch.
+  There is no branching in the DAG on the answer.
+- **Cancellation.** Cancelling the goal withdraws its pending decisions in
+  the same transaction (`cobbler.plan.decision.withdrawn`). Their
+  artifacts are kept.
+- **Limits.** A fan-out child's decision goes through the same
+  acceptance path (REPO-INSPECTION; no fan-out decision test yet). A scope-blocked attempt of a task with a decision can only be
+  rejected, since accepting it would skip the decision. A fan-out
+  dependent gets the decision in its prompt but no copy of the file in its
+  sibling worktree; it reads the artifact by id.
 
 ## Deliberately absent, and what later packages owe
 

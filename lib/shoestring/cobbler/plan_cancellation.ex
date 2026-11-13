@@ -56,8 +56,10 @@ defmodule Shoestring.Cobbler.PlanCancellation do
             event =
               case existing(repo, goal_id, command.id) do
                 nil ->
-                  case record(repo, goal_id, command) do
-                    {:ok, event} -> event
+                  with {:ok, event} <- record(repo, goal_id, command),
+                       {:ok, _withdrawn} <- withdraw_decisions(repo, goal_id, event.payload) do
+                    event
+                  else
                     {:error, reason} -> repo.rollback(reason)
                   end
 
@@ -244,6 +246,19 @@ defmodule Shoestring.Cobbler.PlanCancellation do
       _ -> {:error, :cancellation_mismatch}
     end
   end
+
+  # Cancelling the goal withdraws the decisions still waiting for a person,
+  # in the same transaction; their candidates' artifacts are kept.
+  defp withdraw_decisions(repo, goal_id, %{"scope" => "goal"} = payload),
+    do:
+      Shoestring.Decisions.withdraw_execution(
+        repo,
+        goal_id,
+        payload["execution_id"],
+        "goal cancelled: " <> payload["reason"]
+      )
+
+  defp withdraw_decisions(_repo, _goal_id, _payload), do: {:ok, 0}
 
   # A child target must be the current run of an unresolved child.
   defp target(_status, %{scope: "goal"}), do: :ok

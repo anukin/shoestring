@@ -13,6 +13,13 @@ is summarised by iteration in [docs/history.md](docs/history.md).
 
 ### Added
 
+- Decision points: a plan task can declare a `decision` and write N
+  candidates under `.shoestring/decisions/<id>/`. After its gates pass,
+  the plan waits for a person (`human:` only, first answer wins, no
+  timer) before the task's dependents run, and gives them the chosen
+  candidate as an input. A built-in "none of these" needs a note and stops
+  the task for a person. See [the plan contract](docs/plan-contract.md#decision-points-iteration-19).
+
 - Documentation for first-time users: a rewritten README, a
   [getting-started guide](docs/getting-started.md), [installation](docs/install.md),
   [concepts](docs/concepts.md), [supported platforms and feature status](docs/support.md),

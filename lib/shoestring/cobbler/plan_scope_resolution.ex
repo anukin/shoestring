@@ -111,7 +111,8 @@ defmodule Shoestring.Cobbler.PlanScopeResolution do
              &(&1.plan_task_id == command.task_id and &1.attempt == command.attempt)
            ),
          :ok <- acceptable(blocked, command.decision),
-         {:ok, contract} <- Shoestring.Cobbler.PlanContract.new(revision.content) do
+         {:ok, contract} <- Shoestring.Cobbler.PlanContract.new(revision.content),
+         :ok <- no_decision_accept(contract, command) do
       payload =
         %{
           "resolution_id" => command.resolution_id,
@@ -152,6 +153,18 @@ defmodule Shoestring.Cobbler.PlanScopeResolution do
   defp acceptable(%{scope_json: json}, "accept") when is_binary(json), do: :ok
   defp acceptable(_blocked, "accept"), do: {:error, :final_scope_unavailable}
   defp acceptable(_blocked, "reject"), do: :ok
+
+  # Accepting a scope-blocked attempt would skip its decision point (the
+  # candidates are read only on the ordinary acceptance path), so a task with
+  # a decision can only be rejected here and run again.
+  defp no_decision_accept(contract, %{decision: "accept", task_id: task_id}) do
+    case Enum.find(contract.content["tasks"], &(&1["id"] == task_id)) do
+      %{"decision" => _} -> {:error, :decision_task_cannot_accept_scope}
+      _ -> :ok
+    end
+  end
+
+  defp no_decision_accept(_contract, _command), do: :ok
 
   defp put_retry_state(payload, %{decision: "accept"}, _status, _contract), do: payload
 

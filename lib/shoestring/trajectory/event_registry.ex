@@ -1030,6 +1030,56 @@ defmodule Shoestring.Trajectory.EventRegistry do
         types: %{revision_number: :integer, attempt: :integer}
       }
     },
+    # Decision points (iteration 19): a task's candidates wait for a person.
+    "cobbler.plan.decision.requested" => %{
+      1 => %{
+        required: [
+          :decision_id,
+          :execution_id,
+          :revision_number,
+          :plan_digest,
+          :plan_task_id,
+          :attempt,
+          :run_id,
+          :key,
+          :question,
+          :allow_reject,
+          :options
+        ],
+        optional: [],
+        uuid_fields: [:decision_id, :execution_id, :run_id],
+        types: %{
+          revision_number: :integer,
+          attempt: :integer,
+          allow_reject: :boolean,
+          options: {:array, :map}
+        }
+      }
+    },
+    "cobbler.plan.decision.answered" => %{
+      1 => %{
+        required: [
+          :decision_id,
+          :execution_id,
+          :plan_task_id,
+          :attempt,
+          :run_id,
+          :answer,
+          :decided_by
+        ],
+        optional: [:option_key, :note],
+        uuid_fields: [:decision_id, :execution_id, :run_id],
+        types: %{attempt: :integer}
+      }
+    },
+    "cobbler.plan.decision.withdrawn" => %{
+      1 => %{
+        required: [:decision_id, :execution_id, :plan_task_id, :attempt, :run_id, :reason],
+        optional: [],
+        uuid_fields: [:decision_id, :execution_id, :run_id],
+        types: %{attempt: :integer}
+      }
+    },
     "cobbler.plan.execution.requested" => %{
       1 => %{
         required: [:execution_id, :revision_number, :plan_digest, :ordered_task_ids],
@@ -1789,7 +1839,7 @@ defmodule Shoestring.Trajectory.EventRegistry do
          :ok <- plan_execution_revision(payload),
          :ok <- plan_execution_attempt(payload),
          :ok <- plan_execution_task_id(payload),
-         :ok <- plan_execution_gate(payload),
+         :ok <- failed_gate(payload),
          :ok <- plan_execution_retry_state(payload),
          :ok <- gate_failure_result(payload) do
       :ok
@@ -2014,6 +2064,71 @@ defmodule Shoestring.Trajectory.EventRegistry do
     end
   end
 
+  # The candidates are bounded and each names a stored artifact; keys are
+  # slugs and never the reserved "reject".
+  defp validate_plan_execution("cobbler.plan.decision.requested", 1, payload, _opts) do
+    options = payload["options"]
+
+    option_ok? = fn option ->
+      is_binary(option["key"]) and Regex.match?(~r/\A[a-z0-9][a-z0-9_-]{0,62}\z/, option["key"]) and
+        option["key"] != "reject" and is_binary(option["label"]) and
+        String.length(option["label"]) <= 200 and is_binary(option["media_type"]) and
+        is_binary(option["file"]) and match?({:ok, _}, Ecto.UUID.cast(option["artifact_id"])) and
+        Map.keys(option) -- ~w(key label media_type file artifact_id source) == []
+    end
+
+    with :ok <- plan_execution_digest(payload),
+         :ok <- plan_execution_revision(payload),
+         :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload),
+         {:ok, _} <- Contract.text(payload["question"], :question, max: 2000),
+         true <-
+           (length(options) in 1..12 and Enum.all?(options, option_ok?) and
+              length(Enum.uniq_by(options, & &1["key"])) == length(options)) ||
+             {:field, :options} do
+      :ok
+    else
+      {:field, field} -> Contract.invalid(field, "is not valid")
+      error -> error
+    end
+  end
+
+  # Only a person answers; "none of these" always carries the person's note.
+  defp validate_plan_execution("cobbler.plan.decision.answered", 1, payload, _opts) do
+    note = payload["note"]
+
+    with :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload),
+         true <- human_identity?(payload["decided_by"]) || {:field, :decided_by},
+         true <-
+           (is_nil(note) or (is_binary(note) and String.length(note) <= 2000)) || {:field, :note},
+         true <-
+           ((payload["answer"] == "choose" and is_binary(payload["option_key"])) or
+              (payload["answer"] == "reject" and not Map.has_key?(payload, "option_key") and
+                 is_binary(note) and String.trim(note) != "")) || {:field, :answer} do
+      :ok
+    else
+      {:field, :decided_by} ->
+        Contract.invalid(:decided_by, "must be a human: identity")
+
+      {:field, :answer} ->
+        Contract.invalid(:answer, "must be choose with a key, or reject with a note")
+
+      {:field, field} ->
+        Contract.invalid(field, "is not valid")
+
+      error ->
+        error
+    end
+  end
+
+  defp validate_plan_execution("cobbler.plan.decision.withdrawn", 1, payload, _opts) do
+    with :ok <- plan_execution_attempt(payload),
+         :ok <- plan_execution_task_id(payload),
+         {:ok, _} <- Contract.text(payload["reason"], :reason, max: 2000),
+         do: :ok
+  end
+
   defp validate_plan_execution(_type, _version, _payload, _opts), do: :ok
 
   # Measured final-scope verification time; charged to the goal duration budget.
@@ -2137,6 +2252,12 @@ defmodule Shoestring.Trajectory.EventRegistry do
         :ok
     end
   end
+
+  # A task's decision file (iteration 19) is checked after its gates pass; a
+  # malformed one fails the attempt under the name "decision", which no plan
+  # can cite as a gate.
+  defp failed_gate(%{"gate" => "decision"}), do: :ok
+  defp failed_gate(payload), do: plan_execution_gate(payload)
 
   defp plan_execution_gate(payload) do
     case Map.get(payload, "gate") do

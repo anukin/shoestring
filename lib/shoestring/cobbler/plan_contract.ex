@@ -90,11 +90,13 @@ defmodule Shoestring.Cobbler.PlanContract do
   @budget_keys ~w(max_total_attempts max_total_duration_seconds)
   @task_keys ~w(
     id title outcome depends_on inputs expected_artifacts hints
-    acceptance_criteria gates checkpoint risks execution
+    acceptance_criteria gates checkpoint risks execution decision
   )
   @hint_keys ~w(files symbols)
   @checkpoint_keys ~w(condition evidence)
   @execution_keys ~w(max_attempts max_duration_seconds)
+  @decision_keys ~w(id question min_options max_options allow_reject)
+  @max_decision_options 12
   @planner_keys ~w(identity version source_context_refs)
   @plan_keys ~w(version goal budget tasks planner retirements)
 
@@ -326,6 +328,7 @@ defmodule Shoestring.Cobbler.PlanContract do
          {:ok, tasks} <- normalize_tasks(Contract.fetch(attrs, :tasks)),
          {:ok, planner} <- normalize_planner(Contract.fetch(attrs, :planner)),
          {:ok, retirements} <- normalize_retirements(Contract.fetch(attrs, :retirements), tasks),
+         :ok <- unique_decisions(tasks),
          :ok <- check_budget(budget, tasks) do
       content =
         %{
@@ -339,6 +342,15 @@ defmodule Shoestring.Cobbler.PlanContract do
 
       {:ok, content}
     end
+  end
+
+  # Each decision owns one directory in the task's worktree and one answer.
+  defp unique_decisions(tasks) do
+    ids = for %{"decision" => %{"id" => id}} <- tasks, do: id
+
+    if length(ids) == length(Enum.uniq(ids)),
+      do: :ok,
+      else: invalid(:decision_id, "must be unique within the plan")
   end
 
   # Keep absence distinct from an explicit list so historical digests replay
@@ -517,7 +529,8 @@ defmodule Shoestring.Cobbler.PlanContract do
          {:ok, gates} <- gate_list(Contract.fetch(task, :gates), :task_gates),
          {:ok, checkpoint} <- normalize_checkpoint(Contract.fetch(task, :checkpoint)),
          {:ok, risks} <- text_list(task, :risks, :task_risks, @max_risks, 500),
-         {:ok, execution} <- normalize_execution(Contract.fetch(task, :execution)) do
+         {:ok, execution} <- normalize_execution(Contract.fetch(task, :execution)),
+         {:ok, decision} <- normalize_decision(Contract.optional(task, :decision), artifacts) do
       {:ok,
        %{
          "id" => id,
@@ -532,11 +545,80 @@ defmodule Shoestring.Cobbler.PlanContract do
          "checkpoint" => checkpoint,
          "risks" => risks,
          "execution" => execution
-       }}
+       }
+       |> maybe_put("decision", decision)}
     end
   end
 
   defp normalize_task(_task), do: invalid(:task, "must be an object")
+
+  # A decision point: after the task's gates pass, the plan waits for a
+  # person to choose one of the candidates the task wrote. Absent on every
+  # task without one, so existing plans keep their digest. Nothing is
+  # defaulted: a decision states its bounds and whether "none of these" is
+  # allowed.
+  defp normalize_decision({:ok, nil}, _artifacts), do: {:ok, nil}
+
+  defp normalize_decision({:ok, decision}, artifacts) when is_map(decision) do
+    with :ok <- strict_keys(decision, @decision_keys, :decision),
+         {:ok, id} <- decision_id(Contract.required(decision, :id)),
+         {:ok, question} <-
+           Contract.text(Contract.required(decision, :question), :decision_question, max: 2_000),
+         {:ok, min} <-
+           bounded_integer(
+             Contract.required(decision, :min_options),
+             :decision_min_options,
+             1,
+             @max_decision_options
+           ),
+         {:ok, max} <-
+           bounded_integer(
+             Contract.required(decision, :max_options),
+             :decision_max_options,
+             min,
+             @max_decision_options
+           ),
+         {:ok, allow_reject} <- boolean(Contract.required(decision, :allow_reject)),
+         :ok <- decision_listed(id, artifacts) do
+      {:ok,
+       %{
+         "id" => id,
+         "question" => question,
+         "min_options" => min,
+         "max_options" => max,
+         "allow_reject" => allow_reject
+       }}
+    end
+  end
+
+  defp normalize_decision(_other, _artifacts), do: invalid(:decision, "must be an object")
+
+  defp decision_id({:ok, value}) when is_binary(value) do
+    if Regex.match?(@task_id_pattern, value),
+      do: {:ok, value},
+      else:
+        invalid(
+          :decision_id,
+          "must be a lowercase slug of letters, digits, underscores, and hyphens"
+        )
+  end
+
+  defp decision_id({:error, _changeset} = error), do: error
+  defp decision_id(_other), do: invalid(:decision_id, "must be a string")
+
+  defp boolean({:ok, value}) when is_boolean(value), do: {:ok, value}
+  defp boolean({:error, _changeset} = error), do: error
+  defp boolean(_other), do: invalid(:decision_allow_reject, "must be true or false")
+
+  @doc "Where a task writes the decision file for decision `id`, relative to its worktree."
+  @spec decision_file(String.t()) :: String.t()
+  def decision_file(id), do: ".shoestring/decisions/#{id}/decision.json"
+
+  defp decision_listed(id, artifacts) do
+    if decision_file(id) in artifacts,
+      do: :ok,
+      else: invalid(:decision, "must list #{decision_file(id)} in expected_artifacts")
+  end
 
   defp task_id({:ok, value}) when is_binary(value) do
     if Regex.match?(@task_id_pattern, value) do
