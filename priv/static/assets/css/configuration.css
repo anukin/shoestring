@@ -160,6 +160,21 @@ body:has(.ss-product) #flash-error .alert { background:#f5f7f4; color:#943a29; b
 /* Sessions, phase 3: stopped dispatches and news. */
 .ss-attention-lines { margin:0; padding-left:18px; list-style:disc; font-size:13px; color:var(--ss-ink); display:grid; gap:4px; overflow-wrap:anywhere; }
 .ss-attention-commands { margin:4px 0 0; padding:10px 12px; border:1px solid #e6c886; border-radius:6px; background:var(--ss-paper); font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:12.5px; white-space:pre-wrap; overflow-wrap:anywhere; max-height:240px; overflow:auto; }
+/* An attention card carries its own palette and the product page's text and
+   control rules, so it reads the same outside .ss-product (the goal page,
+   whose layout follows the system's dark mode). */
+.ss-attention { --ss-ink:#172821; --ss-muted:#52635b; --ss-accent:#226448; --ss-ground:#f5f7f4; --ss-paper:#fff; --ss-line:#d9e1d9; --ss-soft:#eaf2e9; --ss-error:#943a29; color:var(--ss-ink); font:15px/1.55 system-ui,sans-serif; color-scheme:light; }
+.ss-attention p { margin:0; font-size:13px; color:var(--ss-muted); max-width:72ch; }
+.ss-attention .ss-attention-subject { color:var(--ss-ink); font-size:14px; overflow-wrap:anywhere; }
+.ss-attention .ss-small { font-size:13px; color:var(--ss-muted); }
+.ss-attention .ss-notice { color:var(--ss-error); font-size:13px; }
+.ss-attention a { color:var(--ss-accent); text-underline-offset:3px; }
+.ss-attention .ss-button:hover { background:var(--ss-soft); text-decoration:none; }
+.ss-attention .ss-primary { background:var(--ss-ink); color:var(--ss-paper); border-color:var(--ss-ink); }
+.ss-attention .ss-primary:hover { background:var(--ss-accent); color:var(--ss-paper); }
+.ss-attention .ss-input { width:100%; min-width:0; border:1px solid var(--ss-line); border-radius:7px; background:var(--ss-paper); padding:10px 12px; color:var(--ss-ink); font:inherit; caret-color:var(--ss-accent); min-height:44px; }
+.ss-attention textarea.ss-input { resize:vertical; }
+.ss-attention .ss-decision-text { color:var(--ss-ink); }
 /* Decisions (iteration 19): candidates side by side, each with its own choose button. */
 .ss-decision-options { margin:4px 0 0; padding:0; list-style:none; display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px; }
 .ss-decision-option { display:grid; gap:6px; align-content:start; padding:10px; border:1px solid #e6c886; border-radius:8px; background:var(--ss-paper); min-width:0; overflow-wrap:anywhere; }

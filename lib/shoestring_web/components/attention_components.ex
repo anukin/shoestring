@@ -88,8 +88,8 @@ defmodule ShoestringWeb.AttentionComponents do
           id={"#{@item.id}-option-#{option["key"]}"}
           class="ss-decision-option"
         >
-          <.candidate goal_id={@decision.goal_id} option={option} />
           <span class="ss-decision-label">{RunPresentation.redact_text(option["label"])}</span>
+          <.candidate goal_id={@decision.goal_id} option={option} />
           <span :if={option["source"]} class="ss-small ss-mono">
             Full file: {option["source"]}
           </span>
