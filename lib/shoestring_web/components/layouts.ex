@@ -77,7 +77,7 @@ defmodule ShoestringWeb.Layouts do
     <% else %>
       <header class="border-b border-zinc-200 px-4 py-4 sm:px-6 lg:px-8">
         <div class="mx-auto flex max-w-2xl items-center justify-between">
-          <a href={~p"/"} class="font-semibold tracking-tight text-zinc-950">Shoestring</a>
+          <a href={~p"/"} class="font-semibold tracking-tight">Shoestring</a>
           <span class="text-xs text-zinc-500">Local-first</span>
         </div>
       </header>

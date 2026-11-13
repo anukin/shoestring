@@ -207,3 +207,67 @@ form[id^="cobbler-"] .textarea {
 
 .hover\:bg-sky-800:hover { background-color: #075985; }
 .hover\:bg-purple-800:hover { background-color: #6b21a8; }
+
+/* Colour utilities the Cobbler pages pick at runtime (badges, dots), with
+   Tailwind's default values: without them a badge had no background and
+   inherited the page's text colour, unreadable in dark mode. */
+.bg-amber-100 { background-color: #fef3c7; }
+.bg-amber-200 { background-color: #fde68a; }
+.bg-amber-500 { background-color: #f59e0b; }
+.bg-amber-600 { background-color: #d97706; }
+.bg-amber-700 { background-color: #b45309; }
+.bg-blue-100 { background-color: #dbeafe; }
+.bg-blue-500 { background-color: #3b82f6; }
+.bg-emerald-100 { background-color: #d1fae5; }
+.bg-emerald-50 { background-color: #ecfdf5; }
+.bg-emerald-500 { background-color: #10b981; }
+.bg-emerald-600 { background-color: #059669; }
+.bg-indigo-100 { background-color: #e0e7ff; }
+.bg-indigo-500 { background-color: #6366f1; }
+.bg-orange-100 { background-color: #ffedd5; }
+.bg-orange-500 { background-color: #f97316; }
+.bg-purple-100 { background-color: #f3e8ff; }
+.bg-purple-500 { background-color: #a855f7; }
+.bg-purple-800 { background-color: #6b21a8; }
+.bg-red-100 { background-color: #fee2e2; }
+.bg-red-200 { background-color: #fecaca; }
+.bg-red-600 { background-color: #dc2626; }
+.bg-rose-100 { background-color: #ffe4e6; }
+.bg-rose-500 { background-color: #f43f5e; }
+.bg-rose-600 { background-color: #e11d48; }
+.bg-rose-700 { background-color: #be123c; }
+.bg-sky-800 { background-color: #075985; }
+.bg-teal-100 { background-color: #ccfbf1; }
+.bg-teal-500 { background-color: #14b8a6; }
+.bg-violet-100 { background-color: #ede9fe; }
+.bg-violet-500 { background-color: #8b5cf6; }
+.bg-yellow-100 { background-color: #fef9c3; }
+.bg-yellow-500 { background-color: #eab308; }
+.bg-zinc-200 { background-color: #e4e4e7; }
+.bg-zinc-400 { background-color: #a1a1aa; }
+.bg-zinc-500 { background-color: #71717a; }
+.bg-zinc-700 { background-color: #3f3f46; }
+.bg-zinc-800 { background-color: #27272a; }
+.bg-zinc-950 { background-color: #09090b; }
+.border-amber-200 { border-color: #fde68a; }
+.border-emerald-200 { border-color: #a7f3d0; }
+.border-red-300 { border-color: #fca5a5; }
+.text-amber-700 { color: #b45309; }
+.text-amber-950 { color: #451a03; }
+.text-blue-800 { color: #1e40af; }
+.text-emerald-700 { color: #047857; }
+.text-emerald-800 { color: #065f46; }
+.text-emerald-900 { color: #064e3b; }
+.text-indigo-600 { color: #4f46e5; }
+.text-indigo-800 { color: #3730a3; }
+.text-orange-800 { color: #9a3412; }
+.text-purple-800 { color: #6b21a8; }
+.text-purple-900 { color: #581c87; }
+.text-red-900 { color: #7f1d1d; }
+.text-red-950 { color: #450a0a; }
+.text-rose-800 { color: #9f1239; }
+.text-teal-800 { color: #115e59; }
+.text-violet-800 { color: #5b21b6; }
+.text-yellow-800 { color: #854d0e; }
+.text-zinc-200 { color: #e4e4e7; }
+.text-zinc-950 { color: #09090b; }

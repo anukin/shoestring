@@ -43,6 +43,30 @@ defmodule ShoestringWeb.GoalPageStylesheetTest do
            """
   end
 
+  # The badges and dots on the goal page take their classes from the
+  # presentation module at runtime (`badge_class: "bg-emerald-100 ..."`),
+  # which the template scan above cannot see. Every such string must be
+  # styled too: an unstyled badge has no background and inherits the page's
+  # text colour, which in dark mode left "Admitted." light on white.
+  @presentation "lib/shoestring_web/live/cobbler_presentation.ex"
+
+  test "every class the goal page's presentation picks at runtime has a rule" do
+    css = Enum.map_join(@stylesheets, "\n", &File.read!/1)
+
+    unstyled =
+      ~r/"([^"]*)"/
+      |> Regex.scan(File.read!(@presentation))
+      |> Enum.flat_map(fn [_, literal] -> String.split(literal) end)
+      |> Enum.filter(&Regex.match?(~r/^(bg|text|border|ring)-[a-z]+-\d{2,3}$/, &1))
+      |> Enum.uniq()
+      |> Enum.reject(&styled?(&1, css))
+      |> Enum.sort()
+
+    assert unstyled == [],
+           "These presentation classes have no rule, so the browser ignores them:\n  " <>
+             Enum.join(unstyled, "\n  ")
+  end
+
   test "the countdown relies on wrapping rules, so they must stay present" do
     app_css = File.read!("priv/static/assets/css/app.css")
 
