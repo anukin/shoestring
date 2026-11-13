@@ -210,6 +210,41 @@ defmodule Shoestring.Decisions.PlanDecisionTest do
     assert %Decision{state: "pending"} = Decisions.get(mine.id)
   end
 
+  test "the chosen candidate is copied into the dependent's worktree from the store",
+       %{goal: goal, worktree: worktree, tmp_dir: tmp} do
+    write_candidates!(worktree)
+    run_sheets!(goal, worktree)
+    decision = pending!(goal)
+    green = Enum.find(decision.options, &(&1["key"] == "green"))
+    input = %{"path" => green["file"], "artifact_id" => green["artifact_id"]}
+
+    dependent = Path.join(tmp, "dependent")
+    File.mkdir_p!(dependent)
+    assert :ok = Decisions.materialize(dependent, [input])
+
+    assert File.read!(Path.join(dependent, green["file"])) ==
+             File.read!(Path.join(worktree, green["file"]))
+
+    # A committed path is already in the tree: nothing is written for it.
+    assert :ok = Decisions.materialize(dependent, [%{input | "path" => "art/green.png"}])
+    refute File.exists?(Path.join(dependent, "art/green.png"))
+
+    # A linked directory on the way is refused, and so is a missing artifact.
+    linked = Path.join(tmp, "linked")
+    File.mkdir_p!(linked)
+    elsewhere = Path.join(tmp, "elsewhere")
+    File.mkdir_p!(elsewhere)
+    File.ln_s!(elsewhere, Path.join(linked, ".shoestring"))
+
+    assert {:error, {:decision_input_unavailable, _, :symlink}} =
+             Decisions.materialize(linked, [input])
+
+    assert File.ls!(elsewhere) == []
+
+    assert {:error, {:decision_input_unavailable, _, _}} =
+             Decisions.materialize(dependent, [%{input | "artifact_id" => Ecto.UUID.generate()}])
+  end
+
   # --------------------------------------------------------------------------
   # "None of these"
   # --------------------------------------------------------------------------
