@@ -816,6 +816,25 @@ defmodule Shoestring.Cobbler.PlanExecutor do
     end)
   end
 
+  # A task that ends in a decision is told Shoestring's file format: the
+  # plan says that a person chooses, not how to lay out the candidates.
+  defp decision_file_prompt(nil), do: ""
+
+  defp decision_file_prompt(decision) do
+    dir = Path.dirname(PlanContract.decision_file(decision["id"]))
+    max_mib = div(Shoestring.Trajectory.ArtifactStore.max_size(), 1024 * 1024)
+
+    "\nThis task ends in a decision a person makes: \"#{decision["question"]}\". Write " <>
+      "#{decision["min_options"]} to #{decision["max_options"]} candidates under #{dir}/ and " <>
+      "describe them in #{dir}/decision.json: " <>
+      ~s({"id": "#{decision["id"]}", "note": "optional context", "options": [{"key": "a-slug", ) <>
+      ~s("label": "at most 200 characters", "file": "#{dir}/a.png", "media_type": "image/png"}]}. ) <>
+      "Paths are relative to the worktree, with no symlinks; each file is at most " <>
+      "#{max_mib} MiB (for a larger candidate, give a smaller preview as file and its path " <>
+      "as \"source\"); keys are lowercase slugs, never \"reject\". #{dir}/ is not committed: " <>
+      "commit your other changes as usual. Do not choose: the person does.\n"
+  end
+
   defp decision_prompt([]), do: ""
 
   defp decision_prompt(inputs),
@@ -2184,6 +2203,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
             profile_instructions(execution[:agent_profile]) <>
             review_prompt(execution, task_id, attempt, Keyword.get(opts, :fanout_sibling)) <>
             decision_prompt(Keyword.get(opts, :decision_inputs, [])) <>
+            decision_file_prompt(task_contract["decision"]) <>
             (Keyword.get(opts, :replacement_prompt) || ""),
         extensions:
           %{

@@ -90,6 +90,13 @@ defmodule Shoestring.Decisions.PlanDecisionTest do
              )
 
     assert PlanExecutorHelpers.run_count(goal.id) == 1
+
+    # The deciding task's worker was told the file format; nothing else was.
+    [run] = Repo.all(Shoestring.Harness.RunRecord |> where(goal_id: ^goal.id))
+    assert run.prompt =~ "This task ends in a decision a person makes"
+    assert run.prompt =~ ".shoestring/decisions/sheet/decision.json"
+    assert run.prompt =~ "2 to 12 candidates"
+    assert run.prompt =~ ~s(never "reject")
   end
 
   test "a pending decision is held by no process: answering later, from another process, resumes the plan",
@@ -139,6 +146,7 @@ defmodule Shoestring.Decisions.PlanDecisionTest do
     assert prompt =~ ".shoestring/decisions/sheet/green.png"
     assert prompt =~ "The green one reads best."
     refute prompt =~ Enum.find(decision.options, &(&1["key"] == "red"))["artifact_id"]
+    refute prompt =~ "This task ends in a decision a person makes"
   end
 
   test "the first answer wins; a second answer and a non-human identity are refused",
