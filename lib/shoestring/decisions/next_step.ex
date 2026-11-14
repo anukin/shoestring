@@ -17,11 +17,15 @@ defmodule Shoestring.Decisions.NextStep do
           :done
           | :starting
           | {:confirm, %{task_id: String.t(), title: String.t(), why: String.t() | nil}}
+          | {:deferred, %{title: String.t(), until: String.t() | nil, why: String.t() | nil}}
+          | {:blocked, %{title: String.t(), why: String.t() | nil}}
 
   @doc """
   `:done` (nothing more for the person here), `:starting` (chosen; the plan
-  is working out whether it may start its next task) or `{:confirm, task}`
-  (the next task waits for the person's OK).
+  is working out whether it may start its next task), `{:confirm, task}`
+  (the next task waits for the person's OK), `{:deferred, task}` (it waits
+  for its provider's usage to reset and starts by itself; nothing for the
+  person to do) or `{:blocked, task}` (admission refused it).
   """
   @spec step(Decision.t(), keyword()) :: step()
   def step(decision, opts \\ [])
@@ -49,8 +53,17 @@ defmodule Shoestring.Decisions.NextStep do
         admission["result"] in [nil, "admit", "require_confirmation"] ->
           :starting
 
+        admission["result"] == "defer_until" ->
+          {:deferred,
+           %{
+             title: task_title(decision.goal_id, task_id),
+             until: admission["defer_until"],
+             why: admission["explanation"]
+           }}
+
         true ->
-          :done
+          {:blocked,
+           %{title: task_title(decision.goal_id, task_id), why: admission["explanation"]}}
       end
     else
       _ -> :done

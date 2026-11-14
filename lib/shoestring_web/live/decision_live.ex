@@ -16,6 +16,7 @@ defmodule ShoestringWeb.DecisionLive do
   alias Shoestring.{Attention, Decisions, Trajectory}
   alias Shoestring.Decisions.NextStep
   alias ShoestringWeb.{AttentionComponents, DecisionText, RunPresentation}
+  import ShoestringWeb.TimeDisplay, only: [countdown: 1]
 
   @impl true
   def mount(%{"decision_id" => id}, _session, socket) do
@@ -165,6 +166,32 @@ defmodule ShoestringWeb.DecisionLive do
                       Start it
                     </button>
                   </div>
+                <% {"answered", {:deferred, task}} -> %>
+                  <p id="decision-deferred" class="ss-attention-subject">
+                    Next: “{task.title}” waits for its provider's usage to reset<%= if task.until do %>
+                      , until
+                      <.countdown
+                        id="decision-deferred-until"
+                        at={task.until}
+                        now={DateTime.utc_now()}
+                      />
+                    <% end %>.
+                  </p>
+                  <p :if={task.why}>{task.why}</p>
+                  <p id="decision-done">
+                    It starts by itself then; nothing for you to do. You can close this page.
+                  </p>
+                <% {"answered", {:blocked, task}} -> %>
+                  <p id="decision-blocked" class="ss-attention-subject">
+                    Next: “{task.title}” could not start.
+                  </p>
+                  <p :if={task.why}>{task.why}</p>
+                  <p>
+                    <.link id="decision-goal-link" navigate={~p"/cobbler/goals/#{@decision.goal_id}"}>
+                      Open the goal
+                    </.link>
+                    for what next.
+                  </p>
                 <% {"answered", :starting} -> %>
                   <p id="decision-starting">Starting the next task…</p>
                 <% {"answered", _step} -> %>
@@ -179,6 +206,8 @@ defmodule ShoestringWeb.DecisionLive do
   end
 
   defp step_name({:confirm, _}), do: "confirm"
+  defp step_name({:deferred, _}), do: "deferred"
+  defp step_name({:blocked, _}), do: "blocked"
   defp step_name(:starting), do: "starting"
   defp step_name(_step), do: "done"
 

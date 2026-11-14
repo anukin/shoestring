@@ -181,6 +181,46 @@ defmodule ShoestringWeb.DecisionPaneTest do
                NextStep.confirm(decision, confirmed.payload["confirmed_by"])
     end
 
+    test "a next task deferred for its provider's usage says when, and asks nothing",
+         %{conn: conn} = ctx do
+      assert {:ok, _} = Decisions.answer(ctx.decision.id, "red", nil, "human:test")
+      {:ok, view, _} = live(conn, pane(ctx.decision.id))
+
+      CobblerHelpers.admission_payload()
+      |> Map.merge(%{
+        "candidate" => candidate(ctx.profile),
+        "result" => "defer_until",
+        "reason_code" => "reserve_breach_five_hour",
+        "explanation" => "Five-hour quota used (96.0%) exceeds maximum allowable (80%).",
+        "defer_until" => "2026-11-14T22:40:00Z"
+      })
+      |> then(&CobblerHelpers.append_admission_event!(ctx.goal.id, &1))
+
+      assert has_element?(view, "#decision-outcome[data-step='deferred']")
+      assert has_element?(view, "#decision-deferred", "Use the chosen sheet")
+      assert has_element?(view, "#decision-deferred-until[datetime='2026-11-14T22:40:00Z']")
+      assert has_element?(view, "#decision-outcome", "Five-hour quota used (96.0%)")
+      refute has_element?(view, "#decision-start-next")
+    end
+
+    test "a next task admission refused points at the goal", %{conn: conn} = ctx do
+      assert {:ok, _} = Decisions.answer(ctx.decision.id, "red", nil, "human:test")
+      {:ok, view, _} = live(conn, pane(ctx.decision.id))
+
+      CobblerHelpers.admission_payload()
+      |> Map.merge(%{
+        "candidate" => candidate(ctx.profile),
+        "result" => "reject",
+        "reason_code" => "unsupported",
+        "explanation" => "Not supported here."
+      })
+      |> then(&CobblerHelpers.append_admission_event!(ctx.goal.id, &1))
+
+      assert has_element?(view, "#decision-outcome[data-step='blocked']")
+      assert has_element?(view, "#decision-goal-link[href='/cobbler/goals/#{ctx.goal.id}']")
+      refute has_element?(view, "#decision-done")
+    end
+
     test "nothing held and nothing left to do: it is done", %{conn: conn} = ctx do
       assert {:ok, _} = Decisions.answer(ctx.decision.id, "red", nil, "human:test")
 
