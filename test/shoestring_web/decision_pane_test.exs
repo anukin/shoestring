@@ -157,6 +157,7 @@ defmodule ShoestringWeb.DecisionPaneTest do
       hold_next!(ctx.goal, ctx.profile)
       assert has_element?(view, "#decision-outcome[data-step='confirm']")
       assert has_element?(view, "#decision-next", "Use the chosen sheet")
+      assert has_element?(view, "#decision-why", "could not tell how much Codex usage is left")
 
       view |> element("#decision-start-next") |> render_click()
 

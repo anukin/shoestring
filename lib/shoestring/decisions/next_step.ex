@@ -43,7 +43,7 @@ defmodule Shoestring.Decisions.NextStep do
            %{
              task_id: task_id,
              title: task_title(decision.goal_id, task_id),
-             why: admission["explanation"]
+             why: why(admission)
            }}
 
         admission["result"] in [nil, "admit", "require_confirmation"] ->
@@ -89,6 +89,19 @@ defmodule Shoestring.Decisions.NextStep do
       {:error, reason} -> {:error, reason}
       _ -> {:error, :nothing_to_confirm}
     end
+  end
+
+  # In the person's words, not the admission's reason code.
+  defp why(admission) do
+    provider =
+      case get_in(admission, ["candidate", "provider_id"]) do
+        "claude" -> "Claude"
+        "codex" -> "Codex"
+        "opencode" -> "opencode"
+        _ -> "the provider"
+      end
+
+    "Shoestring could not tell how much #{provider} usage is left, so it asks you before starting."
   end
 
   defp task_title(goal_id, task_id) do

@@ -154,7 +154,7 @@ defmodule ShoestringWeb.DecisionLive do
                   <p id="decision-next" class="ss-attention-subject">
                     Next: “{task.title}” needs your OK to start.
                   </p>
-                  <p :if={task.why}>{task.why}</p>
+                  <p :if={task.why} id="decision-why">{task.why}</p>
                   <div class="ss-attention-choices">
                     <button
                       id="decision-start-next"
