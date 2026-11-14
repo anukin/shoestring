@@ -117,6 +117,23 @@ defmodule Shoestring.Dispatches.ExternalsTest do
       # A grant's pre-approval never starts it: only the person does.
       assert Dispatches.advance(dispatch) == :none
       assert Dispatches.state(dispatch) == "held"
+
+      # Not even when its goal looks held for a pre-approval (a held review
+      # here): the EXTERNAL rule, not a missing execution, refuses it.
+      held = fn _goal_id ->
+        {:ok,
+         %{
+           completed?: false,
+           needs_user?: false,
+           cancelled?: false,
+           reviews: [%{state: "held", review_id: Ecto.UUID.generate(), calls: 0}],
+           last_admission: nil
+         }}
+      end
+
+      assert Dispatches.advance(dispatch, held) == :none
+      assert Repo.get!(Grants.Grant, ctx.grant.id).unread_usage_used == 0
+      assert %External{state: "held", confirmed_by: nil} = Externals.get(dispatch.id)
     end
 
     test "the grant must allow EXTERNAL; units must be the grant's and fit its cap", ctx do
