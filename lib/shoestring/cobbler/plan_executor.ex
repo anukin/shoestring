@@ -984,7 +984,12 @@ defmodule Shoestring.Cobbler.PlanExecutor do
           children = dispatches_for(projection, execution)
           active_children = active_dispatches(projection, execution)
           active = List.first(active_children)
-          budget = duration_status(repo, goal_id, projection, execution, usage, active)
+
+          {ready_task, budget} =
+            repo
+            |> duration_status(goal_id, projection, execution, usage, active)
+            |> Map.pop(:task_id)
+
           revision = Plans.get_revision(goal_id, execution.revision_number, repo: repo)
           retirements = if revision, do: Map.get(revision.content, "retirements", []), else: []
           retired = MapSet.new(retirements, & &1["task_id"])
@@ -1007,6 +1012,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              retirements: retirements,
              superseded_attempts: projection.superseded,
              active_task: active && active.plan_task_id,
+             # The task the executor dispatches next when nothing runs (nil
+             # while one runs or none is ready).
+             ready_task: if(is_nil(active), do: ready_task),
              active_run_id: active && active.run_id,
              active_attempt: active && active.attempt,
              active_run_ids: Enum.flat_map(active_children, & &1.run_ids),
@@ -1104,9 +1112,9 @@ defmodule Shoestring.Cobbler.PlanExecutor do
             end
         end
 
-      %{remaining_goal_ms: remaining, reason: reason}
+      %{remaining_goal_ms: remaining, reason: reason, task_id: task_id}
     else
-      _ -> %{remaining_goal_ms: nil, reason: :execution_revision_invalid}
+      _ -> %{remaining_goal_ms: nil, reason: :execution_revision_invalid, task_id: nil}
     end
   end
 
@@ -2767,10 +2775,24 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       end)
 
     case result do
-      {:ok, %{event_id: event_id}} ->
+      {:ok, %{event_id: event_id} = outcome} ->
         unless nested? do
           publish_completion(repo.get!(TrajectoryEvent, event_id), opts)
           notify_attention(goal_id)
+
+          # A new decision comes to the person: its pane opens once, when
+          # the row is written (a replay writes none, so opens none).
+          if outcome[:disposition] == :accepted,
+            do:
+              open_decision(
+                decision_id(
+                  goal_id,
+                  execution.execution_id,
+                  dispatched.plan_task_id,
+                  dispatched.attempt
+                ),
+                opts
+              )
         end
 
         result
@@ -2778,6 +2800,19 @@ defmodule Shoestring.Cobbler.PlanExecutor do
       _ ->
         result
     end
+  end
+
+  # Best effort: the decision waits on `shoestring decision list` and the
+  # needs-you count whether or not a browser opened.
+  defp open_decision(decision_id, opts) do
+    Shoestring.Browser.open_when_allowed(
+      Shoestring.Decisions.page_url(%{id: decision_id}),
+      Keyword.get(opts, :browser_opts, [])
+    )
+  rescue
+    _ -> :skipped
+  catch
+    _, _ -> :skipped
   end
 
   # Evidence only: a screen that misses this re-reads on its timer.

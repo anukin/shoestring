@@ -48,6 +48,59 @@
         <p class="mt-3 text-sm text-zinc-600">{@lifecycle_presentation.detail}</p>
       </div>
 
+      <%!-- Decisions the plan waits on, or that a person answered (iteration 19) --%>
+      <div
+        :if={@plan_decisions != []}
+        id="cobbler-plan-decisions"
+        class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4"
+      >
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
+          <.icon name="hero-hand-raised" class="w-4 h-4 text-zinc-500" /> Choices
+        </h3>
+        <%= for decision <- @plan_decisions do %>
+          <%= if decision.state == "pending" do %>
+            <%!-- Answered on the decision's own pane, not among this page's details --%>
+            <div id={"plan-decision-#{decision.id}"} class="text-sm text-zinc-700 space-y-1">
+              <p class="font-medium text-zinc-900">
+                {decision.plan_task_id}: {ShoestringWeb.RunPresentation.redact_text(
+                  decision.question
+                )}
+              </p>
+              <p id={"plan-decision-#{decision.id}-state"} data-state="pending">
+                It waits for you.
+                <.link
+                  id={"plan-decision-#{decision.id}-open"}
+                  navigate={~p"/decisions/#{decision.id}"}
+                  class="font-medium text-blue-800 underline"
+                >
+                  Choose →
+                </.link>
+              </p>
+            </div>
+          <% else %>
+            <div id={"plan-decision-#{decision.id}"} class="text-sm text-zinc-700 space-y-1">
+              <p class="font-medium text-zinc-900">
+                {decision.plan_task_id}: {ShoestringWeb.RunPresentation.redact_text(
+                  decision.question
+                )}
+              </p>
+              <p id={"plan-decision-#{decision.id}-state"} data-state={decision.state}>
+                <%= case decision.state do %>
+                  <% "answered" -> %>
+                    Chosen: {decision.answer_key} by {decision.decided_by}
+                  <% "rejected" -> %>
+                    None of these, by {decision.decided_by}: {ShoestringWeb.RunPresentation.redact_text(
+                      decision.answer_note || ""
+                    )}
+                  <% _ -> %>
+                    Withdrawn: the goal was cancelled.
+                <% end %>
+              </p>
+            </div>
+          <% end %>
+        <% end %>
+      </div>
+
       <%!-- Degraded warnings --%>
       <%= if @warnings != [] do %>
         <div
@@ -75,46 +128,6 @@
           Command store does not match canonical events. Refresh re-reads; no state was changed by this page.
         </div>
       <% end %>
-
-      <%!-- Decisions the plan waits on, or that a person answered (iteration 19) --%>
-      <div
-        :if={@plan_decisions != []}
-        id="cobbler-plan-decisions"
-        class="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm space-y-4"
-      >
-        <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
-          <.icon name="hero-hand-raised" class="w-4 h-4 text-zinc-500" /> Choices
-        </h3>
-        <%= for decision <- @plan_decisions do %>
-          <%= if decision.state == "pending" do %>
-            <ShoestringWeb.AttentionComponents.card
-              item={Shoestring.Attention.decision_item(decision)}
-              reason_for={@reason_for}
-              reason_error={@reason_error}
-            />
-          <% else %>
-            <div id={"plan-decision-#{decision.id}"} class="text-sm text-zinc-700 space-y-1">
-              <p class="font-medium text-zinc-900">
-                {decision.plan_task_id}: {ShoestringWeb.RunPresentation.redact_text(
-                  decision.question
-                )}
-              </p>
-              <p id={"plan-decision-#{decision.id}-state"} data-state={decision.state}>
-                <%= case decision.state do %>
-                  <% "answered" -> %>
-                    Chosen: {decision.answer_key} by {decision.decided_by}
-                  <% "rejected" -> %>
-                    None of these, by {decision.decided_by}: {ShoestringWeb.RunPresentation.redact_text(
-                      decision.answer_note || ""
-                    )}
-                  <% _ -> %>
-                    Withdrawn: the goal was cancelled.
-                <% end %>
-              </p>
-            </div>
-          <% end %>
-        <% end %>
-      </div>
 
       <%!-- Admission decision --%>
       <div
@@ -184,7 +197,10 @@
           <h3 class="text-sm font-semibold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5">
             <.icon name="hero-key" class="w-4 h-4 text-zinc-500" /> Execution Lease
           </h3>
-          <div class="flex flex-wrap items-center gap-2">
+          <p :if={@lease.ended} id="cobbler-lease-ended" class="text-sm text-zinc-500 italic">
+            Its run has ended ({@lease.ended}). This lease is a record of that run: nothing renews it and its deadline no longer applies.
+          </p>
+          <div :if={!@lease.ended} class="flex flex-wrap items-center gap-2">
             <span
               id="cobbler-lease-status"
               data-status={@lease.status_presentation.status}
@@ -254,7 +270,16 @@
             </dd>
             <dt class="text-zinc-500">Deadline</dt>
             <dd id="cobbler-lease-deadline" class="font-medium text-zinc-900">
-              <.countdown id="cobbler-lease-deadline-time" at={@lease.deadline} now={@now} />
+              <%= if @lease.ended do %>
+                <span
+                  id="cobbler-lease-deadline-time"
+                  class="text-xs font-mono text-zinc-500 break-all"
+                >
+                  {@lease.deadline && DateTime.to_iso8601(@lease.deadline)}
+                </span>
+              <% else %>
+                <.countdown id="cobbler-lease-deadline-time" at={@lease.deadline} now={@now} />
+              <% end %>
             </dd>
           </dl>
         </div>

@@ -96,7 +96,7 @@ defmodule Shoestring.CLI.DecisionTest do
       # At the web UI's own host name: its live connection refuses another origin.
       assert text =~ "http://localhost:"
       refute text =~ "127.0.0.1"
-      assert text =~ "/cobbler/goals/#{ctx.goal.id}"
+      assert text =~ "/decisions/#{ctx.decision.id}"
       assert text =~ "nothing decides this on a timer"
     end
 

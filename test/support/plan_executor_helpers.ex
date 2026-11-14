@@ -86,7 +86,7 @@ defmodule Shoestring.Test.PlanExecutorHelpers do
   lease gate can build. Every call mints a fresh decision id.
   """
   @spec admit!(Shoestring.Trajectory.Goal.t()) :: Trajectory.TrajectoryEvent.t()
-  def admit!(goal) do
+  def admit!(goal, overrides \\ %{}) do
     snapshot_id = Ecto.UUID.generate()
     FakeHelpers.append_capacity_snapshot(goal, snapshot_id)
 
@@ -107,6 +107,7 @@ defmodule Shoestring.Test.PlanExecutorHelpers do
           "reserves" => %{"response" => 1, "tool" => 1}
         }
       })
+      |> Map.merge(overrides)
 
     Shoestring.Test.CobblerHelpers.append_admission_event!(goal.id, payload)
   end

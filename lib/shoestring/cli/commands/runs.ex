@@ -147,7 +147,7 @@ defmodule Shoestring.CLI.Commands.Runs do
         {[], [decision | _]} ->
           "Its plan waits for the person to choose among the candidates task " <>
             "#{decision["task"]} produced: #{decision["question"]} The choice is theirs: " <>
-            "tell them; they answer on the web goal page, in the chat screen's popup, or with " <>
+            "tell them; they answer on the decision's web pane, in the chat screen's popup, or with " <>
             "`shoestring decision answer #{String.slice(decision["decision_id"], 0, 8)} " <>
             "--choose KEY`. You cannot answer for them."
 

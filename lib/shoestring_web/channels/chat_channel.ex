@@ -260,7 +260,7 @@ defmodule ShoestringWeb.ChatChannel do
               "url" => "#{base}/goals/#{decision.goal_id}/artifacts/#{option["artifact_id"]}"
             }
           end),
-        "page_url" => "#{base}/cobbler/goals/#{decision.goal_id}",
+        "page_url" => "#{base}/decisions/#{decision.id}",
         "asked_at" => decision.inserted_at
       }
     end

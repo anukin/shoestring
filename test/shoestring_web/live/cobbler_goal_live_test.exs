@@ -148,6 +148,25 @@ defmodule ShoestringWeb.CobblerGoalLiveTest do
            )
 
     assert has_element?(view, "#cobbler-lease-deadline-time-exact", deadline)
+    refute has_element?(view, "#cobbler-lease-ended")
+  end
+
+  test "a lease whose run has ended reads as a record, not as revoked or overdue",
+       %{conn: conn} do
+    goal = create_goal!(Repo, "Ended lease goal")
+    _admission = append_admission_event!(goal.id)
+    {_lease, _task, run} = insert_lease_full(goal, status: "active", renewal_state: "revoked")
+    Repo.update_all(from(r in RunRecord, where: r.id == ^run.id), set: [status: "completed"])
+
+    {:ok, view, _html} = live(conn, "/cobbler/goals/#{goal.id}")
+
+    assert has_element?(view, "#cobbler-lease-ended", "Its run has ended (completed)")
+    refute has_element?(view, "#cobbler-lease-renewal")
+    refute has_element?(view, "#cobbler-lease-status")
+    # The exact instant stays; no countdown or "ago" for a finished run.
+    deadline = DateTime.to_iso8601(DateTime.add(@now, 3600, :second))
+    assert has_element?(view, "#cobbler-lease-deadline-time", deadline)
+    refute has_element?(view, "#cobbler-lease-deadline-time-relative")
   end
 
   test "checkpoint contents are redacted and required content stays visible", %{conn: conn} do

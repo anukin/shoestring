@@ -582,7 +582,7 @@ defmodule ShoestringWeb.ChatChannelTest do
     assert id == decision.id
     assert dispatch_id == dispatch.id
     assert Enum.map(options, & &1["key"]) == ["red", "green", "blue"]
-    assert page_url =~ "/cobbler/goals/#{goal.id}"
+    assert page_url =~ "/decisions/#{decision.id}"
 
     for option <- options,
         do: assert(option["url"] =~ ~r"/goals/#{goal.id}/artifacts/[0-9a-f-]{36}\z")

@@ -288,22 +288,6 @@ defmodule ShoestringWeb.DecisionsWebTest do
     end
   end
 
-  describe "the goal page" do
-    test "shows the decision inline, answers it, then shows who answered", %{conn: conn} = ctx do
-      {:ok, view, _} = live(conn, "/cobbler/goals/#{ctx.goal.id}")
-      card = "#decision-#{ctx.decision.id}"
-      assert has_element?(view, "#cobbler-plan-decisions #{card}")
-
-      # The header says the plan waits for a person, not "Unknown goal state."
-      assert has_element?(view, "#cobbler-goal-status[data-status='plan-needs-user']")
-
-      view |> element("#{card}-choose-blue") |> render_click()
-
-      assert has_element?(
-               view,
-               "#plan-decision-#{ctx.decision.id}-state[data-state='answered']",
-               "Chosen: blue"
-             )
-    end
-  end
+  # The goal page links a pending decision to its pane instead of answering
+  # it: test/shoestring_web/decision_pane_test.exs.
 end

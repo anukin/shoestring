@@ -92,11 +92,15 @@ defmodule Shoestring.Test.DecisionHelpers do
   @doc """
   Approves `plan`, requests execution, dispatches the deciding task, ends its
   run and records its gates. Returns the completion result plus `:run_id`.
-  Options: `:repository_path` for the execution request.
+  Options: `:repository_path` (and any other field) for the execution
+  request; `:complete_opts`, extra executor options for the completion;
+  `:admission`, fields replacing the admission payload's.
   """
   def run_sheets!(goal, worktree, plan \\ decision_plan(), request_opts \\ []) do
+    {complete_opts, request_opts} = Keyword.pop(request_opts, :complete_opts, [])
+    {admission_overrides, request_opts} = Keyword.pop(request_opts, :admission, %{})
     rev = PlanExecutorHelpers.propose_and_approve!(goal, plan)
-    admission = PlanExecutorHelpers.admit!(goal)
+    admission = PlanExecutorHelpers.admit!(goal, admission_overrides)
 
     assert {:ok, _} =
              Cobbler.request_plan_execution(
@@ -119,7 +123,10 @@ defmodule Shoestring.Test.DecisionHelpers do
              )
 
     PlanExecutorHelpers.complete_run!(goal, first.run_id)
-    assert {:ok, result} = Cobbler.complete_plan_task_run(goal.id, first.run_id, opts(worktree))
+
+    assert {:ok, result} =
+             Cobbler.complete_plan_task_run(goal.id, first.run_id, opts(worktree, complete_opts))
+
     Map.put(result, :run_id, first.run_id)
   end
 end

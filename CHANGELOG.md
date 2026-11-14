@@ -13,6 +13,17 @@ is summarised by iteration in [docs/history.md](docs/history.md).
 
 ### Added
 
+- A decision's own pane, `/decisions/<id>`: the question and the candidates,
+  nothing else. Once chosen, if the plan's next task waits for the person's
+  OK (its provider's usage could not be read) the pane offers that one
+  button (no terminal command); then it says it is done. When a new decision
+  is recorded, its pane opens in the browser under the same rule as opening
+  on start (a service started from a terminal, Settings' "open on start"
+  on). `shoestring decision show`, the chat screen and the coordinator's
+  tools link to it. The goal page no longer answers decisions among its
+  details: a waiting one is a line at the top linking to its pane. A lease
+  whose run has ended reads as a record of that run, not as "revoked" with
+  a deadline long past.
 - EXTERNAL dispatches: work done outside Shoestring (a desktop app, a
   signed-in browser) in a private worktree Shoestring makes, accepted only
   by its checks. Always held for the person's start; only a person completes

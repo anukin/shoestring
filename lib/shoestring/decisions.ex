@@ -51,6 +51,22 @@ defmodule Shoestring.Decisions do
   # Reading
   # ----------------------------------------------------------------------------
 
+  @doc """
+  The decision's own page (its pane: the question, the candidates, and
+  nothing else), at the web UI's configured host and port. The page's live
+  connection accepts only that origin, so a page opened at another host
+  name shows but cannot be answered.
+  """
+  def page_url(%{id: id}), do: base_url() <> "/decisions/" <> id
+
+  @doc "The web UI's address: its configured host and port."
+  def base_url do
+    endpoint = Application.get_env(:shoestring, ShoestringWeb.Endpoint, [])
+    url = endpoint[:url] || []
+    port = url[:port] || get_in(endpoint, [:http, :port]) || 4000
+    "http://#{url[:host] || "localhost"}:#{port}"
+  end
+
   @doc "One decision by id, or nil."
   @spec get(String.t()) :: Decision.t() | nil
   def get(id) do

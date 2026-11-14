@@ -12,7 +12,15 @@ defmodule Shoestring.Browser do
   Opens `url` when allowed: `:opened` or `:skipped`. Options: `:env` (a
   `System.get_env/1`), `:allowed?` (Settings, by default) and `:opener`.
   """
-  def open_on_start(url, opts \\ []) do
+  def open_on_start(url, opts \\ []), do: open_when_allowed(url, opts)
+
+  @doc """
+  Opens a page that asks the person something (a decision's pane, iteration
+  19) under the same rule as `open_on_start/2`: only a service the person
+  started from a terminal, with Settings' "open on start" on. Same options
+  and results.
+  """
+  def open_when_allowed(url, opts \\ []) do
     env = Keyword.get(opts, :env, &System.get_env/1)
     allowed? = Keyword.get_lazy(opts, :allowed?, &setting/0)
 

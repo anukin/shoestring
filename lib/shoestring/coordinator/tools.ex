@@ -440,7 +440,7 @@ defmodule Shoestring.Coordinator.Tools do
       "decided_by" => decision.decided_by,
       "page_url" => Shoestring.CLI.Commands.Decision.page_url(decision),
       "who_answers" =>
-        "the person: on the web goal page, the chat screen, or shoestring decision answer"
+        "the person: on its web pane (page_url), the chat screen, or shoestring decision answer"
     }
   end
 

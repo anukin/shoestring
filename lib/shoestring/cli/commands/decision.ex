@@ -209,17 +209,8 @@ defmodule Shoestring.CLI.Commands.Decision do
     end
   end
 
-  @doc """
-  The goal page where a decision's candidates can be seen, at the web UI's
-  configured host and port: the page's live connection accepts only that
-  origin, so a page opened at another host name shows but cannot be answered.
-  """
-  def page_url(decision) do
-    endpoint = Application.get_env(:shoestring, ShoestringWeb.Endpoint, [])
-    url = endpoint[:url] || []
-    port = url[:port] || get_in(endpoint, [:http, :port]) || 4000
-    "http://#{url[:host] || "localhost"}:#{port}/cobbler/goals/#{decision.goal_id}"
-  end
+  @doc "The decision's own page: see `Shoestring.Decisions.page_url/1`."
+  def page_url(decision), do: Decisions.page_url(decision)
 
   defp row(decision),
     do: %{

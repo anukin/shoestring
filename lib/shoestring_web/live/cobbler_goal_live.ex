@@ -63,29 +63,6 @@ defmodule ShoestringWeb.CobblerGoalLive do
     {:ok, error_state(socket, nil, "Goal unavailable.")}
   end
 
-  # A decision this goal's plan waits on (iteration 19), answered here as on
-  # the Sessions page; the first answer wins from whichever screen.
-  @impl true
-  def handle_event("choose", %{"decision" => id, "choice" => choice}, socket),
-    do: {:noreply, decided(socket, id, choice, nil)}
-
-  @impl true
-  def handle_event("reason", %{"ask" => id}, socket),
-    do: {:noreply, assign(socket, reason_for: id, reason_error: nil)}
-
-  @impl true
-  def handle_event("reason_back", _params, socket),
-    do: {:noreply, assign(socket, reason_for: nil, reason_error: nil)}
-
-  @impl true
-  def handle_event("reject_decision", %{"decision" => id, "note" => note}, socket) do
-    if String.trim(to_string(note)) == "" do
-      {:noreply, assign(socket, reason_error: "Say why none of these will do.")}
-    else
-      {:noreply, decided(socket, id, "reject", note)}
-    end
-  end
-
   @impl true
   def handle_event("refresh", _params, socket) do
     {:noreply, reload(socket)}
@@ -236,8 +213,6 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:recheck_form, to_form(%{"operator_identity" => ""}, as: :recheck))
     |> assign(:pending_wakeup, nil)
     |> assign(:plan_decisions, [])
-    |> assign(:reason_for, nil)
-    |> assign(:reason_error, nil)
     |> assign(:now, DateTime.utc_now())
     |> stream(:commands, [], reset: true, dom_id: &command_dom_id/1)
     |> stream(:events, [], reset: true, dom_id: &event_dom_id/1)
@@ -286,42 +261,9 @@ defmodule ShoestringWeb.CobblerGoalLive do
     |> assign(:recheck_form, to_form(%{"operator_identity" => ""}, as: :recheck))
     |> assign(:pending_wakeup, pending_wakeup(goal.id))
     |> assign(:plan_decisions, plan_decisions(goal.id))
-    |> assign_new(:reason_for, fn -> nil end)
-    |> assign_new(:reason_error, fn -> nil end)
     |> assign(:now, DateTime.utc_now())
     |> stream(:commands, commands, reset: true, dom_id: &command_dom_id/1)
     |> stream(:events, sanitized_events, reset: true, dom_id: &event_dom_id/1)
-  end
-
-  defp decided(socket, id, choice, note) do
-    socket =
-      with %{goal: %Goal{id: goal_id}} <- socket.assigns,
-           %{goal_id: ^goal_id} <- Shoestring.Decisions.get(id),
-           {:ok, decision} <-
-             Shoestring.Attention.answer_decision(
-               nil,
-               id,
-               choice,
-               Shoestring.CLI.WorkLoop.default_human(),
-               note
-             ) do
-        put_flash(
-          socket,
-          :info,
-          if(decision.state == "rejected",
-            do: "None of these: the task waits for you to decide what next.",
-            else: "Chosen. The next tasks start with it."
-          )
-        )
-      else
-        {:error, reason} ->
-          put_flash(socket, :error, ShoestringWeb.DecisionText.refusal(reason))
-
-        _ ->
-          put_flash(socket, :error, ShoestringWeb.DecisionText.refusal(:decision_not_found))
-      end
-
-    socket |> assign(reason_for: nil, reason_error: nil) |> reload()
   end
 
   defp plan_decisions(goal_id) do
@@ -825,9 +767,22 @@ defmodule ShoestringWeb.CobblerGoalLive do
       deadline: lease.deadline,
       checkpoint_cadence: lease.checkpoint_cadence,
       consumed: consumed,
-      next_boundary_text: next_boundary_text(consumed)
+      next_boundary_text: next_boundary_text(consumed),
+      ended: ended_run(lease)
     }
   end
+
+  # A lease whose run has ended is a record: its renewal state and deadline
+  # describe that run, not anything still waiting (the page says so instead
+  # of showing "revoked" and a deadline long past as if they mattered now).
+  defp ended_run(%ExecutionLeaseRecord{run_id: run_id}) when is_binary(run_id) do
+    case Repo.get(Shoestring.Harness.RunRecord, run_id) do
+      %{status: status} when status in ~w(cancelled completed failed interrupted) -> status
+      _ -> nil
+    end
+  end
+
+  defp ended_run(_lease), do: nil
 
   # "Which bound is nearest, and how far away" — rendered straight from
   # `LeaseBounds.next_boundary/1` so the page never restates the D7 rule.

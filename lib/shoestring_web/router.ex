@@ -36,6 +36,7 @@ defmodule ShoestringWeb.Router do
     live "/observatory", CapacityObservatoryLive, :index
     live "/cobbler", CobblerDashboardLive, :index
     live "/cobbler/goals/:goal_id", CobblerGoalLive, :show
+    live "/decisions/:decision_id", DecisionLive, :show
     live "/goals/:goal_id/timeline", TrajectoryTimelineLive, :show
     live "/runs/new", RunNewLive, :new
     live "/runs/:run_id", RunShowLive, :show
