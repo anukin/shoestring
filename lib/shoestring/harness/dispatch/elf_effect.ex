@@ -68,7 +68,8 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
   def perform(%RunRecord{} = run, %DispatchRecord{} = dispatch) do
     with {:ok, request} <- Elves.request_from_run(run),
          :ok <- Shoestring.Cobbler.ExecutionProfile.run_authority(Shoestring.Repo, run),
-         {:ok, opts} <- elf_opts(run) do
+         {:ok, opts} <- elf_opts(run),
+         {:ok, opts} <- prepare_toolchain(run, opts) do
       case Elves.start_elf(request, dispatch, opts) do
         {:ok, _pid} -> :ok
         {:ok, :already_running, _pid} -> {:ok, :already_running}
@@ -83,6 +84,110 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
   @doc false
   # The Elf options a persisted run would launch with; read-only, for tests.
   def launch_opts(%RunRecord{} = run), do: elf_opts(run)
+
+  # Only the durable, authorized Worker binding may select a toolchain.
+  defp prepare_toolchain(run, opts) do
+    binding = (run.extensions || %{})[Shoestring.Cobbler.ExecutionProfile.key()] || %{}
+
+    case binding do
+      %{"dispatch_id" => id, "role" => "Worker"} ->
+        case Shoestring.Repo.get(Shoestring.Dispatches.Dispatch, id) do
+          %{setup: setup} when is_map(setup) ->
+            case Shoestring.DispatchSetup.prepare(id, setup) do
+              {:ok, root} ->
+                adapter_opts = Map.put(Keyword.get(opts, :adapter_opts, %{}), :setup_root, root)
+                {:ok, Keyword.put(opts, :adapter_opts, adapter_opts)}
+
+              {:error, _reason} ->
+                {:ok, Keyword.put(opts, :launch_failure, "setup_preparation_failed")}
+            end
+
+          %{toolchain: nil} ->
+            {:ok, opts}
+
+          %{toolchain: requirement} ->
+            case Shoestring.Toolchains.prepare(requirement) do
+              {:ok, root} ->
+                adapter_opts = Map.put(Keyword.get(opts, :adapter_opts, %{}), :go_root, root)
+                {:ok, Keyword.put(opts, :adapter_opts, adapter_opts)}
+
+              {:error, reason} ->
+                {:ok, Keyword.put(opts, :launch_failure, toolchain_failure_code(reason))}
+            end
+
+          _ ->
+            {:ok, Keyword.put(opts, :launch_failure, "toolchain_dispatch_missing")}
+        end
+
+      _ ->
+        {:ok, opts}
+    end
+  end
+
+  defp toolchain_failure_code(:unsupported_go_version), do: "toolchain_unsupported_version"
+  defp toolchain_failure_code(:unsupported_platform), do: "toolchain_unsupported_platform"
+  defp toolchain_failure_code(:checksum_mismatch), do: "toolchain_checksum_mismatch"
+  defp toolchain_failure_code(:invalid_checksum_config), do: "toolchain_checksum_config_invalid"
+  defp toolchain_failure_code(:invalid_archive), do: "toolchain_invalid_archive"
+  defp toolchain_failure_code(:archive_too_large), do: "toolchain_archive_too_large"
+  defp toolchain_failure_code(:download_timeout), do: "toolchain_download_timeout"
+  defp toolchain_failure_code({:download_failed, _}), do: "toolchain_download_failed"
+  defp toolchain_failure_code({:download_status, _}), do: "toolchain_download_failed"
+  defp toolchain_failure_code({:write_error, _}), do: "toolchain_cache_failed"
+  defp toolchain_failure_code(:missing_state_dir), do: "toolchain_cache_failed"
+  defp toolchain_failure_code(:invalid_go_version), do: "toolchain_invalid_requirement"
+  defp toolchain_failure_code(:invalid_toolchain_requirement), do: "toolchain_invalid_requirement"
+  defp toolchain_failure_code(_), do: "toolchain_preparation_failed"
+
+  @doc false
+  def put_setup_env(opts, nil), do: opts
+
+  def put_setup_env(opts, root) do
+    Keyword.update(opts, :env, [{"SHOESTRING_SETUP_DIR", root}], fn env ->
+      env ++ [{"SHOESTRING_SETUP_DIR", root}]
+    end)
+  end
+
+  @doc false
+  def setup_prompt(prompt, nil), do: prompt
+
+  def setup_prompt(prompt, _root) do
+    prompt <>
+      "\n\nTools installed for this dispatch are available in $SHOESTRING_SETUP_DIR/bin. " <>
+      "Invoke them by explicit path in sandboxed commands, or prepend that directory to PATH " <>
+      "inside a sandboxed command when needed."
+  end
+
+  @doc false
+  def put_go_env(opts, nil, _workdir), do: opts
+
+  def put_go_env(opts, root, workdir) do
+    env = go_env(root, workdir)
+    Keyword.update(opts, :env, env, &(&1 ++ env))
+  end
+
+  @doc false
+  def go_env(nil, _workdir), do: []
+
+  def go_env(root, workdir) do
+    cache_base =
+      case File.read(Path.join(workdir, ".git")) do
+        {:ok, "gitdir: " <> path} -> Path.expand(String.trim(path), workdir)
+        _ -> workdir
+      end
+
+    cache = Path.join(cache_base, "shoestring-go")
+
+    [
+      {"GOROOT", root},
+      {"PATH", Path.join(root, "bin") <> ":" <> (System.get_env("PATH") || "/usr/bin:/bin")},
+      {"GOTOOLCHAIN", "local"},
+      {"GOENV", "off"},
+      {"GOCACHE", Path.join(cache, "cache")},
+      {"GOMODCACHE", Path.join(cache, "mod")},
+      {"GOPATH", Path.join(cache, "path")}
+    ]
+  end
 
   # -- Private helpers --
 

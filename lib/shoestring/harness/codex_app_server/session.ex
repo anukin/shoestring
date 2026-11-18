@@ -255,6 +255,11 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         |> forward_opt(state.opts, :executable)
         |> forward_opt(state.opts, :args)
         |> plan_run_env(state.opts[:git_sandbox_policy])
+        |> Shoestring.Harness.Dispatch.ElfEffect.put_go_env(
+          state.opts[:go_root],
+          state.opts[:workdir]
+        )
+        |> Shoestring.Harness.Dispatch.ElfEffect.put_setup_env(state.opts[:setup_root])
 
       case state.transport_mod.start_link(transport_opts) do
         {:ok, pid} ->
@@ -712,7 +717,9 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         thread_id = get_in(response, ["result", "thread", "id"])
         state = %{state | thread_id: thread_id}
         # Now launch the turn
-        prompt = (state.run_request && state.run_request.prompt) || "Execute task."
+        prompt =
+          ((state.run_request && state.run_request.prompt) || "Execute task.")
+          |> Shoestring.Harness.Dispatch.ElfEffect.setup_prompt(state.opts[:setup_root])
 
         send_rpc(
           state,
@@ -730,7 +737,10 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         # original prompt plus the checkpoint pointer, next action, and
         # decision refs (the 3 continuation keys only; raw transcript
         # terms never enter).
-        prompt = Shoestring.Harness.Continuation.resume_prompt(state.run_request)
+        prompt =
+          state.run_request
+          |> Shoestring.Harness.Continuation.resume_prompt()
+          |> Shoestring.Harness.Dispatch.ElfEffect.setup_prompt(state.opts[:setup_root])
 
         send_rpc(
           state,
@@ -1077,6 +1087,12 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     end
   end
 
+  defp go_permissions(permissions, nil), do: permissions
+
+  defp go_permissions(permissions, root) do
+    Map.update(permissions || %{}, "read_paths", [root], &Enum.uniq(&1 ++ [root]))
+  end
+
   defp turn_params(state, params) do
     params = effort_params(state, model_params(state, params))
 
@@ -1107,6 +1123,8 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
             policy,
             System.user_home!(),
             state.opts[:permissions]
+            |> go_permissions(state.opts[:go_root])
+            |> go_permissions(state.opts[:setup_root])
           )
         )
     end

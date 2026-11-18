@@ -44,6 +44,9 @@ defmodule Shoestring.Cobbler.PlanGate do
   like a secret (it is recorded with every run). `kind` orders gates
   (cheap first) and `required: false` records a failure without blocking the
   task. `timeout_ms` (at most 300 000) replaces the default timeout.
+  `dispatch_setup: true` runs a project gate with the coordinator-generated
+  setup's executable directory first on its PATH. Use it when this gate is
+  meant to trust the dispatch's prepared environment.
 
   ## Specification
 
@@ -58,6 +61,7 @@ defmodule Shoestring.Cobbler.PlanGate do
 
   # `version` changes whenever a gate's argv or meaning changes.
   @gates %{
+    "go_test" => %{argv: ["go", "test", "./..."], parameters: [], kind: "test", version: 1},
     "mix_precommit" => %{
       argv: ["mix", "precommit"],
       parameters: [],
@@ -167,19 +171,22 @@ defmodule Shoestring.Cobbler.PlanGate do
     attrs = Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
     argv = attrs["argv"]
     timeout = attrs["timeout_ms"]
+    dispatch_setup = Map.get(attrs, "dispatch_setup", false)
 
     if Regex.match?(@project_name, @project_prefix <> name) and
-         Map.keys(attrs) -- ~w(argv kind required timeout_ms) == [] and
+         Map.keys(attrs) -- ~w(argv kind required timeout_ms dispatch_setup) == [] and
          valid_argv?(argv) and attrs["kind"] in Shoestring.Cobbler.GateSpec.kinds() and
+         is_boolean(dispatch_setup) and
          Map.get(attrs, "required", true) in [true, false] and
          (is_nil(timeout) or (is_integer(timeout) and timeout > 0 and timeout <= @max_timeout_ms)) do
       {:ok,
        %{
          argv: argv,
          kind: attrs["kind"],
-         version: 1,
+         version: if(dispatch_setup, do: 2, else: 1),
          source: "configuration",
          required: Map.get(attrs, "required", true),
+         dispatch_setup: dispatch_setup,
          timeout_ms: timeout
        }}
     else

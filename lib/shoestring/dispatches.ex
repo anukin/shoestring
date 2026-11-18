@@ -35,11 +35,13 @@ defmodule Shoestring.Dispatches do
     AgentProfiles,
     Agents,
     Authority,
+    DispatchSetup,
     Grants,
     Harnesses,
     Lessons,
     ModelCatalog,
-    Repo
+    Repo,
+    Toolchains
   }
 
   alias Shoestring.Cobbler.{ExecutionControl, ExecutionProfile, Intake, PlanContract, Plans}
@@ -81,6 +83,24 @@ defmodule Shoestring.Dispatches do
     end
   end
 
+  @doc "The pinned toolchain of a coordinator IMPLEMENT goal, if it has one."
+  def toolchain_for_goal(goal_id, repo \\ Repo) do
+    repo.one(
+      from d in Dispatch,
+        where: d.goal_id == ^goal_id and d.purpose == "implement",
+        select: d.toolchain
+    )
+  end
+
+  @doc "The generated setup for a coordinator IMPLEMENT goal, if it has one."
+  def setup_for_goal(goal_id, repo \\ Repo) do
+    repo.one(
+      from d in Dispatch,
+        where: d.goal_id == ^goal_id and d.purpose == "implement" and not is_nil(d.setup),
+        select: {d.id, d.setup}
+    )
+  end
+
   @doc "Latest durable harness run for a dispatch's goal, including completed runs."
   def latest_run(%{goal_id: nil}), do: nil
 
@@ -110,18 +130,35 @@ defmodule Shoestring.Dispatches do
          %Grant{} = grant <- Grants.active(request.session_id) || {:error, :no_grant} do
       usage = usage(grant)
 
-      {:ok,
-       %{
-         "advice" => if(request.purpose == "implement", do: advice(prepared)),
-         "would_dispatch" => Grants.check(grant, check_request(prepared), usage) == :ok,
-         "grant_check" => check_result(Grants.check(grant, check_request(prepared), usage)),
-         "grant" => room(grant, usage),
-         "plan" => prepared.contract.content,
-         "plan_digest" => prepared.contract.digest,
-         "left_out" => left_out(prepared.root)
-       }}
+      report = %{
+        "advice" => if(request.purpose == "implement", do: advice(prepared)),
+        "would_dispatch" => Grants.check(grant, check_request(prepared), usage) == :ok,
+        "grant_check" => check_result(Grants.check(grant, check_request(prepared), usage)),
+        "grant" => room(grant, usage),
+        "plan" => prepared.contract.content,
+        "plan_digest" => prepared.contract.digest,
+        "left_out" => left_out(prepared.root)
+      }
+
+      {:ok, describe_environment(report, request)}
     end
   end
+
+  defp describe_environment(report, %{setup: %{} = setup}),
+    do: Map.put(report, "setup", setup_summary(setup))
+
+  defp describe_environment(report, %{toolchain: %{} = requirement}) do
+    Map.merge(report, %{
+      "toolchain" => requirement,
+      "toolchain_status" => Toolchains.cache_status(requirement)
+    })
+  end
+
+  defp describe_environment(report, _request), do: report
+
+  @doc "A setup summary for dispatch output, with the names of its downloads."
+  def setup_summary(%{"script" => _} = setup),
+    do: %{"downloads" => Enum.map(Map.get(setup, "downloads", []), & &1["name"])}
 
   # What past runs of this worker on this kind of task looked like.
   defp advice(prepared) do
@@ -185,6 +222,8 @@ defmodule Shoestring.Dispatches do
              dispatch.model == request.model and
              dispatch.provider == request.provider and dispatch.purpose == request.purpose and
              dispatch.after_dispatch_id == cast_id(Map.get(request, :after_dispatch)) and
+             dispatch.toolchain == Map.get(request, :toolchain) and
+             dispatch.setup == Map.get(request, :setup) and
              (dispatch.lesson_codes || []) == lesson_codes(request),
            do: {:ok, dispatch},
            else: {:error, :request_id_conflict}
@@ -236,6 +275,8 @@ defmodule Shoestring.Dispatches do
   defp prepare(request) do
     with :ok <- request_id(request.request_id),
          :ok <- purpose(request.purpose),
+         :ok <- toolchain(request.purpose, Map.get(request, :toolchain)),
+         :ok <- setup(request.purpose, Map.get(request, :setup), Map.get(request, :toolchain)),
          {:ok, title} <- text(redact(request.title), :title, 200),
          {:ok, brief} <- brief(redact(request.brief)),
          :ok <- worker(request),
@@ -264,6 +305,32 @@ defmodule Shoestring.Dispatches do
       }
 
       prepare(request.purpose, prepared, facts)
+    end
+  end
+
+  defp toolchain(_purpose, nil), do: :ok
+
+  defp toolchain("implement", requirement) do
+    case Toolchains.validate(requirement) do
+      :ok -> :ok
+      {:error, _reason} -> {:error, {:invalid_dispatch, :toolchain}}
+    end
+  end
+
+  defp toolchain(_purpose, _requirement), do: {:error, :toolchain_implement_only}
+
+  defp setup(_purpose, nil, _toolchain), do: :ok
+
+  defp setup(purpose, _setup, _toolchain) when purpose != "implement",
+    do: {:error, :setup_implement_only}
+
+  defp setup("implement", _setup, toolchain) when not is_nil(toolchain),
+    do: {:error, :setup_with_toolchain}
+
+  defp setup("implement", setup, nil) do
+    case DispatchSetup.validate(setup) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:invalid_setup, reason}}
     end
   end
 
@@ -305,7 +372,7 @@ defmodule Shoestring.Dispatches do
          {:ok, seconds} <- implement_seconds(request),
          {:ok, gates} <-
            Intake.gates(facts,
-             gates: Map.get(request, :gates, []),
+             gates: implement_gates(request, facts),
              tests: Map.get(request, :tests, [])
            ),
          {:ok, goal} <-
@@ -390,6 +457,15 @@ defmodule Shoestring.Dispatches do
            ) do
       {:ok, call(prepared, input, seconds)}
     end
+  end
+
+  defp implement_gates(request, facts) do
+    names = Map.get(request, :gates, [])
+
+    if request[:toolchain] && names == [] && Map.get(request, :tests, []) == [] &&
+         "go.mod" in facts.tracked,
+       do: ["go_test"],
+       else: names
   end
 
   # An IMPLEMENT may follow another IMPLEMENT of its session and repository
@@ -865,6 +941,8 @@ defmodule Shoestring.Dispatches do
                 if(request.purpose == "implement",
                   do: get_in(request, [:agent_entry, "permissions"])
                 ),
+              toolchain: Map.get(request, :toolchain),
+              setup: Map.get(request, :setup),
               batch_label: Map.get(request, :batch_label),
               batch_size: Map.get(request, :batch_size),
               goal_id: if(request.purpose in ~w(implement external), do: Ecto.UUID.generate()),

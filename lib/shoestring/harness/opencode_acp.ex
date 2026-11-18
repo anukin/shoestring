@@ -214,6 +214,8 @@ defmodule Shoestring.Harness.OpencodeAcp do
         opts
         |> Map.to_list()
         |> Keyword.merge(launch)
+        |> Shoestring.Harness.Dispatch.ElfEffect.put_go_env(Map.get(opts, :go_root), workdir)
+        |> Shoestring.Harness.Dispatch.ElfEffect.put_setup_env(Map.get(opts, :setup_root))
         |> Keyword.merge(
           run_request: request,
           run_id: request.dispatch_id,
@@ -247,7 +249,9 @@ defmodule Shoestring.Harness.OpencodeAcp do
       sandbox_opts =
         [
           worktrees_dir: Map.get(opts, :sandbox_worktrees_dir),
-          executable: Map.get(opts, :executable)
+          executable: Map.get(opts, :executable),
+          go_root: Map.get(opts, :go_root),
+          setup_root: Map.get(opts, :setup_root)
         ]
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 

@@ -195,6 +195,51 @@ defmodule Shoestring.DispatchesTest do
     assert {:ok, %{consistent?: true, divergences: []}} = Plans.rebuild(dispatch.goal_id)
   end
 
+  test "an unsupported pinned Go fails the claimed worker before provider startup", ctx do
+    assert {:ok, dispatch, :recorded} =
+             Dispatches.create(request(ctx, %{toolchain: %{"go" => "1.99.99"}}))
+
+    assert {:ok, binding} = Dispatches.binding(dispatch.id, "Worker", Repo)
+    %{goal: goal, task: task} = Shoestring.Test.ElvesHelpers.insert_goal_task()
+    request = Shoestring.Test.ElvesHelpers.run_request(goal, task)
+
+    assert {:ok, delivery, job} =
+             Shoestring.Harness.Dispatches.enqueue(
+               request,
+               Shoestring.Test.ElvesHelpers.fake_identity()
+             )
+
+    from(r in Shoestring.Harness.RunRecord, where: r.id == ^delivery.run_id)
+    |> Repo.update_all(
+      set: [
+        provider_id: "codex_app_server_stdio",
+        extensions: %{ExecutionProfile.key() => binding}
+      ]
+    )
+
+    previous = Application.get_env(:shoestring, :dispatch_effect)
+    Application.put_env(:shoestring, :dispatch_effect, Shoestring.Harness.Dispatch.ElfEffect)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:shoestring, :dispatch_effect, previous),
+        else: Application.delete_env(:shoestring, :dispatch_effect)
+    end)
+
+    assert :ok = Shoestring.Harness.DispatchWorker.perform(job)
+
+    assert {:ok, terminal} =
+             Shoestring.Test.ElvesHelpers.wait_until(fn ->
+               Shoestring.Test.ElvesHelpers.terminal_event(goal.id, delivery.run_id)
+             end)
+
+    assert terminal.type == "run.failed"
+    assert terminal.payload["error_code"] == "toolchain_unsupported_version"
+
+    assert 0 ==
+             Shoestring.Test.ElvesHelpers.count_events(goal.id, delivery.run_id, ["run.running"])
+  end
+
   test "every grant limit refuses before anything is recorded", ctx do
     refusals = [
       {%{model: "opus", provider: "claude"}, {:error, {:outside_grant, :model}}},

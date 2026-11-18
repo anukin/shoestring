@@ -330,10 +330,7 @@ defmodule Shoestring.CLI.Follow do
         "  The worker finished; checking its work."
 
       "run.failed" ->
-        if p["error_code"] == "supervisor_crash",
-          do:
-            "  Shoestring lost the worker during a service stop or crash; its exact stop time is unknown.",
-          else: "  The worker failed (#{p["error_category"]}: #{p["error_code"]})."
+        run_failure(p["error_category"], p["error_code"])
 
       "run.cancelled" ->
         "  The worker was cancelled."
@@ -411,6 +408,18 @@ defmodule Shoestring.CLI.Follow do
         nil
     end
   end
+
+  defp run_failure(_category, "supervisor_crash"),
+    do:
+      "  Shoestring lost the worker during a service stop or crash; its exact stop time is unknown."
+
+  defp run_failure(_category, "toolchain_" <> _ = code),
+    do: "  Could not prepare Go before starting the worker (#{code})."
+
+  defp run_failure(_category, "setup_" <> _ = code),
+    do: "  Could not prepare the dispatch environment (#{code})."
+
+  defp run_failure(category, code), do: "  The worker failed (#{category}: #{code})."
 
   defp describe(shell, event) do
     case line(event) do

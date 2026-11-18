@@ -71,7 +71,17 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
          paths = opencode_paths(home, env),
          {:ok, tmp} <- temp_dir(),
          {:ok, profile} <-
-           release_on_error(profile(roots, paths, install_dir(executable), tmp, home), tmp) do
+           release_on_error(
+             profile(
+               roots,
+               paths,
+               install_dir(executable),
+               tmp,
+               home,
+               [Keyword.get(opts, :go_root), Keyword.get(opts, :setup_root)]
+             ),
+             tmp
+           ) do
       {:ok,
        %{
          command: sandbox_exec,
@@ -273,12 +283,17 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
   # without a rule.
   defp install_dir(executable), do: executable |> Path.dirname() |> Path.dirname()
 
-  defp profile(roots, paths, install, tmp, home) do
+  defp profile(roots, paths, install, tmp, home, go_root) do
     # Roots are the worktree, its gitdir, then <store>/objects and refs; Git
     # reads the rest of the private store (config, HEAD) too.
     store = roots |> Enum.at(2) |> Path.dirname()
     writable = roots ++ [paths.data, paths.state, paths.cache, tmp]
-    readable = writable ++ [store, paths.config, install] ++ config_links(paths.config)
+
+    readable =
+      writable ++
+        [store, paths.config, install] ++
+        config_links(paths.config) ++
+        Enum.map(Enum.reject(List.wrap(go_root), &is_nil/1), &GitSandbox.physical_path/1)
 
     if Enum.all?([home | readable], &quotable?/1) do
       sinks = Enum.map_join(@dev_sinks, " ", &"(literal #{q(&1)})")

@@ -1,5 +1,5 @@
 defmodule Shoestring.Cobbler.PlanPythonGateTest do
-  use ExUnit.Case, async: false
+  use Shoestring.DataCase, async: false
 
   alias Shoestring.Cobbler.{GateProcess, PlanContract, PlanGate, PlanGateRunner}
   alias Shoestring.Cobbler.Planner.Evaluation

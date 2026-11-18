@@ -502,7 +502,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
                   task_contract,
                   context,
                   opts
-                  |> Keyword.put(:gate_runner_opts, gate_opts)
+                  |> Keyword.put(:gate_runner_opts, Keyword.put(gate_opts, :repo, repo))
                   |> Keyword.put(:remaining_duration_ms, remaining)
                   |> Keyword.put(
                     :gate_log,
@@ -3031,7 +3031,7 @@ defmodule Shoestring.Cobbler.PlanExecutor do
              goal_id,
              contract,
              execution,
-             gate_opts,
+             Keyword.put(gate_opts, :repo, repo),
              PlanBudget.global_remaining(usage, contract),
              PlanGateLog.new(repo, goal_id, execution.execution_id, "execution", %{}, opts)
            ),

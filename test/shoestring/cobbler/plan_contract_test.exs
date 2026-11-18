@@ -486,6 +486,7 @@ defmodule Shoestring.Cobbler.PlanContractTest do
 
     test "the trusted registry is closed" do
       assert PlanGate.names() == [
+               "go_test",
                "mix_compile_strict",
                "mix_format_check",
                "mix_precommit",

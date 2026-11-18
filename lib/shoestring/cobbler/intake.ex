@@ -20,7 +20,7 @@ defmodule Shoestring.Cobbler.Intake do
   @max_map_bytes 12_288
   @python_test ~r/\Atests?\/(?:[A-Za-z_][A-Za-z0-9_]*\/)*test_[A-Za-z0-9_]+\.py\z/
   @elixir_test ~r/\Atest\/[A-Za-z0-9_][A-Za-z0-9_.\/-]{0,180}_test\.exs\z/
-  @parameterless_gates ~w(mix_test mix_precommit mix_format_check mix_compile_strict)
+  @parameterless_gates ~w(mix_test mix_precommit mix_format_check mix_compile_strict go_test)
 
   @default_constraints [
     "Change only what the request needs; leave unrelated files unchanged.",

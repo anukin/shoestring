@@ -285,6 +285,72 @@ the session, purpose, worker, title and brief) returns the same dispatch.
 `--batch LABEL --batch-size N` declares a strategy of N dispatches; one more
 is refused. `--dry-run` checks the grant and the plan and records nothing.
 
+### Generate an environment setup for an IMPLEMENT dispatch
+
+When a project needs tools that its worker sandbox lacks, the coordinator can
+generate a shell script in the dispatch tool's `setup.script` field. If it
+needs release archives, list them in `setup.downloads` as objects with a local
+`name`, an HTTPS `url`, and the published lowercase `sha256`. The CLI accepts
+the same `{"script": "...", "downloads": [...]}` object as a JSON file via
+`--setup FILE`. A dry run validates the setup without provisioning it.
+
+After admission, Shoestring fetches the declared files and verifies their
+checksums. It runs the script under `/bin/sh` in a dedicated macOS sandbox.
+The script reads its inputs from `$SHOESTRING_SETUP_DOWNLOADS` and installs
+into `$SHOESTRING_SETUP_DIR`. The setup shell has no network, checkout, or
+inherited credentials. Put executables or wrappers in
+`$SHOESTRING_SETUP_DIR/bin`. Sandboxed worker commands can call those
+executables directly or prepend the directory to their own `PATH`.
+Shoestring reuses the successful setup within the dispatch. A setup failure
+is reported before a provider starts.
+
+For an Elixir project, declare compatible Erlang/OTP and Elixir release
+archives. The script can unpack both into the prefix and put `erl`, `elixir`,
+and `mix` wrappers in its `bin` directory. Include any dependencies the
+checks need as pinned downloads and prepare them for offline use. The
+release layouts are described by
+[Erlang/OTP Builds](https://github.com/erlef/otp_builds) and
+[setup-beam](https://github.com/erlef/setup-beam).
+
+An operator can configure a project gate to trust executables produced by
+the dispatch's script. For example, this gate uses the prepared Mix offline
+when the coordinator selects `project:prepared_mix_test`.
+
+```elixir
+config :shoestring, :project_gates, %{
+  "prepared_mix_test" => %{argv: ["mix", "test"], kind: "test", dispatch_setup: true}
+}
+```
+
+Downloads use a server-side allowlist. It includes public GitHub release
+assets and build hosts for Hex and Erlang. Operators can add exact hosts via
+`config :shoestring, :dispatch_setup_download_hosts`. A setup can declare
+up to eight downloads and 100 MB of response data. A dispatch chooses either
+a generated `setup` or the Go shortcut below.
+
+### Prepare Go for an IMPLEMENT dispatch
+
+The coordinator can set `"toolchain": {"go": "1.25.3"}` in its dispatch tool
+call. From the terminal, add `--go 1.25.3` to the equivalent dispatch.
+Use the exact release your project requires.
+
+Shoestring prepares the release after admission and before launching the
+worker. It downloads from the official Go distribution host, verifies the
+archive against a trusted checksum, and caches the install for reuse. The
+worker and acceptance checks both use the pinned release. An installation
+failure is recorded on the dispatch before a provider starts.
+
+If the committed repository has a root `go.mod` and you leave the checks
+unspecified, Shoestring selects `go_test` (`go test ./...`). You can also
+select it explicitly with `--gate go_test`. Acceptance checks run offline,
+so commit the project's vendored modules if the tests need external modules.
+
+The built-in checksum catalog covers Go 1.25.3 for macOS and Linux on arm64
+and amd64. An operator can set `config :shoestring, :toolchain_checksums`
+to a map from `{version, os, arch}` to the official lowercase SHA-256
+checksum to add another exact release. The release archive is still fetched
+from the same official host.
+
 ### One task after another (iteration 16 C1)
 
 ```sh

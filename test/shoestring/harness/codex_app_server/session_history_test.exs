@@ -14,6 +14,10 @@ defmodule Shoestring.Harness.CodexAppServer.SessionHistoryTest do
     assert_fresh([], false)
   end
 
+  test "setup instructions reach a fresh worker" do
+    assert_fresh([setup_root: "/synthetic/setup"], false)
+  end
+
   test "ephemeral resume is refused before opening a transport" do
     assert {:error, :ephemeral_resume_unsupported} =
              Session.start_link(ephemeral: true, resume: true, command: "not-a-provider")
@@ -81,7 +85,16 @@ defmodule Shoestring.Harness.CodexAppServer.SessionHistoryTest do
 
     %{"params" => turn} = Enum.find(frames, &(&1["method"] == "turn/start"))
     assert turn["model"] == "fixture-model"
-    assert turn["input"] == [%{"type" => "text", "text" => "Implement the approved task"}]
+    assert [%{"type" => "text", "text" => text}] = turn["input"]
+    assert text =~ "Implement the approved task"
+
+    if Keyword.has_key?(history_opts, :setup_root) do
+      assert text =~ "$SHOESTRING_SETUP_DIR/bin"
+      refute text =~ "/synthetic/setup"
+    else
+      assert text == "Implement the approved task"
+    end
+
     refute Enum.any?(frames, &(&1["method"] == "thread/resume"))
   end
 

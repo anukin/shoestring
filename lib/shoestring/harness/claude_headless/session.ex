@@ -893,7 +893,10 @@ defmodule Shoestring.Harness.ClaudeHeadless.Session do
     })
   end
 
-  defp prompt(state), do: (state.run_request && state.run_request.prompt) || "Execute task."
+  defp prompt(state) do
+    ((state.run_request && state.run_request.prompt) || "Execute task.")
+    |> Shoestring.Harness.Dispatch.ElfEffect.setup_prompt(state.opts[:setup_root])
+  end
 
   defp default_argv(state) do
     tools = Keyword.get(state.opts, :tools, "Bash")

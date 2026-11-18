@@ -263,6 +263,11 @@ defmodule Shoestring.Harness.ClaudeHeadless do
         |> Keyword.put_new(:permission_bypass, false)
         |> Keyword.delete(:asks)
         |> apply_sandbox(sandbox)
+        |> Shoestring.Harness.Dispatch.ElfEffect.put_go_env(
+          Map.get(opts, :go_root),
+          valid_workdir
+        )
+        |> Shoestring.Harness.Dispatch.ElfEffect.put_setup_env(Map.get(opts, :setup_root))
 
       case Session.start_link(session_opts) do
         {:ok, pid} ->
@@ -297,6 +302,8 @@ defmodule Shoestring.Harness.ClaudeHeadless do
           dir -> [worktrees_dir: dir]
         end
         |> Keyword.put(:permissions, Map.get(opts, :permissions))
+        |> Keyword.put(:go_root, Map.get(opts, :go_root))
+        |> Keyword.put(:setup_root, Map.get(opts, :setup_root))
 
       case Sandbox.prepare(workdir, workspace_ref, sandbox_opts) do
         {:ok, sandbox} ->

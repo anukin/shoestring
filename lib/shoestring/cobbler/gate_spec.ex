@@ -58,23 +58,31 @@ defmodule Shoestring.Cobbler.GateSpec do
           {:ok, t()} | {:error, :project_gate_not_configured | :unknown_gate}
   def build(reference, default_timeout_ms \\ @default_timeout_ms) do
     with {:ok, facts} <- PlanGate.spec(reference) do
-      {:ok,
-       %{
-         "schema_version" => @schema_version,
-         "gate" => facts.gate,
-         "version" => facts.version,
-         "source" => facts.source,
-         "kind" => facts.kind,
-         "order" => Map.fetch!(@order, facts.kind),
-         "argv" => facts.argv,
-         "working_directory" => "worktree",
-         "environment" => GateSandbox.environment_names(),
-         "timeout_ms" => facts.timeout_ms || default_timeout_ms,
-         "output_limit_bytes" => @output_limit_bytes,
-         "success" => "exit_status_zero",
-         "required" => facts.required,
-         "artifact" => "combined_output_redacted"
-       }}
+      spec = %{
+        "schema_version" => @schema_version,
+        "gate" => facts.gate,
+        "version" => facts.version,
+        "source" => facts.source,
+        "kind" => facts.kind,
+        "order" => Map.fetch!(@order, facts.kind),
+        "argv" => facts.argv,
+        "working_directory" => "worktree",
+        "environment" => GateSandbox.environment_names(),
+        "timeout_ms" => facts.timeout_ms || default_timeout_ms,
+        "output_limit_bytes" => @output_limit_bytes,
+        "success" => "exit_status_zero",
+        "required" => facts.required,
+        "artifact" => "combined_output_redacted"
+      }
+
+      if facts[:dispatch_setup] do
+        {:ok,
+         spec
+         |> Map.put("dispatch_setup", true)
+         |> Map.update!("environment", &Enum.sort(["SHOESTRING_SETUP_DIR" | &1]))}
+      else
+        {:ok, spec}
+      end
     end
   end
 
