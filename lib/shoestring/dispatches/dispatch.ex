@@ -36,6 +36,7 @@ defmodule Shoestring.Dispatches.Dispatch do
     # The agent's permissions when its session started (`Agents.Permissions`).
     field :permissions, :map
     field :toolchain, :map
+    field :setup, :map
     # A batch IMPLEMENT's tasks (C2), each with its own declared files; 1 otherwise.
     field :task_count, :integer, default: 1
     field :batch_label, :string

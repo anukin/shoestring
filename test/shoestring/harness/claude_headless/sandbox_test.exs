@@ -92,18 +92,22 @@ defmodule Shoestring.Harness.ClaudeHeadless.SandboxTest do
   test "pinned Go root is readable without granting write access", ctx do
     wt = worktree!(ctx, true)
     go_root = Path.join(ctx.home, "toolchains/go")
+    setup_root = Path.join(ctx.home, "setup")
 
     assert {:ok, sandbox} =
              Sandbox.prepare(wt.path, wt.workspace_ref,
                worktrees_dir: ctx.worktrees,
                home: ctx.home,
-               go_root: go_root
+               go_root: go_root,
+               setup_root: setup_root
              )
 
     on_exit(fn -> Sandbox.release(sandbox.temp_dir) end)
     fs = sandbox.settings["sandbox"]["filesystem"]
     assert go_root in fs["allowRead"]
     refute go_root in fs["allowWrite"]
+    assert setup_root in fs["allowRead"]
+    refute setup_root in fs["allowWrite"]
     assert Path.expand(ctx.home) in fs["denyRead"]
   end
 
@@ -268,6 +272,26 @@ defmodule Shoestring.Harness.ClaudeHeadless.SandboxTest do
 
     assert [%{"type" => "user", "message" => %{"content" => [%{"text" => "Check the fixture"}]}}] =
              Keyword.fetch!(opts, :sent)
+  end
+
+  test "setup instructions reach the worker prompt without changing provider PATH" do
+    session =
+      start_supervised!(
+        {Session,
+         [
+           run_request: request("workspace/fixture"),
+           owner: self(),
+           transport: Shoestring.Test.ArgvCaptureTransport,
+           setup_root: "/synthetic/setup",
+           env: [{"PATH", "/trusted/bin"}]
+         ]}
+      )
+
+    opts = :sys.get_state(:sys.get_state(session).transport_pid)
+    prompt = List.last(Keyword.fetch!(opts, :args))
+    assert prompt =~ "$SHOESTRING_SETUP_DIR/bin"
+    refute prompt =~ "/synthetic/setup"
+    assert {"PATH", "/trusted/bin"} in Keyword.fetch!(opts, :env)
   end
 
   test "sandbox flags go before the prompt and replace the permission bypass" do

@@ -92,6 +92,16 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
     case binding do
       %{"dispatch_id" => id, "role" => "Worker"} ->
         case Shoestring.Repo.get(Shoestring.Dispatches.Dispatch, id) do
+          %{setup: setup} when is_map(setup) ->
+            case Shoestring.DispatchSetup.prepare(id, setup) do
+              {:ok, root} ->
+                adapter_opts = Map.put(Keyword.get(opts, :adapter_opts, %{}), :setup_root, root)
+                {:ok, Keyword.put(opts, :adapter_opts, adapter_opts)}
+
+              {:error, _reason} ->
+                {:ok, Keyword.put(opts, :launch_failure, "setup_preparation_failed")}
+            end
+
           %{toolchain: nil} ->
             {:ok, opts}
 
@@ -128,6 +138,25 @@ defmodule Shoestring.Harness.Dispatch.ElfEffect do
   defp toolchain_failure_code(:invalid_go_version), do: "toolchain_invalid_requirement"
   defp toolchain_failure_code(:invalid_toolchain_requirement), do: "toolchain_invalid_requirement"
   defp toolchain_failure_code(_), do: "toolchain_preparation_failed"
+
+  @doc false
+  def put_setup_env(opts, nil), do: opts
+
+  def put_setup_env(opts, root) do
+    Keyword.update(opts, :env, [{"SHOESTRING_SETUP_DIR", root}], fn env ->
+      env ++ [{"SHOESTRING_SETUP_DIR", root}]
+    end)
+  end
+
+  @doc false
+  def setup_prompt(prompt, nil), do: prompt
+
+  def setup_prompt(prompt, _root) do
+    prompt <>
+      "\n\nTools installed for this dispatch are available in $SHOESTRING_SETUP_DIR/bin. " <>
+      "Invoke them by explicit path in sandboxed commands, or prepend that directory to PATH " <>
+      "inside a sandboxed command when needed."
+  end
 
   @doc false
   def put_go_env(opts, nil, _workdir), do: opts

@@ -106,7 +106,7 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
          {:ok, commit} <- resolve_commit(worktree, opts),
          :ok <- check_clean(worktree, opts),
          timeout <- resolve_timeout(opts),
-         {:ok, result} <- invoke(argv, worktree, timeout, normalized_context, opts),
+         {:ok, result} <- invoke(argv, worktree, timeout, normalized_context, spec, opts),
          :ok <- check_output_size(result, gate),
          :ok <- check_snapshot(worktree, commit, opts) do
       {:ok,
@@ -341,10 +341,10 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
     end
   end
 
-  defp invoke(argv, worktree, timeout_ms, context, opts) do
+  defp invoke(argv, worktree, timeout_ms, context, spec, opts) do
     case Keyword.get(opts, :runner) do
       nil ->
-        invoke_system(argv, worktree, timeout_ms, context, opts)
+        invoke_system(argv, worktree, timeout_ms, context, spec, opts)
 
       runner when is_function(runner, 3) ->
         normalize_injected(runner.(argv, worktree, timeout_ms))
@@ -368,13 +368,14 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
   defp normalize_injected({:error, reason}), do: {:error, reason}
   defp normalize_injected(_other), do: {:error, {:invalid_gate_runner, :result}}
 
-  defp invoke_system(argv, worktree, timeout_ms, context, opts) do
+  defp invoke_system(argv, worktree, timeout_ms, context, spec, opts) do
     sandbox_opts =
       opts
       |> Keyword.get(:gate_sandbox, [])
       |> Keyword.put_new(:worktrees_dir, Keyword.get(opts, :worktrees_dir))
 
     with {:ok, sandbox_opts} <- managed_toolchain(context.goal_id, sandbox_opts, opts),
+         {:ok, sandbox_opts} <- managed_setup(spec, context.goal_id, sandbox_opts, opts),
          {:ok, sandbox} <- GateSandbox.wrap(argv, worktree, sandbox_opts) do
       # The gate's temporary directory goes once the command has finished,
       # whatever its outcome.
@@ -404,6 +405,20 @@ defmodule Shoestring.Cobbler.PlanGateRunner do
         end
     end
   end
+
+  defp managed_setup(%{"dispatch_setup" => true}, goal_id, sandbox_opts, opts) do
+    repo = Keyword.get(opts, :repo, Shoestring.Repo)
+
+    with {id, setup} <- Shoestring.Dispatches.setup_for_goal(goal_id, repo),
+         {:ok, root} <- Shoestring.DispatchSetup.cached_root(id, setup) do
+      {:ok, Keyword.put(sandbox_opts, :setup_root, root)}
+    else
+      _ -> {:error, {:gate_unavailable, %{reason: :managed_setup_unavailable}}}
+    end
+  end
+
+  defp managed_setup(_spec, _goal_id, sandbox_opts, _opts),
+    do: {:ok, Keyword.delete(sandbox_opts, :setup_root)}
 
   defp check_output_size(%{output: output} = _result, gate) do
     if byte_size(output) > @max_output_bytes do

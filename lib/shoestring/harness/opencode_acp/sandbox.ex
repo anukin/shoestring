@@ -78,7 +78,7 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
                install_dir(executable),
                tmp,
                home,
-               Keyword.get(opts, :go_root)
+               [Keyword.get(opts, :go_root), Keyword.get(opts, :setup_root)]
              ),
              tmp
            ) do
@@ -292,7 +292,8 @@ defmodule Shoestring.Harness.OpencodeAcp.Sandbox do
     readable =
       writable ++
         [store, paths.config, install] ++
-        config_links(paths.config) ++ Enum.map(List.wrap(go_root), &GitSandbox.physical_path/1)
+        config_links(paths.config) ++
+        Enum.map(Enum.reject(List.wrap(go_root), &is_nil/1), &GitSandbox.physical_path/1)
 
     if Enum.all?([home | readable], &quotable?/1) do
       sinks = Enum.map_join(@dev_sinks, " ", &"(literal #{q(&1)})")

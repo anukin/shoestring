@@ -9,7 +9,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       --brief FILE [--effort LEVEL] [--reviewer PROVIDER:MODEL]
       [--file PATH]... [--stay-out PATH]...
       [--accept TEXT]... [--gate NAME]... [--test PATH]... [--attempts N]
-      [--go VERSION]
+      [--go VERSION | --setup FILE]
       [--minutes M] [--batch LABEL --batch-size N] [--after DISPATCH]
       [--lesson CODE]... [--tasks FILE]
       [--session ID] [--request-id ID] [--repo PATH] [--dry-run] [--json]
@@ -30,6 +30,8 @@ defmodule Shoestring.CLI.Commands.Dispatch do
   checkout is never changed.
 
   `--go VERSION` requests a pinned Go release for the worker and acceptance checks.
+  `--setup FILE` reads a JSON object with a shell script and optional pinned downloads.
+  It prepares a private environment for the worker and acceptance checks.
 
   `--agent` names an agent of the session's team (its slug, or its job:
   explorer, implementer, reviewer) instead of a worker: its model and effort
@@ -110,6 +112,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     accept: :keep,
     gate: :keep,
     go: :string,
+    setup: :string,
     test: :keep,
     attempts: :integer,
     minutes: :integer,
@@ -239,6 +242,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       accept: Keyword.get_values(opts, :accept),
       gates: Keyword.get_values(opts, :gate),
       toolchain: if(opts[:go], do: %{"go" => opts[:go]}),
+      setup: opts[:setup] && read_setup!(Command.expand(opts[:setup], context)),
       tests: Keyword.get_values(opts, :test),
       units: Keyword.get_values(opts, :units)
     })
@@ -267,6 +271,9 @@ defmodule Shoestring.CLI.Commands.Dispatch do
     {provider, model} = Dispatches.external_worker()
 
     cond do
+      fields[:setup] != nil ->
+        {:error, "Setup is only for --purpose implement"}
+
       fields[:toolchain] != nil ->
         {:error, "A toolchain is only for --purpose implement"}
 
@@ -324,6 +331,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         repository: fields.repository,
         files: Map.get(fields, :files, []),
         toolchain: fields[:toolchain],
+        setup: fields[:setup],
         stay_out: Map.get(fields, :stay_out, []),
         accept: Map.get(fields, :accept, []),
         gates: Map.get(fields, :gates, []),
@@ -388,6 +396,9 @@ defmodule Shoestring.CLI.Commands.Dispatch do
 
   defp purpose_options(fields) do
     cond do
+      fields[:purpose] != "implement" and fields[:setup] != nil ->
+        {:error, "Setup is only for --purpose implement"}
+
       fields[:purpose] != "implement" and fields[:toolchain] != nil ->
         {:error, "A toolchain is only for --purpose implement"}
 
@@ -421,6 +432,16 @@ defmodule Shoestring.CLI.Commands.Dispatch do
         Refusal.refuse!(
           "--tasks needs a JSON list of tasks, each {\"title\", \"brief\", \"files\"}: #{path}"
         )
+    end
+  end
+
+  defp read_setup!(path) do
+    with {:ok, %{type: :regular, size: size}} when size <= 131_072 <- File.stat(path),
+         {:ok, json} <- File.read(path),
+         {:ok, %{} = setup} <- Jason.decode(json) do
+      setup
+    else
+      _ -> Refusal.refuse!("--setup needs a JSON file with a script and optional downloads")
     end
   end
 
@@ -458,6 +479,7 @@ defmodule Shoestring.CLI.Commands.Dispatch do
                do: ["toolchain", Jason.encode!(request.toolchain)],
                else: []
              ) ++
+             if(request[:setup], do: ["setup", Jason.encode!(request.setup)], else: []) ++
              if(Map.get(request, :units, []) != [], do: ["units" | request.units], else: []),
            <<0>>
          )
@@ -523,7 +545,11 @@ defmodule Shoestring.CLI.Commands.Dispatch do
       "created_at" => dispatch.inserted_at
     }
 
-    if dispatch.toolchain, do: Map.put(data, "toolchain", dispatch.toolchain), else: data
+    cond do
+      dispatch.toolchain -> Map.put(data, "toolchain", dispatch.toolchain)
+      dispatch.setup -> Map.put(data, "setup", Dispatches.setup_summary(dispatch.setup))
+      true -> data
+    end
   end
 
   @doc false
@@ -656,6 +682,15 @@ defmodule Shoestring.CLI.Commands.Dispatch do
 
   def message(:toolchain_implement_only, _request),
     do: "A toolchain is only for --purpose implement"
+
+  def message(:setup_implement_only, _request),
+    do: "Setup is only for --purpose implement"
+
+  def message(:setup_with_toolchain, _request),
+    do: "Choose one environment with either --setup or --go."
+
+  def message({:invalid_setup, reason}, _request),
+    do: "Invalid setup script or downloads (#{reason})."
 
   def message({:invalid_dispatch, :toolchain}, _request),
     do: "The toolchain needs an exact Go release, for example --go 1.25.3."

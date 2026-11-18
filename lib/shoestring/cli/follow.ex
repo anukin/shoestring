@@ -416,6 +416,9 @@ defmodule Shoestring.CLI.Follow do
   defp run_failure(_category, "toolchain_" <> _ = code),
     do: "  Could not prepare Go before starting the worker (#{code})."
 
+  defp run_failure(_category, "setup_" <> _ = code),
+    do: "  Could not prepare the dispatch environment (#{code})."
+
   defp run_failure(category, code), do: "  The worker failed (#{category}: #{code})."
 
   defp describe(shell, event) do

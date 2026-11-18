@@ -94,6 +94,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
             |> settings(worktree, repository, home, shared_temp(temp))
             |> widen(permissions)
             |> widen_go(Keyword.get(opts, :go_root))
+            |> widen_go(Keyword.get(opts, :setup_root))
             |> put_in(["sandbox", "allowUnsandboxedCommands"], asks)
 
           {:ok,

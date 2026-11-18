@@ -181,6 +181,118 @@ defmodule Shoestring.Cobbler.GateSandboxTest do
     end
   end
 
+  test "setup binaries run offline with read-only access to their prefix", ctx do
+    root = Path.join(ctx.home, "setup")
+    File.mkdir_p!(Path.join(root, "bin"))
+    binary = Path.join(root, "bin/setup-probe")
+
+    File.write!(binary, ~S"""
+    #!/bin/sh
+    printf '%s\n' "$SHOESTRING_SETUP_DIR"
+    cat "$1" 2>/dev/null || printf 'secret-denied\n'
+    touch "$SHOESTRING_SETUP_DIR/write" 2>/dev/null || printf 'write-denied\n'
+    """)
+
+    File.chmod!(binary, 0o755)
+
+    assert {:ok, sandbox} =
+             GateSandbox.wrap(["setup-probe", Path.join(ctx.home, "secret.txt")], ctx.worktree,
+               worktrees_dir: ctx.worktrees_dir,
+               home: ctx.home,
+               setup_root: root
+             )
+
+    try do
+      assert {:ok, result} = GateProcess.run(sandbox.argv, ctx.worktree, 5_000, 65_536)
+      assert result.exit_status == 0
+      assert result.output =~ root
+      assert result.output =~ "secret-denied"
+      assert result.output =~ "write-denied"
+      refute result.output =~ ctx.secret
+    after
+      GateSandbox.release(sandbox)
+    end
+  end
+
+  test "only a project gate configured to trust setup runs its prepared executable", ctx do
+    session = Shoestring.SessionsFixtures.session(conversation: false)
+
+    dispatch =
+      Shoestring.SessionsFixtures.dispatch_fixture(session, "implement", nil, "Setup gate")
+
+    requirement = %{
+      "script" => ~S"""
+      cat > "$SHOESTRING_SETUP_DIR/bin/python3" <<'SCRIPT'
+      #!/bin/sh
+      printf 'prepared Python received %s\n' "$1"
+      SCRIPT
+      chmod +x "$SHOESTRING_SETUP_DIR/bin/python3"
+      """
+    }
+
+    dispatch |> Ecto.Changeset.change(setup: requirement) |> Shoestring.Repo.update!()
+
+    settings = %{
+      state_dir: ctx.home,
+      project_gates: %{
+        "prepared_python" => %{
+          argv: ["python3", "from-project-gate"],
+          kind: "test",
+          dispatch_setup: true
+        }
+      }
+    }
+
+    for {key, value} <- settings do
+      previous = Application.fetch_env(:shoestring, key)
+      Application.put_env(:shoestring, key, value)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:shoestring, key, value)
+          :error -> Application.delete_env(:shoestring, key)
+        end
+      end)
+    end
+
+    context = Map.put(context(), :goal_id, dispatch.goal_id)
+    prepared_gate = %{"gate" => "project:prepared_python"}
+
+    options = [
+      worktree_path: ctx.worktree,
+      worktrees_dir: ctx.worktrees_dir,
+      gate_sandbox: [home: ctx.home]
+    ]
+
+    assert {:error, {:gate_unavailable, %{reason: :managed_setup_unavailable}}} =
+             PlanGateRunner.run(prepared_gate, context, options)
+
+    assert {:ok, _root} = Shoestring.DispatchSetup.prepare(dispatch.id, requirement)
+    assert {:ok, prepared} = PlanGateRunner.run(prepared_gate, context, options)
+    assert prepared.exit_status == 0
+    assert prepared.output =~ "prepared Python received from-project-gate"
+
+    assert {:ok, builtin} =
+             PlanGateRunner.run(
+               %{"gate" => "python_unittest", "test_paths" => ["test/test_probe.py"]},
+               context,
+               options
+             )
+
+    assert builtin.exit_status == 0
+    assert builtin.output =~ "PROBE "
+    refute builtin.output =~ "prepared Python received"
+  end
+
+  test "missing setup prefix fails closed", ctx do
+    assert {:error, {:gate_unavailable, %{reason: :managed_setup_unavailable}}} =
+             GateSandbox.wrap(["sh", "-c", "true"], ctx.worktree,
+               worktrees_dir: ctx.worktrees_dir,
+               home: ctx.home,
+               setup_root: Path.join(ctx.home, "missing-setup")
+             )
+  end
+
   test "missing managed Go fails closed even if another go is on PATH", ctx do
     assert {:error, {:gate_unavailable, %{reason: :managed_toolchain_unavailable}}} =
              GateSandbox.wrap(["go", "version"], ctx.worktree,

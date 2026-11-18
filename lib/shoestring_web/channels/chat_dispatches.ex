@@ -63,7 +63,7 @@ defmodule ShoestringWeb.ChatDispatches do
 
     lines =
       Enum.flat_map(
-        ~w(state worker toolchain reviewer waiting attempts_used duration_ms next batch result reviews report),
+        ~w(state worker toolchain setup reviewer waiting attempts_used duration_ms next batch result reviews report),
         &lines(&1, data[&1], data)
       )
 
@@ -114,6 +114,11 @@ defmodule ShoestringWeb.ChatDispatches do
   defp lines(_key, [], _data), do: []
 
   defp lines("toolchain", %{"go" => version}, _data), do: ["Requires Go #{version}"]
+
+  defp lines("setup", %{"downloads" => []}, _data), do: ["Has a generated setup script"]
+
+  defp lines("setup", %{"downloads" => names}, _data),
+    do: ["Has a generated setup script with #{Enum.join(names, ", ")}"]
 
   # A batch (C2): one line per task, how their merge stands (C3), and how to
   # take them all when Shoestring's merge stopped.

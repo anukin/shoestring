@@ -475,6 +475,8 @@ defmodule Shoestring.Harness.OpencodeAcp.Session do
         do: Continuation.resume_prompt(state.run_request),
         else: (state.run_request && state.run_request.prompt) || "Execute task."
 
+    text = Shoestring.Harness.Dispatch.ElfEffect.setup_prompt(text, state.opts[:setup_root])
+
     state =
       request(
         state,

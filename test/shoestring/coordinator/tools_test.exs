@@ -223,6 +223,74 @@ defmodule Shoestring.Coordinator.ToolsTest do
     assert Repo.all(Shoestring.Dispatches.Dispatch) == []
   end
 
+  test "the coordinator records generated setup and the CLI can replay it", ctx do
+    grant!(ctx)
+
+    setup = %{
+      "script" => "printf 'a setup artifact\\n' > \"$SHOESTRING_SETUP_DIR/marker\"",
+      "downloads" => [
+        %{
+          "name" => "runtime.zip",
+          "url" => "https://builds.hex.pm/builds/elixir/runtime.zip",
+          "sha256" => String.duplicate("0", 64)
+        }
+      ]
+    }
+
+    args = tool_args(%{"setup" => setup})
+
+    assert {:ok, %{"setup" => %{"downloads" => ["runtime.zip"]}, "would_dispatch" => true}} =
+             Tools.call("dispatch", Map.put(args, "dry_run", true), ctx.binding)
+
+    assert Repo.all(Shoestring.Dispatches.Dispatch) == []
+
+    assert {:ok, %{"dispatch_id" => id, "goal_id" => goal_id, "setup" => summary}} =
+             Tools.call("dispatch", args, ctx.binding)
+
+    assert summary == %{"downloads" => ["runtime.zip"]}
+    assert Shoestring.Dispatches.setup_for_goal(goal_id) == {id, setup}
+    assert {:error, :not_cached} = Shoestring.DispatchSetup.cached_root(id, setup)
+
+    setup_file = Path.join(ctx.repo, "setup.json")
+    File.write!(setup_file, Jason.encode!(setup))
+    Dispatch.run(cli_args(ctx, ["--setup", setup_file]), context(ctx))
+    assert %{"dispatch_id" => ^id, "setup" => ^summary, "outcome" => "replayed"} = printed!()
+
+    changed =
+      Map.merge(args, %{
+        "request_id" => Shoestring.Dispatches.get(id).request_id,
+        "setup" => Map.put(setup, "script", "true")
+      })
+
+    assert {:error,
+            "That request id was used for a different dispatch; pass another --request-id."} =
+             Tools.call("dispatch", changed, ctx.binding)
+  end
+
+  test "generated setup only applies to a single IMPLEMENT environment", ctx do
+    grant!(ctx)
+    setup = %{"script" => "true"}
+
+    assert {:error, "Setup is only for --purpose implement"} =
+             Tools.call(
+               "dispatch",
+               tool_args(%{"setup" => setup, "purpose" => "explore"}),
+               ctx.binding
+             )
+
+    assert {:error, "Choose one environment with either --setup or --go."} =
+             Tools.call(
+               "dispatch",
+               tool_args(%{"setup" => setup, "toolchain" => %{"go" => "1.25.3"}}),
+               ctx.binding
+             )
+
+    assert {:error, "Invalid setup script or downloads (invalid_setup)."} =
+             Tools.call("dispatch", tool_args(%{"setup" => %{"script" => ""}}), ctx.binding)
+
+    assert Repo.all(Shoestring.Dispatches.Dispatch) == []
+  end
+
   test "runs tools return the command's JSON for this session's dispatches only", ctx do
     grant!(ctx)
     %{"dispatch_id" => id} = as_json(Tools.call("dispatch", tool_args(), ctx.binding))

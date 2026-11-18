@@ -259,6 +259,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
           state.opts[:go_root],
           state.opts[:workdir]
         )
+        |> Shoestring.Harness.Dispatch.ElfEffect.put_setup_env(state.opts[:setup_root])
 
       case state.transport_mod.start_link(transport_opts) do
         {:ok, pid} ->
@@ -716,7 +717,9 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         thread_id = get_in(response, ["result", "thread", "id"])
         state = %{state | thread_id: thread_id}
         # Now launch the turn
-        prompt = (state.run_request && state.run_request.prompt) || "Execute task."
+        prompt =
+          ((state.run_request && state.run_request.prompt) || "Execute task.")
+          |> Shoestring.Harness.Dispatch.ElfEffect.setup_prompt(state.opts[:setup_root])
 
         send_rpc(
           state,
@@ -734,7 +737,10 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         # original prompt plus the checkpoint pointer, next action, and
         # decision refs (the 3 continuation keys only; raw transcript
         # terms never enter).
-        prompt = Shoestring.Harness.Continuation.resume_prompt(state.run_request)
+        prompt =
+          state.run_request
+          |> Shoestring.Harness.Continuation.resume_prompt()
+          |> Shoestring.Harness.Dispatch.ElfEffect.setup_prompt(state.opts[:setup_root])
 
         send_rpc(
           state,
@@ -1116,7 +1122,9 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
           Shoestring.Harness.CodexAppServer.GitSandbox.permissions(
             policy,
             System.user_home!(),
-            go_permissions(state.opts[:permissions], state.opts[:go_root])
+            state.opts[:permissions]
+            |> go_permissions(state.opts[:go_root])
+            |> go_permissions(state.opts[:setup_root])
           )
         )
     end

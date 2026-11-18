@@ -92,6 +92,38 @@ defmodule Shoestring.Coordinator.Tools do
             "required" => ["go"],
             "additionalProperties" => false
           },
+          "setup" => %{
+            "type" => "object",
+            "description" =>
+              "IMPLEMENT only. Generate a setup script when the task needs tools installed before " <>
+                "the worker starts. Put executables or wrappers in $SHOESTRING_SETUP_DIR/bin. " <>
+                "The script runs with /bin/sh, downloadable artifacts are declared below, " <>
+                "and the script has no network or checkout access.",
+            "properties" => %{
+              "script" => %{"type" => "string", "description" => "Shell script for /bin/sh"},
+              "downloads" => %{
+                "type" => "array",
+                "description" =>
+                  "Pinned HTTPS artifacts available under $SHOESTRING_SETUP_DOWNLOADS",
+                "maxItems" => 8,
+                "items" => %{
+                  "type" => "object",
+                  "properties" => %{
+                    "name" => %{"type" => "string", "description" => "Local basename"},
+                    "url" => %{"type" => "string", "description" => "HTTPS release archive URL"},
+                    "sha256" => %{
+                      "type" => "string",
+                      "description" => "Published SHA-256 checksum"
+                    }
+                  },
+                  "required" => ["name", "url", "sha256"],
+                  "additionalProperties" => false
+                }
+              }
+            },
+            "required" => ["script"],
+            "additionalProperties" => false
+          },
           "tests" => Map.put(@list, "description", "Test files to run"),
           "attempts" => %{"type" => "integer", "minimum" => 1, "description" => "Default 1"},
           "minutes" => %{
@@ -480,6 +512,8 @@ defmodule Shoestring.Coordinator.Tools do
          :ok <- typed(args, @integers, &(is_integer(&1) and &1 > 0), "a positive integer"),
          :ok <- typed(args, ["toolchain"], &is_map/1, "an object with an exact Go version"),
          :ok <-
+           typed(args, ["setup"], &is_map/1, "an object with a script and optional downloads"),
+         :ok <-
            typed(
              args,
              ["tasks"],
@@ -501,7 +535,8 @@ defmodule Shoestring.Coordinator.Tools do
        Map.merge(fields, %{
          session_id: binding.session_id,
          repository: binding.repository,
-         toolchain: args["toolchain"]
+         toolchain: args["toolchain"],
+         setup: args["setup"]
        })}
     end
   end

@@ -122,6 +122,18 @@ defmodule Shoestring.Harness.OpencodeAcp.SessionTest do
     OpencodeAcp.release(identity)
   end
 
+  test "setup instructions reach the worker prompt", context do
+    {:ok, identity} =
+      OpencodeAcp.start(request(), opts(context, "complete", %{setup_root: "/synthetic/setup"}))
+
+    _ = events_until_terminal(identity)
+    frame = Enum.find(sent(context), &(&1["method"] == "session/prompt"))
+    [%{"text" => text}] = frame["params"]["prompt"]
+    assert text =~ "$SHOESTRING_SETUP_DIR/bin"
+    refute text =~ "/synthetic/setup"
+    OpencodeAcp.release(identity)
+  end
+
   test "an expired provider login is an authentication error, not a task failure", context do
     {:ok, identity} = OpencodeAcp.start(request(), opts(context, "auth"))
     [error] = identity |> events_until_terminal() |> Enum.filter(&(&1.kind == :error))

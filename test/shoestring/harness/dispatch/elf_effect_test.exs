@@ -61,6 +61,22 @@ defmodule Shoestring.Harness.Dispatch.ElfEffectTest do
     assert ElfEffect.go_env(nil, workdir) == []
   end
 
+  test "setup environment preserves provider PATH and gives workers instructions" do
+    root = Path.join(System.tmp_dir!(), "setup-prefix")
+    opts = ElfEffect.put_setup_env([env: [{"PATH", "/trusted/bin"}]], root)
+    env = Map.new(opts[:env])
+    assert env["SHOESTRING_SETUP_DIR"] == root
+    assert env["PATH"] == "/trusted/bin"
+    assert ElfEffect.put_setup_env([], nil) == []
+
+    prompt = ElfEffect.setup_prompt("Run tests", root)
+    assert prompt =~ "Run tests"
+    assert prompt =~ "$SHOESTRING_SETUP_DIR/bin"
+    assert prompt =~ "sandboxed command"
+    refute prompt =~ root
+    assert ElfEffect.setup_prompt("Run tests", nil) == "Run tests"
+  end
+
   test "a toolchain failure does not replace an already cancelled run", %{goal: goal, task: task} do
     request = ElvesHelpers.run_request(goal, task)
     assert {:ok, dispatch, _job} = Dispatches.enqueue(request, ElvesHelpers.fake_identity())

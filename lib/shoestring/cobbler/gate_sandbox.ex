@@ -69,11 +69,15 @@ defmodule Shoestring.Cobbler.GateSandbox do
 
     with :ok <- mechanism(sandbox_exec),
          {:ok, path, store} <- roots(worktree, root),
-         {:ok, go_root} <- toolchain(executable, home, Keyword.get(opts, :go_root)),
+         {:ok, setup_root} <- setup_root(Keyword.get(opts, :setup_root)),
+         {:ok, go_root} <- toolchain(executable, home, Keyword.get(opts, :go_root), setup_root),
          {:ok, tmp} <- temp_dir(),
-         {:ok, profile} <- release_on_error(profile(path, store, tmp, home, go_root), tmp) do
-      pairs = Enum.map(env(tmp, go_root), fn {key, value} -> key <> "=" <> value end)
-      version = if go_root, do: @profile_version, else: @profile_version_without_toolchain
+         {:ok, profile} <-
+           release_on_error(profile(path, store, tmp, home, go_root, setup_root), tmp) do
+      pairs = Enum.map(env(tmp, go_root, setup_root), fn {key, value} -> key <> "=" <> value end)
+
+      version =
+        if go_root || setup_root, do: @profile_version, else: @profile_version_without_toolchain
 
       {:ok,
        %{
@@ -106,7 +110,7 @@ defmodule Shoestring.Cobbler.GateSandbox do
     end
   end
 
-  defp toolchain(executable, home, root) when is_binary(root) do
+  defp toolchain(executable, home, root, setup_root) when is_binary(root) do
     physical = GitSandbox.physical_path(root)
     binary = Path.join(physical, "bin/go")
 
@@ -116,7 +120,7 @@ defmodule Shoestring.Cobbler.GateSandbox do
       if executable == "go" do
         {:ok, physical}
       else
-        case toolchain(executable, home, nil) do
+        case toolchain(executable, home, nil, setup_root) do
           {:ok, nil} -> {:ok, physical}
           error -> error
         end
@@ -126,20 +130,42 @@ defmodule Shoestring.Cobbler.GateSandbox do
     end
   end
 
-  defp toolchain(_executable, _home, root) when not is_nil(root),
+  defp toolchain(_executable, _home, root, _setup_root) when not is_nil(root),
     do: {:error, :managed_toolchain_unavailable}
 
-  defp toolchain(executable, home, nil) do
-    case System.find_executable(executable) do
+  defp toolchain(executable, home, nil, setup_root) do
+    candidate = setup_root && Path.join([setup_root, "bin", executable])
+
+    case (executable_in_setup?(candidate, setup_root) && candidate) ||
+           System.find_executable(executable) do
       nil ->
         {:error, :executable_not_found}
 
       found ->
-        if String.starts_with?(GitSandbox.physical_path(found), home <> "/"),
-          do: {:error, :toolchain_under_home},
-          else: {:ok, nil}
+        if not executable_in_setup?(found, setup_root) and
+             String.starts_with?(GitSandbox.physical_path(found), home <> "/"),
+           do: {:error, :toolchain_under_home},
+           else: {:ok, nil}
     end
   end
+
+  defp setup_root(nil), do: {:ok, nil}
+
+  defp setup_root(root) when is_binary(root) do
+    if Path.type(root) == :absolute and File.dir?(root),
+      do: {:ok, GitSandbox.physical_path(root)},
+      else: {:error, :managed_setup_unavailable}
+  end
+
+  defp setup_root(_), do: {:error, :managed_setup_unavailable}
+
+  defp executable_in_setup?(path, root) when is_binary(path) and is_binary(root) do
+    File.regular?(path) and
+      String.starts_with?(GitSandbox.physical_path(path), root <> "/") and
+      match?({:ok, %{mode: mode}} when band(mode, 0o111) != 0, File.stat(path))
+  end
+
+  defp executable_in_setup?(_, _), do: false
 
   defp temp_dir, do: Shoestring.SandboxTemp.create(@temp_prefix)
 
@@ -167,14 +193,18 @@ defmodule Shoestring.Cobbler.GateSandbox do
 
   # Python writes no bytecode, so a project gate running Python leaves the
   # worktree as clean as it found it (the runner checks after the gate).
-  defp env(tmp, go_root) do
+  defp env(tmp, go_root, setup_root) do
     locale = for key <- @locale, value = System.get_env(key), do: {key, value}
 
     [
       {"PATH",
        Enum.join(
          Enum.reject(
-           [go_root && Path.join(go_root, "bin"), System.get_env("PATH") || "/usr/bin:/bin"],
+           [
+             setup_root && Path.join(setup_root, "bin"),
+             go_root && Path.join(go_root, "bin"),
+             System.get_env("PATH") || "/usr/bin:/bin"
+           ],
            &is_nil/1
          ),
          ":"
@@ -182,8 +212,11 @@ defmodule Shoestring.Cobbler.GateSandbox do
       {"HOME", tmp},
       {"TMPDIR", tmp},
       {"PYTHONDONTWRITEBYTECODE", "1"}
-    ] ++ go_env(tmp, go_root) ++ locale ++ Sandbox.git_env()
+    ] ++ setup_env(setup_root) ++ go_env(tmp, go_root) ++ locale ++ Sandbox.git_env()
   end
+
+  defp setup_env(nil), do: []
+  defp setup_env(root), do: [{"SHOESTRING_SETUP_DIR", root}]
 
   defp go_env(_tmp, nil), do: []
 
@@ -199,11 +232,17 @@ defmodule Shoestring.Cobbler.GateSandbox do
     ]
   end
 
-  defp profile(worktree, store, tmp, home, go_root) do
-    if Enum.all?(Enum.reject([worktree, store, tmp, home, go_root], &is_nil/1), &quotable?/1) do
+  defp profile(worktree, store, tmp, home, go_root, setup_root) do
+    if Enum.all?(
+         Enum.reject([worktree, store, tmp, home, go_root, setup_root], &is_nil/1),
+         &quotable?/1
+       ) do
       sinks = Enum.map_join(@dev_sinks, " ", &"(literal #{q(&1)})")
 
-      toolchain_read = if go_root, do: " (subpath #{q(go_root)})", else: ""
+      toolchain_read =
+        [go_root, setup_root]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.map_join("", &" (subpath #{q(&1)})")
 
       # Later rules take precedence over earlier ones.
       {:ok,
