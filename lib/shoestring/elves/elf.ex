@@ -120,6 +120,7 @@ defmodule Shoestring.Elves.Elf do
     :request,
     :adapter,
     :adapter_opts,
+    :launch_failure,
     :adapter_identity,
     :process_owner,
     :command,
@@ -204,6 +205,7 @@ defmodule Shoestring.Elves.Elf do
       request: Keyword.fetch!(opts, :request),
       adapter: Keyword.get(opts, :adapter, Shoestring.Harness.Fake),
       adapter_opts: Keyword.get(opts, :adapter_opts, %{}),
+      launch_failure: Keyword.get(opts, :launch_failure),
       process_owner: Keyword.get(opts, :process_owner, :runner),
       command: Keyword.get(opts, :command, ["sleep", "30"]),
       env: Keyword.get(opts, :env, []),
@@ -227,9 +229,17 @@ defmodule Shoestring.Elves.Elf do
   def handle_continue(:launch, state) do
     try do
       case reconcile_before_spawn(state) do
-        {:stop, reason, state} -> {:stop, reason, state}
-        {:adopt, state} -> adopt_group(state)
-        {:fresh, state} -> launch_fresh(state)
+        {:stop, reason, state} ->
+          {:stop, reason, state}
+
+        {:adopt, state} ->
+          adopt_group(state)
+
+        {:fresh, %{launch_failure: code} = state} when is_binary(code) ->
+          abort_launch(state, Classifier.launch_failed(code), :toolchain_preparation_failed)
+
+        {:fresh, state} ->
+          launch_fresh(state)
       end
     rescue
       _error -> crash_land(state)

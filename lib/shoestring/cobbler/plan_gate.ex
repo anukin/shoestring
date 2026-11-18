@@ -58,6 +58,7 @@ defmodule Shoestring.Cobbler.PlanGate do
 
   # `version` changes whenever a gate's argv or meaning changes.
   @gates %{
+    "go_test" => %{argv: ["go", "test", "./..."], parameters: [], kind: "test", version: 1},
     "mix_precommit" => %{
       argv: ["mix", "precommit"],
       parameters: [],

@@ -89,6 +89,24 @@ defmodule Shoestring.Harness.ClaudeHeadless.SandboxTest do
     assert {"PYTHONDONTWRITEBYTECODE", "1"} in sandbox.env
   end
 
+  test "pinned Go root is readable without granting write access", ctx do
+    wt = worktree!(ctx, true)
+    go_root = Path.join(ctx.home, "toolchains/go")
+
+    assert {:ok, sandbox} =
+             Sandbox.prepare(wt.path, wt.workspace_ref,
+               worktrees_dir: ctx.worktrees,
+               home: ctx.home,
+               go_root: go_root
+             )
+
+    on_exit(fn -> Sandbox.release(sandbox.temp_dir) end)
+    fs = sandbox.settings["sandbox"]["filesystem"]
+    assert go_root in fs["allowRead"]
+    refute go_root in fs["allowWrite"]
+    assert Path.expand(ctx.home) in fs["denyRead"]
+  end
+
   # Before this, Claude kept its default temporary directory, the shared
   # /tmp/claude-<uid> that holds every other Claude session's files, and its
   # sandbox let a worker's Bash write there (VERIFIED offline with 2.1.316).

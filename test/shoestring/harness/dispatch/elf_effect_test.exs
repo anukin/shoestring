@@ -46,6 +46,39 @@ defmodule Shoestring.Harness.Dispatch.ElfEffectTest do
     {:ok, goal: goal, task: task}
   end
 
+  test "pinned Go uses its own binary and writable private Git cache" do
+    workdir = Path.join(System.tmp_dir!(), "go-env-#{Ecto.UUID.generate()}")
+    gitdir = Path.join(workdir, "private-git")
+    File.mkdir_p!(workdir)
+    File.write!(Path.join(workdir, ".git"), "gitdir: #{gitdir}\n")
+    root = Path.join(workdir, "toolchain")
+    env = Map.new(ElfEffect.go_env(root, workdir))
+    assert env["GOROOT"] == root
+    assert String.starts_with?(env["PATH"], Path.join(root, "bin") <> ":")
+    assert env["GOTOOLCHAIN"] == "local"
+    assert env["GOCACHE"] == Path.join(gitdir, "shoestring-go/cache")
+    assert env["GOPATH"] == Path.join(gitdir, "shoestring-go/path")
+    assert ElfEffect.go_env(nil, workdir) == []
+  end
+
+  test "a toolchain failure does not replace an already cancelled run", %{goal: goal, task: task} do
+    request = ElvesHelpers.run_request(goal, task)
+    assert {:ok, dispatch, _job} = Dispatches.enqueue(request, ElvesHelpers.fake_identity())
+    assert {:ok, :cancelled} = Elves.cancel_run(dispatch.run_id)
+
+    assert {:ok, pid} =
+             Elves.start_elf(request, dispatch,
+               supervisor: elf_supervisor(),
+               launch_failure: "toolchain_download_failed"
+             )
+
+    ref = Process.monitor(pid)
+    assert_receive {:DOWN, ^ref, :process, ^pid, reason}
+    assert reason in [:normal, :noproc]
+    assert ElvesHelpers.terminal_event(goal.id, dispatch.run_id).type == "run.cancelled"
+    assert 0 == ElvesHelpers.count_events(goal.id, dispatch.run_id, ["run.failed", "run.running"])
+  end
+
   test "configured effect starts exactly one Elf and the run reaches terminal", %{
     goal: goal,
     task: task

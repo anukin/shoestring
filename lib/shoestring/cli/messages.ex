@@ -23,7 +23,7 @@ defmodule Shoestring.CLI.Messages do
 
   def message({:unknown_gate, name}, _),
     do:
-      "Unknown gate #{name}. Use mix_test, mix_precommit, mix_format_check, mix_compile_strict " <>
+      "Unknown gate #{name}. Use mix_test, mix_precommit, mix_format_check, mix_compile_strict, go_test " <>
         "or project:NAME for a gate in config :shoestring, :project_gates."
 
   def message({:untracked_test_path, path}, _), do: "#{path} is not a tracked file."

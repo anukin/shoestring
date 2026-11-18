@@ -6,9 +6,9 @@ defmodule Shoestring.Cobbler.GateSandboxTest do
   listener the test owns. The read, write, network and environment cases
   fail against `b94f477`, where gates ran with the service's access.
   """
-  use ExUnit.Case, async: false
+  use Shoestring.DataCase, async: false
 
-  alias Shoestring.Cobbler.{GateProcess, PlanGateRunner}
+  alias Shoestring.Cobbler.{GateProcess, GateSandbox, PlanGateRunner}
   alias Shoestring.Worktrees
 
   @moduletag :tmp_dir
@@ -148,6 +148,106 @@ defmodule Shoestring.Cobbler.GateSandboxTest do
       listener: listener,
       outside: outside
     }
+  end
+
+  test "managed Go is available under the denied home with offline environment", ctx do
+    root = Path.join(ctx.home, "managed-go")
+    File.mkdir_p!(Path.join(root, "bin"))
+    binary = Path.join(root, "bin/go")
+
+    File.write!(binary, ~S"""
+    #!/bin/sh
+    printf '%s\n' "$GOTOOLCHAIN $GOPROXY $GOSUMDB"
+    cat "$1" 2>/dev/null || printf 'denied\n'
+    """)
+
+    File.chmod!(binary, 0o755)
+
+    assert {:ok, sandbox} =
+             GateSandbox.wrap(["go", Path.join(ctx.home, "secret.txt")], ctx.worktree,
+               worktrees_dir: ctx.worktrees_dir,
+               home: ctx.home,
+               go_root: root
+             )
+
+    try do
+      assert {:ok, result} = GateProcess.run(sandbox.argv, ctx.worktree, 5_000, 65_536)
+      assert result.exit_status == 0
+      assert result.output =~ "local off off"
+      assert result.output =~ "denied"
+      refute result.output =~ ctx.secret
+    after
+      GateSandbox.release(sandbox)
+    end
+  end
+
+  test "missing managed Go fails closed even if another go is on PATH", ctx do
+    assert {:error, {:gate_unavailable, %{reason: :managed_toolchain_unavailable}}} =
+             GateSandbox.wrap(["go", "version"], ctx.worktree,
+               worktrees_dir: ctx.worktrees_dir,
+               home: ctx.home,
+               go_root: Path.join(ctx.home, "missing-go")
+             )
+  end
+
+  test "a dispatch goal selects its cached Go for the trusted Go gate", ctx do
+    session = Shoestring.SessionsFixtures.session(conversation: false)
+    dispatch = Shoestring.SessionsFixtures.dispatch_fixture(session, "implement", nil, "Go gate")
+    requirement = %{"go" => "1.99.9"}
+    dispatch |> Ecto.Changeset.change(toolchain: requirement) |> Shoestring.Repo.update!()
+
+    old_state = Application.get_env(:shoestring, :state_dir)
+    old_checksums = Application.get_env(:shoestring, :toolchain_checksums)
+
+    arch =
+      if to_string(:erlang.system_info(:system_architecture)) =~ "aarch64",
+        do: "arm64",
+        else: "amd64"
+
+    checksum = String.duplicate("a", 64)
+    Application.put_env(:shoestring, :state_dir, ctx.home)
+
+    Application.put_env(:shoestring, :toolchain_checksums, %{
+      {"1.99.9", "darwin", arch} => checksum
+    })
+
+    on_exit(fn ->
+      if old_state,
+        do: Application.put_env(:shoestring, :state_dir, old_state),
+        else: Application.delete_env(:shoestring, :state_dir)
+
+      if old_checksums,
+        do: Application.put_env(:shoestring, :toolchain_checksums, old_checksums),
+        else: Application.delete_env(:shoestring, :toolchain_checksums)
+    end)
+
+    {:ok, root} = Shoestring.Toolchains.install_root(requirement)
+    File.mkdir_p!(Path.join(root, "bin"))
+    File.write!(Path.join(root, ".shoestring-sha256"), checksum)
+
+    File.write!(
+      Path.join(root, "bin/go"),
+      "#!/bin/sh\nprintf 'fixture Go 1.99.9 %s %s\n' \"$GOTOOLCHAIN\" \"$GOPROXY\"\n"
+    )
+
+    File.chmod!(Path.join(root, "bin/go"), 0o755)
+
+    context = Map.put(context(), :goal_id, dispatch.goal_id)
+
+    opts = [
+      worktree_path: ctx.worktree,
+      worktrees_dir: ctx.worktrees_dir,
+      gate_sandbox: [home: ctx.home]
+    ]
+
+    assert {:ok, evidence} = PlanGateRunner.run(%{"gate" => "go_test"}, context, opts)
+    assert evidence.exit_status == 0
+    assert evidence.output =~ "fixture Go 1.99.9 local off"
+
+    File.rename!(Path.join(root, ".shoestring-sha256"), Path.join(root, "marker-away"))
+
+    assert {:error, {:gate_unavailable, %{reason: :managed_toolchain_unavailable}}} =
+             PlanGateRunner.run(%{"gate" => "go_test"}, context, opts)
   end
 
   test "a gate cannot read the rest of the home directory but reads its worktree", ctx do

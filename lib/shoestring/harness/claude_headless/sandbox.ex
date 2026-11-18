@@ -93,6 +93,7 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
             roots
             |> settings(worktree, repository, home, shared_temp(temp))
             |> widen(permissions)
+            |> widen_go(Keyword.get(opts, :go_root))
             |> put_in(["sandbox", "allowUnsandboxedCommands"], asks)
 
           {:ok,
@@ -150,6 +151,11 @@ defmodule Shoestring.Harness.ClaudeHeadless.Sandbox do
     |> update_in(["sandbox", "filesystem", "allowWrite"], &Enum.uniq(&1 ++ writes))
     |> put_in(["sandbox", "network", "allowedDomains"], hosts)
   end
+
+  defp widen_go(settings, nil), do: settings
+
+  defp widen_go(settings, root),
+    do: update_in(settings, ["sandbox", "filesystem", "allowRead"], &Enum.uniq(&1 ++ [root]))
 
   defp settings(roots, worktree, repository, home, deny_write) do
     %{

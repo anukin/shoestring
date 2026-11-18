@@ -285,6 +285,29 @@ the session, purpose, worker, title and brief) returns the same dispatch.
 `--batch LABEL --batch-size N` declares a strategy of N dispatches; one more
 is refused. `--dry-run` checks the grant and the plan and records nothing.
 
+### Prepare Go for an IMPLEMENT dispatch
+
+The coordinator can set `"toolchain": {"go": "1.25.3"}` in its dispatch tool
+call. From the terminal, add `--go 1.25.3` to the equivalent dispatch.
+Use the exact release your project requires.
+
+Shoestring prepares the release after admission and before launching the
+worker. It downloads from the official Go distribution host, verifies the
+archive against a trusted checksum, and caches the install for reuse. The
+worker and acceptance checks both use the pinned release. An installation
+failure is recorded on the dispatch before a provider starts.
+
+If the committed repository has a root `go.mod` and you leave the checks
+unspecified, Shoestring selects `go_test` (`go test ./...`). You can also
+select it explicitly with `--gate go_test`. Acceptance checks run offline,
+so commit the project's vendored modules if the tests need external modules.
+
+The built-in checksum catalog covers Go 1.25.3 for macOS and Linux on arm64
+and amd64. An operator can set `config :shoestring, :toolchain_checksums`
+to a map from `{version, os, arch}` to the official lowercase SHA-256
+checksum to add another exact release. The release archive is still fetched
+from the same official host.
+
 ### One task after another (iteration 16 C1)
 
 ```sh

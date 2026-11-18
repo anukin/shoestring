@@ -11,7 +11,7 @@ defmodule Shoestring.Cobbler.GateSandbox do
     such as existence and size, stays visible so path lookups work). The
     worktree, its private Git storage and the gate's temporary directory are
     readable, as is everything outside the home directory (the system
-    toolchain).
+    toolchain). A dispatch-managed Go installation is also readable.
   - **Writes.** Only the worktree (not its `.git` link file) and the gate's
     temporary directory, plus the standard `/dev` sinks.
   - **Network.** No outbound connection, including to localhost. Binding and
@@ -34,13 +34,16 @@ defmodule Shoestring.Cobbler.GateSandbox do
   cancellation behave as before.
   """
 
+  import Bitwise
+
   alias Shoestring.Harness.ClaudeHeadless.Sandbox
   alias Shoestring.Harness.CodexAppServer.GitSandbox
   alias Shoestring.{State, Worktrees}
 
   @sandbox_exec "/usr/bin/sandbox-exec"
   @env_exec "/usr/bin/env"
-  @profile_version 1
+  @profile_version 2
+  @profile_version_without_toolchain 1
   @locale ~w(LANG LC_ALL LC_CTYPE)
   @dev_sinks ~w(/dev/null /dev/zero /dev/tty /dev/dtracehelper)
 
@@ -53,7 +56,9 @@ defmodule Shoestring.Cobbler.GateSandbox do
   @doc """
   Wraps a trusted gate `argv` for `worktree`. Options: `:worktrees_dir` (the
   service's worktree root), `:home` (defaults to the user's home) and
-  `:sandbox_exec` (the mechanism's path).
+  `:sandbox_exec` (the mechanism's path), and `:go_root` (the trusted
+  dispatch-managed Go installation). Go modules must already be available
+  offline, for example in a checked-in vendor directory.
   """
   @spec wrap([String.t()], Path.t(), keyword()) ::
           {:ok, t()} | {:error, {:gate_unavailable, %{reason: atom()}}}
@@ -64,17 +69,18 @@ defmodule Shoestring.Cobbler.GateSandbox do
 
     with :ok <- mechanism(sandbox_exec),
          {:ok, path, store} <- roots(worktree, root),
-         :ok <- toolchain(executable, home),
+         {:ok, go_root} <- toolchain(executable, home, Keyword.get(opts, :go_root)),
          {:ok, tmp} <- temp_dir(),
-         {:ok, profile} <- release_on_error(profile(path, store, tmp, home), tmp) do
-      pairs = Enum.map(env(tmp), fn {key, value} -> key <> "=" <> value end)
+         {:ok, profile} <- release_on_error(profile(path, store, tmp, home, go_root), tmp) do
+      pairs = Enum.map(env(tmp, go_root), fn {key, value} -> key <> "=" <> value end)
+      version = if go_root, do: @profile_version, else: @profile_version_without_toolchain
 
       {:ok,
        %{
          argv: [sandbox_exec, "-p", profile, @env_exec, "-i" | pairs] ++ argv,
          temp_dir: tmp,
          identity:
-           "macos_seatbelt:v#{@profile_version}:sha256:" <>
+           "macos_seatbelt:v#{version}:sha256:" <>
              (:crypto.hash(:sha256, profile) |> Base.encode16(case: :lower))
        }}
     else
@@ -100,7 +106,30 @@ defmodule Shoestring.Cobbler.GateSandbox do
     end
   end
 
-  defp toolchain(executable, home) do
+  defp toolchain(executable, home, root) when is_binary(root) do
+    physical = GitSandbox.physical_path(root)
+    binary = Path.join(physical, "bin/go")
+
+    if Path.type(root) == :absolute and File.regular?(binary) and
+         String.starts_with?(GitSandbox.physical_path(binary), physical <> "/") and
+         match?({:ok, %{mode: mode}} when band(mode, 0o111) != 0, File.stat(binary)) do
+      if executable == "go" do
+        {:ok, physical}
+      else
+        case toolchain(executable, home, nil) do
+          {:ok, nil} -> {:ok, physical}
+          error -> error
+        end
+      end
+    else
+      {:error, :managed_toolchain_unavailable}
+    end
+  end
+
+  defp toolchain(_executable, _home, root) when not is_nil(root),
+    do: {:error, :managed_toolchain_unavailable}
+
+  defp toolchain(executable, home, nil) do
     case System.find_executable(executable) do
       nil ->
         {:error, :executable_not_found}
@@ -108,7 +137,7 @@ defmodule Shoestring.Cobbler.GateSandbox do
       found ->
         if String.starts_with?(GitSandbox.physical_path(found), home <> "/"),
           do: {:error, :toolchain_under_home},
-          else: :ok
+          else: {:ok, nil}
     end
   end
 
@@ -131,27 +160,50 @@ defmodule Shoestring.Cobbler.GateSandbox do
   """
   @spec environment_names() :: [String.t()]
   def environment_names do
-    (~w(PATH HOME TMPDIR PYTHONDONTWRITEBYTECODE) ++
+    (~w(PATH HOME TMPDIR PYTHONDONTWRITEBYTECODE GOROOT GOTOOLCHAIN GOENV GOPROXY GOSUMDB GOCACHE GOMODCACHE) ++
        @locale ++ Enum.map(Sandbox.git_env(), &elem(&1, 0)))
     |> Enum.sort()
   end
 
   # Python writes no bytecode, so a project gate running Python leaves the
   # worktree as clean as it found it (the runner checks after the gate).
-  defp env(tmp) do
+  defp env(tmp, go_root) do
     locale = for key <- @locale, value = System.get_env(key), do: {key, value}
 
     [
-      {"PATH", System.get_env("PATH") || "/usr/bin:/bin"},
+      {"PATH",
+       Enum.join(
+         Enum.reject(
+           [go_root && Path.join(go_root, "bin"), System.get_env("PATH") || "/usr/bin:/bin"],
+           &is_nil/1
+         ),
+         ":"
+       )},
       {"HOME", tmp},
       {"TMPDIR", tmp},
       {"PYTHONDONTWRITEBYTECODE", "1"}
-    ] ++ locale ++ Sandbox.git_env()
+    ] ++ go_env(tmp, go_root) ++ locale ++ Sandbox.git_env()
   end
 
-  defp profile(worktree, store, tmp, home) do
-    if Enum.all?([worktree, store, tmp, home], &quotable?/1) do
+  defp go_env(_tmp, nil), do: []
+
+  defp go_env(tmp, root) do
+    [
+      {"GOROOT", root},
+      {"GOTOOLCHAIN", "local"},
+      {"GOENV", "off"},
+      {"GOPROXY", "off"},
+      {"GOSUMDB", "off"},
+      {"GOCACHE", Path.join(tmp, "go-cache")},
+      {"GOMODCACHE", Path.join(tmp, "go-mod")}
+    ]
+  end
+
+  defp profile(worktree, store, tmp, home, go_root) do
+    if Enum.all?(Enum.reject([worktree, store, tmp, home, go_root], &is_nil/1), &quotable?/1) do
       sinks = Enum.map_join(@dev_sinks, " ", &"(literal #{q(&1)})")
+
+      toolchain_read = if go_root, do: " (subpath #{q(go_root)})", else: ""
 
       # Later rules take precedence over earlier ones.
       {:ok,
@@ -166,7 +218,7 @@ defmodule Shoestring.Cobbler.GateSandbox do
        (deny file-write* (literal #{q(Path.join(worktree, ".git"))}))
        (deny file-read* (subpath #{q(home)}))
        (allow file-read-metadata (subpath #{q(home)}))
-       (allow file-read* (subpath #{q(worktree)}) (subpath #{q(store)}) (subpath #{q(tmp)}))
+       (allow file-read* (subpath #{q(worktree)}) (subpath #{q(store)}) (subpath #{q(tmp)})#{toolchain_read})
        """}
     else
       {:error, :unsafe_sandbox_path}

@@ -668,6 +668,7 @@ defmodule Shoestring.Elves do
       request: request,
       adapter: Keyword.get(opts, :adapter, Shoestring.Harness.Fake),
       adapter_opts: Keyword.get(opts, :adapter_opts, default_adapter_opts(opts)),
+      launch_failure: Keyword.get(opts, :launch_failure),
       process_owner: Keyword.get(opts, :process_owner, :runner),
       command: Keyword.get(opts, :command, ["sleep", "30"]),
       env: Keyword.get(opts, :env, []),

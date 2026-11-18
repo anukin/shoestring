@@ -81,6 +81,17 @@ defmodule Shoestring.Coordinator.Tools do
           "stay_out" => Map.put(@list, "description", "Paths the task must not change"),
           "accept" => Map.put(@list, "description", "Acceptance criteria"),
           "gates" => Map.put(@list, "description", "Named gates to run"),
+          "toolchain" => %{
+            "type" => "object",
+            "description" =>
+              "IMPLEMENT only: prepare a pinned Go release for the worker and offline checks. " <>
+                "Use the project's required version.",
+            "properties" => %{
+              "go" => %{"type" => "string", "description" => "Exact release, e.g. 1.25.3"}
+            },
+            "required" => ["go"],
+            "additionalProperties" => false
+          },
           "tests" => Map.put(@list, "description", "Test files to run"),
           "attempts" => %{"type" => "integer", "minimum" => 1, "description" => "Default 1"},
           "minutes" => %{
@@ -467,6 +478,7 @@ defmodule Shoestring.Coordinator.Tools do
          :ok <- typed(args, @strings, &is_binary/1, "a string"),
          :ok <- typed(args, @lists, &string_list?/1, "a list of strings"),
          :ok <- typed(args, @integers, &(is_integer(&1) and &1 > 0), "a positive integer"),
+         :ok <- typed(args, ["toolchain"], &is_map/1, "an object with an exact Go version"),
          :ok <-
            typed(
              args,
@@ -485,7 +497,12 @@ defmodule Shoestring.Coordinator.Tools do
           tasks -> Map.put(fields, :tasks, tasks)
         end
 
-      {:ok, Map.merge(fields, %{session_id: binding.session_id, repository: binding.repository})}
+      {:ok,
+       Map.merge(fields, %{
+         session_id: binding.session_id,
+         repository: binding.repository,
+         toolchain: args["toolchain"]
+       })}
     end
   end
 

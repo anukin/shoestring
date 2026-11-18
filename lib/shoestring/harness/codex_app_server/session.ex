@@ -255,6 +255,10 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
         |> forward_opt(state.opts, :executable)
         |> forward_opt(state.opts, :args)
         |> plan_run_env(state.opts[:git_sandbox_policy])
+        |> Shoestring.Harness.Dispatch.ElfEffect.put_go_env(
+          state.opts[:go_root],
+          state.opts[:workdir]
+        )
 
       case state.transport_mod.start_link(transport_opts) do
         {:ok, pid} ->
@@ -1077,6 +1081,12 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
     end
   end
 
+  defp go_permissions(permissions, nil), do: permissions
+
+  defp go_permissions(permissions, root) do
+    Map.update(permissions || %{}, "read_paths", [root], &Enum.uniq(&1 ++ [root]))
+  end
+
   defp turn_params(state, params) do
     params = effort_params(state, model_params(state, params))
 
@@ -1106,7 +1116,7 @@ defmodule Shoestring.Harness.CodexAppServer.Session do
           Shoestring.Harness.CodexAppServer.GitSandbox.permissions(
             policy,
             System.user_home!(),
-            state.opts[:permissions]
+            go_permissions(state.opts[:permissions], state.opts[:go_root])
           )
         )
     end

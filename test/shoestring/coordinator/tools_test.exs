@@ -171,6 +171,58 @@ defmodule Shoestring.Coordinator.ToolsTest do
              Tools.call("dispatch", tool_args(), ctx.binding)
   end
 
+  test "a pinned Go request previews its check and replays the same dispatch from the CLI", ctx do
+    grant!(ctx)
+    File.write!(Path.join(ctx.repo, "go.mod"), "module example.invalid/calc\n\ngo 1.25.3\n")
+    git!(ctx.repo, ["add", "go.mod"])
+    git!(ctx.repo, ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "go"])
+
+    requirement = %{"go" => "1.25.3"}
+    args = tool_args(%{"toolchain" => requirement})
+
+    assert {:ok, %{"toolchain" => ^requirement, "plan" => plan}} =
+             Tools.call("dispatch", Map.put(args, "dry_run", true), ctx.binding)
+
+    assert [%{"gates" => [%{"gate" => "go_test"}]}] = plan["tasks"]
+    assert Repo.all(Shoestring.Dispatches.Dispatch) == []
+
+    assert {:ok, %{"toolchain" => ^requirement, "dispatch_id" => id, "goal_id" => goal_id}} =
+             Tools.call("dispatch", args, ctx.binding)
+
+    assert Shoestring.Dispatches.toolchain_for_goal(goal_id) == requirement
+    Dispatch.run(cli_args(ctx, ["--go", "1.25.3"]), context(ctx))
+
+    assert %{"outcome" => "replayed", "dispatch_id" => ^id, "toolchain" => ^requirement} =
+             printed!()
+
+    request_id = Shoestring.Dispatches.get(id).request_id
+    changed = %{"request_id" => request_id, "toolchain" => %{"go" => "1.25.4"}}
+
+    assert {:error,
+            "That request id was used for a different dispatch; pass another --request-id."} =
+             Tools.call("dispatch", Map.merge(args, changed), ctx.binding)
+  end
+
+  test "toolchain proposals reject raw installer fields and non-IMPLEMENT work", ctx do
+    grant!(ctx)
+
+    assert {:error, "The toolchain needs an exact Go release, for example --go 1.25.3."} =
+             Tools.call(
+               "dispatch",
+               tool_args(%{"toolchain" => %{"go" => "1.25.3", "script" => "install.sh"}}),
+               ctx.binding
+             )
+
+    assert {:error, "A toolchain is only for --purpose implement"} =
+             Tools.call(
+               "dispatch",
+               tool_args(%{"purpose" => "explore", "toolchain" => %{"go" => "1.25.3"}}),
+               ctx.binding
+             )
+
+    assert Repo.all(Shoestring.Dispatches.Dispatch) == []
+  end
+
   test "runs tools return the command's JSON for this session's dispatches only", ctx do
     grant!(ctx)
     %{"dispatch_id" => id} = as_json(Tools.call("dispatch", tool_args(), ctx.binding))
